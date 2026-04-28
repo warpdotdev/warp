@@ -266,7 +266,7 @@ fn test_explicit_physical_binding_matches_any_layout() -> anyhow::Result<()> {
     // A binding that explicitly opts into physical-key matching should fire
     // regardless of the active keyboard layout - this is the "I know what I'm
     // doing, force layout-independent matching" path.
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     enum Action {
         Copy,
     }

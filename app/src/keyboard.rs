@@ -8,9 +8,10 @@ use warpui::keymap::Keystroke;
 use warpui::keymap::Trigger;
 use warpui::AppContext;
 
-use crate::settings::input::InputSettings;
+use crate::settings::InputSettings;
 use anyhow::Context;
 use settings::Setting as _;
+use warpui::SingletonEntity as _;
 
 /// Push the current `InputSettings::smart_layout_aware_bindings` value into
 /// the keystroke matcher. Call this at startup (after `load_custom_keybindings`)

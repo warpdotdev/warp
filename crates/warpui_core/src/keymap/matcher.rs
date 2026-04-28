@@ -34,7 +34,12 @@ pub struct Matcher {
 
 #[derive(Default)]
 struct Pending {
-    keystrokes: Vec<Keystroke>,
+    /// Each pending keystroke is paired with the physical key code that the
+    /// platform reported for it (when known). Carrying the physical code here
+    /// is what lets the matcher fire `Code(KeyC)` bindings on a Russian
+    /// layout where the logical `key` is `с`, and what lets Smart binding
+    /// promote alphanumeric Logical bindings to physical-key matching.
+    keystrokes: Vec<(Keystroke, Option<String>)>,
     context: Option<Context>,
 }
 
@@ -331,15 +336,8 @@ impl Matcher {
     ) -> MatchResult {
         // Smart binding is suppressed during IME composition: matching a
         // hotkey by physical key while the user is composing kanji/hangul
-        // would surprise them by firing the hotkey mid-input. The classic
-        // Logical-key path (which wouldn't have collided anyway, since the
-        // composition logical key is `Process`) remains active.
+        // would surprise them by firing the hotkey mid-input.
         let smart = self.smart_binding_enabled && !ctx.set.contains("IMEOpen");
-
-        // Normalize the incoming OS event for matching purposes. The pending
-        // chord buffer stores the *normalized* keystroke so that subsequent
-        // bindings in a multi-keystroke chord can be matched the same way.
-        let normalized = normalize_event_for_match(keystroke, physical_code, smart);
 
         let pending = self.pending.entry(view_id).or_default();
 
@@ -349,12 +347,14 @@ impl Matcher {
             }
         }
 
-        pending.keystrokes.push(normalized);
+        pending
+            .keystrokes
+            .push((keystroke, physical_code.map(String::from)));
 
         let mut retain_pending = false;
         for binding in self.keymap.bindings() {
             if let Trigger::Keystrokes(keystrokes) = &binding.trigger {
-                if keystrokes_starts_with(keystrokes, &pending.keystrokes, smart)
+                if keystrokes_starts_with_event(keystrokes, &pending.keystrokes, smart)
                     && binding.context_predicate.eval(ctx)
                 {
                     if keystrokes.len() == pending.keystrokes.len() {
@@ -408,59 +408,79 @@ impl Matcher {
     }
 }
 
-/// Convert an OS-side `Keystroke` (which always carries the *logical* key as
-/// `key`) into a form ready for comparison against a binding's keystrokes.
-///
-/// When Smart binding is on AND the OS reported an alphanumeric physical key
-/// (`KeyA..KeyZ` / `Digit0..Digit9`), the event's `key` is rewritten to
-/// `Code(NAME)`. This way a Logical binding `cmd-c` (which the parser also
-/// rewrites symmetrically through `normalize_binding_for_match`) matches the
-/// physical `KeyC` press regardless of the active layout - fixing the
-/// long-standing "copy/paste broken on Russian layout" bug.
-///
-/// When Smart binding is off, this is a no-op modulo the move.
-fn normalize_event_for_match(
-    mut keystroke: Keystroke,
-    physical_code: Option<&str>,
+/// `slice::starts_with` analogue that compares each pair of binding<->event
+/// keystrokes via [`matches_keystroke`], which understands the three matching
+/// regimes (explicit Physical via `Code(NAME)`, Smart binding promotion of
+/// alphanumeric Logical bindings, plain Logical comparison).
+fn keystrokes_starts_with_event(
+    binding_keystrokes: &[Keystroke],
+    pending: &[(Keystroke, Option<String>)],
     smart_enabled: bool,
-) -> Keystroke {
-    if !smart_enabled {
-        return keystroke;
+) -> bool {
+    if pending.len() > binding_keystrokes.len() {
+        return false;
     }
-    // Already a Physical binding from explicit user opt-in - leave as is.
-    if keystroke.physical_code().is_some() {
-        return keystroke;
-    }
-    if let Some(code) = physical_code {
-        if crate::platform::keyboard::is_alphanumeric_physical(code) {
-            keystroke.key = format!("Code({})", code);
+    for (b, (e, p)) in binding_keystrokes.iter().zip(pending.iter()) {
+        if !matches_keystroke(b, e, p.as_deref(), smart_enabled) {
+            return false;
         }
     }
-    keystroke
+    true
 }
 
-/// Mirror of `normalize_event_for_match` for the binding side.
+/// Decide whether the binding `b` matches the OS event `e` (with the optional
+/// physical key code `event_physical`). Three regimes, evaluated in priority
+/// order:
 ///
-/// Smart binding only activates when the *binding* is a Logical single-letter
-/// or single-digit keystroke and the corresponding alphanumeric physical key
-/// can be derived from `key`. Symbol/named/special-key bindings are left
-/// untouched because for those the user expects the logical key (e.g.
-/// `Cmd+/` should mean "the slash key", which lives on different physical
-/// positions in different layouts).
-fn normalize_binding_for_match(keystroke: &Keystroke, smart_enabled: bool) -> Option<Keystroke> {
-    if !smart_enabled {
-        return None;
+/// 1. **Explicit Physical** - `b` was written as `cmd-Code(KeyC)`. Match iff
+///    the modifiers agree and `event_physical` equals the binding's physical
+///    code. The event's logical `key` is irrelevant here, which is exactly
+///    what makes the binding layout-independent.
+/// 2. **Smart binding** - `b` is a single alphanumeric Logical key (`cmd-c`),
+///    Smart binding is on, and `event_physical` reports a `KeyA..KeyZ` /
+///    `Digit0..Digit9` press. The binding is promoted to physical-key
+///    matching for this comparison.
+/// 3. **Plain Logical** - the existing structural compare.
+fn matches_keystroke(
+    b: &Keystroke,
+    e: &Keystroke,
+    event_physical: Option<&str>,
+    smart_enabled: bool,
+) -> bool {
+    if b.ctrl != e.ctrl
+        || b.alt != e.alt
+        || b.shift != e.shift
+        || b.cmd != e.cmd
+        || b.meta != e.meta
+    {
+        return false;
     }
-    if keystroke.physical_code().is_some() {
-        return None;
+
+    if let Some(b_phys) = b.physical_code() {
+        return event_physical == Some(b_phys);
     }
-    let key = keystroke.key.as_str();
+
+    if smart_enabled {
+        if let (Some(e_phys), Some(b_phys)) = (event_physical, single_letter_to_physical(&b.key)) {
+            if crate::platform::keyboard::is_alphanumeric_physical(e_phys) && b_phys == e_phys {
+                return true;
+            }
+        }
+    }
+
+    b.key == e.key
+}
+
+/// If `key` is exactly one ASCII letter or digit, return the corresponding
+/// W3C UIEvents code (`"KeyA".."KeyZ"` / `"Digit0".."Digit9"`). Otherwise
+/// `None`. This is the binding-side projection used by Smart binding.
+fn single_letter_to_physical(key: &str) -> Option<&'static str> {
     let mut chars = key.chars();
     let first = chars.next()?;
     if chars.next().is_some() {
-        return None; // not a single character
+        return None;
     }
-    let code_name: &'static str = match first {
+    Some(match first {
         'a' | 'A' => "KeyA",
         'b' | 'B' => "KeyB",
         'c' | 'C' => "KeyC",
@@ -498,37 +518,7 @@ fn normalize_binding_for_match(keystroke: &Keystroke, smart_enabled: bool) -> Op
         '8' => "Digit8",
         '9' => "Digit9",
         _ => return None,
-    };
-    let mut clone = keystroke.clone();
-    clone.key = format!("Code({})", code_name);
-    Some(clone)
-}
-
-/// `slice::starts_with` analogue that compares each pair of keystrokes either
-/// directly or - if Smart binding is on - via `normalize_binding_for_match`
-/// to allow alphanumeric Logical bindings to match physical-key events.
-fn keystrokes_starts_with(
-    binding_keystrokes: &[Keystroke],
-    pending: &[Keystroke],
-    smart_enabled: bool,
-) -> bool {
-    if pending.len() > binding_keystrokes.len() {
-        return false;
-    }
-    for (b, p) in binding_keystrokes.iter().zip(pending.iter()) {
-        if b == p {
-            continue;
-        }
-        if smart_enabled {
-            if let Some(normalized) = normalize_binding_for_match(b, true) {
-                if normalized == *p {
-                    continue;
-                }
-            }
-        }
-        return false;
-    }
-    true
+    })
 }
 
 #[cfg(test)]
