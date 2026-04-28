@@ -17,12 +17,19 @@ pub struct Matcher {
     /// all of the bindings that match the [`Context`] it is paired with.
     binding_validators: Vec<(Context, BindingValidatorFn)>,
     /// Function to convert bindings that have a [`CustomTag`] trigger to one that has a
-    /// [`Keystroke`]-based trigger instead. If `None`, bindings are not converted.  
+    /// [`Keystroke`]-based trigger instead. If `None`, bindings are not converted.
     custom_trigger_to_keystroke_fn: Option<Box<dyn Fn(CustomTag) -> Option<Keystroke> + 'static>>,
     /// Function to lookup the default keystroke for a given custom action. Used when converting
     /// custom actions to key events during keybinding editing.
     default_keystroke_trigger_for_custom_action:
         Option<Box<dyn Fn(CustomTag) -> Option<Keystroke> + 'static>>,
+    /// When `true`, the matcher treats single-letter and single-digit Logical
+    /// bindings as if they were Physical bindings on the equivalent W3C
+    /// UIEvents code (e.g. binding `cmd-c` matches the physical `KeyC` key
+    /// regardless of the active layout). This is the "Smart layout-aware
+    /// shortcuts" master toggle in Keyboard settings. Default `false`
+    /// preserves backward compatibility - the user must opt in.
+    smart_binding_enabled: bool,
 }
 
 #[derive(Default)]
@@ -57,12 +64,27 @@ impl Matcher {
             binding_validators: vec![],
             custom_trigger_to_keystroke_fn: None,
             default_keystroke_trigger_for_custom_action: None,
+            smart_binding_enabled: false,
         }
     }
 
     pub fn set_keymap(&mut self, keymap: Keymap) {
         self.pending.clear();
         self.keymap = keymap;
+    }
+
+    /// Toggle the "Smart layout-aware shortcuts" feature. Affects future
+    /// `push_keystroke` calls; pending multi-keystroke chords are cleared so
+    /// that the change can never be observed mid-chord.
+    pub fn set_smart_binding_enabled(&mut self, enabled: bool) {
+        if self.smart_binding_enabled != enabled {
+            self.smart_binding_enabled = enabled;
+            self.pending.clear();
+        }
+    }
+
+    pub fn smart_binding_enabled(&self) -> bool {
+        self.smart_binding_enabled
     }
 
     /// Helper function to that returns [`Trigger`] with any [`Trigger::Custom`]s replaced by a
@@ -303,9 +325,22 @@ impl Matcher {
     pub fn push_keystroke(
         &mut self,
         keystroke: Keystroke,
+        physical_code: Option<&str>,
         view_id: EntityId,
         ctx: &Context,
     ) -> MatchResult {
+        // Smart binding is suppressed during IME composition: matching a
+        // hotkey by physical key while the user is composing kanji/hangul
+        // would surprise them by firing the hotkey mid-input. The classic
+        // Logical-key path (which wouldn't have collided anyway, since the
+        // composition logical key is `Process`) remains active.
+        let smart = self.smart_binding_enabled && !ctx.set.contains("IMEOpen");
+
+        // Normalize the incoming OS event for matching purposes. The pending
+        // chord buffer stores the *normalized* keystroke so that subsequent
+        // bindings in a multi-keystroke chord can be matched the same way.
+        let normalized = normalize_event_for_match(keystroke, physical_code, smart);
+
         let pending = self.pending.entry(view_id).or_default();
 
         if let Some(pending_ctx) = pending.context.as_ref() {
@@ -314,12 +349,12 @@ impl Matcher {
             }
         }
 
-        pending.keystrokes.push(keystroke);
+        pending.keystrokes.push(normalized);
 
         let mut retain_pending = false;
         for binding in self.keymap.bindings() {
             if let Trigger::Keystrokes(keystrokes) = &binding.trigger {
-                if keystrokes.starts_with(&pending.keystrokes)
+                if keystrokes_starts_with(keystrokes, &pending.keystrokes, smart)
                     && binding.context_predicate.eval(ctx)
                 {
                     if keystrokes.len() == pending.keystrokes.len() {
@@ -371,6 +406,129 @@ impl Matcher {
         }
         MatchResult::None
     }
+}
+
+/// Convert an OS-side `Keystroke` (which always carries the *logical* key as
+/// `key`) into a form ready for comparison against a binding's keystrokes.
+///
+/// When Smart binding is on AND the OS reported an alphanumeric physical key
+/// (`KeyA..KeyZ` / `Digit0..Digit9`), the event's `key` is rewritten to
+/// `Code(NAME)`. This way a Logical binding `cmd-c` (which the parser also
+/// rewrites symmetrically through `normalize_binding_for_match`) matches the
+/// physical `KeyC` press regardless of the active layout - fixing the
+/// long-standing "copy/paste broken on Russian layout" bug.
+///
+/// When Smart binding is off, this is a no-op modulo the move.
+fn normalize_event_for_match(
+    mut keystroke: Keystroke,
+    physical_code: Option<&str>,
+    smart_enabled: bool,
+) -> Keystroke {
+    if !smart_enabled {
+        return keystroke;
+    }
+    // Already a Physical binding from explicit user opt-in - leave as is.
+    if keystroke.physical_code().is_some() {
+        return keystroke;
+    }
+    if let Some(code) = physical_code {
+        if crate::platform::keyboard::is_alphanumeric_physical(code) {
+            keystroke.key = format!("Code({})", code);
+        }
+    }
+    keystroke
+}
+
+/// Mirror of `normalize_event_for_match` for the binding side.
+///
+/// Smart binding only activates when the *binding* is a Logical single-letter
+/// or single-digit keystroke and the corresponding alphanumeric physical key
+/// can be derived from `key`. Symbol/named/special-key bindings are left
+/// untouched because for those the user expects the logical key (e.g.
+/// `Cmd+/` should mean "the slash key", which lives on different physical
+/// positions in different layouts).
+fn normalize_binding_for_match(keystroke: &Keystroke, smart_enabled: bool) -> Option<Keystroke> {
+    if !smart_enabled {
+        return None;
+    }
+    if keystroke.physical_code().is_some() {
+        return None;
+    }
+    let key = keystroke.key.as_str();
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        return None; // not a single character
+    }
+    let code_name: &'static str = match first {
+        'a' | 'A' => "KeyA",
+        'b' | 'B' => "KeyB",
+        'c' | 'C' => "KeyC",
+        'd' | 'D' => "KeyD",
+        'e' | 'E' => "KeyE",
+        'f' | 'F' => "KeyF",
+        'g' | 'G' => "KeyG",
+        'h' | 'H' => "KeyH",
+        'i' | 'I' => "KeyI",
+        'j' | 'J' => "KeyJ",
+        'k' | 'K' => "KeyK",
+        'l' | 'L' => "KeyL",
+        'm' | 'M' => "KeyM",
+        'n' | 'N' => "KeyN",
+        'o' | 'O' => "KeyO",
+        'p' | 'P' => "KeyP",
+        'q' | 'Q' => "KeyQ",
+        'r' | 'R' => "KeyR",
+        's' | 'S' => "KeyS",
+        't' | 'T' => "KeyT",
+        'u' | 'U' => "KeyU",
+        'v' | 'V' => "KeyV",
+        'w' | 'W' => "KeyW",
+        'x' | 'X' => "KeyX",
+        'y' | 'Y' => "KeyY",
+        'z' | 'Z' => "KeyZ",
+        '0' => "Digit0",
+        '1' => "Digit1",
+        '2' => "Digit2",
+        '3' => "Digit3",
+        '4' => "Digit4",
+        '5' => "Digit5",
+        '6' => "Digit6",
+        '7' => "Digit7",
+        '8' => "Digit8",
+        '9' => "Digit9",
+        _ => return None,
+    };
+    let mut clone = keystroke.clone();
+    clone.key = format!("Code({})", code_name);
+    Some(clone)
+}
+
+/// `slice::starts_with` analogue that compares each pair of keystrokes either
+/// directly or - if Smart binding is on - via `normalize_binding_for_match`
+/// to allow alphanumeric Logical bindings to match physical-key events.
+fn keystrokes_starts_with(
+    binding_keystrokes: &[Keystroke],
+    pending: &[Keystroke],
+    smart_enabled: bool,
+) -> bool {
+    if pending.len() > binding_keystrokes.len() {
+        return false;
+    }
+    for (b, p) in binding_keystrokes.iter().zip(pending.iter()) {
+        if b == p {
+            continue;
+        }
+        if smart_enabled {
+            if let Some(normalized) = normalize_binding_for_match(b, true) {
+                if normalized == *p {
+                    continue;
+                }
+            }
+        }
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

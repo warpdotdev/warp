@@ -527,3 +527,75 @@ pub enum KeyCode {
     /// General-purpose function key.
     F35,
 }
+
+/// Convert a [`KeyCode`] to its W3C UIEvents `code` value (e.g. `KeyCode::KeyC` -> `"KeyC"`).
+///
+/// Used to serialize bindings whose `match_mode` is `Physical` and to fill in
+/// the `physical_key` field of `Keystroke` when an OS event arrives. The names
+/// follow the W3C UIEvents code spec (https://w3c.github.io/uievents-code/),
+/// which is what the `KeyCode` enum already mirrors via its derived
+/// `Serialize` impl.
+pub fn physical_key_to_string(code: KeyCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Inverse of [`physical_key_to_string`]. Returns `None` if the input is not
+/// the name of any known [`KeyCode`] variant.
+pub fn physical_key_from_string(name: &str) -> Option<KeyCode> {
+    serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
+}
+
+/// True for `KeyA..KeyZ` and `Digit0..Digit9` - the physical keys that the
+/// "Smart layout-aware shortcuts" setting applies to. Other physical keys
+/// (symbols, function keys, navigation, numpad) are intentionally excluded:
+/// for those, a layout-independent match would surprise more users than it
+/// would help (e.g. `Cmd+/` should remain a logical match because the `/`
+/// symbol can live on a different physical key in non-US layouts).
+pub fn is_alphanumeric_physical(name: &str) -> bool {
+    name.starts_with("Key") || name.starts_with("Digit")
+}
+
+#[cfg(test)]
+mod physical_key_string_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_letter() {
+        assert_eq!(physical_key_to_string(KeyCode::KeyC), "KeyC");
+        assert_eq!(physical_key_from_string("KeyC"), Some(KeyCode::KeyC));
+    }
+
+    #[test]
+    fn roundtrip_digit() {
+        assert_eq!(physical_key_to_string(KeyCode::Digit0), "Digit0");
+        assert_eq!(physical_key_from_string("Digit0"), Some(KeyCode::Digit0));
+    }
+
+    #[test]
+    fn roundtrip_symbol() {
+        assert_eq!(physical_key_to_string(KeyCode::Slash), "Slash");
+        assert_eq!(physical_key_from_string("Slash"), Some(KeyCode::Slash));
+    }
+
+    #[test]
+    fn unknown_returns_none() {
+        assert_eq!(physical_key_from_string("Bogus"), None);
+        assert_eq!(physical_key_from_string(""), None);
+    }
+
+    #[test]
+    fn alphanumeric_classification() {
+        assert!(is_alphanumeric_physical("KeyA"));
+        assert!(is_alphanumeric_physical("KeyZ"));
+        assert!(is_alphanumeric_physical("Digit0"));
+        assert!(is_alphanumeric_physical("Digit9"));
+        assert!(!is_alphanumeric_physical("Slash"));
+        assert!(!is_alphanumeric_physical("F1"));
+        assert!(!is_alphanumeric_physical("ArrowUp"));
+        assert!(!is_alphanumeric_physical("Numpad0"));
+        assert!(!is_alphanumeric_physical(""));
+    }
+}

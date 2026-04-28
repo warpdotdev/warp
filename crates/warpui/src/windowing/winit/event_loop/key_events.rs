@@ -90,6 +90,18 @@ pub fn convert_keyboard_input_event(
 
     let shift = window_state.modifiers.shift_key();
 
+    // Capture the layout-independent physical key code (e.g. "KeyC") *before*
+    // we move `input.logical_key` below. Used by the matcher to support
+    // "match by physical key" bindings.
+    let physical_code = match input.physical_key {
+        winit::keyboard::PhysicalKey::Code(code) => {
+            convert_winit_key_code_to_warp(code).map(|c| {
+                crate::platform::keyboard::physical_key_to_string(c)
+            })
+        }
+        winit::keyboard::PhysicalKey::Unidentified(_) => None,
+    };
+
     let logical_key = match &input.logical_key {
         // When keystrokes with ctrl-alt are pressed on Windows, `input.logical_key` is
         // Unidentified.
@@ -131,6 +143,102 @@ pub fn convert_keyboard_input_event(
             key_without_modifiers,
         },
         is_composing: false,
+        physical_code,
+    })
+}
+
+/// Convert a `winit::keyboard::KeyCode` to our internal
+/// `warpui_core::platform::keyboard::KeyCode`. The two enums share the same
+/// variant names (W3C UIEvents code) so a `Debug`-string round-trip is
+/// reliable, but we use a small explicit match for the common letter and
+/// digit keys to avoid the allocation - the matcher's hot path runs through
+/// here on every keypress.
+fn convert_winit_key_code_to_warp(
+    code: winit::keyboard::KeyCode,
+) -> Option<crate::platform::keyboard::KeyCode> {
+    use crate::platform::keyboard::KeyCode as Warp;
+    use winit::keyboard::KeyCode as Wk;
+    Some(match code {
+        Wk::Backquote => Warp::Backquote,
+        Wk::Backslash => Warp::Backslash,
+        Wk::BracketLeft => Warp::BracketLeft,
+        Wk::BracketRight => Warp::BracketRight,
+        Wk::Comma => Warp::Comma,
+        Wk::Digit0 => Warp::Digit0,
+        Wk::Digit1 => Warp::Digit1,
+        Wk::Digit2 => Warp::Digit2,
+        Wk::Digit3 => Warp::Digit3,
+        Wk::Digit4 => Warp::Digit4,
+        Wk::Digit5 => Warp::Digit5,
+        Wk::Digit6 => Warp::Digit6,
+        Wk::Digit7 => Warp::Digit7,
+        Wk::Digit8 => Warp::Digit8,
+        Wk::Digit9 => Warp::Digit9,
+        Wk::Equal => Warp::Equal,
+        Wk::IntlBackslash => Warp::IntlBackslash,
+        Wk::IntlRo => Warp::IntlRo,
+        Wk::IntlYen => Warp::IntlYen,
+        Wk::KeyA => Warp::KeyA,
+        Wk::KeyB => Warp::KeyB,
+        Wk::KeyC => Warp::KeyC,
+        Wk::KeyD => Warp::KeyD,
+        Wk::KeyE => Warp::KeyE,
+        Wk::KeyF => Warp::KeyF,
+        Wk::KeyG => Warp::KeyG,
+        Wk::KeyH => Warp::KeyH,
+        Wk::KeyI => Warp::KeyI,
+        Wk::KeyJ => Warp::KeyJ,
+        Wk::KeyK => Warp::KeyK,
+        Wk::KeyL => Warp::KeyL,
+        Wk::KeyM => Warp::KeyM,
+        Wk::KeyN => Warp::KeyN,
+        Wk::KeyO => Warp::KeyO,
+        Wk::KeyP => Warp::KeyP,
+        Wk::KeyQ => Warp::KeyQ,
+        Wk::KeyR => Warp::KeyR,
+        Wk::KeyS => Warp::KeyS,
+        Wk::KeyT => Warp::KeyT,
+        Wk::KeyU => Warp::KeyU,
+        Wk::KeyV => Warp::KeyV,
+        Wk::KeyW => Warp::KeyW,
+        Wk::KeyX => Warp::KeyX,
+        Wk::KeyY => Warp::KeyY,
+        Wk::KeyZ => Warp::KeyZ,
+        Wk::Minus => Warp::Minus,
+        Wk::Period => Warp::Period,
+        Wk::Quote => Warp::Quote,
+        Wk::Semicolon => Warp::Semicolon,
+        Wk::Slash => Warp::Slash,
+        Wk::Enter => Warp::Enter,
+        Wk::Space => Warp::Space,
+        Wk::Tab => Warp::Tab,
+        Wk::Backspace => Warp::Backspace,
+        Wk::Delete => Warp::Delete,
+        Wk::Escape => Warp::Escape,
+        Wk::ArrowDown => Warp::ArrowDown,
+        Wk::ArrowLeft => Warp::ArrowLeft,
+        Wk::ArrowRight => Warp::ArrowRight,
+        Wk::ArrowUp => Warp::ArrowUp,
+        Wk::Home => Warp::Home,
+        Wk::End => Warp::End,
+        Wk::PageDown => Warp::PageDown,
+        Wk::PageUp => Warp::PageUp,
+        Wk::F1 => Warp::F1,
+        Wk::F2 => Warp::F2,
+        Wk::F3 => Warp::F3,
+        Wk::F4 => Warp::F4,
+        Wk::F5 => Warp::F5,
+        Wk::F6 => Warp::F6,
+        Wk::F7 => Warp::F7,
+        Wk::F8 => Warp::F8,
+        Wk::F9 => Warp::F9,
+        Wk::F10 => Warp::F10,
+        Wk::F11 => Warp::F11,
+        Wk::F12 => Warp::F12,
+        // Anything not on the alphanumeric/symbol/navigation/F-key fast path
+        // doesn't need physical-key matching today - return None and let the
+        // matcher fall back to the logical-key path.
+        _ => return None,
     })
 }
 

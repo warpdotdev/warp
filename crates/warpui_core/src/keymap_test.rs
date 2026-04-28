@@ -81,6 +81,61 @@ fn test_keystroke_parse() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_keystroke_parse_physical_code() -> anyhow::Result<()> {
+    // The new layout-independent binding syntax: `Code(NAME)` carries a W3C
+    // UIEvents code in place of a logical key.
+    let parsed = Keystroke::parse("cmd-Code(KeyC)")?;
+    assert!(parsed.cmd);
+    assert!(!parsed.ctrl);
+    assert_eq!(parsed.key, "Code(KeyC)");
+    assert_eq!(parsed.physical_code(), Some("KeyC"));
+    assert_eq!(parsed.match_mode(), KeystrokeMatchMode::Physical);
+
+    // Round-trip via `normalized` should be stable.
+    assert_eq!(parsed.normalized(), "cmd-Code(KeyC)");
+    assert_eq!(Keystroke::parse(parsed.normalized())?, parsed);
+
+    // Multi-modifier physical bindings.
+    let parsed = Keystroke::parse("ctrl-shift-Code(KeyV)")?;
+    assert!(parsed.ctrl && parsed.shift);
+    assert_eq!(parsed.physical_code(), Some("KeyV"));
+
+    // Physical binding for a digit.
+    let parsed = Keystroke::parse("cmd-Code(Digit0)")?;
+    assert_eq!(parsed.physical_code(), Some("Digit0"));
+
+    Ok(())
+}
+
+#[test]
+fn test_keystroke_parse_physical_code_unknown() {
+    // An unknown KeyCode name must be rejected so a typo in the user's
+    // keybindings.yaml doesn't silently produce a binding that never matches.
+    assert!(Keystroke::parse("cmd-Code(Bogus)").is_err());
+    assert!(Keystroke::parse("cmd-Code(keyc)").is_err()); // case sensitive
+}
+
+#[test]
+fn test_keystroke_match_mode_logical_default() -> anyhow::Result<()> {
+    // Existing Logical bindings keep `match_mode == Logical` and have no
+    // `physical_code`; this is what guarantees backward compatibility for
+    // every keybinding currently in user `keybindings.yaml` files.
+    let parsed = Keystroke::parse("cmd-c")?;
+    assert_eq!(parsed.physical_code(), None);
+    assert_eq!(parsed.match_mode(), KeystrokeMatchMode::Logical);
+    Ok(())
+}
+
+#[test]
+fn test_keystroke_normalized_preserves_logical() -> anyhow::Result<()> {
+    // No behavior change for legacy bindings: `cmd-c` normalizes to `cmd-c`,
+    // not to `cmd-Code(KeyC)`. The migration to Physical is opt-in.
+    let parsed = Keystroke::parse("cmd-c")?;
+    assert_eq!(parsed.normalized(), "cmd-c");
+    Ok(())
+}
+
+#[test]
 fn test_keystroke_normalized() -> anyhow::Result<()> {
     assert_eq!(Keystroke::parse("ctrl-p")?.normalized(), "ctrl-p");
     assert_eq!(Keystroke::parse("cmd-p")?.normalized(), "cmd-p");

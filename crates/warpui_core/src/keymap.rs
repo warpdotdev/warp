@@ -317,6 +317,28 @@ pub struct EditableBindingLens<'a> {
     pub id: BindingId,
 }
 
+/// How a `Keystroke` binding matches incoming OS events: by the logical key
+/// (existing behavior; backward compatible) or by the physical key code
+/// (layout-independent; needed to make shortcuts work on non-Latin layouts
+/// such as Russian).
+///
+/// In storage, the mode is encoded directly in `Keystroke.key`:
+/// - `Logical`: `key` holds the logical character or named key (e.g. `"c"`,
+///   `"enter"`, `"f1"`).
+/// - `Physical`: `key` holds the W3C UIEvents code wrapped in `Code(...)`
+///   (e.g. `"Code(KeyC)"`).
+///
+/// This sidesteps adding new fields to `Keystroke` (which would force
+/// updating ~50 struct literal sites in the codebase) and keeps the YAML/TOML
+/// settings format perfectly backward compatible: legacy `cmd-c` bindings
+/// parse to `key = "c"` and behave exactly as before.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default)]
+pub enum KeystrokeMatchMode {
+    #[default]
+    Logical,
+    Physical,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct Keystroke {
     pub ctrl: bool,
@@ -918,6 +940,24 @@ impl Keystroke {
                         ctrl = true
                     }
                 }
+                // `Code(NAME)` token marks the keystroke as a layout-independent
+                // physical-key binding. NAME must be a valid W3C UIEvents code
+                // (e.g. `KeyC`, `Digit0`, `Slash`). The names never contain `-`,
+                // so `split('-')` keeps the token intact. We store the entire
+                // `Code(NAME)` string in `key`, and `Keystroke::match_mode()`
+                // recognizes it as `Physical`.
+                s if s.starts_with("Code(") && s.ends_with(')') => {
+                    let name = &s["Code(".len()..s.len() - 1];
+                    if crate::platform::keyboard::physical_key_from_string(name).is_some() {
+                        key = Some(s.to_string());
+                    } else {
+                        return Err(anyhow!(
+                            "Unknown physical key code `{}` in `{}`",
+                            name,
+                            source
+                        ));
+                    }
+                }
                 "space" => key = Some(String::from(" ")),
                 _ => {
                     if let Some(component) = components.peek() {
@@ -936,15 +976,20 @@ impl Keystroke {
             }
         }
 
+        let final_key = key.ok_or_else(|| anyhow!("Invalid keystroke: key is unset"))?;
+
         // Make sure that we aren't accidentally registering a keybinding
         // with shift + lowercase (e.g. shift-r), which will never actually be
-        // sent (since the OS sends ctrl-R in cases like this)
-        if cfg!(debug_assertions) {
-            let stroke = match &key {
-                Some(key) if key.chars().count() == 1 => {
-                    Some(key.chars().next().expect("Character should exist"))
-                }
-                _ => None,
+        // sent (since the OS sends ctrl-R in cases like this).
+        // Skipped for Physical bindings: there is no logical-letter case to
+        // worry about - the physical key encodes the position regardless of
+        // shift state.
+        let is_physical = final_key.starts_with("Code(") && final_key.ends_with(')');
+        if cfg!(debug_assertions) && !is_physical {
+            let stroke = if final_key.chars().count() == 1 {
+                final_key.chars().next()
+            } else {
+                None
             };
             match stroke {
                 Some(stroke) if shift && stroke.is_lowercase() => {
@@ -963,7 +1008,7 @@ impl Keystroke {
             shift,
             cmd,
             meta,
-            key: key.ok_or_else(|| anyhow!("Invalid keystroke: key is unset"))?,
+            key: final_key,
         })
     }
 
@@ -984,12 +1029,36 @@ impl Keystroke {
         if self.meta {
             s.push_str("meta-");
         }
+        // For Physical bindings, `key` already contains `"Code(NAME)"` and
+        // round-trips cleanly through `parse`. For Logical bindings we keep
+        // the existing space-folding behavior.
         s.push_str(match self.key.as_str() {
             " " => "space",
             k => k,
         });
 
         s
+    }
+
+    /// Whether this keystroke matches by logical character (default) or by
+    /// physical key code (layout-independent).
+    pub fn match_mode(&self) -> KeystrokeMatchMode {
+        if self.physical_code().is_some() {
+            KeystrokeMatchMode::Physical
+        } else {
+            KeystrokeMatchMode::Logical
+        }
+    }
+
+    /// If this keystroke is a Physical binding, return the W3C UIEvents code
+    /// (e.g. `"KeyC"`). Otherwise return `None`.
+    pub fn physical_code(&self) -> Option<&str> {
+        let key = self.key.as_str();
+        if key.starts_with("Code(") && key.ends_with(')') {
+            Some(&key["Code(".len()..key.len() - 1])
+        } else {
+            None
+        }
     }
 
     /// Returns the keybinding string using special characters to present ctrl/alt/shift/cmd keys.
@@ -1031,6 +1100,26 @@ impl Keystroke {
         }
         if self.meta {
             s.push("Meta".into());
+        }
+
+        // For Physical bindings, derive a friendly display from the physical
+        // key code embedded in `key` ("Code(KeyC)" -> "C", "Code(Digit0)" -> "0",
+        // otherwise the raw code name). This avoids showing the verbose
+        // `Code(...)` token in the UI.
+        if let Some(name) = self.physical_code() {
+            let display = if let Some(rest) = name.strip_prefix("Key") {
+                rest.to_string()
+            } else if let Some(rest) = name.strip_prefix("Digit") {
+                rest.to_string()
+            } else {
+                name.to_string()
+            };
+            s.push(display.into());
+            return if OperatingSystem::get().is_mac() {
+                s.join("")
+            } else {
+                s.join(" ")
+            };
         }
 
         // Always treat the key as uppercase--this matches how operating systems and most

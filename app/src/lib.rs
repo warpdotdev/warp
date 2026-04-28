@@ -2218,6 +2218,11 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 
     keyboard::load_custom_keybindings(ctx);
 
+    // Apply the user's "Smart layout-aware shortcuts" preference to the
+    // matcher. Changes made later through the settings UI also flow through
+    // `keyboard::sync_smart_binding_to_matcher`.
+    keyboard::sync_smart_binding_to_matcher(ctx);
+
     IntervalTimer::handle(ctx).update(ctx, |timer, _ctx| {
         timer.mark_interval_end("KEYBINDINGS_LOADED");
     });

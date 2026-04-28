@@ -1394,6 +1394,7 @@ pub fn test_text_input_on_block_list() -> Builder {
                 chars: "\u{1b}".to_string(),
                 details: Default::default(),
                 is_composing: false,
+                physical_code: None,
             })
             .add_assertion(|app, window_id| {
                 let views = app.views_of_type(window_id).expect("Should be able to retrieve view");

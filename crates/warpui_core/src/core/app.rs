@@ -272,8 +272,37 @@ impl App {
         keystroke: &Keystroke,
         is_composing: bool,
     ) -> Result<bool> {
+        self.dispatch_keystroke_with_physical(
+            window_id,
+            responder_chain,
+            keystroke,
+            is_composing,
+            None,
+        )
+    }
+
+    /// Like [`Self::dispatch_keystroke`], but also accepts the physical key
+    /// code (W3C UIEvents code, e.g. `"KeyC"`). Required for
+    /// `Smart layout-aware shortcuts` and explicit `Code(...)` bindings to
+    /// match correctly. Callers wired through `Event::KeyDown` (the normal
+    /// keyboard path) should use this. Tests and synthetic dispatchers can
+    /// continue using the simpler `dispatch_keystroke` and pass `None`.
+    pub fn dispatch_keystroke_with_physical(
+        &self,
+        window_id: WindowId,
+        responder_chain: &[EntityId],
+        keystroke: &Keystroke,
+        is_composing: bool,
+        physical_code: Option<&str>,
+    ) -> Result<bool> {
         let mut state = self.0.borrow_mut();
-        state.dispatch_keystroke(window_id, responder_chain, keystroke, is_composing)
+        state.dispatch_keystroke(
+            window_id,
+            responder_chain,
+            keystroke,
+            is_composing,
+            physical_code,
+        )
     }
 
     pub fn add_model<T, F>(&mut self, build_model: F) -> ModelHandle<T>
@@ -1950,6 +1979,7 @@ impl AppContext {
                 chars: keystroke.key,
                 details: Default::default(),
                 is_composing: false,
+                physical_code: None,
             })
             .and_then(|key_event| {
                 self.presenter(window_id).map(|presenter| {
@@ -1991,6 +2021,7 @@ impl AppContext {
         responder_chain: &[EntityId],
         keystroke: &Keystroke,
         is_composing: bool,
+        physical_code: Option<&str>,
     ) -> Result<bool> {
         let mut context_chain = self.contexts_from_responder_chain(window_id, responder_chain)?;
         let mut pending = false;
@@ -2000,6 +2031,7 @@ impl AppContext {
             }
             let handled = match self.keystroke_matcher.push_keystroke(
                 keystroke.clone(),
+                physical_code,
                 responder_chain[i],
                 ctx,
             ) {
@@ -2052,6 +2084,17 @@ impl AppContext {
     ) -> Option<Keystroke> {
         self.keystroke_matcher
             .default_keystroke_trigger_for_custom_action(custom_tag)
+    }
+
+    /// Toggle "Smart layout-aware shortcuts" - alphanumeric Logical bindings
+    /// match by physical key code regardless of the active keyboard layout.
+    /// Called from settings handlers; the matcher caches the value.
+    pub fn set_smart_binding_enabled(&mut self, enabled: bool) {
+        self.keystroke_matcher.set_smart_binding_enabled(enabled);
+    }
+
+    pub fn smart_binding_enabled(&self) -> bool {
+        self.keystroke_matcher.smart_binding_enabled()
     }
 
     pub fn add_model<T, F>(&mut self, build_model: F) -> ModelHandle<T>
@@ -3223,6 +3266,7 @@ impl AppContext {
             if let Event::KeyDown {
                 keystroke,
                 is_composing,
+                physical_code,
                 ..
             } = &event
             {
@@ -3233,6 +3277,7 @@ impl AppContext {
                         &responder_chain,
                         keystroke,
                         *is_composing,
+                        physical_code.as_deref(),
                     ) {
                         Ok(handled) => {
                             keystroke_handled = handled;

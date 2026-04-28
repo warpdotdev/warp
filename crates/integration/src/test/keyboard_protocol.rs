@@ -242,6 +242,7 @@ pub fn test_keyboard_protocol_enabled_shifted_symbol_uses_unshifted_keycode() ->
                         ..Default::default()
                     },
                     is_composing: false,
+                    physical_code: None,
                 })
                 .set_timeout(Duration::from_secs(5))
                 .add_assertion(assert_output_contains(
@@ -445,6 +446,7 @@ pub fn test_keyboard_protocol_report_all_keys_printable_and_cursor() -> Builder 
                     chars: "é".to_string(),
                     details: KeyEventDetails::default(),
                     is_composing: false,
+                    physical_code: None,
                 })
                 .set_timeout(Duration::from_secs(5))
                 .add_assertion(assert_output_contains(

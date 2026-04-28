@@ -234,11 +234,204 @@ impl Matcher {
         view_id: EntityId,
         ctx: &Context,
     ) -> Option<Arc<dyn Action>> {
-        match self.push_keystroke(Keystroke::parse(keystroke).unwrap(), view_id, ctx) {
+        match self.push_keystroke(Keystroke::parse(keystroke).unwrap(), None, view_id, ctx) {
             MatchResult::Action(action) => Some(action),
             _ => None,
         }
     }
+
+    /// Like `test_keystroke`, but also supplies a physical key code - simulates
+    /// what `convert_keyboard_input_event` produces for a real OS keypress.
+    fn test_keystroke_with_physical(
+        &mut self,
+        keystroke: &str,
+        physical_code: &str,
+        view_id: EntityId,
+        ctx: &Context,
+    ) -> Option<Arc<dyn Action>> {
+        match self.push_keystroke(
+            Keystroke::parse(keystroke).unwrap(),
+            Some(physical_code),
+            view_id,
+            ctx,
+        ) {
+            MatchResult::Action(action) => Some(action),
+            _ => None,
+        }
+    }
+}
+
+#[test]
+fn test_explicit_physical_binding_matches_any_layout() -> anyhow::Result<()> {
+    // A binding that explicitly opts into physical-key matching should fire
+    // regardless of the active keyboard layout - this is the "I know what I'm
+    // doing, force layout-independent matching" path.
+    #[derive(Debug, PartialEq)]
+    enum Action {
+        Copy,
+    }
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([
+        EditableBinding::new("editor:copy", "Copy", Action::Copy)
+            .with_key_binding("cmd-Code(KeyC)")
+            .with_context_predicate(id!("editor")),
+    ]);
+
+    let mut ctx = Context::default();
+    ctx.set.insert("editor");
+
+    let mut matcher = Matcher::new(keymap);
+    let view_id = EntityId::new();
+
+    // Russian layout: physical KeyC produces logical "с" (Cyrillic). The
+    // explicit Physical binding still matches.
+    assert_eq!(
+        matcher
+            .test_keystroke_with_physical("cmd-с", "KeyC", view_id, &ctx)
+            .map(|a| a.as_action::<Action>().clone()),
+        Some(Action::Copy),
+    );
+
+    // English layout: same binding matches the equivalent logical event.
+    assert_eq!(
+        matcher
+            .test_keystroke_with_physical("cmd-c", "KeyC", view_id, &ctx)
+            .map(|a| a.as_action::<Action>().clone()),
+        Some(Action::Copy),
+    );
+
+    // Wrong physical key on the same layout - should not match (sanity check).
+    assert!(matcher
+        .test_keystroke_with_physical("cmd-v", "KeyV", view_id, &ctx)
+        .is_none());
+
+    Ok(())
+}
+
+#[test]
+fn test_smart_binding_promotes_alphanumeric_logical() -> anyhow::Result<()> {
+    // The master "Smart layout-aware shortcuts" toggle: a plain Logical
+    // `cmd-c` binding starts matching by physical KeyC when the toggle is on.
+    // This is the one-click "fix copy/paste under RU" path.
+    #[derive(Debug, PartialEq, Clone)]
+    enum Action {
+        Copy,
+    }
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([
+        EditableBinding::new("editor:copy", "Copy", Action::Copy)
+            .with_key_binding("cmd-c")
+            .with_context_predicate(id!("editor")),
+    ]);
+
+    let mut ctx = Context::default();
+    ctx.set.insert("editor");
+
+    let mut matcher = Matcher::new(keymap);
+    let view_id = EntityId::new();
+
+    // Smart binding OFF + RU layout: doesn't match (this is the bug we
+    // started with - documented here as a regression-guard test).
+    assert!(matcher
+        .test_keystroke_with_physical("cmd-с", "KeyC", view_id, &ctx)
+        .is_none());
+
+    // Smart binding ON + RU layout: matches via physical normalization.
+    matcher.set_smart_binding_enabled(true);
+    assert_eq!(
+        matcher
+            .test_keystroke_with_physical("cmd-с", "KeyC", view_id, &ctx)
+            .map(|a| a.as_action::<Action>().clone()),
+        Some(Action::Copy),
+    );
+
+    // Smart binding ON + EN layout: still matches (no regression).
+    assert_eq!(
+        matcher
+            .test_keystroke_with_physical("cmd-c", "KeyC", view_id, &ctx)
+            .map(|a| a.as_action::<Action>().clone()),
+        Some(Action::Copy),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_smart_binding_does_not_promote_symbol_bindings() -> anyhow::Result<()> {
+    // Smart binding only applies to letter/digit physical keys. Symbol
+    // bindings like `cmd-/` continue to match by logical character - that's
+    // what the user expects (the slash symbol lives in different physical
+    // positions across layouts and forcing it to one would be wrong).
+    #[derive(Debug, PartialEq, Clone)]
+    enum Action {
+        Find,
+    }
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([
+        EditableBinding::new("editor:find", "Find", Action::Find)
+            .with_key_binding("cmd-/")
+            .with_context_predicate(id!("editor")),
+    ]);
+
+    let mut ctx = Context::default();
+    ctx.set.insert("editor");
+
+    let mut matcher = Matcher::new(keymap);
+    matcher.set_smart_binding_enabled(true);
+    let view_id = EntityId::new();
+
+    // Logical `/` matches.
+    assert_eq!(
+        matcher
+            .test_keystroke_with_physical("cmd-/", "Slash", view_id, &ctx)
+            .map(|a| a.as_action::<Action>().clone()),
+        Some(Action::Find),
+    );
+
+    // A different layout's physical "Slash" without a `/` logical key should
+    // *not* fire `cmd-/` - the Smart binding promotion stays off for symbols,
+    // which is the right behavior.
+    assert!(matcher
+        .test_keystroke_with_physical("cmd-7", "Slash", view_id, &ctx)
+        .is_none());
+
+    Ok(())
+}
+
+#[test]
+fn test_smart_binding_suppressed_during_ime_composition() -> anyhow::Result<()> {
+    // While the user is composing CJK input (IME), the matcher must not fire
+    // hotkeys via physical-key promotion - the user is typing kanji, not
+    // pressing copy.
+    #[derive(Debug, PartialEq, Clone)]
+    enum Action {
+        Copy,
+    }
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([
+        EditableBinding::new("editor:copy", "Copy", Action::Copy)
+            .with_key_binding("cmd-c")
+            .with_context_predicate(id!("editor")),
+    ]);
+
+    let mut ctx = Context::default();
+    ctx.set.insert("editor");
+    ctx.set.insert("IMEOpen");
+
+    let mut matcher = Matcher::new(keymap);
+    matcher.set_smart_binding_enabled(true);
+    let view_id = EntityId::new();
+
+    // Even with smart binding on, IMEOpen blocks the physical-key shortcut.
+    assert!(matcher
+        .test_keystroke_with_physical("cmd-с", "KeyC", view_id, &ctx)
+        .is_none());
+
+    Ok(())
 }
 
 trait AsAction {

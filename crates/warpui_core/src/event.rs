@@ -98,6 +98,12 @@ pub enum Event {
         chars: String,
         details: KeyEventDetails,
         is_composing: bool,
+        /// W3C UIEvents `code` of the physical key (e.g. `"KeyC"`), independent
+        /// of the active keyboard layout. Used by the matcher to support
+        /// "match by physical key" bindings - critical for shortcuts to work
+        /// on non-Latin layouts (RU, etc.). `None` if the platform reported an
+        /// unidentified physical key.
+        physical_code: Option<String>,
     },
     ScrollWheel {
         position: Vector2F,
@@ -393,11 +399,13 @@ impl Scale for Event {
                 chars,
                 details,
                 is_composing,
+                physical_code,
             } => Event::KeyDown {
                 keystroke,
                 chars,
                 details,
                 is_composing,
+                physical_code,
             },
             Event::ModifierKeyChanged { key_code, state } => {
                 Event::ModifierKeyChanged { key_code, state }
