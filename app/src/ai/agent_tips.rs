@@ -423,6 +423,12 @@ impl AITip for AgentTip {
         if matches!(self.kind, AgentTipKind::Handoff) {
             return AISettings::as_ref(app).is_cloud_handoff_enabled(app);
         }
+        // Tips whose description references a keybinding placeholder should only be shown
+        // when the keybinding is actually configured, so we never display the raw
+        // "<keybinding>" string to users.
+        if self.description.contains("<keybinding>") && self.keystroke(app).is_none() {
+            return false;
+        }
         true
     }
 }
