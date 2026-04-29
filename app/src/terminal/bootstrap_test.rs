@@ -62,3 +62,54 @@ fn test_trims_powershell_specifics() {
 fn decode_script(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("should not fail to decode")
 }
+
+/// Regression test for GH-1957.
+///
+/// `warp_ssh_helper` (defined in each shell's bootstrap body) is the wrapper
+/// that spawns the user's interactive `ssh` for a Warp-managed remote
+/// session. Without `-o LogLevel=ERROR`, OpenSSH emits INFO-level messages
+/// (notably `channel N: open failed: connect failed: open failed`, logged by
+/// `channel_input_open_failure` in OpenSSH's `channels.c` whenever a
+/// client-initiated port-forward is rejected by the server) directly into
+/// the user's terminal, where they appear as terminal noise the user can't
+/// silence via `~/.ssh/config` (cli `-o` wins over config).
+///
+/// This test asserts each shell's wrapper invocation includes the flag, so a
+/// future refactor can't accidentally regress the fix.
+#[test]
+fn test_warp_ssh_helper_suppresses_openssh_chatter() {
+    const BASH_BODY: &str = include_str!("../../assets/bundled/bootstrap/bash_body.sh");
+    const ZSH_BODY: &str = include_str!("../../assets/bundled/bootstrap/zsh_body.sh");
+    const FISH_BODY: &str = include_str!("../../assets/bundled/bootstrap/fish.sh");
+
+    for (shell, body) in [
+        ("bash_body.sh", BASH_BODY),
+        ("zsh_body.sh", ZSH_BODY),
+        ("fish.sh", FISH_BODY),
+    ] {
+        let helper_idx = body.find("warp_ssh_helper").unwrap_or_else(|| {
+            panic!("{shell}: `warp_ssh_helper` definition not found")
+        });
+        let invocation_offset = body[helper_idx..]
+            .find("command ssh -o ControlMaster=yes")
+            .unwrap_or_else(|| {
+                panic!(
+                    "{shell}: `command ssh -o ControlMaster=yes` no longer appears inside \
+                     `warp_ssh_helper`. If the wrapper structure has changed, update this \
+                     regression test (and verify GH-1957 doesn't regress)."
+                )
+            });
+        let invocation_start = helper_idx + invocation_offset;
+        // The invocation is multi-line via `\` continuations. Inspect a wide
+        // window after the start of the call so we cover the full arg list
+        // regardless of how it's wrapped across lines.
+        let window_end = (invocation_start + 600).min(body.len());
+        let window = &body[invocation_start..window_end];
+        assert!(
+            window.contains("-o LogLevel=ERROR"),
+            "GH-1957: `{shell}`'s `warp_ssh_helper` is missing `-o LogLevel=ERROR`. \
+             Without it, OpenSSH's INFO-level chatter (channel-open-failure noise) \
+             leaks into the user's terminal. Window inspected:\n{window}"
+        );
+    }
+}

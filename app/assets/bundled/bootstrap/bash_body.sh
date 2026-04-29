@@ -985,7 +985,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
             # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
             # support.
+            #
+            # `-o LogLevel=ERROR` suppresses OpenSSH's INFO-level chatter that otherwise leaks into the user's
+            # interactive terminal (e.g. `channel N: open failed: connect failed: open failed`, logged by
+            # `channel_input_open_failure` in OpenSSH's channels.c whenever an outbound port-forward request is
+            # rejected by the server). Real errors (auth failures, host unreachable, etc.) are still emitted at
+            # ERROR level. See GH-1957.
             command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
+            -o LogLevel=ERROR \
             -t "${@:1}" \
 "
 export TERM_PROGRAM='WarpTerminal'
