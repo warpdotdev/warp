@@ -603,6 +603,7 @@ fn parse_dcs_precmd() {
                 conda_env: Some("numpy".to_string()),
                 node_version: None,
                 kube_config: None,
+                aws_profile: None,
                 session_id: Some(167303092612201),
                 ps1_is_encoded: None,
                 is_after_in_band_command: false,

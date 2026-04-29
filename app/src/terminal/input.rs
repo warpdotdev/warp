@@ -947,6 +947,38 @@ fn render_prompt_chip_shell_command(
             format!("nvm use {}", shell_quote_arg(version, shell_type))
         }
         PromptChipShellCommand::NvmInstallLatestNode => "nvm install node".to_string(),
+        PromptChipShellCommand::SetAwsProfile { profile_name } => {
+            // Clear `AWS_VAULT` plus the temporary credential triplet that
+            // `aws-vault exec` injects, then `export AWS_PROFILE=…`. Without
+            // clearing the triplet, the AWS SDK keeps using the prior vault
+            // credentials inside `aws-vault exec` sessions while the chip
+            // displays a different profile — confusing "wrong account"
+            // behavior. Shell-specific syntax:
+            //   - bash/zsh: `unset … ; export AWS_PROFILE=…`
+            //   - fish:     `set -e … ; or true; set -gx AWS_PROFILE …`
+            //               (`set -e` exits non-zero when the variables
+            //               aren't set, which is the common case — `or true`
+            //               swallows that so the chip click doesn't render
+            //               as a failed command)
+            //   - PowerShell: `Remove-Item Env:… ; $env:AWS_PROFILE = …`
+            let quoted = shell_quote_arg(profile_name, shell_type);
+            match shell_type {
+                ShellType::Fish => format!(
+                    "set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+                     or true; set -gx AWS_PROFILE {quoted}"
+                ),
+                ShellType::PowerShell => format!(
+                    "Remove-Item \
+                     Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
+                     -ErrorAction SilentlyContinue; \
+                     $env:AWS_PROFILE = {quoted}"
+                ),
+                ShellType::Bash | ShellType::Zsh => format!(
+                    "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+                     export AWS_PROFILE={quoted}"
+                ),
+            }
+        }
         PromptChipShellCommand::Echo { message } => {
             format!("echo {}", shell_quote_arg(message, shell_type))
         }

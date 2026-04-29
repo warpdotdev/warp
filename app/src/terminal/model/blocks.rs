@@ -2914,6 +2914,7 @@ impl BlockList {
             ps1: block.ps1.clone(),
             honor_ps1: Some(block.honor_ps1),
             kube_config: None,
+            aws_profile: None,
             rprompt: block.rprompt.clone(),
             ps1_is_encoded: None,
             is_after_in_band_command: false,

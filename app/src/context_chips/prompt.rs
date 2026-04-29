@@ -339,6 +339,7 @@ impl PromptConfiguration {
             ContextChipKind::ShellGitBranch,
             ContextChipKind::GitDiffStats,
             ContextChipKind::KubernetesContext,
+            ContextChipKind::AwsProfile,
         ];
         if FeatureFlag::GithubPrPromptChip.is_enabled() && !suppress_pr_chip {
             chips.push(ContextChipKind::GithubPullRequest);

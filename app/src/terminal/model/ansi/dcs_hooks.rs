@@ -454,6 +454,9 @@ pub struct PrecmdValue {
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub kube_config: Option<String>,
 
+    #[serde(deserialize_with = "empty_string_is_none", default)]
+    pub aws_profile: Option<String>,
+
     pub session_id: HookSessionId,
 
     /// Whether this PrecmdValue was emitted after the completion of an in-band command.
@@ -487,6 +490,7 @@ impl Default for PrecmdValue {
             conda_env: Default::default(),
             node_version: Default::default(),
             kube_config: Default::default(),
+            aws_profile: Default::default(),
             session_id: Default::default(),
             is_after_in_band_command: Default::default(),
         }

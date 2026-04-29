@@ -202,6 +202,53 @@ fn renders_fixed_prompt_chip_command_without_interpolation() {
     );
 }
 
+#[test]
+fn renders_set_aws_profile_prompt_chip_command_per_shell() {
+    let command = PromptChipShellCommand::SetAwsProfile {
+        profile_name: "prod".to_string(),
+    };
+    for shell in [ShellType::Bash, ShellType::Zsh] {
+        assert_eq!(
+            render_prompt_chip_shell_command(&command, shell),
+            "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+             export AWS_PROFILE='prod'"
+        );
+    }
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Fish),
+        "set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+         or true; set -gx AWS_PROFILE 'prod'"
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        "Remove-Item \
+         Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
+         -ErrorAction SilentlyContinue; \
+         $env:AWS_PROFILE = 'prod'"
+    );
+}
+
+#[test]
+fn renders_set_aws_profile_prompt_chip_command_quotes_metacharacters() {
+    // Profile names with shell metacharacters must round-trip through
+    // shell_quote_arg without breaking out of the single-quoted context.
+    let command = PromptChipShellCommand::SetAwsProfile {
+        profile_name: "prod;rm -rf ~ 'x'".to_string(),
+    };
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Bash),
+        r#"unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; export AWS_PROFILE='prod;rm -rf ~ '"'"'x'"'"''"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Fish),
+        r"set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; or true; set -gx AWS_PROFILE 'prod;rm -rf ~ \'x\''"
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        "Remove-Item Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN -ErrorAction SilentlyContinue; $env:AWS_PROFILE = 'prod;rm -rf ~ ''x'''"
+    );
+}
+
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 

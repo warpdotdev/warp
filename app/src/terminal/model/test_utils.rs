@@ -387,6 +387,7 @@ impl TerminalModel {
             node_version: None,
             session_id: Some(0),
             kube_config: None,
+            aws_profile: None,
             ps1: None,
             honor_ps1: None,
             rprompt: None,
