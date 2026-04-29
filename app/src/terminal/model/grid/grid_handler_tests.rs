@@ -1071,6 +1071,71 @@ fn test_possible_file_paths() {
 }
 
 #[test]
+fn test_possible_file_paths_across_wrapped_lines() {
+    let first_line = "src/modules/core/internal/utils/wrappers/adapters/";
+    let second_line = "interfaces/implementations/factories/README.md";
+    let full_path = format!("{first_line}{second_line}");
+    let expected_range = Point { row: 0, col: 0 }..=Point {
+        row: 1,
+        col: second_line.len() - 1,
+    };
+    let blockgrid = mock_blockgrid(&format!("{first_line}\n{second_line}"));
+
+    for hover_point in [
+        Point {
+            row: 0,
+            col: first_line.len() - 2,
+        },
+        Point { row: 1, col: 0 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range == expected_range
+            }),
+            "expected wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+#[test]
+fn test_possible_file_paths_across_multiple_wrapped_lines() {
+    let first_line = "src/core/";
+    let second_line = "wrappers/";
+    let third_line = "adapters/";
+    let fourth_line = "README.md";
+    let full_path = format!("{first_line}{second_line}{third_line}{fourth_line}");
+    let blockgrid = mock_blockgrid(&format!(
+        "{first_line}\n{second_line}\n{third_line}\n{fourth_line}"
+    ));
+
+    for hover_point in [
+        Point { row: 0, col: 5 },
+        Point { row: 1, col: 8 },
+        Point { row: 2, col: 5 },
+        Point { row: 3, col: 5 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range.contains(&hover_point)
+            }),
+            "expected multi-line wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+#[test]
 fn test_fragment_boundary_at_point() {
     let assert_fragment_boundary =
         |blockgrid: &BlockGrid,
