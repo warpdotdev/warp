@@ -179,6 +179,10 @@ pub enum KeybindingsViewAction {
     CancelKeyStrokeEditing(usize),
     ConfirmKeyStroke(usize),
     RemoveKeyStroke(usize),
+    /// Flip the currently-edited keystroke between Logical (`cmd-c`) and
+    /// Physical (`cmd-Code(KeyC)`) form. Only valid for single ASCII
+    /// letter/digit keys; for everything else the button is hidden.
+    ToggleLayoutIndependent(usize),
 }
 
 #[derive(Default, Clone)]
@@ -188,7 +192,73 @@ struct RowMouseStates {
     remove_mouse_state: MouseStateHandle,
     cancel_mouse_state: MouseStateHandle,
     save_mouse_state: MouseStateHandle,
+    layout_independent_mouse_state: MouseStateHandle,
 }
+
+/// Try to flip a keystroke between Logical (`cmd-c`) and Physical
+/// (`cmd-Code(KeyC)`) form. Returns `None` for keystrokes that can't be
+/// flipped - symbols, named keys (`enter`, `tab`), function keys, or
+/// physical codes outside the alphanumeric set. The UI hides the toggle
+/// button for those bindings rather than offering a useless action.
+fn flip_layout_mode(keystroke: &Keystroke) -> Option<Keystroke> {
+    let key = keystroke.key.as_str();
+    let new_key: String = if key.starts_with("Code(") && key.ends_with(')') {
+        // Physical -> Logical
+        let name = &key["Code(".len()..key.len() - 1];
+        let letter = match name {
+            "KeyA" => "a", "KeyB" => "b", "KeyC" => "c", "KeyD" => "d",
+            "KeyE" => "e", "KeyF" => "f", "KeyG" => "g", "KeyH" => "h",
+            "KeyI" => "i", "KeyJ" => "j", "KeyK" => "k", "KeyL" => "l",
+            "KeyM" => "m", "KeyN" => "n", "KeyO" => "o", "KeyP" => "p",
+            "KeyQ" => "q", "KeyR" => "r", "KeyS" => "s", "KeyT" => "t",
+            "KeyU" => "u", "KeyV" => "v", "KeyW" => "w", "KeyX" => "x",
+            "KeyY" => "y", "KeyZ" => "z",
+            "Digit0" => "0", "Digit1" => "1", "Digit2" => "2",
+            "Digit3" => "3", "Digit4" => "4", "Digit5" => "5",
+            "Digit6" => "6", "Digit7" => "7", "Digit8" => "8",
+            "Digit9" => "9",
+            _ => return None,
+        };
+        // Honor the existing shift convention: shift + letter = uppercase.
+        if keystroke.shift && letter.chars().all(|c| c.is_ascii_lowercase()) {
+            letter.to_uppercase()
+        } else {
+            letter.to_string()
+        }
+    } else {
+        // Logical -> Physical, only for single ASCII letter/digit
+        let mut chars = key.chars();
+        let c = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        let code_name = match c {
+            'a' | 'A' => "KeyA", 'b' | 'B' => "KeyB", 'c' | 'C' => "KeyC",
+            'd' | 'D' => "KeyD", 'e' | 'E' => "KeyE", 'f' | 'F' => "KeyF",
+            'g' | 'G' => "KeyG", 'h' | 'H' => "KeyH", 'i' | 'I' => "KeyI",
+            'j' | 'J' => "KeyJ", 'k' | 'K' => "KeyK", 'l' | 'L' => "KeyL",
+            'm' | 'M' => "KeyM", 'n' | 'N' => "KeyN", 'o' | 'O' => "KeyO",
+            'p' | 'P' => "KeyP", 'q' | 'Q' => "KeyQ", 'r' | 'R' => "KeyR",
+            's' | 'S' => "KeyS", 't' | 'T' => "KeyT", 'u' | 'U' => "KeyU",
+            'v' | 'V' => "KeyV", 'w' | 'W' => "KeyW", 'x' | 'X' => "KeyX",
+            'y' | 'Y' => "KeyY", 'z' | 'Z' => "KeyZ",
+            '0' => "Digit0", '1' => "Digit1", '2' => "Digit2",
+            '3' => "Digit3", '4' => "Digit4", '5' => "Digit5",
+            '6' => "Digit6", '7' => "Digit7", '8' => "Digit8",
+            '9' => "Digit9",
+            _ => return None,
+        };
+        format!("Code({})", code_name)
+    };
+
+    Some(Keystroke {
+        key: new_key,
+        ..keystroke.clone()
+    })
+}
+
+const LAYOUT_BUTTON_TEXT_TO_PHYSICAL: &str = "\u{1F310} Layout-aware";
+const LAYOUT_BUTTON_TEXT_TO_LOGICAL: &str = "\u{1F310} Layout-aware (on)";
 
 /// Wrapper around the CommandBinding structure that includes the styling/render-specific
 /// attribtues (such as MouseStateHandles)
@@ -457,6 +527,45 @@ impl KeybindingRow {
         .with_padding_left(CLEAR_CANCEL_BUTTONS_SPACING)
         .finish();
         edit_buttons_based_on_state.push(clear);
+
+        // "Layout-aware" toggle: only shown for keystrokes that can be flipped
+        // (single ASCII letter or digit, in either Logical or Physical form).
+        // For symbol/named/function keys the toggle is meaningless, so we
+        // hide it rather than show a disabled button - keeps the popup clean.
+        if let Some(current) = self.binding.trigger.as_ref() {
+            if flip_layout_mode(current).is_some() {
+                let is_physical =
+                    current.key.starts_with("Code(") && current.key.ends_with(')');
+                let label = if is_physical {
+                    LAYOUT_BUTTON_TEXT_TO_LOGICAL
+                } else {
+                    LAYOUT_BUTTON_TEXT_TO_PHYSICAL
+                };
+                let layout_btn = Container::new(
+                    Hoverable::new(
+                        self.mouse_state_handles
+                            .layout_independent_mouse_state
+                            .clone(),
+                        move |state| {
+                            render_button(
+                                label,
+                                appearance,
+                                self.get_button_text_color(appearance, state),
+                            )
+                        },
+                    )
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(
+                            KeybindingsViewAction::ToggleLayoutIndependent(index),
+                        );
+                    })
+                    .finish(),
+                )
+                .with_padding_left(CLEAR_CANCEL_BUTTONS_SPACING)
+                .finish();
+                edit_buttons_based_on_state.push(layout_btn);
+            }
+        }
 
         let cancel = Container::new(
             Hoverable::new(
@@ -743,6 +852,29 @@ impl KeybindingsView {
             ctx.notify();
         }
     }
+
+    fn toggle_layout_independent(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if let Some(row) = self.rows.as_mut().and_then(|rows| rows.get_mut(index)) {
+            // Pick the keystroke we should flip: the one currently displayed
+            // in the popup (which lives in either `unsaved_binding` if the
+            // user has pressed a new combo or `current_binding` otherwise).
+            let current = self
+                .modifying_row
+                .as_ref()
+                .and_then(|s| s.unsaved_binding.clone().or_else(|| s.current_binding.clone()))
+                .or_else(|| row.binding.trigger.clone());
+            let Some(current) = current else { return };
+            let Some(flipped) = flip_layout_mode(&current) else { return };
+
+            if let Some(state) = &mut self.modifying_row {
+                state.unsaved_binding = Some(flipped.clone());
+            }
+            self.conflict_map
+                .update(&row.binding.trigger, Some(flipped.clone()));
+            row.binding.trigger = Some(flipped);
+            ctx.notify();
+        }
+    }
 }
 
 impl Entity for KeybindingsView {
@@ -871,6 +1003,7 @@ impl TypedActionView for KeybindingsView {
             KeystrokeDefined(index, key) => {
                 self.set_temporary_keystroke_state(*index, key.clone(), ctx)
             }
+            ToggleLayoutIndependent(index) => self.toggle_layout_independent(*index, ctx),
         }
     }
 }
