@@ -1,11 +1,59 @@
 use super::{
-    format_create_git_branch_command, format_git_branch_command, truncate_from_beginning,
-    CreateGitBranch, GitBranch, GitLineChanges,
+    format_aws_profile_command, format_create_git_branch_command, format_git_branch_command,
+    truncate_from_beginning, CreateGitBranch, GitBranch, GitLineChanges,
 };
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
 use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
+use crate::terminal::shell::ShellType;
 use crate::ui_components::icons::Icon;
+
+#[test]
+fn test_format_aws_profile_command_posix() {
+    for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
+        assert_eq!(
+            format_aws_profile_command("prod", Some(shell)),
+            "export AWS_PROFILE='prod'"
+        );
+    }
+}
+
+#[test]
+fn test_format_aws_profile_command_powershell() {
+    assert_eq!(
+        format_aws_profile_command("prod", Some(ShellType::PowerShell)),
+        "$env:AWS_PROFILE = 'prod'"
+    );
+}
+
+#[test]
+fn test_format_aws_profile_command_unknown_shell_defaults_to_posix() {
+    assert_eq!(
+        format_aws_profile_command("staging", None),
+        "export AWS_PROFILE='staging'"
+    );
+}
+
+#[test]
+fn test_format_aws_profile_command_escapes_single_quotes() {
+    assert_eq!(
+        format_aws_profile_command("foo'bar", Some(ShellType::Bash)),
+        r"export AWS_PROFILE='foo'\''bar'"
+    );
+    assert_eq!(
+        format_aws_profile_command("foo'bar", Some(ShellType::PowerShell)),
+        "$env:AWS_PROFILE = 'foo''bar'"
+    );
+}
+
+#[test]
+fn test_format_aws_profile_command_handles_metacharacters() {
+    let crafted = "foo; rm -rf ~";
+    assert_eq!(
+        format_aws_profile_command(crafted, Some(ShellType::Bash)),
+        "export AWS_PROFILE='foo; rm -rf ~'"
+    );
+}
 
 #[test]
 fn test_github_pr_display_text_from_url() {
