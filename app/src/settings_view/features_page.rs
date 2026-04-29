@@ -52,9 +52,9 @@ use crate::settings::{
     LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
     OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
     QuakeModeSettings, ScrollSettings, SelectionSettings, ShowAutosuggestionIgnoreButton,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    ShowTerminalInputMessageBar, SmartLayoutAwareBindings, SshSettings, SyntaxHighlighting,
+    TabBehavior, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -2618,6 +2618,13 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             keys_widgets.push(Box::new(GlobalHotkeyWidget::default()));
+        }
+
+        if InputSettings::as_ref(ctx)
+            .smart_layout_aware_bindings
+            .is_supported_on_current_platform()
+        {
+            keys_widgets.push(Box::new(SmartLayoutAwareBindingsWidget::default()));
         }
 
         let mut text_editing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
@@ -5643,6 +5650,56 @@ impl SettingsWidget for SyntaxHighlightingWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleSyntaxHighlighting);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct SmartLayoutAwareBindingsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for SmartLayoutAwareBindingsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "smart layout aware shortcuts keyboard physical key russian cyrillic non-latin"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Smart layout-aware shortcuts (work on any keyboard layout)".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                SmartLayoutAwareBindings::storage_key(),
+                SmartLayoutAwareBindings::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(
+                    *InputSettings::as_ref(app)
+                        .smart_layout_aware_bindings
+                        .value(),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleSmartLayoutAwareBindings);
                 })
                 .finish(),
             None,
