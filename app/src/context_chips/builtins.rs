@@ -293,19 +293,29 @@ begin
     test -f "$_aws_crd"; and sed -n 's/^\[\([^]]*\)\]$/\1/p' -- "$_aws_crd"
 end | awk 'NF && !seen[$0]++'"#;
 
+    // PowerShell parses config and credentials separately to match the POSIX
+    // and fish behavior: in `~/.aws/config` only `[profile X]` and `[default]`
+    // are profiles (other sections like `[sso-session ...]` or `[services ...]`
+    // are config blocks, not profiles), while every `[X]` in `~/.aws/credentials`
+    // is a profile.
     const PWSH_COMMAND: &str = r#"
-        $files = @()
         $cfg = if ($env:AWS_CONFIG_FILE) { $env:AWS_CONFIG_FILE } else { "$HOME\.aws\config" }
         $crd = if ($env:AWS_SHARED_CREDENTIALS_FILE) { $env:AWS_SHARED_CREDENTIALS_FILE } else { "$HOME\.aws\credentials" }
-        if (Test-Path $cfg) { $files += $cfg }
-        if (Test-Path $crd) { $files += $crd }
         $seen = @{}
-        foreach ($f in $files) {
-            Get-Content $f | ForEach-Object {
+        if (Test-Path $cfg) {
+            Get-Content $cfg | ForEach-Object {
+                $name = $null
                 if ($_ -match '^\[profile (.+)\]$') { $name = $Matches[1] }
-                elseif ($_ -match '^\[(.+)\]$') { $name = $Matches[1] }
-                else { return }
-                if (-not $seen.ContainsKey($name)) { $seen[$name] = $true; $name }
+                elseif ($_ -match '^\[(default)\]$') { $name = $Matches[1] }
+                if ($name -and -not $seen.ContainsKey($name)) { $seen[$name] = $true; $name }
+            }
+        }
+        if (Test-Path $crd) {
+            Get-Content $crd | ForEach-Object {
+                if ($_ -match '^\[(.+)\]$') {
+                    $name = $Matches[1]
+                    if (-not $seen.ContainsKey($name)) { $seen[$name] = $true; $name }
+                }
             }
         }
     "#;
