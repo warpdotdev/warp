@@ -16,7 +16,7 @@ The diff rendering surface is shared by two consumers: the AI block-list inline 
 - `app/src/code_review/code_review_view.rs` (311KB) hosts the diff per file and renders into the pane. It's the consumer that subscribes to setting changes and rebuilds visible diffs on layout change.
 - `app/src/ai/blocklist/inline_action/code_diff_view.rs` (where `DisplayMode::FullPane`, `Embedded`, `InlineBanner` are constructed at lines 796, 798, 1248, 1258, 1311, 2026, 2065, 2170, 2204, 2206) is the AI block-list inline-action diff host that wraps `InlineDiffView` and decides which `DisplayMode` to use.
 - `app/src/settings/code.rs` (63 lines) is the settings group for `code.*`. Settings are declared via the `define_settings_group!` macro with `toml_path`, `default`, `supported_platforms`, and `sync_to_cloud` fields. Existing entries set the pattern for the new `diff_layout` setting.
-- `app/src/features/` defines `FeatureFlag` variants (referenced from `app/src/code_review/diff_state.rs:28`). The new `SideBySideDiffLayout` flag declares here.
+- `crates/warp_features/src/lib.rs` defines the `FeatureFlag` enum (line 8 onward) and the per-flag changelog descriptions (`description_for_changelog` match arms around line 1000-1024). `app/src/features.rs` is a one-line re-export (`pub use warp_core::features::*;`). Cargo features are registered for each flag in `app/src/lib.rs:2680-2740` via `#[cfg(feature = "...")]` guards on each `FeatureFlag::Variant` entry. The matching Cargo feature names are declared in the workspace `Cargo.toml` (and per-crate `Cargo.toml` files) under `[features]`. The new `SideBySideDiffLayout` flag is declared in all three places: the enum, the changelog match, and the cfg-gated registration block (with a matching `side_by_side_diff_layout` Cargo feature).
 - `app/src/code_review/scroll_preservation.rs` (8KB) holds scroll preservation helpers that the side-by-side scroll-sync model can build on.
 - `app/src/code_review/comments/diff_hunk_parser.rs` (181 lines) parses hunks into per-line records (`build_line_result`, lines 47-90). The hunk-alignment model for side-by-side reuses this parser; no new parser is introduced.
 - `app/src/code_review/comments/comment.rs` and `comment_list_view.rs` (48KB) own comment rendering. Comment placement gains a per-pane gutter marker; the existing thread placement logic is unchanged because comments are still anchored on `EditorLineLocation`.
@@ -77,12 +77,32 @@ The setting type system already supports enums via `serde`, matching how other s
 
 ### 3. Add the `SideBySideDiffLayout` feature flag
 
-Add `SideBySideDiffLayout` to the `FeatureFlag` enum in `app/src/features/`. The flag defaults to off in shipping builds and on in dogfood builds. The flag is consulted in two places:
+The flag is wired in three concrete locations:
 
-- `app/src/code_review/diff_menu.rs` to decide whether to show the Layout radio group rows.
-- `app/src/code/inline_diff.rs::InlineDiffView::new` and the Code Review pane's per-diff construction site to decide whether to read the setting at all (when off, layout is hard-coded to `Inline`).
+1. **Enum variant** in `crates/warp_features/src/lib.rs::FeatureFlag` (the canonical `pub enum FeatureFlag` at line 8). Add `SideBySideDiffLayout,` alongside existing variants such as `CodeReviewFind` (line 471), `BlocklistMarkdownImages`, and `EmbeddedCodeReviewComments`. `app/src/features.rs` is a one-line re-export, so the flag becomes available as `crate::features::FeatureFlag::SideBySideDiffLayout` automatically.
 
-Once the feature stabilizes, the flag is removed in a follow-up PR. The setting and the menu rows persist.
+2. **Cargo feature mapping**:
+   - In the workspace `Cargo.toml` (and the relevant per-crate `Cargo.toml` files; reference: how `code_review_find = []` is declared today): add `side_by_side_diff_layout = []`.
+   - Add the matching cfg-gated registration entry in `app/src/lib.rs` between lines 2680-2740, alongside other `#[cfg(feature = "...")] FeatureFlag::Variant,` lines. Pattern (matching the existing block):
+     ```rust
+     #[cfg(feature = "side_by_side_diff_layout")]
+     FeatureFlag::SideBySideDiffLayout,
+     ```
+   - Add the dogfood/preview enablement to the `PREVIEW_FLAGS` registration so dogfood builds default the flag on, matching how `CodeReviewFind` is enabled in preview today.
+
+3. **Changelog description** in `crates/warp_features/src/lib.rs` inside the `description_for_changelog` match arms (lines 1004-1024 today):
+   ```rust
+   SideBySideDiffLayout => Some("Enables a side-by-side diff layout in the code review pane and AI block-list diffs."),
+   ```
+
+The flag is consulted at three runtime sites:
+- `app/src/code_review/diff_menu.rs` decides whether to render the Layout radio rows.
+- `app/src/code_review/code_review_view.rs` decides whether to read `code.editor.diff_layout` at per-file construction (when off, layout is hard-coded to `Inline` regardless of stored value).
+- `app/src/ai/blocklist/inline_action/code_diff_view.rs` decides the same for embedded AI block-list diffs.
+
+The Settings page widget (Change 13) is also gated on the flag so the radio group disappears from Settings while the flag is off.
+
+Once the feature stabilizes, the flag and its Cargo feature are removed in a follow-up PR. The setting and the menu rows persist as the user-facing control.
 
 ### 4. Build `SideBySideDiffView`
 
@@ -121,23 +141,34 @@ Key methods:
 - `apply_diffs_if_any(ctx)` mirrors `InlineDiffView::apply_diffs_if_any` (`app/src/code/inline_diff.rs:196-228`). For `DiffType::Update`, both editors get content; for `DiffType::Create` the baseline pane shows an empty file with a "(new file)" header line; for `DiffType::Delete` the modified pane shows an empty file with "(deleted)".
 - `set_display_mode(mode, ctx)` calls the existing `DiffViewer::set_display_mode` body once per editor.
 
-Implement `DiffViewer` for `SideBySideDiffView` so that `editor()` returns the focused pane's editor and the trait's existing methods work without changes. Add new trait methods on a separate `MultiPaneDiffViewer` trait (defaulted on `DiffViewer`) for callers that need both panes:
+Implement `DiffViewer` for `SideBySideDiffView`, but **override every method that has a meaningful per-pane interpretation** so that the trait's existing call sites keep working correctly. Returning the focused editor from `editor()` is fine as a fallback for callers that need a single editor handle (search, find, focus management), but it must not be the default for hunk navigation, accept, save, or `changed_lines`. Each override is listed below with the method's role and the side-by-side semantics.
+
+| Trait method (existing) | Default body in `diff_viewer.rs:110-160` | `SideBySideDiffView` override |
+|---|---|---|
+| `editor()` | returns single `&ViewHandle<CodeEditorView>` | returns the focused pane's editor (`Modified` by default; `Baseline` when the user has tabbed into the left pane). Used only by callers that genuinely want the focused editor (search, focus, find). |
+| `diff()` | returns `Option<&DiffType>` | returns `self.diff_type.as_ref()`. Same as `InlineDiffView`. |
+| `was_edited()` | returns `false` | returns `self.was_edited`, which tracks edits to the modified pane only. The baseline pane is always read-only, so it cannot have been edited. |
+| `changed_lines(ctx)` | calls `self.editor().as_ref(ctx).changed_lines(ctx)` | calls `self.modified.as_ref(ctx).changed_lines(ctx)`. The baseline pane has no diff applied and would always return empty. |
+| `set_display_mode(mode, ctx)` | applies the mode to a single editor | calls the existing single-editor body once for `self.baseline` and once for `self.modified`, so both editors get the correct `scroll_wheel_behavior`, `vertical_expansion_behavior`, scrollbar appearance, interaction state, and nav-bar settings. |
+| `navigate_next_diff_hunk(ctx)` | calls `self.editor().update(...).navigate_next_diff_hunk` | calls `navigate_next_diff_hunk` on `self.modified` (which owns the hunk model). The `ScrollSyncModel` (Change 7) then drives `self.baseline` to keep the matching row in view. |
+| `navigate_previous_diff_hunk(ctx)` | calls `self.editor().update(...).navigate_previous_diff_hunk` | symmetric to next-hunk: drives `self.modified`'s hunk navigation, scroll-sync drives baseline. |
+| `accept_and_save_diff(ctx)` | no-op (default) | mirrors `InlineDiffView::save_content`: writes `self.modified`'s buffer text via the registered `FileModel` file id. The baseline pane is never written. |
+| `reject_diff(ctx)` | no-op (default) | resets `self.modified`'s buffer to the baseline content, then re-runs `apply_diffs_if_any` (which produces an empty alignment, so both panes show identical content). |
+| `restore_diff_base(ctx)` | returns `Ok(())` (default) | restores `self.modified` to the baseline content (the same path `InlineDiffView::restore_diff_base` would have taken if implemented), then rebuilds the alignment. Returns the same `Result` shape. |
+
+In addition to the overrides above, `SideBySideDiffView` exposes pane-aware accessors that callers in Change 9 (Code Review pane) and Change 11 (comments) need:
 
 ```rust
-pub trait MultiPaneDiffViewer: DiffViewer {
-    fn baseline_editor(&self) -> &ViewHandle<CodeEditorView> {
-        self.editor()
-    }
-    fn modified_editor(&self) -> &ViewHandle<CodeEditorView> {
-        self.editor()
-    }
-    fn focused_pane(&self) -> Option<Pane> {
-        None
-    }
+impl SideBySideDiffView {
+    pub fn baseline_editor(&self) -> &ViewHandle<CodeEditorView> { &self.baseline }
+    pub fn modified_editor(&self) -> &ViewHandle<CodeEditorView> { &self.modified }
+    pub fn focused_pane(&self) -> Pane { self.focused_pane }
+    pub fn set_focused_pane(&mut self, pane: Pane, ctx: &mut ViewContext<Self>);
+    pub fn alignment(&self) -> &HunkAlignment { &self.alignment }
 }
 ```
 
-The default implementation delegates everything to `editor()`, so existing single-pane consumers (`InlineDiffView` and `LocalCodeEditorView`) need no changes. `SideBySideDiffView` overrides all three.
+These are inherent methods on the concrete type rather than additions to the `DiffViewer` trait, because only side-by-side has two panes. Callers that want both panes pattern-match on the concrete type or hold a `ViewHandle<SideBySideDiffView>` directly. Callers that only need the focused editor stay on the `DiffViewer` trait and get the focused pane via `editor()`. Existing single-pane consumers (`InlineDiffView` and `LocalCodeEditorView`) need no changes; the trait contract is unchanged for them.
 
 ### 5. Editor padding-row API
 
@@ -198,15 +229,25 @@ impl HunkAlignment {
 }
 ```
 
-The algorithm walks unified-diff hunks (parsed by `app/src/code_review/comments/diff_hunk_parser.rs::build_line_result`):
+The algorithm walks unified-diff hunks (parsed by `app/src/code_review/comments/diff_hunk_parser.rs::build_line_result`) and **pairs deleted lines with added lines on shared rows** so a modification renders as one row across both panes. This satisfies product invariant 3.
 
-- For each `Context` line: emit a `(Some(b), Some(m))` row, advance both indices.
-- For each `Delete` line: emit a `(Some(b), None)` row, advance baseline only, append a one-line `PaddingRow { gutter_kind: AddSide }` to `modified_padding` at the current modified index.
-- For each `Add` line: emit a `(None, Some(m))` row, advance modified only, append a one-line `PaddingRow { gutter_kind: DeleteSide }` to `baseline_padding` at the current baseline index.
+For each hunk, the algorithm runs in two phases:
 
-Modifications (a `Delete` immediately followed by an `Add`) emit `(Some(b), None)` then `(None, Some(m))` by default. A follow-up optimization (out of scope for this spec) can collapse adjacent delete-add pairs into a single `(Some(b), Some(m))` row to keep modified lines on the same row as the line they replaced. The minimal, correctness-first version above is what ships first; the collapsed version follows once telemetry confirms users prefer it.
+**Phase 1: Group consecutive deletes and adds.** Walk the hunk's lines linearly. Buffer consecutive `Delete` lines into a `pending_deletes: Vec<usize>` (indices into the baseline file). When the run of `Delete`s ends and the next line is `Add`, buffer consecutive `Add` lines into a `pending_adds: Vec<usize>` (indices into the modified file). When either the run of `Add`s ends or a `Context`/`HunkHeader` boundary is hit, emit the pair (Phase 2). `Context` and `HunkHeader` lines outside any pending run flush as themselves: a `Context` line emits `(Some(b), Some(m))` and advances both indices; `HunkHeader` is consumed by the parser and contributes nothing to the row map.
 
-`row_map` is consulted by the scroll-sync model in Change 7.
+**Phase 2: Emit a paired-then-padded sequence.** Given `D = pending_deletes.len()` and `A = pending_adds.len()`:
+- For `i in 0..min(D, A)`: emit `(Some(pending_deletes[i]), Some(pending_adds[i]))`. This is the shared-row case from product invariant 3, the case that satisfies the primary side-by-side requirement.
+- If `D > A`: for the remaining `D - A` deleted lines, emit `(Some(pending_deletes[i]), None)` rows and append matching `PaddingRow { gutter_kind: AddSide, line_index: <modified_pane_row>, count: 1 }` entries to `modified_padding` so the right pane keeps its row count aligned.
+- If `A > D`: symmetric. Emit `(None, Some(pending_adds[i]))` rows for the unpaired suffix and append `PaddingRow { gutter_kind: DeleteSide, ... }` entries to `baseline_padding`.
+
+When a hunk has only `Delete` lines and no following `Add` (a pure deletion hunk), Phase 2 emits all `D` rows as `(Some(b), None)` with matching padding; this is the `D > 0, A == 0` branch of the same code path. When a hunk has only `Add` lines and no preceding `Delete` (a pure addition hunk), Phase 2 emits all `A` rows as `(None, Some(m))` with matching padding; this is the `D == 0, A > 0` branch.
+
+Edge cases:
+- A `Delete` immediately followed by `Context` immediately followed by `Add` is two separate runs (deletes flushed at the `Context` boundary; adds run alone). They render as a pure deletion followed by a context line followed by a pure addition. This matches GitHub and GitLab's behavior, which only pair adjacent delete/add runs.
+- A `Delete` of N lines followed by an `Add` of M lines where the lines have unrelated content still pairs them by index. Word-level diff highlighting on a pair is out of scope (see product Non-goals); the spec's contract is positional pairing only. The renderer shows the deleted line's full content on the left and the added line's full content on the right, which is identical to GitHub and GitLab side-by-side review.
+- An empty hunk (parser returns no rows) emits nothing; alignment for that hunk is empty.
+
+`row_map` is consulted by the scroll-sync model in Change 7. `modified_padding` and `baseline_padding` are passed to `CodeEditorView::set_padding_rows` (Change 5) on the respective editors.
 
 ### 7. `ScrollSyncModel`
 
@@ -267,7 +308,7 @@ The integration:
 - For `DiffLayout::Inline`, construct `InlineDiffView` as today.
 - For `DiffLayout::SideBySide`, construct `SideBySideDiffView` with the same `DisplayMode`.
 
-`InlineBanner` mode is a special case: side-by-side at a small max height shows two cramped columns. For this spec, `SideBySide` falls back to `Inline` when the chosen `DisplayMode` is `InlineBanner { .. }`. The fallback is documented in product invariant 2 implicitly (the spec discusses the embedded and full-pane surfaces) and is called out here so the implementation is unambiguous. A future spec can revisit the `InlineBanner` side-by-side behavior.
+`InlineBanner` mode is a special case explicitly carved out by product invariant 2: the small "Suggested fixes" banner that appears below a command block does not honor the side-by-side setting. When the chosen `DisplayMode` is `InlineBanner { .. }`, the construction site builds an `InlineDiffView` regardless of the stored `code.editor.diff_layout` value. The Layout radio group is also hidden in the View Options menu for the banner (Change 8), so users cannot select side-by-side for that surface in the first place. Every other AI block-list construction site (the `DisplayMode::with_embedded(MAX_EDITOR_HEIGHT)` path at line 798 and the `DisplayMode::FullPane` paths at lines 1311, 2026, 2065, 2170, 2204, 2206) honors the setting.
 
 ### 11. Comment threads
 
@@ -285,9 +326,21 @@ Add a `CodeReviewTelemetryEvent::DiffLayoutChanged { from: DiffLayout, to: DiffL
 
 `code.editor.diff_layout` is reachable from both:
 - The View Options menu in the diff toolbar (the primary path; product invariant 6).
-- The Settings pane under Code, where users can flip it without opening a diff. This follows the existing pattern for settings declared in `app/src/settings/code.rs` (e.g. `show_project_explorer`, line 50).
+- The Settings pane under Code (product invariant 13's "without opening a diff" path).
 
-Both surfaces write to the same setting key, so changes propagate through the existing settings subscription.
+The Settings pane integration is **not free** from declaring the setting in Change 2. The settings page is composed of explicit widget objects in `app/src/settings_view/code_page.rs` (2462 lines). Toggle settings have widgets such as `ProjectExplorerToggleWidget` (line 2382-2462), `CodeReviewPanelToggleWidget` (line 2301), and `GlobalSearchToggleWidget`, each of which `impl SettingsWidget`. These widgets are registered in the page's section list (lines 307-310 and 382-385). The new layout setting needs the same shape:
+
+1. **New widget**: add a `DiffLayoutSelectWidget` (or `DiffLayoutRadioWidget`) struct alongside the existing toggle widgets in `app/src/settings_view/code_page.rs`. Because `code.editor.diff_layout` is enum-valued (not bool-valued), the widget cannot reuse the toggle pattern; it uses the existing radio/segmented-control primitive in `warpui::ui_components` (the same primitive used by other enum settings; reference: `app/src/ui_components/tab_selector.rs` and the appearance theme picker in `app/src/settings_view/appearance_page.rs`). The widget reads and writes `CodeSettings::DiffLayout` via `ToggleableSetting`-style helpers and emits the appropriate telemetry on change.
+
+2. **Widget registration**: add `Box::new(DiffLayoutSelectWidget::default())` to the section's widget list near `Box::new(ProjectExplorerToggleWidget::default())` at line 309 and the matching section at line 384. The widget appears under the "Code Review" section.
+
+3. **Feature flag gating**: wrap the widget registration in `if FeatureFlag::SideBySideDiffLayout.is_enabled()` (or the equivalent `cfg`-gated registration pattern) so the widget is hidden while the flag is off. The setting key still exists in `CodeSettings`, but no UI surface exposes it.
+
+4. **Page meta**: confirm that the existing `SettingsPageMeta` for the Code page covers the new widget for search and keyboard navigation. No changes expected here because the widget participates in the page's standard section iteration.
+
+Without this widget, declaring the setting in `CodeSettings` only makes it readable from `settings.toml` and via the View Options menu; the Settings page itself shows nothing. Both invariant 13 in product.md and the user-facing claim that the setting is "reachable from the Settings pane" depend on this change landing alongside Change 2.
+
+Both surfaces (View Options menu and Settings widget) write to the same setting key, so changes propagate through the existing settings subscription.
 
 ## Test plan
 
@@ -349,6 +402,10 @@ Every site that constructs `InlineDiffView` (per `grep -rn "InlineDiffView::new"
 
 ## Open questions
 
-1. The `InlineBanner` fallback to `Inline` for side-by-side (Change 10) is the safest default. Should the toolbar show a "Side-by-side not available in this layout" hint to the user, or silently fall back? The current spec says silently; the Code Review SME may prefer a hint.
-2. The collapsed delete-add row optimization (mentioned in Change 6) is out of scope for the first ship. A telemetry signal that quantifies how often a delete is immediately followed by an add helps prioritize the follow-up.
-3. Comment thread interaction with the opposite-pane gutter marker (Change 11) is non-interactive in this spec. Whether the marker should be clickable (focuses the comment in the other pane) is a UX call for the Code Review SME and a candidate follow-up.
+1. Comment thread interaction with the opposite-pane gutter marker (Change 11) is non-interactive in this spec. Whether the marker should be clickable (focuses the comment in the other pane) is a UX call for the Code Review SME and a candidate follow-up.
+2. The radio/segmented-control primitive used by the Settings widget (Change 13) needs SME confirmation. The current spec references `tab_selector` and the appearance theme picker as precedents; the actual primitive name and import path should be confirmed during implementation review.
+3. Resizable panel split (a draggable divider that lets the user shift the 50/50 split) is out of scope for the first ship per product Non-goals. Whether to revisit this in a follow-up depends on telemetry and user feedback after the initial release.
+
+## Revision notes
+
+- v2 (this revision): replaced the two-row delete/add algorithm in Change 6 with a paired-row algorithm so a modification renders on a shared row across panes (resolves Oz CRITICAL on tech.md line 207, aligns with product invariant 3). Replaced the unused `app/src/features/` reference in Change 3 with the real wiring across `crates/warp_features/src/lib.rs`, `app/src/lib.rs:2680-2740`, and the workspace `Cargo.toml` features block. Replaced the `DiffViewer`-via-`MultiPaneDiffViewer` proposal in Change 4 with an explicit per-method override table for `SideBySideDiffView`, naming the side-by-side semantics for every existing trait method. Lifted the `InlineBanner` fallback in Change 10 from a tech-only deferral to an explicit product-spec exception (product invariant 2). Added a Settings widget integration section to Change 13 covering the new widget, the radio primitive, registration in `app/src/settings_view/code_page.rs:307-310`, and feature-flag gating.

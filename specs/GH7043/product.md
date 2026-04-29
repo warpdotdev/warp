@@ -41,17 +41,18 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
 
 1. When `code.editor.diff_layout` is unset or `inline`, every diff in Warp renders identically to today. No regression to the default form.
 
-2. When `code.editor.diff_layout` is `side_by_side`, every diff in Warp renders with the baseline on the left and the modified file on the right.
+2. When `code.editor.diff_layout` is `side_by_side`, every diff in Warp renders with the baseline on the left and the modified file on the right, with one explicit exception: AI block-list diffs in `InlineBanner` display (the small "Suggested fixes" banner that appears below a command block) continue to render inline regardless of the setting. The banner's vertical budget (typically 100-160px) is too small to read two columns, and the banner already collapses to inline at narrow widths today. Invariant 16 below makes this gating observable: the View Options menu's Layout radio group is hidden in the banner. Every other surface, including the full Code Review pane and the embedded AI block-list diff (`Embedded { max_height }` mode), honors the setting.
    - The split is a 50/50 vertical split with a single 1-pixel divider in the panel chrome.
    - The two panes share a horizontal scrollbar appearance and inherit horizontal scrollbars independently, since wrap-vs-no-wrap behavior is per-pane.
    - The baseline pane shows the file content prior to the diff, with deletions visible. The modified pane shows the post-diff file content, with additions visible. Unchanged context lines appear in both panes at the same vertical position.
 
-3. Hunk-aligned padding keeps corresponding lines aligned across panes:
+3. Hunk-aligned padding keeps corresponding lines aligned across panes. The alignment algorithm pairs deleted lines with added lines within a hunk so that a modification renders on a single shared row across the two panes:
    - Unchanged lines: rendered at the same row on both sides with the same content.
-   - Modifications (a `-` line replaced by a `+` line in the inline rendering): the deleted line renders on the left at row N; the added line renders on the right at row N. The right pane shows nothing for the deleted-only side; the left pane shows nothing for the added-only side.
-   - Pure additions (`+` lines with no corresponding `-` lines): the added lines render on the right at consecutive rows; the left pane shows blank padding at the same rows so the next unchanged context line still aligns.
-   - Pure deletions (`-` lines with no corresponding `+` lines): the deleted lines render on the left at consecutive rows; the right pane shows blank padding at the same rows.
+   - Modifications: within each hunk, deleted lines and added lines are paired in order. For a hunk of `D` deleted lines followed by `A` added lines, the first `min(D, A)` pairs render on shared rows: the deleted line on the left at row N, the added line on the right at row N. The shared row is what makes "before/after" review readable.
+   - Excess deletions (when `D > A`): the trailing `D - A` deleted-only lines render on the left at consecutive rows; the right pane shows blank padding at the same rows. This is the pure-deletion case for unpaired suffixes.
+   - Excess additions (when `A > D`): the trailing `A - D` added-only lines render on the right at consecutive rows; the left pane shows blank padding at the same rows. This is the pure-addition case for unpaired suffixes.
    - The padding rows are visually the same height as a normal line and use the same gutter as the matching pane, so vertical positions on the two panes always agree.
+   - Word-level or character-level highlighting on a paired modification row is out of scope (see Non-goals); a row pair shows the deleted line in full on the left and the added line in full on the right.
 
 4. Synchronized vertical scrolling:
    - A scroll wheel event in either pane drives both panes by the same delta.
@@ -108,5 +109,6 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
     - Memory overhead for `SideBySide` is a second `CodeEditorView` per visible diff, which the existing inline path already constructs and destroys when navigating between diffs in code review. The number of simultaneously alive editors does not grow more than 2x in steady state.
 
 16. Feature flag gating:
-    - The change ships behind a `SideBySideDiffLayout` `FeatureFlag` (`app/src/features/`) that defaults to off in shipping builds and on in dogfood builds. Once stabilized, the flag is removed and the setting becomes the user-facing control.
-    - When the flag is off, the View Options menu does not show the Layout radio group, and the setting is treated as `Inline` regardless of stored value.
+    - The change ships behind a `SideBySideDiffLayout` `FeatureFlag` defined in `crates/warp_features/src/lib.rs` (the canonical flag enum, re-exported from `app/src/features.rs`) that defaults to off in shipping builds and on in dogfood/preview builds. Once stabilized, the flag is removed and the setting becomes the user-facing control.
+    - When the flag is off, the View Options menu does not show the Layout radio group, the Settings page does not render the Layout widget, and the setting is treated as `Inline` regardless of stored value.
+    - The Layout radio group is also hidden in the AI block-list `InlineBanner` display per invariant 2 (the banner is too small for two columns); the rest of the AI block-list diff surface shows the radio group when the flag is on.
