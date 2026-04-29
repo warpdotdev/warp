@@ -8,12 +8,20 @@ use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
 use crate::terminal::shell::ShellType;
 use crate::ui_components::icons::Icon;
 
+// POSIX prefix that clears aws-vault-injected env vars before the export.
+const POSIX_UNSET_PREFIX: &str =
+    "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; ";
+
+const PWSH_UNSET_PREFIX: &str = "Remove-Item \
+     Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
+     -ErrorAction SilentlyContinue; ";
+
 #[test]
 fn test_format_aws_profile_command_posix() {
     for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
         assert_eq!(
             format_aws_profile_command("prod", Some(shell)),
-            "export AWS_PROFILE='prod'"
+            format!("{POSIX_UNSET_PREFIX}export AWS_PROFILE='prod'")
         );
     }
 }
@@ -22,7 +30,7 @@ fn test_format_aws_profile_command_posix() {
 fn test_format_aws_profile_command_powershell() {
     assert_eq!(
         format_aws_profile_command("prod", Some(ShellType::PowerShell)),
-        "$env:AWS_PROFILE = 'prod'"
+        format!("{PWSH_UNSET_PREFIX}$env:AWS_PROFILE = 'prod'")
     );
 }
 
@@ -30,7 +38,7 @@ fn test_format_aws_profile_command_powershell() {
 fn test_format_aws_profile_command_unknown_shell_defaults_to_posix() {
     assert_eq!(
         format_aws_profile_command("staging", None),
-        "export AWS_PROFILE='staging'"
+        format!("{POSIX_UNSET_PREFIX}export AWS_PROFILE='staging'")
     );
 }
 
@@ -38,11 +46,11 @@ fn test_format_aws_profile_command_unknown_shell_defaults_to_posix() {
 fn test_format_aws_profile_command_escapes_single_quotes() {
     assert_eq!(
         format_aws_profile_command("foo'bar", Some(ShellType::Bash)),
-        r"export AWS_PROFILE='foo'\''bar'"
+        format!(r"{POSIX_UNSET_PREFIX}export AWS_PROFILE='foo'\''bar'")
     );
     assert_eq!(
         format_aws_profile_command("foo'bar", Some(ShellType::PowerShell)),
-        "$env:AWS_PROFILE = 'foo''bar'"
+        format!("{PWSH_UNSET_PREFIX}$env:AWS_PROFILE = 'foo''bar'")
     );
 }
 
@@ -51,8 +59,35 @@ fn test_format_aws_profile_command_handles_metacharacters() {
     let crafted = "foo; rm -rf ~";
     assert_eq!(
         format_aws_profile_command(crafted, Some(ShellType::Bash)),
-        "export AWS_PROFILE='foo; rm -rf ~'"
+        format!("{POSIX_UNSET_PREFIX}export AWS_PROFILE='foo; rm -rf ~'")
     );
+}
+
+#[test]
+fn test_format_aws_profile_command_clears_vault_credentials() {
+    // The chip click is an explicit override: clearing AWS_VAULT plus the
+    // temporary credential triplet that aws-vault injects ensures the AWS
+    // SDK actually uses the newly selected profile rather than stale vault
+    // credentials.
+    let must_unset = [
+        "AWS_VAULT",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ];
+    for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
+        let cmd = format_aws_profile_command("staging", Some(shell));
+        for var in must_unset {
+            assert!(cmd.contains(var), "POSIX command must clear {var}: {cmd}");
+        }
+    }
+    let pwsh = format_aws_profile_command("staging", Some(ShellType::PowerShell));
+    for var in must_unset {
+        assert!(
+            pwsh.contains(&format!("Env:{var}")),
+            "PowerShell command must clear Env:{var}: {pwsh}"
+        );
+    }
 }
 
 #[test]

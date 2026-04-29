@@ -2087,15 +2087,31 @@ pub fn format_aws_profile_command(
     shell: Option<crate::terminal::shell::ShellType>,
 ) -> String {
     use crate::terminal::shell::ShellType;
+    // Clicking the chip is an explicit profile override. The chip resolves
+    // the active profile as `AWS_VAULT` > `AWS_PROFILE` > ..., so in an
+    // aws-vault session merely setting `AWS_PROFILE` would not change the
+    // displayed profile. We also clear the temporary credentials that
+    // `aws-vault exec` injects (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+    // / `AWS_SESSION_TOKEN`); otherwise the AWS SDK would keep using the
+    // prior vault credentials while the chip displayed a different profile,
+    // producing confusing "wrong account" behavior.
     match shell {
         Some(ShellType::PowerShell) => {
             // PowerShell: single quotes preserve literal; escape `'` as `''`.
-            format!("$env:AWS_PROFILE = '{}'", profile_name.replace('\'', "''"))
+            format!(
+                "Remove-Item \
+                 Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
+                 -ErrorAction SilentlyContinue; \
+                 $env:AWS_PROFILE = '{}'",
+                profile_name.replace('\'', "''")
+            )
         }
-        // Bash, Zsh, Fish — fish has an `export` builtin shim for `set -gx`.
+        // Bash, Zsh, Fish — fish has an `export` builtin shim for `set -gx`
+        // and `unset` works in fish via its compatibility shim as well.
         // POSIX-style single-quote escaping: `'` → `'\''`.
         _ => format!(
-            "export AWS_PROFILE='{}'",
+            "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+             export AWS_PROFILE='{}'",
             profile_name.replace('\'', "'\\''")
         ),
     }
