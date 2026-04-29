@@ -8,9 +8,14 @@ use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
 use crate::terminal::shell::ShellType;
 use crate::ui_components::icons::Icon;
 
-// POSIX prefix that clears aws-vault-injected env vars before the export.
+// Bash/zsh prefix that clears aws-vault-injected env vars before the export.
 const POSIX_UNSET_PREFIX: &str =
     "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; ";
+
+// Fish uses `set -e` to unset and `set -gx` to export — `unset`/`export` are
+// not standard fish builtins.
+const FISH_UNSET_PREFIX: &str =
+    "set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; ";
 
 const PWSH_UNSET_PREFIX: &str = "Remove-Item \
      Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
@@ -18,12 +23,20 @@ const PWSH_UNSET_PREFIX: &str = "Remove-Item \
 
 #[test]
 fn test_format_aws_profile_command_posix() {
-    for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
+    for shell in [ShellType::Bash, ShellType::Zsh] {
         assert_eq!(
             format_aws_profile_command("prod", Some(shell)),
             format!("{POSIX_UNSET_PREFIX}export AWS_PROFILE='prod'")
         );
     }
+}
+
+#[test]
+fn test_format_aws_profile_command_fish() {
+    assert_eq!(
+        format_aws_profile_command("prod", Some(ShellType::Fish)),
+        format!("{FISH_UNSET_PREFIX}set -gx AWS_PROFILE 'prod'")
+    );
 }
 
 #[test]
@@ -49,6 +62,10 @@ fn test_format_aws_profile_command_escapes_single_quotes() {
         format!(r"{POSIX_UNSET_PREFIX}export AWS_PROFILE='foo'\''bar'")
     );
     assert_eq!(
+        format_aws_profile_command("foo'bar", Some(ShellType::Fish)),
+        format!(r"{FISH_UNSET_PREFIX}set -gx AWS_PROFILE 'foo'\''bar'")
+    );
+    assert_eq!(
         format_aws_profile_command("foo'bar", Some(ShellType::PowerShell)),
         format!("{PWSH_UNSET_PREFIX}$env:AWS_PROFILE = 'foo''bar'")
     );
@@ -60,6 +77,10 @@ fn test_format_aws_profile_command_handles_metacharacters() {
     assert_eq!(
         format_aws_profile_command(crafted, Some(ShellType::Bash)),
         format!("{POSIX_UNSET_PREFIX}export AWS_PROFILE='foo; rm -rf ~'")
+    );
+    assert_eq!(
+        format_aws_profile_command(crafted, Some(ShellType::Fish)),
+        format!("{FISH_UNSET_PREFIX}set -gx AWS_PROFILE 'foo; rm -rf ~'")
     );
 }
 
@@ -78,7 +99,10 @@ fn test_format_aws_profile_command_clears_vault_credentials() {
     for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
         let cmd = format_aws_profile_command("staging", Some(shell));
         for var in must_unset {
-            assert!(cmd.contains(var), "POSIX command must clear {var}: {cmd}");
+            assert!(
+                cmd.contains(var),
+                "{shell:?} command must clear {var}: {cmd}"
+            );
         }
     }
     let pwsh = format_aws_profile_command("staging", Some(ShellType::PowerShell));
@@ -88,6 +112,28 @@ fn test_format_aws_profile_command_clears_vault_credentials() {
             "PowerShell command must clear Env:{var}: {pwsh}"
         );
     }
+}
+
+#[test]
+fn test_format_aws_profile_command_fish_uses_set_not_unset_export() {
+    // Fish doesn't have standard `unset` or `export` builtins.
+    let cmd = format_aws_profile_command("prod", Some(ShellType::Fish));
+    assert!(
+        !cmd.contains("unset "),
+        "fish command must not use `unset`: {cmd}"
+    );
+    assert!(
+        !cmd.contains("export "),
+        "fish command must not use `export`: {cmd}"
+    );
+    assert!(
+        cmd.contains("set -e "),
+        "fish command must use `set -e`: {cmd}"
+    );
+    assert!(
+        cmd.contains("set -gx "),
+        "fish command must use `set -gx`: {cmd}"
+    );
 }
 
 #[test]

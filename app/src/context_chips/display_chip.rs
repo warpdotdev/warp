@@ -2106,9 +2106,17 @@ pub fn format_aws_profile_command(
                 profile_name.replace('\'', "''")
             )
         }
-        // Bash, Zsh, Fish — fish has an `export` builtin shim for `set -gx`
-        // and `unset` works in fish via its compatibility shim as well.
-        // POSIX-style single-quote escaping: `'` → `'\''`.
+        Some(ShellType::Fish) => {
+            // Fish has no standard `unset` or `export` builtins. Use `set -e`
+            // to clear, `set -gx` to export. Single-quote escaping `'\''`
+            // works in fish because outside-of-quotes `\'` is a literal `'`.
+            format!(
+                "set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+                 set -gx AWS_PROFILE '{}'",
+                profile_name.replace('\'', "'\\''")
+            )
+        }
+        // Bash, Zsh — POSIX-style single-quote escaping: `'` → `'\''`.
         _ => format!(
             "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
              export AWS_PROFILE='{}'",
