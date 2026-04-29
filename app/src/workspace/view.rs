@@ -19236,6 +19236,12 @@ impl Workspace {
             context.set.insert(flags::SHOW_INPUT_HINT_TEXT_CONTEXT_FLAG);
         }
 
+        if *input_settings.smart_layout_aware_bindings.value() {
+            context
+                .set
+                .insert(flags::SMART_LAYOUT_AWARE_BINDINGS_CONTEXT_FLAG);
+        }
+
         if *input_settings.show_agent_tips.value() {
             context.set.insert(flags::SHOW_AGENT_TIPS_FLAG);
         }

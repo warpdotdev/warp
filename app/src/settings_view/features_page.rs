@@ -400,6 +400,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
+            "smart layout-aware shortcuts (keyboard layout independent)",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleSmartLayoutAwareBindings,
+            )),
+            context,
+            flags::SMART_LAYOUT_AWARE_BINDINGS_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            InputSettings::as_ref(app)
+                .smart_layout_aware_bindings
+                .is_supported_on_current_platform(),
+        ),
+    );
+
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
             "editing commands with Vim keybindings",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleVimMode,
@@ -578,6 +594,7 @@ pub enum FeaturesPageAction {
     ToggleMiddleClickPaste,
     ToggleCodeAsDefaultEditor,
     ToggleShowInputHintText,
+    ToggleSmartLayoutAwareBindings,
     ToggleUseAudibleBell,
     ToggleShowTerminalZeroStateBlock,
     TogglePreferLowPowerGPU,
@@ -806,6 +823,13 @@ impl FeaturesPageAction {
                 TelemetryEvent::FeaturesPageAction {
                     action: "ToggleShowInputHintText".to_string(),
                     value: to_string(*settings.show_hint_text),
+                }
+            }
+            Self::ToggleSmartLayoutAwareBindings => {
+                let settings = InputSettings::as_ref(ctx);
+                TelemetryEvent::FeaturesPageAction {
+                    action: "ToggleSmartLayoutAwareBindings".to_string(),
+                    value: to_string(*settings.smart_layout_aware_bindings),
                 }
             }
             Self::ToggleShowTerminalInputMessageLine => {
@@ -1660,6 +1684,16 @@ impl TypedActionView for FeaturesPageView {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
                     report_if_error!(input_settings.show_hint_text.toggle_and_save_value(ctx));
                 });
+            }
+            ToggleSmartLayoutAwareBindings => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(input_settings
+                        .smart_layout_aware_bindings
+                        .toggle_and_save_value(ctx));
+                });
+                // Push the new value into the live keystroke matcher so the
+                // change applies without restarting the app.
+                crate::keyboard::sync_smart_binding_to_matcher(ctx);
             }
             ToggleShowTerminalInputMessageLine => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {

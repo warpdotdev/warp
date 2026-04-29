@@ -291,12 +291,22 @@ impl KeybindingRow {
                 keyshortcut.build().finish()
             }
         };
+        // Append a small "globe" indicator to layout-independent (Physical)
+        // bindings so the user can see at a glance which shortcuts will work
+        // across keyboard layouts.
+        let description_text = binding.description.in_context(DescriptionContext::Default);
+        let is_physical = binding
+            .trigger
+            .as_ref()
+            .map(|k| k.key.starts_with("Code(") && k.key.ends_with(')'))
+            .unwrap_or(false);
+        let description_owned: String = if is_physical {
+            format!("{}  \u{1F310}", description_text)
+        } else {
+            description_text.to_string()
+        };
         let element = render_columns(
-            render_text(
-                binding.description.in_context(DescriptionContext::Default),
-                None,
-                appearance,
-            ),
+            render_text(&description_owned, None, appearance),
             keystroke,
             0.7,
             background,
