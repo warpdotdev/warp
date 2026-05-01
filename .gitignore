@@ -58,3 +58,5 @@ desired_behavior.md
 
 # Don't include the python cache for bundled skills.
 __pycache__/
+config.bat
+node_modules

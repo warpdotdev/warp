@@ -1357,14 +1357,20 @@ pub fn test_resize_does_not_panic_on_out_of_bounds_cursor() {
         line four\r\n",
     );
 
-    // Aggressive shrink: most pre-resize cursor positions are out of bounds in a 2x2 grid.
+    // `SizeInfo::new_without_font_metrics(rows, cols)` — note the order.
+    //
+    // Aggressive shrink: most pre-resize cursor positions are out of bounds
+    // in a 2-row x 2-col grid.
     grid.resize(SizeInfo::new_without_font_metrics(2, 2));
     // Grow back to a usable size — the grid must still be functional.
     grid.resize(SizeInfo::new_without_font_metrics(20, 20));
-    // Shrink to a different small size and back, to cover the "hard-wrapped line"
-    // path where the cursor could end up at an empty cell after the line end.
-    grid.resize(SizeInfo::new_without_font_metrics(5, 2));
-    grid.resize(SizeInfo::new_without_font_metrics(40, 10));
+    // Shrink to an asymmetric small size (2 rows x 5 cols), covering the
+    // "hard-wrapped line tail" path where the cursor could end up at an
+    // empty cell after a hard-wrap.
+    grid.resize(SizeInfo::new_without_font_metrics(2, 5));
+    // Final grow to 10 rows x 40 cols — wider than tall, exercises the
+    // "more cols, fewer rows" reflow direction.
+    grid.resize(SizeInfo::new_without_font_metrics(10, 40));
 
     // Sanity check: the grid remains queryable after the resize storm — i.e.
     // the resize path didn't poison internal state.
