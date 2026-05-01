@@ -4359,6 +4359,7 @@ impl PaneGroup {
             }
             PaneGroupFocusEvent::InSplitPaneChanged => ctx.notify(),
             PaneGroupFocusEvent::FocusedPaneMaximizedChanged => ctx.notify(),
+            PaneGroupFocusEvent::FontSizeOverrideChanged { .. } => {}
         }
     }
 
@@ -4856,12 +4857,17 @@ impl PaneGroup {
         let pane_content = self.pane_contents.remove(pane_id);
 
         let in_split_pane = self.panes.visible_pane_count() > 1;
+        let removed_pane_id = *pane_id;
         self.focus_state.update(ctx, |focus_state, ctx| {
             focus_state.set_in_split_pane(in_split_pane, ctx);
             // If the focused+maximized pane was removed, stop maximizing panes.
             if was_focused {
                 focus_state.set_focused_pane_maximized(false, ctx);
             }
+            // Drop any per-pane state keyed by the moved pane's id from this
+            // group. The destination group will start fresh; the source
+            // shouldn't hold zombie state for a pane it no longer owns.
+            focus_state.forget_pane(removed_pane_id);
         });
 
         ctx.notify();
@@ -5352,6 +5358,12 @@ impl PaneGroup {
             // Mirror cleanup_closed_pane's transitive-share map cleanup so
             // the non-undo close path doesn't leak stale entries.
             self.forget_transitively_shared_pane(pane_id);
+
+            // Drop any per-pane state keyed by `pane_id` so it doesn't
+            // accumulate over the lifetime of the pane group.
+            self.focus_state.update(ctx, |state, _| {
+                state.forget_pane(pane_id);
+            });
         }
 
         self.handle_pane_count_change(ctx);
@@ -5971,6 +5983,10 @@ impl PaneGroup {
         // Drop any transitive-share tracking entry for this pane so the
         // map doesn't accumulate stale ids.
         self.forget_transitively_shared_pane(pane_id);
+        // Drop any per-pane state for the now-permanently-closed pane.
+        self.focus_state.update(ctx, |state, _| {
+            state.forget_pane(pane_id);
+        });
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);

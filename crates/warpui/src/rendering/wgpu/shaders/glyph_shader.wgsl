@@ -25,8 +25,7 @@ struct Uniforms {
     viewport_size: vec2<f32>,
     // Padding necessary to ensure that the uniforms is 16 bytes. Some wgpu-supported devices (such as webgl) require
     // buffer bindings to be a multiple of 16 bytes.
-    padding: vec2<f32>
-}
+    padding: vec2<f32>}
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -89,7 +88,7 @@ fn vs_main(
         fade_alpha = 1. - fade_dist / fade_width;
     }
 
-     // Convert the position of the item from screen coordinates into normalized device coordinates
+    // Convert the position of the item from screen coordinates into normalized device coordinates
     var device_pos: vec2<f32> = pixel_pos / uniforms.viewport_size * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
 
     var texture_coordinate: vec2<f32> = glyph.uv_bounds.xy + glyph.vertex_position * glyph.uv_bounds.zw;

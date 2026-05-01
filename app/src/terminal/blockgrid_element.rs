@@ -30,6 +30,7 @@ impl BlockGridElement {
         enforce_minimum_contrast: EnforceMinimumContrast,
         obfuscate_secrets: ObfuscateSecrets,
         size_info: SizeInfo,
+        font_size: f32,
     ) -> Self {
         let theme = appearance.theme();
         let cell_size = Vector2F::new(
@@ -46,7 +47,7 @@ impl BlockGridElement {
                 grid_render_params: GridRenderParams {
                     warp_theme: theme.clone(),
                     font_family: appearance.monospace_font_family(),
-                    font_size: appearance.monospace_font_size(),
+                    font_size,
                     font_weight: appearance.monospace_font_weight(),
                     line_height_ratio: appearance.ui_builder().line_height_ratio(),
                     enforce_minimum_contrast,

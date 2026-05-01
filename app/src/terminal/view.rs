@@ -1188,7 +1188,7 @@ impl SizeUpdateBuilder {
             view.sessions.as_ref(ctx),
             ctx.font_cache(),
             appearance.monospace_font_family(),
-            appearance.monospace_font_size(),
+            view.effective_monospace_font_size(ctx),
             appearance.line_height_ratio(),
             ctx,
         );
@@ -2297,6 +2297,11 @@ pub struct TerminalViewRenderContext {
     pub pane_state: SplitPaneState,
     pub active_session_state: ActiveSessionState,
     pub selected_blocks: SelectedBlocks,
+    /// The effective monospace font size for this pane: per-pane override
+    /// if one is set, else the global `FontSettings::monospace_font_size`.
+    /// Renderers inside a pane should prefer this over
+    /// `Appearance::monospace_font_size()`.
+    pub effective_font_size: f32,
     /// Identifier for retrieving the position information of the input box element.
     pub input_box_element_key: String,
     /// Unique view id for saving active cursor position.
@@ -15748,6 +15753,17 @@ impl TerminalView {
         Appearance::as_ref(ctx)
     }
 
+    /// Returns this pane's effective monospace font size: the per-pane
+    /// override if one is set, else the global `FontSettings::monospace_font_size`.
+    /// Falls back to the global if the focus handle hasn't been wired up yet
+    /// (early init).
+    pub fn effective_monospace_font_size(&self, ctx: &AppContext) -> f32 {
+        match self.focus_handle.as_ref() {
+            Some(handle) => handle.effective_monospace_font_size(ctx),
+            None => Appearance::as_ref(ctx).monospace_font_size(),
+        }
+    }
+
     fn refresh_size(&mut self, ctx: &mut ViewContext<Self>) {
         self.resize_internal(
             SizeUpdateBuilder::for_refresh(*self.size_info).build(self, ctx),
@@ -22595,6 +22611,7 @@ impl TerminalView {
             hovered_secret: self.hovered_secret,
             horizontal_clipped_scroll_state: self.horizontal_clipped_scroll_state.clone(),
             ai_render_context: self.ai_render_context.clone(),
+            effective_font_size: self.effective_monospace_font_size(app),
         }
     }
 

@@ -2,8 +2,7 @@ struct Uniforms {
     viewport_size: vec2<f32>,
     // Padding necessary to ensure that the uniforms is 16 bytes. Some wgpu-supported devices (such as webgl) require
     // buffer bindings to be a multiple of 16 bytes.
-    padding: vec2<f32>
-}
+    padding: vec2<f32>}
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 

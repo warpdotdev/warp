@@ -74,8 +74,21 @@ impl TerminalView {
             return;
         };
 
-        if focus_handle.is_affected(event) {
-            self.on_pane_state_change(ctx);
+        if !focus_handle.is_affected(event) {
+            return;
+        }
+
+        match event {
+            PaneGroupFocusEvent::FontSizeOverrideChanged { .. } => {
+                // Recompute grid metrics for this pane at the new effective
+                // font size. Mirrors the global path in
+                // `AppearanceEvent::MonospaceFontSizeChanged` (terminal/view.rs)
+                // but scoped to a single pane.
+                self.refresh_size(ctx);
+            }
+            _ => {
+                self.on_pane_state_change(ctx);
+            }
         }
     }
 

@@ -157,7 +157,8 @@ impl<P: BackingView> PaneView<P> {
                 // Re-render to update dimming and header visibility.
                 ctx.notify();
             }
-            PaneGroupFocusEvent::ActiveSessionChanged { .. } => {}
+            PaneGroupFocusEvent::ActiveSessionChanged { .. }
+            | PaneGroupFocusEvent::FontSizeOverrideChanged { .. } => {}
         }
     }
 

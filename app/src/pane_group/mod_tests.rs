@@ -30,6 +30,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
@@ -2800,6 +2801,267 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
             // effect queue doesn't get processed or further modified before we
             // enqueue this event on the effect queue.
             ctx.emit(Event::OpenPromptEditor);
+        });
+    });
+}
+
+#[test]
+fn test_per_pane_font_size_override() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let first_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let second_pane_id = get_newly_created_pane_id(panes, &[first_pane_id]);
+
+            let focus_state = panes.focus_state_handle();
+            let global_size = *crate::settings::FontSettings::as_ref(ctx)
+                .monospace_font_size
+                .value();
+
+            // No overrides yet — both panes resolve to the global.
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(first_pane_id, ctx),
+                global_size
+            );
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(second_pane_id, ctx),
+                global_size
+            );
+            assert!(focus_state
+                .as_ref(ctx)
+                .font_size_override(first_pane_id)
+                .is_none());
+
+            // Set an override on the first pane only.
+            let override_size = global_size + 4.0;
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(first_pane_id, override_size, ctx);
+            });
+
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(first_pane_id, ctx),
+                override_size
+            );
+            // Sibling pane still falls back to the global.
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(second_pane_id, ctx),
+                global_size
+            );
+            assert_eq!(
+                focus_state.as_ref(ctx).font_size_override(first_pane_id),
+                Some(override_size)
+            );
+
+            // Clearing falls back to the global.
+            focus_state.update(ctx, |state, ctx| {
+                state.clear_font_size_override(first_pane_id, ctx);
+            });
+
+            assert!(focus_state
+                .as_ref(ctx)
+                .font_size_override(first_pane_id)
+                .is_none());
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(first_pane_id, ctx),
+                global_size
+            );
+        });
+    });
+}
+
+#[test]
+fn test_forget_pane_drops_font_size_override() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let focus_state = panes.focus_state_handle();
+
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(pane_id, 18.0, ctx);
+            });
+            assert_eq!(
+                focus_state.as_ref(ctx).font_size_override(pane_id),
+                Some(18.0)
+            );
+
+            // Simulating pane removal — the override entry should be gone so
+            // it doesn't leak across the pane group's lifetime.
+            focus_state.update(ctx, |state, _| state.forget_pane(pane_id));
+            assert!(focus_state
+                .as_ref(ctx)
+                .font_size_override(pane_id)
+                .is_none());
+        });
+    });
+}
+
+#[test]
+fn test_clear_font_size_override_is_noop_when_absent() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let focus_state = panes.focus_state_handle();
+
+            // No override set; clearing should be silent.
+            focus_state.update(ctx, |state, ctx| {
+                state.clear_font_size_override(pane_id, ctx);
+            });
+            assert!(focus_state
+                .as_ref(ctx)
+                .font_size_override(pane_id)
+                .is_none());
+        });
+    });
+}
+
+#[test]
+fn test_is_affected_for_font_size_override_only_targets_matching_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let first_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let second_pane_id = get_newly_created_pane_id(panes, &[first_pane_id]);
+
+            let first_handle =
+                PaneFocusHandle::new(first_pane_id, panes.focus_state_handle().clone());
+            let second_handle =
+                PaneFocusHandle::new(second_pane_id, panes.focus_state_handle().clone());
+
+            let event = PaneGroupFocusEvent::FontSizeOverrideChanged {
+                pane_id: first_pane_id,
+            };
+            assert!(
+                first_handle.is_affected(&event),
+                "matching pane should react"
+            );
+            assert!(
+                !second_handle.is_affected(&event),
+                "sibling pane should not react"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pane_focus_handle_font_size_accessors() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let handle = PaneFocusHandle::new(pane_id, panes.focus_state_handle().clone());
+            let focus_state = panes.focus_state_handle();
+            let global = *crate::settings::FontSettings::as_ref(ctx)
+                .monospace_font_size
+                .value();
+
+            // No override yet — handle reports None and effective == global.
+            assert!(handle.font_size_override(ctx).is_none());
+            assert_eq!(handle.effective_monospace_font_size(ctx), global);
+
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(pane_id, 20.0, ctx);
+            });
+
+            assert_eq!(handle.font_size_override(ctx), Some(20.0));
+            assert_eq!(handle.effective_monospace_font_size(ctx), 20.0);
+        });
+    });
+}
+
+#[test]
+fn test_set_font_size_override_is_noop_when_unchanged() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let focus_state = panes.focus_state_handle();
+
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(pane_id, 14.0, ctx);
+                // Re-apply the same value. The early-return inside the model
+                // means no event fires; we observe the effect via the value
+                // staying intact and `font_size_override` returning the same.
+                state.set_font_size_override(pane_id, 14.0, ctx);
+            });
+            assert_eq!(
+                focus_state.as_ref(ctx).font_size_override(pane_id),
+                Some(14.0)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_per_pane_font_size_override_takes_precedence_over_global_change() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let first_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let second_pane_id = get_newly_created_pane_id(panes, &[first_pane_id]);
+
+            let focus_state = panes.focus_state_handle();
+            let original_global = *crate::settings::FontSettings::as_ref(ctx)
+                .monospace_font_size
+                .value();
+
+            // Pin pane 1 to its own size, leave pane 2 on the global.
+            let pinned_size = original_global + 6.0;
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(first_pane_id, pinned_size, ctx);
+            });
+
+            // Now move the global. Pane 1 keeps its override; pane 2 follows the global.
+            let new_global = original_global - 2.0;
+            crate::settings::FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                font_settings
+                    .monospace_font_size
+                    .set_value(new_global, ctx)
+                    .expect("set_value");
+            });
+
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(first_pane_id, ctx),
+                pinned_size,
+                "overridden pane should ignore global changes"
+            );
+            assert_eq!(
+                focus_state
+                    .as_ref(ctx)
+                    .effective_monospace_font_size(second_pane_id, ctx),
+                new_global,
+                "non-overridden pane should follow the global"
+            );
         });
     });
 }

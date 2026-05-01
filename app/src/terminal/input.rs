@@ -227,7 +227,7 @@ use crate::input_suggestions::{
     TabCompletionsPreselectOption,
 };
 use crate::network::NetworkStatus;
-use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::pane_group::PaneGroupAction;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
@@ -2637,6 +2637,7 @@ impl Input {
             // Clones used in render_decorator_elements closure below.
             let prompt_render_helper_clone = prompt_render_helper.clone();
             let model_clone = model.clone();
+            let weak_input_handle: WeakViewHandle<Input> = ctx.handle();
             // Clone used in keymap_context_modifier closure below.
             let terminal_model_for_keymap_context = model.clone();
             let has_prompt_suggestion_banner_for_keymap = has_prompt_suggestion_banner.clone();
@@ -2690,6 +2691,14 @@ impl Input {
                                     app,
                                 )
                             {
+                                let font_size = weak_input_handle
+                                    .upgrade(app)
+                                    .map(|handle: ViewHandle<Input>| {
+                                        handle.as_ref(app).effective_monospace_font_size(app)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        Appearance::as_ref(app).monospace_font_size()
+                                    });
                                 let SameLinePromptElements {
                                     lprompt_top,
                                     lprompt_bottom,
@@ -2697,6 +2706,7 @@ impl Input {
                                 } = prompt_render_helper_clone.render_same_line_prompt_areas(
                                     &terminal_model,
                                     Appearance::as_ref(app),
+                                    font_size,
                                     app,
                                 );
 
@@ -5782,9 +5792,19 @@ impl Input {
 
     pub fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle.clone());
+        // Initial sync — apply any pre-existing per-pane font-size override
+        // to the input editor before the first render. Without this, splitting
+        // a pane that already has an override would leave the new pane's
+        // input editor at the global until the next override change.
+        self.sync_editor_font_size(ctx);
         let focus_model = focus_handle.focus_state_handle().clone();
         ctx.subscribe_to_model(&focus_model, move |me, _, event, ctx| {
             if !focus_handle.is_affected(event) {
+                return;
+            }
+
+            if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. }) {
+                me.sync_editor_font_size(ctx);
                 return;
             }
 
@@ -5808,9 +5828,31 @@ impl Input {
         });
     }
 
+    /// Push the current per-pane font-size override (or absence) down to the
+    /// embedded input editor so the box where the user types matches the
+    /// terminal grid. Called on every `FontSizeOverrideChanged` event for
+    /// this pane and once at focus-handle wiring time.
+    fn sync_editor_font_size(&mut self, ctx: &mut ViewContext<Self>) {
+        let override_size = self
+            .focus_handle
+            .as_ref()
+            .and_then(|h| h.font_size_override(ctx));
+        self.editor.update(ctx, |editor, ctx| match override_size {
+            Some(size) => editor.set_font_size(size, ctx),
+            None => editor.clear_font_size(ctx),
+        });
+    }
+
     fn is_pane_focused(&self, app: &AppContext) -> bool {
         // If the focus handle hasn't been set yet, assume we're not in a split pane and therefore focused.
         self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app))
+    }
+
+    pub fn effective_monospace_font_size(&self, app: &AppContext) -> f32 {
+        match self.focus_handle.as_ref() {
+            Some(handle) => handle.effective_monospace_font_size(app),
+            None => Appearance::as_ref(app).monospace_font_size(),
+        }
     }
 
     fn is_active_session(&self, app: &AppContext) -> bool {
@@ -14328,9 +14370,12 @@ impl Input {
     pub fn prompt_and_rprompt_text(&self, app: &AppContext) -> (String, Option<String>) {
         let model = self.model.lock();
         let appearance = Appearance::as_ref(app);
-        let (lprompt_top, lprompt_bottom, rprompt) = self
-            .prompt_render_helper
-            .render_prompt(&model, appearance, app);
+        let (lprompt_top, lprompt_bottom, rprompt) = self.prompt_render_helper.render_prompt(
+            &model,
+            appearance,
+            self.effective_monospace_font_size(app),
+            app,
+        );
         // Separate this into a helper (follow-up PR?)
 
         let show_universal_developer_input = self.should_show_universal_developer_input(app);

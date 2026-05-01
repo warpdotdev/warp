@@ -2,8 +2,7 @@ struct Uniforms {
     viewport_size: vec2<f32>,
     // Padding necessary to ensure that the uniforms is 16 bytes. Some wgpu-supported devices (such as webgl) require
     // buffer bindings to be a multiple of 16 bytes.
-    padding: vec2<f32>
-}
+    padding: vec2<f32>}
 
 const EPSILON: f32 = 0.0000001;
 const PI: f32 = 3.141592653589793;
@@ -112,12 +111,12 @@ fn rect_fs_main(in: RectVertexShaderOutput) -> @location(0) vec4<f32> {
         // Bottom half
         border_inner_corner.y -= in.border_width.z;
         if in.position.x >= in.rect_center.x {
-          // Bottom right quadrant
+            // Bottom right quadrant
             border_inner_corner.x -= in.border_width.y;
             outer_corner_radius = in.corner_radius.w;
             inner_corner_radius = max(0.0, outer_corner_radius - in.border_width.z);
         } else {
-          // Bottom left quadrant
+            // Bottom left quadrant
             border_inner_corner.x -= in.border_width.w;
             outer_corner_radius = in.corner_radius.z;
             inner_corner_radius = max(0.0, outer_corner_radius - in.border_width.z);
@@ -126,12 +125,12 @@ fn rect_fs_main(in: RectVertexShaderOutput) -> @location(0) vec4<f32> {
         // Top half
         border_inner_corner.y -= in.border_width.x;
         if in.position.x >= in.rect_center.x {
-          // Top right quadrant
+            // Top right quadrant
             border_inner_corner.x -= in.border_width.y;
             outer_corner_radius = in.corner_radius.y;
             inner_corner_radius = max(0.0, outer_corner_radius - in.border_width.x);
         } else {
-          // Top left quadrant
+            // Top left quadrant
             border_inner_corner.x -= in.border_width.w;
             outer_corner_radius = in.corner_radius.x;
             inner_corner_radius = max(0.0, outer_corner_radius - in.border_width.x);
