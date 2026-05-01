@@ -876,6 +876,20 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
           # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
           # support.
+          #
+          # MotD emulation note (tracks GH-1160). The heredoc below emulates the
+          # MotD print that SSHD normally does at login. SSHD skips MotD when
+          # invoked with a command, and the bash/zsh rcfile bootstrap further
+          # down does not reintroduce it, so before this fix bash/zsh users
+          # silently lost the MotD over Warp SSH. Probe order: /etc/motd,
+          # then /etc/motd.d (Fedora/RHEL fragments), then /run/motd.dynamic
+          # (Ubuntu/Debian pre-rendered MotD), then the legacy paths.
+          # The motd_emitted flag tracks fall-through so an empty /etc/motd.d
+          # does not block later candidates. Variables set by the remote
+          # shell (motd_emitted, the for-loop iterator) are referenced as
+          # backslash-dollar (e.g. \$motd_fragment) so the local shell does
+          # not expand the dollar-sign before the heredoc reaches the remote
+          # -- same escape pattern as the zshenv decode loop below.
           command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
           -t "${@:1}" \
 "
@@ -890,25 +904,8 @@ test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VER
 hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\"}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 
-# Emulate the SSHD logic to print the MotD. Because the Warp SSH wrapper passes
-# a command to run, SSHD does a quiet login, updating utmp and other login
-# state, but not printing the MotD. The previous version of this block only
-# ran for non-bash/non-zsh shells under the (incorrect) assumption that the
-# rcfile-based bootstrap below would handle it for bash/zsh. It does not, so
-# bash/zsh users silently lost the MotD. (GH-1160)
+# GH-1160: emulate the MotD print SSHD skips for command-passing invocations.
 if test ! -e "'$HOME/.hushlogin'"; then
-  # Modern Linux distros may use any of these forms:
-  #   * /etc/motd as a regular file or symlink to /run/motd.dynamic
-  #   * /etc/motd.d/* — concatenated fragments (Fedora / RHEL style)
-  #   * /run/motd.dynamic — pre-rendered dynamic MotD (Ubuntu/Debian)
-  # `test -f` follows symlinks and only succeeds for regular files, which
-  # rules out the "/etc/motd is a directory" failure mode where the old
-  # `cat /etc/motd` would error.
-  #
-  # Quoting note: this whole block runs on the *remote* shell but is embedded
-  # in a double-quoted heredoc that the local shell parses first. The remote
-  # for-loop variable and emit-tracker must be referenced as \$VAR so the
-  # local shell leaves the dollar-sign alone.
   motd_emitted=0
   if test -f /etc/motd && test -r /etc/motd; then
     command -p cat /etc/motd
@@ -936,9 +933,8 @@ if test ! -e "'$HOME/.hushlogin'"; then
 fi
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
-  # Emulate a login shell by sourcing /etc/profile for non-bash/non-zsh
-  # shells. bash and zsh load their own profile/rcfile chain via the
-  # `case` statement below.
+  # Source /etc/profile for non-bash/non-zsh shells; bash and zsh load
+  # their own profile/rcfile chain via the case statement below.
   if test -r /etc/profile; then
     . /etc/profile
   fi
