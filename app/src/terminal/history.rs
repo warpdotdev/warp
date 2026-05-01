@@ -2,7 +2,7 @@ use chrono::{DateTime, Local, TimeZone as _};
 use futures::Future;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
 };
@@ -247,15 +247,25 @@ pub struct History {
     /// same way the initial read did.
     live_sync_sessions: HashMap<ShellHost, Arc<Session>>,
 
-    /// Per-host generation counter incremented on every authoritative refresh
-    /// of `history_file_commands[host]` (initial load **and**
-    /// [`Self::apply_external_history_lines`]). The watcher's async re-read
-    /// snapshots the generation when it kicks off and only applies its result
-    /// if the generation still matches at completion time. Without this, two
-    /// watcher events firing close together can race: the second
-    /// (most-recent) read can complete first, then the first (older) read
-    /// completes and rolls history back.
-    live_sync_generation: HashMap<ShellHost, u64>,
+    /// Per-host monotonic event-sequence counter. Bumped on every
+    /// authoritative refresh of `history_file_commands[host]`:
+    ///   * initial-load completion (in [`Self::load_history_file_commands`]),
+    ///   * each watcher-event-driven re-read spawn (in
+    ///     [`Self::handle_shell_history_watcher_event`], **before** the async
+    ///     read kicks off, so the snapshot reflects this event's place in
+    ///     the sequence),
+    ///   * apply-time bump (in [`Self::apply_external_history_lines`]).
+    ///
+    /// A spawned re-read snapshots the bumped seq at spawn time and only
+    /// applies its result when the seq still matches at completion. Without
+    /// the *event-time* bump, two watcher events firing close together would
+    /// snapshot the same seq value: whichever read completed first would
+    /// apply (and bump), and the second — even if its data was newer — would
+    /// see a mismatch and be silently dropped, rolling history back to the
+    /// stale read's contents. With the event-time bump each event has a
+    /// unique seq, so an older event's read always loses to a newer event's
+    /// read regardless of completion order ("latest-wins" semantics).
+    live_sync_event_seq: HashMap<ShellHost, u64>,
 
     /// Set to `true` once [`Self::set_up_external_history_sync`] has installed
     /// the watcher subscription. The subscription is global and idempotent so
@@ -750,10 +760,11 @@ impl History {
                 .insert(host.clone(), session_commands_to_append);
         }
 
-        // Bump the live-sync generation so any in-flight async re-read started
-        // *before* this load completed sees a stale generation and drops its
-        // result instead of overwriting the freshly-loaded state. (GH-3422)
-        *self.live_sync_generation.entry(host.clone()).or_insert(0) += 1;
+        // Bump the live-sync event sequence so any in-flight async re-read
+        // started *before* this load completed sees a stale snapshot and
+        // drops its result instead of overwriting the freshly-loaded state.
+        // (GH-3422)
+        *self.live_sync_event_seq.entry(host.clone()).or_insert(0) += 1;
 
         self.initialize_session_start_and_skip_indices(session_ids, host, start_index, ctx);
     }
@@ -1079,10 +1090,13 @@ impl History {
     /// changed path that we registered in [`Self::maybe_register_live_sync`],
     /// kick off an async re-read **through the same `Session::read_history`
     /// path the initial load uses** (so the Windows PowerShell / Kaspersky
-    /// workaround in `read_powershell_history_contents` is honored), snapshot
-    /// the host's live-sync generation, and dispatch the parsed lines to
-    /// [`Self::apply_external_history_lines`] only if the generation still
-    /// matches at completion time.
+    /// workaround in `read_powershell_history_contents` is honored). Bumps
+    /// the host's `live_sync_event_seq` *before* spawning so this event's
+    /// snapshot is uniquely later than every prior event's snapshot, and
+    /// dispatches the parsed lines to [`Self::apply_external_history_lines`]
+    /// which only applies when the snapshot is still the latest at
+    /// completion time ("latest-wins" semantics — see
+    /// `live_sync_event_seq` field doc).
     #[cfg(not(target_family = "wasm"))]
     fn handle_shell_history_watcher_event(
         &mut self,
@@ -1108,9 +1122,18 @@ impl History {
                     );
                     continue;
                 };
-                // Snapshot the generation so a stale completion can't roll
-                // back a newer apply that landed first.
-                let snapshot_gen = self.live_sync_generation.get(&host).copied().unwrap_or(0);
+                // Bump the event sequence *before* spawning and snapshot
+                // the bumped value — this gives every watcher event a
+                // unique seq, so a stale (earlier-event) read whose async
+                // completion arrives after a newer-event read has already
+                // applied will see `snap < latest_seq` and drop, rather
+                // than rolling history back. See the `live_sync_event_seq`
+                // field doc for the race scenario this guards against.
+                let snapshot_seq = {
+                    let entry = self.live_sync_event_seq.entry(host.clone()).or_insert(0);
+                    *entry += 1;
+                    *entry
+                };
                 let host_for_apply = host.clone();
                 ctx.spawn(
                     async move { session.read_history(is_kaspersky_running).await },
@@ -1118,7 +1141,7 @@ impl History {
                         me.apply_external_history_lines(
                             host_for_apply,
                             lines,
-                            Some(snapshot_gen),
+                            Some(snapshot_seq),
                             ctx,
                         );
                     },
@@ -1136,12 +1159,13 @@ impl History {
     /// Shifts session-index bookkeeping by the size delta and emits
     /// [`HistoryEvent::ExternalHistoryUpdated`].
     ///
-    /// **Generation check**: when `snapshot_gen` is `Some(n)`, n is the
-    /// live-sync generation at the time the async re-read kicked off. If
-    /// the host's current generation has moved on (because the initial
-    /// load completed in the meantime, or another live-sync update landed
-    /// first), we drop this stale read instead of overwriting newer state.
-    /// `None` skips the check (used by direct test callers).
+    /// **Latest-wins seq check**: when `snapshot_seq` is `Some(n)`, n is
+    /// the value of `live_sync_event_seq[host]` at the time the async
+    /// re-read was spawned (bumped uniquely per watcher event). If the
+    /// host's seq has moved past `n` (because a later watcher event
+    /// fired, or the initial load completed, in the meantime), this read
+    /// is stale and we drop it. `None` skips the check (used by direct
+    /// test callers).
     ///
     /// **session_commands dedupe**: when the same command appears in both
     /// the freshly re-read histfile and `session_commands[host]` (the
@@ -1151,17 +1175,20 @@ impl History {
         &mut self,
         host: ShellHost,
         new_lines: Vec<String>,
-        snapshot_gen: Option<u64>,
+        snapshot_seq: Option<u64>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Stale-read guard: if the generation has moved on since this async
-        // re-read started, drop the result. Newer state has already landed.
-        if let Some(snap) = snapshot_gen {
-            let current_gen = self.live_sync_generation.get(&host).copied().unwrap_or(0);
-            if current_gen != snap {
+        // Stale-read guard: drop iff a strictly newer event has been
+        // observed since this read was spawned. Equality means "still the
+        // latest" and applies normally; `<` means a newer event has
+        // already bumped the seq and (most likely) already applied a
+        // fresher result, so this read would roll history back.
+        if let Some(snap) = snapshot_seq {
+            let current_seq = self.live_sync_event_seq.get(&host).copied().unwrap_or(0);
+            if snap < current_seq {
                 log::debug!(
                     "GH-3422: dropping stale live-sync read for {host:?} \
-                     (snapshot_gen={snap}, current_gen={current_gen})"
+                     (snapshot_seq={snap}, current_seq={current_seq})"
                 );
                 return;
             }
@@ -1213,49 +1240,64 @@ impl History {
         self.history_file_commands
             .insert(host.clone(), new_entries);
 
-        // Snapshot pre-dedupe session_commands length so we can compute how
-        // many entries get removed below.
-        let old_session_commands_len = self
+        // Snapshot the *exact* old session_commands positions that get
+        // dropped by the dedupe below — we need the per-position set
+        // (not just the count) to correctly shift skip-indices and the
+        // session_start boundary. An aggregate "dropped N entries" shift
+        // can't tell whether a given OLD session-position survived: e.g.
+        // if positions 0 and 2 are dropped but 1 is kept, an aggregate
+        // shift would push old-position 1 by 2 (wrong; the correct shift
+        // for old-pos 1 is 1, since only one position before it was
+        // dropped).
+        let dropped_positions: BTreeSet<usize> = self
             .session_commands
             .get(&host)
-            .map(|v| v.len())
-            .unwrap_or(0);
+            .map(|v| {
+                v.iter()
+                    .enumerate()
+                    .filter_map(|(idx, entry)| {
+                        new_history_command_set
+                            .contains(&entry.command)
+                            .then_some(idx)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Drop session_commands entries whose command string appears in the
         // newly-replaced history_file_commands. This keeps each command
-        // visible exactly once in the rendered autocomplete list.
+        // visible exactly once in the rendered autocomplete list. Uses the
+        // same predicate as the `dropped_positions` snapshot above; the two
+        // must stay in sync, so do the snapshot **before** the retain.
         if let Some(session_cmds) = self.session_commands.get_mut(&host) {
             session_cmds.retain(|entry| !new_history_command_set.contains(&entry.command));
         }
-        let new_session_commands_len = self
-            .session_commands
-            .get(&host)
-            .map(|v| v.len())
-            .unwrap_or(0);
-        let session_commands_dropped = old_session_commands_len - new_session_commands_len;
 
-        // Bump the live-sync generation so any later in-flight read started
-        // before this apply ran sees a stale generation and drops its result.
-        *self.live_sync_generation.entry(host.clone()).or_insert(0) += 1;
+        // Bump the live-sync event seq so any later in-flight read started
+        // before this apply ran sees a stale snapshot and drops its result.
+        *self.live_sync_event_seq.entry(host.clone()).or_insert(0) += 1;
 
         // The render-space history list for a host is
         //   history_file_commands[host] ++ session_commands[host]
         //
-        // The history_file boundary moved from `old_history_file_len` to
-        // `new_history_file_len` (delta_history). The session_commands
-        // portion shrank by `session_commands_dropped` (delta_session is
-        // negative). For sessions on this host:
-        //   * `session_start_indices` is positioned just past the snapshot
-        //     of history+session at session-start time. After this apply,
-        //     it must shift by the net delta so it still points to "where
-        //     this session's commands begin".
-        //   * `session_skip_indices` are absolute indices into the concat
-        //     list. Indices in the (now-replaced) history_file portion are
-        //     gone; indices in the session_commands portion shift by the
-        //     net delta and need to drop entries that were among the
-        //     deduped-out commands.
-        let delta_history: isize = new_history_file_len as isize - old_history_file_len as isize;
-        let net_delta: isize = delta_history - session_commands_dropped as isize;
+        // After the replace + dedupe above:
+        //   * the history_file boundary moved from `old_history_file_len`
+        //     to `new_history_file_len`,
+        //   * each OLD session-position P maps to NEW session-position
+        //     `P - count(dropped_positions < P)` if P survived, or to
+        //     "no entry" if P itself is in `dropped_positions`.
+        //
+        // We use `count(dropped_positions < P)` for *both* surviving and
+        // dropped P. That's correct because for a dropped P the boundary
+        // (or skip-index) needs to slide *over* P to the next surviving
+        // entry, which lives at NEW-position `P - count(dropped < P)` —
+        // count_strictly_less, regardless of whether P itself was dropped
+        // (algebraically: a chain of consecutive dropped positions
+        // collapses into the same new index). For session-skip we still
+        // explicitly drop indices whose entry was dropped; for
+        // session-start, the boundary is allowed to point past the end of
+        // session_commands (means "no entries past this point yet"), so
+        // we don't filter on dropped-ness.
         let on_host_session_ids: Vec<SessionId> = self
             .session_id_to_shell_host
             .iter()
@@ -1263,24 +1305,48 @@ impl History {
             .map(|(id, _)| *id)
             .collect();
 
+        let shift_session_pos = |old_session_pos: usize| -> usize {
+            // count_strictly_less. `range(..x)` is the half-open range
+            // [start, x), which excludes x itself.
+            let count_before = dropped_positions.range(..old_session_pos).count();
+            // `count_before <= old_session_pos` always holds (dropped
+            // positions are <= some session-position bound and
+            // `range(..old_session_pos)` is a subset of those), so this
+            // subtraction can't underflow.
+            old_session_pos - count_before
+        };
+
         for session_id in &on_host_session_ids {
             if let Some(start) = self.session_start_indices.get_mut(session_id) {
-                let shifted = (*start as isize + net_delta).max(new_history_file_len as isize);
-                *start = shifted.max(0) as usize;
+                let s = *start;
+                let shifted = if s <= old_history_file_len {
+                    // Was at-or-before the (now-replaced) history boundary.
+                    // The entries it referred to are gone; clamp to the new
+                    // history boundary, which is the start of the
+                    // session_commands range.
+                    new_history_file_len
+                } else {
+                    let old_session_pos = s - old_history_file_len;
+                    new_history_file_len + shift_session_pos(old_session_pos)
+                };
+                *start = shifted;
             }
             if let Some(skips) = self.session_skip_indices.get_mut(session_id) {
                 *skips = skips
                     .iter()
                     .filter_map(|&i| {
-                        if i >= old_history_file_len {
-                            // index pointed into session_commands; shift by net delta
-                            let shifted = i as isize + net_delta;
-                            (shifted >= 0).then_some(shifted as usize)
-                        } else {
-                            // index pointed into the now-replaced history_file
-                            // portion; drop it (the underlying entries are gone)
-                            None
+                        if i < old_history_file_len {
+                            // index pointed into the now-replaced
+                            // history_file portion; the entry is gone.
+                            return None;
                         }
+                        let old_session_pos = i - old_history_file_len;
+                        if dropped_positions.contains(&old_session_pos) {
+                            // entry at this session-position was dedupe'd
+                            // out; nothing to skip anymore.
+                            return None;
+                        }
+                        Some(new_history_file_len + shift_session_pos(old_session_pos))
                     })
                     .collect();
             }
@@ -1329,25 +1395,55 @@ impl History {
         }
 
         // Prefer the session's resolved `HISTFILE` (handles `HISTFILE=...`
-        // overrides in the user's rc files). Fall back to the shell's default
-        // candidates expanded against the home directory.
+        // overrides in the user's rc files). Fall back to the shell's
+        // default candidates. `history_files()` returns a mix of:
+        //   * tilde-prefixed paths (`~/.zsh_history`, …) on Unix, and the
+        //     non-Windows PowerShell case — these need home-directory
+        //     expansion;
+        //   * absolute paths — specifically the Windows PowerShell case,
+        //     where the candidate is constructed against `base_config_dir()`
+        //     and is already absolute.
+        // The previous version blanket-stripped `~/` (or `~`) and dropped
+        // anything that didn't match via a `?`. That silently filtered the
+        // Windows PowerShell histfile out of live-sync registration — i.e.
+        // PowerShell users on Windows never got watcher-driven updates.
         let candidate_paths: Vec<PathBuf> = if let Some(custom) = session.histfile().as_deref() {
             vec![PathBuf::from(custom)]
         } else {
-            let Some(home) = dirs::home_dir() else {
-                log::warn!(
-                    "live_sync_os_shell_history is on but no home directory could be \
-                     resolved; skipping live history watch registration"
-                );
-                return;
+            let raw = host.shell_type.history_files();
+            // Only resolve `home_dir` when at least one candidate needs it.
+            // Absolute candidates (Windows PowerShell) shouldn't be skipped
+            // just because `dirs::home_dir()` failed.
+            let needs_home = raw.iter().any(|p| p.starts_with("~/"));
+            let home = if needs_home {
+                match dirs::home_dir() {
+                    Some(h) => Some(h),
+                    None => {
+                        log::warn!(
+                            "live_sync_os_shell_history is on but no home directory could \
+                             be resolved; skipping live history watch registration"
+                        );
+                        return;
+                    }
+                }
+            } else {
+                None
             };
-            host.shell_type
-                .history_files()
-                .into_iter()
-                .filter_map(|p| {
-                    // `history_files()` returns `~/...`-prefixed strings; expand them.
-                    let stripped = p.strip_prefix("~/").or_else(|| p.strip_prefix("~"))?;
-                    Some(home.join(stripped))
+            raw.into_iter()
+                .map(|p| {
+                    if let Some(rest) = p.strip_prefix("~/") {
+                        // SAFETY: `needs_home` is true (because at least one
+                        // candidate, this one, has a `~/` prefix), so `home`
+                        // is `Some` and the early-return above has not fired.
+                        home.as_ref()
+                            .expect("needs_home implies home is Some")
+                            .join(rest)
+                    } else {
+                        // Absolute path — pass through verbatim. (The
+                        // Windows PowerShell candidate from
+                        // `base_config_dir().join(…)` lands here.)
+                        PathBuf::from(p)
+                    }
                 })
                 .collect()
         };
