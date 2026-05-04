@@ -347,8 +347,25 @@ impl ContextChipKind {
                     [
                         ChipFingerprintInput::SessionId,
                         ChipFingerprintInput::AwsProfile,
+                        // `ExternalCommandsState` flips from `Unknown` to `Known` once the
+                        // session has finished bootstrapping. Including it here forces the
+                        // on-click profile-list shell command to be re-fetched after
+                        // bootstrap, which avoids leaving an empty picker when the chip
+                        // first renders before the session is ready (e.g. immediately
+                        // after opening Warp, before `AWS_PROFILE` is set).
+                        ChipFingerprintInput::ExternalCommandsState,
+                        // Re-fetch the profile list after the user runs an `aws` /
+                        // `aws-vault` / `aws configure` command, so newly-added profiles
+                        // appear in the picker without needing to restart the session.
+                        ChipFingerprintInput::InvalidatingCommandCount,
                     ],
-                ),
+                )
+                .with_invalidate_on_commands([
+                    "aws",
+                    "aws-vault",
+                    "aws-profile",
+                    "aws2",
+                ]),
             )),
             Self::SvnBranch => Some(ContextChip::shell_builtin(
                 "Svn Branch",

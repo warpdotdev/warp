@@ -291,7 +291,14 @@ impl DisplayChipMenu {
         chip_menu_type: ChipMenuType,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        // The search input is unhelpful when there is at most one item to search
+        // through, so we omit it for the AWS profile picker in that case (it
+        // would otherwise be focused-but-useless when the user has a single
+        // configured profile and no other profiles in their config).
+        let search_disabled_due_to_few_items =
+            chip_menu_type == ChipMenuType::AwsProfiles && menu_items.len() <= 1;
         let search_input = match chip_menu_type {
+            _ if search_disabled_due_to_few_items => None,
             ChipMenuType::Directories
             | ChipMenuType::Branches
             | ChipMenuType::AwsProfiles

@@ -947,11 +947,20 @@ impl DisplayChip {
                 }
             }
             ContextChipKind::AwsProfile => {
+                // Hide the currently-active profile from the picker so the user only
+                // sees profiles they can switch *to* — selecting your current profile
+                // would just re-run the export with no observable effect.
+                let current_profile = chip_result
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string);
                 let profile_items: Vec<AwsProfile> = chip_result
                     .on_click_values
                     .iter()
                     .map(|name| name.trim())
                     .filter(|name| !name.is_empty())
+                    .filter(|name| current_profile.as_deref() != Some(*name))
                     .map(|name| AwsProfile(name.to_string()))
                     .collect();
 
@@ -1318,13 +1327,8 @@ impl DisplayChip {
                     return true;
                 }
             }
-            DisplayChipKind::GitBranch { menu_open, menu } => {
-                if *menu_open {
-                    ctx.focus(menu);
-                    return true;
-                }
-            }
-            DisplayChipKind::AwsProfile { menu_open, menu } => {
+            DisplayChipKind::GitBranch { menu_open, menu }
+            | DisplayChipKind::AwsProfile { menu_open, menu } => {
                 if *menu_open {
                     ctx.focus(menu);
                     return true;
