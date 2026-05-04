@@ -523,6 +523,13 @@ impl ContextChip {
 
 impl Environment {
     /// Create a new environment with the given values.
+    ///
+    /// This is a test-only constructor that takes only the historically-tracked
+    /// fields. New env-derived fields (like `aws_profile`, `git_branch`) are
+    /// not parameters here on purpose — production code should use
+    /// [`Self::from_block`] which inherits every field from a [`Block`].
+    /// If you're adding a new field, default it to `None` here and populate
+    /// it in `from_block` instead of growing this signature.
     pub fn new(
         python_virtualenv: Option<String>,
         conda_environment: Option<String>,
