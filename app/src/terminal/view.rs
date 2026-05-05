@@ -8465,18 +8465,32 @@ impl TerminalView {
                 }
             }
             ModelEvent::ClipboardStore(_, contents) => {
-                ctx.clipboard()
-                    .write(ClipboardContent::plain_text(contents.to_owned()));
+                let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+                if access.allows_write() {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(contents.to_owned()));
+                } else {
+                    log::info!(
+                        "OSC 52 clipboard write blocked by terminal.osc52_clipboard_access setting"
+                    );
+                }
             }
             ModelEvent::ClipboardLoad(_, format) => {
-                self.write_to_pty(
-                    format(&TerminalView::read_from_clipboard(
-                        Some(self.shell_family(ctx)),
+                let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+                if access.allows_read() {
+                    self.write_to_pty(
+                        format(&TerminalView::read_from_clipboard(
+                            Some(self.shell_family(ctx)),
+                            ctx,
+                        ))
+                        .into_bytes(),
                         ctx,
-                    ))
-                    .into_bytes(),
-                    ctx,
-                );
+                    );
+                } else {
+                    log::info!(
+                        "OSC 52 clipboard read blocked by terminal.osc52_clipboard_access setting"
+                    );
+                }
             }
             ModelEvent::CursorBlinkingChange(_) => {}
             ModelEvent::MouseCursorDirty => {}
