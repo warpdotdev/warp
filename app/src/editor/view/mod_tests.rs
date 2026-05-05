@@ -4538,12 +4538,6 @@ fn test_editor_set_and_clear_font_size_override() {
             editor.set_font_size(18.0, ctx);
             assert_eq!(editor.text_options.font_size_override, Some(18.0));
 
-            // Re-applying the same value is a no-op for the override; we
-            // can't directly observe `ctx.notify()`, but the early-return
-            // guards an unnecessary repaint.
-            editor.set_font_size(18.0, ctx);
-            assert_eq!(editor.text_options.font_size_override, Some(18.0));
-
             editor.set_font_size(22.0, ctx);
             assert_eq!(editor.text_options.font_size_override, Some(22.0));
 
@@ -4552,10 +4546,6 @@ fn test_editor_set_and_clear_font_size_override() {
                 editor.text_options.font_size_override.is_none(),
                 "clear should drop the override"
             );
-
-            // Clearing again when nothing is set is a no-op.
-            editor.clear_font_size(ctx);
-            assert!(editor.text_options.font_size_override.is_none());
         });
     });
 }

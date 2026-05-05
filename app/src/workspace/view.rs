@@ -16872,16 +16872,20 @@ impl Workspace {
     }
 
     fn reset_font_size(&mut self, ctx: &mut ViewContext<Self>) {
-        // Clears the focused pane's per-pane override so it falls back to the
-        // current global `FontSettings::monospace_font_size`. We deliberately
-        // don't reset the global here — the user may have intentionally
-        // configured it.
-        let pane_group = self.active_tab_pane_group().clone();
-        let focus_state = pane_group.as_ref(ctx).focus_state_handle().clone();
-        let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
-        focus_state.update(ctx, |state, ctx| {
-            state.clear_font_size_override(pane_id, ctx);
-        });
+        if *PaneSettings::as_ref(ctx).pane_specific_font_size {
+            let pane_group = self.active_tab_pane_group().clone();
+            let focus_state = pane_group.as_ref(ctx).focus_state_handle().clone();
+            let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            focus_state.update(ctx, |state, ctx| {
+                state.clear_font_size_override(pane_id, ctx);
+            });
+        } else {
+            FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                report_if_error!(font_settings
+                    .monospace_font_size
+                    .set_value(MonospaceFontSize::default_value(), ctx));
+            });
+        }
     }
 
     fn increase_zoom(&mut self, ctx: &mut ViewContext<Self>) {
@@ -16934,9 +16938,16 @@ impl Workspace {
             .as_ref(ctx)
             .effective_monospace_font_size(pane_id, ctx);
         let new_size = (current + font_size_delta).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-        focus_state.update(ctx, |state, ctx| {
-            state.set_font_size_override(pane_id, new_size, ctx);
-        });
+
+        if *PaneSettings::as_ref(ctx).pane_specific_font_size {
+            focus_state.update(ctx, |state, ctx| {
+                state.set_font_size_override(pane_id, new_size, ctx);
+            });
+        } else {
+            FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                report_if_error!(font_settings.monospace_font_size.set_value(new_size, ctx));
+            });
+        }
     }
 
     fn set_selected_object(&mut self, id: Option<WarpDriveItemId>, ctx: &mut ViewContext<Self>) {
