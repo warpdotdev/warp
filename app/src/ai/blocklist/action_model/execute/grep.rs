@@ -24,21 +24,13 @@ use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::{host_native_absolute_path, shell_native_absolute_path};
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::model::session::{ExecuteCommandOptions, Session};
+use crate::terminal::model::session::{shell_quote_arg, ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
 use crate::terminal::ShellLaunchData;
 use crate::{send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
 
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";
-
-fn escape_double_quotes(s: &str) -> String {
-    s.replace('"', "\\\"")
-}
-
-fn powershell_escape_double_quotes(s: &str) -> String {
-    s.replace('"', "`\"")
-}
 
 /// Information about the Grep call that resulted in an error, used to send
 /// telemetry about the error.
@@ -420,6 +412,7 @@ async fn run_grep(
                 &absolute_path,
                 &session,
                 shell_launch_data,
+                shell_type,
                 &execute_directory,
             )
             .await
@@ -465,20 +458,7 @@ async fn run_git_grep_command(
     shell_type: ShellType,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // This command works on all the shells we support (even PowerShell).
-    let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
-    for query in queries {
-        let escaped_query = format!(
-            "\"{}\"",
-            if shell_type == ShellType::PowerShell {
-                powershell_escape_double_quotes(query)
-            } else {
-                escape_double_quotes(query)
-            }
-        );
-        grep_command.push_str(format!(" -e {escaped_query}").as_str());
-    }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let grep_command = build_git_grep_command(queries, target_path, shell_type);
 
     let command_output = session
         .execute_command(
@@ -524,20 +504,10 @@ async fn run_grep_command(
     target_path: &str,
     session: &Session,
     shell_launch_data: Option<ShellLaunchData>,
+    shell_type: ShellType,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // Summary of the options we use:
-    // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
-    // * "-n" includes line numbers
-    // * "-r" performs a recursive search
-    // * "-I" ignores binary files
-    // * "-H" prints file name headers
-    // * "-E" uses extended regex expressions
-    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
-    for query in queries {
-        grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
-    }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let grep_command = build_grep_command(queries, target_path, shell_type);
 
     let command_output = session
         .execute_command(
@@ -586,17 +556,7 @@ async fn run_select_string_command(
     shell_launch_data: Option<ShellLaunchData>,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // We enable the `-CaseSensitive` flag to match the default behavior of grep.
-    // TODO(CODE-239): Make this command more efficient when searching a file.
-    let select_string_command = format!(
-        "Get-ChildItem -Path \"{}\" -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
-        target_path,
-        queries
-            .iter()
-            .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
-            .collect::<Vec<_>>()
-            .join(",")
-    );
+    let select_string_command = build_select_string_command(queries, target_path);
 
     let command_output = session
         .execute_command(
@@ -626,6 +586,52 @@ async fn run_select_string_command(
             .with_command(select_string_command)
             .with_output(output.into()))
     }
+}
+
+fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
+    // This command works on all the shells we support (even PowerShell).
+    let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
+    for query in queries {
+        // Queries can originate from model output and project instructions. Keep
+        // them as grep arguments so shell substitutions like $() are inert.
+        grep_command.push_str(format!(" -e {}", shell_quote_arg(query, shell_type)).as_str());
+    }
+    grep_command.push_str(format!(" {}", shell_quote_arg(target_path, shell_type)).as_str());
+    grep_command
+}
+
+fn build_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
+    // Summary of the options we use:
+    // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
+    // * "-n" includes line numbers
+    // * "-r" performs a recursive search
+    // * "-I" ignores binary files
+    // * "-H" prints file name headers
+    // * "-E" uses extended regex expressions
+    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
+    for query in queries {
+        // Queries can originate from model output and project instructions. Keep
+        // them as grep arguments so shell substitutions like $() are inert.
+        grep_command.push_str(format!(" -e {}", shell_quote_arg(query, shell_type)).as_str());
+    }
+    grep_command.push_str(format!(" {}", shell_quote_arg(target_path, shell_type)).as_str());
+    grep_command
+}
+
+fn build_select_string_command(queries: &[String], target_path: &str) -> String {
+    // We enable the `-CaseSensitive` flag to match the default behavior of grep.
+    // TODO(CODE-239): Make this command more efficient when searching a file.
+    format!(
+        "Get-ChildItem -Path {} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
+        shell_quote_arg(target_path, ShellType::PowerShell),
+        queries
+            .iter()
+            // PowerShell evaluates command substitutions in double-quoted
+            // strings, so patterns must be single-quoted data arguments.
+            .map(|q| shell_quote_arg(q, ShellType::PowerShell))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 /// Parses the output of grep or a grep-like command into the format that we pass
