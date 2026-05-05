@@ -24,8 +24,6 @@ use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::assets::asset_cache::Asset;
 use warpui::image_cache::ImageType;
 use warpui::r#async::executor::Background;
-#[cfg(not(target_family = "wasm"))]
-use warpui::util::save_as_file;
 use warpui::AppContext;
 
 use super::super::{AltScreen, BlockList};
@@ -3361,16 +3359,9 @@ impl ansi::Handler for TerminalModel {
                 pending.data = decoded_bytes;
 
                 if !pending.metadata.inline {
-                    #[cfg(not(target_family = "wasm"))]
-                    if let Some(cwd) = self
-                        .active_block_metadata()
-                        .current_working_directory()
-                        .map(|cwd| cwd.to_string())
-                    {
-                        let mut path = PathBuf::from(cwd);
-                        path.push(pending.metadata.name);
-                        let _ = save_as_file(&pending.data[..], path);
-                    }
+                    log::warn!(
+                        "Ignoring non-inline iTerm file payload; automatic local file writes are disabled."
+                    );
                     return;
                 }
 
