@@ -2219,6 +2219,10 @@ impl Block {
             .contents_to_string_force_full_grid_contents(false, None)
     }
 
+    pub fn full_block_to_string(&self) -> String {
+        self.bounds_to_string(self.start_point(), self.end_point())
+    }
+
     pub fn output_with_secrets_unobfuscated(&self) -> String {
         self.output_grid()
             .contents_to_string_with_secrets_unobfuscated(false, None)
