@@ -21,7 +21,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::completer::SessionContext;
-use crate::context_chips::display_chip::{format_git_branch_command, DisplayChipAction};
+use crate::context_chips::display_chip::{DisplayChipAction, PromptChipShellCommand};
 use crate::settings::InputSettings;
 use crate::terminal::input::MenuPositioningProvider;
 use crate::terminal::model_events::ModelEventDispatcher;
@@ -87,7 +87,7 @@ pub enum PromptDisplayEvent {
     OpenConversationHistory,
     OpenCommandPaletteFiles,
     RunAgentQuery(String),
-    TryExecuteCommand(String),
+    TryExecuteCommand(PromptChipShellCommand),
     OpenAIDocument {
         document_id: AIDocumentId,
         document_version: AIDocumentVersion,
@@ -371,7 +371,9 @@ impl TypedActionView for PromptDisplay {
         match action {
             PromptDisplayAction::SelectGitBranch { value } => {
                 ctx.emit(PromptDisplayEvent::TryExecuteCommand(
-                    format_git_branch_command(value),
+                    PromptChipShellCommand::GitCheckout {
+                        branch_name: value.clone(),
+                    },
                 ));
             }
         }
