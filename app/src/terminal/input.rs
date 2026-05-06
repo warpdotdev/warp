@@ -38,7 +38,23 @@ use crate::ai::predict::prompt_suggestions::{
     has_pending_code_or_unit_test_prompt_suggestion,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillManager, SkillOpenOrigin, SkillTelemetryEvent};
+use crate::ai::AIRequestUsageModel;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::appearance::{Appearance, AppearanceEvent};
+use crate::channel::{Channel, ChannelState};
+use crate::cloud_object::model::actions::ObjectActionType;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::code_review::diff_state::DiffMode;
+use crate::completer::SessionContext;
+use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
+use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellCommand};
+use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
@@ -77,6 +93,7 @@ use crate::terminal::input::suggestions_mode_model::{
 use crate::terminal::input::terminal_message_bar::TerminalInputMessageBar;
 use crate::terminal::input::user_query::{UserQueryMenuEvent, UserQueryMenuView};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::shell_quote_arg;
 use crate::terminal::package_installers::command_at_cursor_has_common_package_installer_prefix;
 use crate::terminal::prompt_render_helper::should_render_ps1_prompt;
 use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
@@ -745,6 +762,33 @@ impl CommandExecutionSource {
         // TODO: at some point we will want to couple both of these cases
         // into one source variant, as they are both AI sources.
         matches!(self, CommandExecutionSource::AI { .. })
+    }
+}
+
+fn render_prompt_chip_shell_command(
+    command: &PromptChipShellCommand,
+    shell_type: ShellType,
+) -> String {
+    match command {
+        PromptChipShellCommand::GitCheckout { branch_name } => {
+            format!("git checkout {}", shell_quote_arg(branch_name, shell_type))
+        }
+        PromptChipShellCommand::GitCreateAndCheckoutBranch { branch_name } => {
+            format!(
+                "git checkout -b {} --",
+                shell_quote_arg(branch_name, shell_type)
+            )
+        }
+        PromptChipShellCommand::ChangeDirectory { dir_name } => {
+            format!("cd {}", shell_quote_arg(dir_name, shell_type))
+        }
+        PromptChipShellCommand::NvmUse { version } => {
+            format!("nvm use {}", shell_quote_arg(version, shell_type))
+        }
+        PromptChipShellCommand::NvmInstallLatestNode => "nvm install node".to_string(),
+        PromptChipShellCommand::Echo { message } => {
+            format!("echo {}", shell_quote_arg(message, shell_type))
+        }
     }
 }
 
@@ -4434,9 +4478,17 @@ impl Input {
                 });
             }
             PromptDisplayEvent::TryExecuteCommand(command) => {
+                let Some(shell_type) = self
+                    .active_session(ctx)
+                    .map(|session| session.shell().shell_type())
+                else {
+                    log::warn!("Tried to execute prompt chip command without an active session");
+                    return;
+                };
+                let command = render_prompt_chip_shell_command(command, shell_type);
                 // Snapshot the current input so we can restore it after the command completes.
                 let current_input = self.buffer_text(ctx);
-                if self.try_execute_command_from_source(command, CommandExecutionSource::User, ctx)
+                if self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx)
                 {
                     self.cancel_active_conversation(ctx, CancellationReason::UserCommandExecuted);
                     if !current_input.is_empty() {
