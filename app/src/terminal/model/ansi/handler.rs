@@ -15,6 +15,7 @@ use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::kitty::{KittyAction, KittyChunk, KittyResponse};
 use crate::terminal::model::selection::ScrollDelta;
+use crate::terminal::model::session::SessionId;
 use crate::terminal::model::terminal_model::TmuxInstallationState;
 use crate::terminal::model::tmux::ControlModeEvent;
 
@@ -236,6 +237,14 @@ pub trait Handler {
 
     /// Report text area size in characters.
     fn text_area_size_chars<W: io::Write>(&mut self, _: &mut W);
+
+    /// Returns whether the given session_id is recognized as a client-generated
+    /// session. Used to validate DCS hook integrity: hooks carrying an
+    /// unrecognized session_id are rejected before dispatch. Defaults to false
+    /// so implementors must explicitly opt into accepting integrity-protected hooks.
+    fn is_registered_session(&self, _session_id: SessionId) -> bool {
+        false
+    }
 
     /// Callback for the Warp CommandFinished hook.
     fn command_finished(&mut self, _data: CommandFinishedValue) {}

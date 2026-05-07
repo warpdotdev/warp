@@ -648,9 +648,40 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         }
     }
 
+    /// Validates that a hook's session_id is recognized. Returns `true` if the
+    /// hook should be processed, `false` if it should be rejected.
+    fn validate_hook_session_id(&mut self, hook: &DProtoHook) -> bool {
+        if !hook.requires_registered_session() {
+            return true;
+        }
+
+        let Some(session_id) = hook.session_id() else {
+            log::warn!(
+                "Rejected DCS hook '{}' with missing session_id",
+                hook.name()
+            );
+            return false;
+        };
+
+        if !self.handler.is_registered_session(session_id) {
+            log::warn!(
+                "Rejected DCS hook '{}' with unrecognized session_id {}",
+                hook.name(),
+                session_id.as_u64()
+            );
+            return false;
+        }
+        true
+    }
+
     /// Calls the appropriate `ansi::Handler` function according to the given hook. This function
     /// assumes that the hook was encoded originally.
     fn handle_decoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
+        if let Ok(ref hook) = hook {
+            if !self.validate_hook_session_id(hook) {
+                return;
+            }
+        }
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
             Ok(DProtoHook::Precmd { value }) => self.handler.precmd(value),
@@ -701,6 +732,11 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         // This is because we can guarantee that theses RC file hook don't contain non-ASCII chars
         // that might otherwise corrupt parsing of the PTY output (the same can't be said for the
         // payloads of other DCS hooks).
+        if let Ok(ref hook) = hook {
+            if !self.validate_hook_session_id(hook) {
+                return;
+            }
+        }
         match hook {
             Ok(DProtoHook::InitShell { value }) => self.handler.init_shell(value),
             Ok(DProtoHook::InitSubshell { value }) => {

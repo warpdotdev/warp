@@ -1,5 +1,5 @@
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::ParseIntError;
 use std::ops::{Range, RangeInclusive};
 use std::path::PathBuf;
@@ -604,6 +604,11 @@ pub struct TerminalModel {
     /// Next ID to use for images where the ID is not explicitly specified
     /// by the Kitty protocol
     pub next_kitty_image_id: u32,
+
+    /// Set of session IDs that were generated client-side and injected into
+    /// bootstrap init scripts. Used to validate DCS hook integrity: hooks
+    /// carrying an unrecognized session_id are rejected.
+    registered_session_ids: HashSet<SessionId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1062,23 +1067,33 @@ impl TerminalModel {
             },
         );
 
+        let session_id = 123.into();
+        terminal_model.register_session_id(session_id);
+
         // We need to set the hostname to the local hostname to ensure that we
         // treat the session as a local one, not a remote one.  (See the
         // implementation of `SessionInfo::determine_session_type()` for more
         // details.)
         let hostname = get_local_hostname().unwrap_or_else(|_| "localhost".to_string());
         terminal_model.init_shell(InitShellValue {
-            session_id: 123.into(),
+            session_id,
             shell: "zsh".to_owned(),
             hostname,
             ..Default::default()
         });
         terminal_model.bootstrapped(BootstrappedValue {
+            session_id: Some(session_id.as_u64()),
             shell: "zsh".to_string(),
             ..Default::default()
         });
-        terminal_model.command_finished(Default::default());
-        terminal_model.precmd(Default::default());
+        terminal_model.command_finished(CommandFinishedValue {
+            session_id: Some(session_id.as_u64()),
+            ..Default::default()
+        });
+        terminal_model.precmd(PrecmdValue {
+            session_id: Some(session_id.as_u64()),
+            ..Default::default()
+        });
         terminal_model
     }
 
@@ -1165,6 +1180,7 @@ impl TerminalModel {
             image_id_to_metadata: HashMap::new(),
             // Start mid-way through the u32 range to avoid collisions
             next_kitty_image_id: 2147483647,
+            registered_session_ids: HashSet::new(),
         }
     }
 
@@ -2385,6 +2401,12 @@ macro_rules! delegate {
 }
 
 impl TerminalModel {
+    /// Registers a client-generated session ID so that DCS hooks carrying
+    /// this ID will be accepted by the integrity check.
+    pub fn register_session_id(&mut self, session_id: SessionId) {
+        self.registered_session_ids.insert(session_id);
+    }
+
     pub fn needs_bracketed_paste(&mut self) -> bool {
         delegate!(self.needs_bracketed_paste())
     }
@@ -2445,6 +2467,10 @@ pub enum HandlerEvent {
 }
 
 impl ansi::Handler for TerminalModel {
+    fn is_registered_session(&self, session_id: SessionId) -> bool {
+        self.registered_session_ids.contains(&session_id)
+    }
+
     fn set_title(&mut self, title: Option<String>) {
         // Don't set the tab title if the title event is for a running in-band command.
         if self.block_list().is_writing_or_executing_in_band_command() {
@@ -2931,6 +2957,17 @@ impl ansi::Handler for TerminalModel {
     fn ssh(&mut self, value: SSHValue) {
         if !self.ignore_bootstrapping_messages {
             let remote_shell = value.remote_shell.clone();
+            let Some(remote_session_id) = value.remote_session_id.map(SessionId::from) else {
+                log::warn!("Rejected SSH hook without remote_session_id");
+                return;
+            };
+            // The value `0` is the legacy/default session ID, not a client-generated
+            // integrity token.
+            if remote_session_id.as_u64() == 0 {
+                log::warn!("Rejected SSH hook with zero remote_session_id");
+                return;
+            }
+            self.register_session_id(remote_session_id);
             self.pending_legacy_ssh_session = Some(value);
             self.event_proxy
                 .send_terminal_event(Event::SSH(remote_shell));
