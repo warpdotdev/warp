@@ -1,10 +1,11 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warpui::fonts::Cache as FontCache;
+use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::{active_or_next_match, AttributedStringBuilder, CachedBackgroundColor};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::char_or_str::CharOrStr;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{grid_renderer, SizeInfo};
@@ -206,6 +207,70 @@ fn test_calculate_background_bounds() {
     assert_multi_row_selection_bounds(30, 80, 32, 40); // 3 lines
     assert_multi_row_selection_bounds(40, 60, 43, 10); // 4 lines
     assert_multi_row_selection_bounds(50, 140, 59, 20); // 10 lines
+}
+
+/// Verifies that `AttributedStringBuilder::character_index_to_cell_map` is **byte-indexed**, not
+/// char-indexed. `paint_line` looks up cells via `glyph.index`, which cosmic_text emits as a UTF-8
+/// byte offset. For ASCII text both indexings happen to coincide, but multi-byte scripts (Thai,
+/// CJK, emoji, …) would have their glyphs drawn at the wrong column otherwise.
+#[test]
+fn test_attributed_string_builder_byte_indexed_cell_map() {
+    let dummy_family = FamilyId(0);
+    let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
+
+    // "สวัสดี" — every codepoint is 3 bytes in UTF-8. The cell layout that the terminal grid
+    // produces for this string is:
+    //   col 0: ส (Char)         col 1: วั (Str — ว + zerowidth ั)
+    //   col 2: ส (Char)         col 3: ดี (Str — ด + zerowidth ี)
+    builder.append_content(CharOrStr::Char('ส'), 0);
+    builder.append_content(CharOrStr::Str("วั"), 1);
+    builder.append_content(CharOrStr::Char('ส'), 2);
+    builder.append_content(CharOrStr::Str("ดี"), 3);
+
+    let data = builder.build();
+
+    assert_eq!(data.line, "สวัสดี", "appended chars must round-trip into the line");
+    assert_eq!(
+        data.line.len(),
+        18,
+        "six 3-byte Thai codepoints = 18 UTF-8 bytes"
+    );
+    assert_eq!(
+        data.character_index_to_cell_map.len(),
+        18,
+        "the cell map must have one entry per byte (NOT per char) — otherwise paint_line, which \
+         indexes with glyph.index (a UTF-8 byte offset), would read out-of-bounds or hit the \
+         wrong cell for any non-ASCII codepoint"
+    );
+
+    // Every byte of each codepoint must point to its grid column.
+    let expected = [
+        0, 0, 0, // ส @ col 0
+        1, 1, 1, // ว @ col 1
+        1, 1, 1, // ั @ col 1 (combining mark stays in same cell as base)
+        2, 2, 2, // ส @ col 2
+        3, 3, 3, // ด @ col 3
+        3, 3, 3, // ี @ col 3 (combining mark stays in same cell as base)
+    ];
+    assert_eq!(
+        data.character_index_to_cell_map, expected,
+        "each byte of a multi-byte codepoint must map to the same cell column"
+    );
+}
+
+/// ASCII regression check — a build that wrongly switched to char-indexing would still pass for
+/// pure-ASCII input, so we explicitly assert the byte map for ASCII looks the same as before.
+#[test]
+fn test_attributed_string_builder_byte_indexed_cell_map_ascii() {
+    let dummy_family = FamilyId(0);
+    let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
+
+    builder.append_content(CharOrStr::Char('h'), 0);
+    builder.append_content(CharOrStr::Char('i'), 1);
+
+    let data = builder.build();
+    assert_eq!(data.line, "hi");
+    assert_eq!(data.character_index_to_cell_map, vec![0, 1]);
 }
 
 #[test]
