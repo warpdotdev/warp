@@ -65,14 +65,14 @@ use crate::settings::{
     ChangelogSettings, CloudPreferencesSettings, CodeSettings, CommandCorrections,
     CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DefaultSessionMode,
     EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys,
-    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
+    GPUSettings, GlobalHotkeyMode, HideCursorWhileTyping, InputSettings, InputSettingsChangedEvent,
     LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
     OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
     QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
     ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
     SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    VimStatusBar, VimUnnamedSystemClipboard,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -219,6 +219,19 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         .is_supported_on_current_platform(
             InputSettings::as_ref(app)
                 .completions_open_while_typing
+                .is_supported_on_current_platform(),
+        ),
+        ToggleSettingActionPair::new(
+            "hide mouse cursor while typing",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleHideCursorWhileTyping,
+            )),
+            context,
+            flags::HIDE_CURSOR_WHILE_TYPING_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            InputSettings::as_ref(app)
+                .hide_cursor_while_typing
                 .is_supported_on_current_platform(),
         ),
         ToggleSettingActionPair::new(
@@ -569,6 +582,7 @@ pub enum FeaturesPageAction {
     ToggleSnackbar,
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
+    ToggleHideCursorWhileTyping,
     ToggleCommandCorrections,
     ToggleErrorUnderlining,
     ToggleSyntaxHighlighting,
@@ -768,6 +782,10 @@ impl FeaturesPageAction {
             Self::ToggleCompletionsOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCompletionsOpenWhileTyping".to_string(),
                 value: to_string(*input_settings.completions_open_while_typing.value()),
+            },
+            Self::ToggleHideCursorWhileTyping => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleHideCursorWhileTyping".to_string(),
+                value: to_string(*input_settings.hide_cursor_while_typing.value()),
             },
             Self::ToggleCommandCorrections => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCommandCorrections".to_string(),
@@ -1618,6 +1636,13 @@ impl TypedActionView for FeaturesPageView {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
                     report_if_error!(input_settings
                         .completions_open_while_typing
+                        .toggle_and_save_value(ctx));
+                });
+            }
+            ToggleHideCursorWhileTyping => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(input_settings
+                        .hide_cursor_while_typing
                         .toggle_and_save_value(ctx));
                 });
             }
@@ -2614,6 +2639,12 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(CompletionsMenuWhileTypingWidget::default()));
+        }
+        if input_settings
+            .hide_cursor_while_typing
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(HideCursorWhileTypingWidget::default()));
         }
         if input_settings
             .command_corrections
@@ -5658,6 +5689,52 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleCompletionsOpenWhileTyping);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct HideCursorWhileTypingWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for HideCursorWhileTypingWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "hide mouse cursor pointer typing"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Hide mouse cursor while typing".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                HideCursorWhileTyping::storage_key(),
+                HideCursorWhileTyping::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*InputSettings::as_ref(app).hide_cursor_while_typing.value())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleHideCursorWhileTyping);
                 })
                 .finish(),
             None,
