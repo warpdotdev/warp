@@ -30,7 +30,7 @@ use crate::pane_group::TerminalViewResources;
 use crate::persistence::ModelEvent;
 use crate::settings::DebugSettings;
 
-use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::{SessionId, Sessions};
 
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -459,11 +459,23 @@ impl TerminalManager {
             .lock()
             .set_pending_shell_launch_data(shell_launch_data.clone());
 
+        // Register the session ID that was generated during shell starter construction.
+        // For bash, fish, and PowerShell, the session ID is already baked into the command
+        // args. For zsh and MSYS2, enqueue_init_script injects this same ID.
+        let generated_session_id = match &shell_starter {
+            ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.session_id(),
+            ShellStarter::DockerSandbox(starter) => starter.session_id(),
+            ShellStarter::Wsl(starter) => starter.session_id(),
+        };
+        self.model()
+            .lock()
+            .register_session_id(generated_session_id);
+
         // Enqueue the init shell script (for shells that need it), then create
         // the PTY and start its corresponding event loop.
         let model = self.model();
         let pty = match self
-            .enqueue_init_script(&shell_starter)
+            .enqueue_init_script(&shell_starter, generated_session_id)
             .context("Failed to write shell init script to the pty")
             .and_then(|_| {
                 Self::create_pty(
@@ -560,14 +572,21 @@ impl TerminalManager {
         }
     }
 
-    fn enqueue_init_script(&self, shell_starter: &ShellStarter) -> Result<(), SendError<Message>> {
+    fn enqueue_init_script(
+        &self,
+        shell_starter: &ShellStarter,
+        session_id: SessionId,
+    ) -> Result<(), SendError<Message>> {
         let shell_type = shell_starter.shell_type();
         if shell_type == crate::terminal::shell::ShellType::Zsh
             // For more on why this is necessary on Git Bash, see https://linear.app/warpdotdev/issue/CORE-3202.
             || shell_starter.is_msys2()
         {
-            let init_shell_script =
-                crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS);
+            let init_shell_script = crate::terminal::bootstrap::init_shell_script_for_shell(
+                shell_type,
+                &crate::ASSETS,
+                session_id,
+            );
             let tx = self.event_loop_tx.lock();
             tx.send(Message::Input(init_shell_script.into_bytes().into()))?;
             tx.send(Message::Input(shell_type.execute_command_bytes().into()))

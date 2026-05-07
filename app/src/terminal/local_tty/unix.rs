@@ -856,7 +856,8 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     };
 
     // 1. Write the init script to this sandbox's dedicated host init dir.
-    let init_script = raw_init_shell_script_for_shell(ShellType::Bash, &ASSETS);
+    let init_script =
+        raw_init_shell_script_for_shell(ShellType::Bash, &ASSETS, starter.session_id());
     let init_dir = starter.init_dir();
     mk_owner_only_dir(&init_dir)?;
     std::fs::write(starter.init_path(), init_script).context("write sandbox init script")?;
