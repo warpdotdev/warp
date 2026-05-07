@@ -285,6 +285,39 @@ impl FontDB {
     }
 }
 
+/// Returns the system locale as a BCP-47 language tag (e.g. "th-TH", "en-US").
+///
+/// On Linux/FreeBSD, reads `LC_ALL` → `LC_CTYPE` → `LANG` and converts the POSIX
+/// locale name (e.g. "th_TH.UTF-8") to BCP-47 (e.g. "th-TH").  On all other
+/// platforms we fall back to "en" because font fallback on those platforms goes
+/// through platform-specific APIs (DirectWrite on Windows, CoreText on macOS)
+/// rather than fontconfig locale ordering.
+fn detect_system_locale() -> String {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        if let Some(lang) = std::env::var("LC_ALL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("LC_CTYPE").ok().filter(|s| !s.is_empty()))
+            .or_else(|| std::env::var("LANG").ok().filter(|s| !s.is_empty()))
+        {
+            let tag = lang
+                .split('.')
+                .next()
+                .unwrap_or("en")
+                .replace('_', "-");
+            if !tag.is_empty() {
+                return tag;
+            }
+        }
+        "en".into()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        "en".into()
+    }
+}
+
 impl Default for TextLayoutSystem {
     fn default() -> Self {
         Self::new()
@@ -296,9 +329,10 @@ impl TextLayoutSystem {
         Self {
             families: Default::default(),
             font_store: RwLock::new(cosmic_text::FontSystem::new_with_locale_and_db(
-                // Locale is needed for font fallback. For now, we hardcode this to "en" to match
-                // our mac implementation https://github.com/warpdotdev/warp-internal/blob/bf33d651a9fcece70df8eac35f89b0393ca5189a/ui/src/platform/mac/fonts.rs#L383.
-                "en".into(),
+                // Detect the system locale so that cosmic_text selects appropriate fallback
+                // fonts for non-Latin scripts (e.g. Thai, Arabic) on Linux/FreeBSD where
+                // fontconfig uses the locale for font ordering.
+                detect_system_locale(),
                 Default::default(),
             )),
             font_id_map: Default::default(),

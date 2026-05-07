@@ -1118,6 +1118,11 @@ fn render_grid_with_ligatures<'a>(
         let offset_row = start_row + offset;
         let mut string_builder =
             AttributedStringBuilder::new(font_family, font_family, grid.columns());
+        // Cells whose content is CharOrStr::Str (base char + zero-width combining chars, e.g.
+        // Thai "วั") are excluded from layout_line and rendered here via glyph_for_char, which
+        // has DirectWrite system-font fallback. layout_line uses cosmic_text/fontdb and cannot
+        // load system Thai fonts on demand, so it produces glyph_id=0 for those characters.
+        let mut deferred_str_cells: Vec<(usize, ColorU, String)> = Vec::new();
 
         let Some(row) = grid.row(row_idx) else {
             report_error!("grid_renderer should not try to render an out-of-bounds row");
@@ -1424,7 +1429,14 @@ fn render_grid_with_ligatures<'a>(
                     // attempt the same thing, so we replace it with a placeholder
                     string_builder.append_placeholder(col);
                 } else {
-                    string_builder.append_content(cell.content_for_display(), col);
+                    match cell.content_for_display() {
+                        CharOrStr::Str(s) => {
+                            string_builder.append_placeholder(col);
+                            deferred_str_cells
+                                .push((col, cell_colors.foreground_color, s.to_owned()));
+                        }
+                        other => string_builder.append_content(other, col),
+                    }
                 }
             }
         }
@@ -1453,6 +1465,30 @@ fn render_grid_with_ligatures<'a>(
             &string_data.character_index_to_cell_map,
             ctx.scene,
         );
+
+        // Render deferred CharOrStr::Str cells (base + combining chars, e.g. Thai "วั").
+        // Look up the base char with full DirectWrite fallback to find the script font, then
+        // reuse that font for every combining mark — DirectWrite cannot map combining marks
+        // standalone (no script context), but the script font that contains ว also contains ั.
+        for (col, foreground_color, content) in deferred_str_cells.drain(..) {
+            let origin = line_origin + vec2f(col as f32 * cell_size.x(), 0.);
+            let mut chars = content.chars();
+            let Some(first_char) = chars.next() else { continue };
+            let Some((first_glyph, base_font_id)) =
+                ctx.font_cache.glyph_for_char(default_font_id, first_char, true)
+            else {
+                continue;
+            };
+            ctx.scene
+                .draw_glyph(origin, first_glyph, base_font_id, font_size, foreground_color);
+            for c in chars {
+                if let Some((glyph_id, _)) = ctx.font_cache.glyph_for_char(base_font_id, c, false)
+                {
+                    ctx.scene
+                        .draw_glyph(origin, glyph_id, base_font_id, font_size, foreground_color);
+                }
+            }
+        }
 
         if grid.filter_has_context_lines() {
             maybe_render_dotted_lines(
@@ -1726,27 +1762,6 @@ fn render_cell_glyph(
     let font_id = font_id_cache.font_ids[font_style as usize]
         .get_or_insert_with(|| ctx.font_cache.select_font(font_family, properties));
 
-    let glyph_and_font = match cell_content {
-        // Special-case whitespace, which doesn't need rendering.  We
-        // explicitly check these two chars instead of using
-        // `char::is_whitespace` for performance reasons.
-        CharOrStr::Char(' ' | '\t') => None,
-        CharOrStr::Char(char) => glyphs.glyph_for_char(char, *font_id, ctx.font_cache),
-        // Certain zerowidth characters, such as emoji presentation selectors, can affect the underlying glyph and
-        // change the rendering. Hence, we need to layout/render the text as a combined string, instead of simply
-        // the single character. For example, in \0x2601\0xFE0F, the FE0F selector causes ☁️ to be changed from a
-        // 1-width char to a 2-width char.
-        CharOrStr::Str(content_with_zerowidth) => glyphs.glyph_for_string(
-            content_with_zerowidth,
-            *font_id,
-            ctx.font_cache,
-            font_family,
-            font_size,
-            properties,
-            ctx,
-        ),
-    };
-
     let origin = grid_origin + glyph_offset + baseline_position;
 
     // Handle special unicode characters that will look better with native
@@ -1759,16 +1774,49 @@ fn render_cell_glyph(
                 glyph_type,
             });
         }
-        None => {
-            // Add FontId as part of the hashkey since characters with different
-            // fonts will have different glyph ids.
-            if let Some((glyph_id, font_id)) = glyph_and_font {
-                // If we don't have special handling for the character, draw the
-                // glyph from the font.
-                ctx.scene
-                    .draw_glyph(origin, glyph_id, font_id, font_size, foreground_color);
+        None => match cell_content {
+            // Special-case whitespace, which doesn't need rendering.  We
+            // explicitly check these two chars instead of using
+            // `char::is_whitespace` for performance reasons.
+            CharOrStr::Char(' ' | '\t') => {}
+            CharOrStr::Char(char) => {
+                if let Some((glyph_id, font_id)) =
+                    glyphs.glyph_for_char(char, *font_id, ctx.font_cache)
+                {
+                    ctx.scene
+                        .draw_glyph(origin, glyph_id, font_id, font_size, foreground_color);
+                }
             }
-        }
+            // Certain zerowidth characters, such as emoji presentation selectors, can affect the
+            // underlying glyph and change the rendering. Hence, we need to layout/render the text
+            // as a combined string. For example, \0x2601\0xFE0F causes ☁️ to become 2-wide.
+            // Thai combining vowels (e.g. "วั") also produce multiple glyphs — the base consonant
+            // and the above/below mark — which must all be drawn at the same cell origin so the
+            // font's own glyph metrics position the mark correctly above the consonant.
+            CharOrStr::Str(content_with_zerowidth) => {
+                for (glyph_id, glyph_font_id, position) in glyphs.glyphs_for_string(
+                    content_with_zerowidth,
+                    *font_id,
+                    ctx.font_cache,
+                    font_family,
+                    font_size,
+                    properties,
+                    ctx,
+                ) {
+                    // Apply HarfBuzz's shaped position so combining marks (e.g. Thai ั / ี)
+                    // sit at the offset the script's GPOS table prescribes — without this,
+                    // every glyph stacks on the cell origin and marks land on the previous
+                    // cell or wherever the bare glyph happens to extend.
+                    ctx.scene.draw_glyph(
+                        origin + position,
+                        glyph_id,
+                        glyph_font_id,
+                        font_size,
+                        foreground_color,
+                    );
+                }
+            }
+        },
     }
 
     if first_cell_in_link {
@@ -2643,9 +2691,15 @@ struct AttributedStringBuilder {
     current_style: StyleAndFont,
     current_style_start_char_index: usize,
     style_runs: Vec<(Range<usize>, StyleAndFont)>,
-    // Conceptually, this is a map from character index to cell index. However, since it is both
-    // dense and build in order, we can avoid the overhead of hashing by using a `Vec`
+    // A byte-offset-indexed map from each UTF-8 byte position in `line` to a cell (column) index.
+    // Each character fills *all* of its UTF-8 bytes with the same cell column so that
+    // `paint_line` can use `glyph.index` — which is a byte offset, not a char index — to
+    // look up the correct cell. Without this, multi-byte characters (Thai, CJK, emoji, …) are
+    // drawn at the wrong grid column.
     character_index_to_cell_map: Vec<usize>,
+    // Tracks the number of *chars* appended (as opposed to bytes) so that style-run ranges stay
+    // char-indexed, matching what `layout_line` expects.
+    char_count: usize,
     line: String,
 }
 
@@ -2661,12 +2715,13 @@ impl AttributedStringBuilder {
             current_style_start_char_index: 0,
             style_runs: Vec::new(),
             character_index_to_cell_map: Vec::with_capacity(columns),
+            char_count: 0,
             line: String::with_capacity(columns),
         }
     }
 
     fn next_character_index(&self) -> usize {
-        self.character_index_to_cell_map.len()
+        self.char_count
     }
 
     /// Flushes the currently cached style into the style runs list and update the current style
@@ -2724,8 +2779,15 @@ impl AttributedStringBuilder {
     /// This will update the mapping of cell indexes so that the character can be connected with
     /// its expected grid position later.
     fn append_character(&mut self, chr: char, column: usize) {
+        let start_byte = self.line.len();
         self.line.push(chr);
-        self.character_index_to_cell_map.push(column);
+        // `glyph.index` in `paint_line` is a UTF-8 byte offset, so we fill every byte of this
+        // character's UTF-8 encoding with the same cell column. This ensures multi-byte characters
+        // (Thai, CJK, emoji, …) are drawn at the correct grid column.
+        for _ in start_byte..self.line.len() {
+            self.character_index_to_cell_map.push(column);
+        }
+        self.char_count += 1;
     }
 
     /// Append a cell's content to the attributed string at a specific grid column.
