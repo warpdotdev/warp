@@ -840,7 +840,7 @@ fn test_selection_bounds_all_grids_single_line_lprompt_command() {
 }
 
 #[test]
-fn test_full_block_to_string_includes_prompt_command_rprompt_and_output() {
+fn test_command_and_output_to_string_includes_ps1_prompt_command_rprompt_and_output() {
     let block_index = BlockIndex::zero();
     let mut prompt_and_command_grid = mock_blockgrid("lprompt%cmd1");
     prompt_and_command_grid.finish();
@@ -862,8 +862,36 @@ fn test_full_block_to_string_includes_prompt_command_rprompt_and_output() {
     }));
 
     assert_eq!(
-        block.full_block_to_string(),
+        block.command_and_output_to_string(),
         "lprompt%cmd1\nrprompt\noutput1\noutput2"
+    );
+}
+
+#[test]
+fn test_command_and_output_to_string_excludes_warp_prompt() {
+    let block_index = BlockIndex::zero();
+    let mut prompt_and_command_grid = mock_blockgrid("cmd1");
+    prompt_and_command_grid.finish();
+    let mut rprompt_grid = mock_blockgrid("rprompt");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("output1\r\noutput2\r\n");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        block_index,
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        false, /* honor_ps1 */
+    );
+    block.set_honor_ps1(false);
+    let mut prompt_grid = mock_blockgrid("warp_prompt");
+    prompt_grid.finish();
+    block.set_prompt_grid(prompt_grid);
+
+    assert_eq!(
+        block.command_and_output_to_string(),
+        "cmd1\noutput1\noutput2"
     );
 }
 
