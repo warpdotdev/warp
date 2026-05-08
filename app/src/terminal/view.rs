@@ -25411,10 +25411,14 @@ impl TerminalView {
     }
 
     fn warpify_ssh_session(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(session_id) = self.active_block_session_id() else {
+            return;
+        };
         self.warpify_state.set_shell_detection_in_progress();
         self.begin_ssh_warpify_timeout(SSH_WARPIFY_TIMEOUT_DURATION, ctx);
         self.clear_line_editor_and_write_to_pty(
-            convert_script_to_one_line(&begin_warpify_ssh_session_command(ctx)).into_bytes(),
+            convert_script_to_one_line(&begin_warpify_ssh_session_command(ctx, session_id))
+                .into_bytes(),
             ctx,
         );
     }

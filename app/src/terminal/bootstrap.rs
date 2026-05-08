@@ -218,7 +218,7 @@ pub fn generate_session_id() -> SessionId {
 }
 
 /// Placeholder in init shell scripts that gets replaced with the client-generated session ID.
-const SESSION_ID_PLACEHOLDER: &str = "@@WARP_SESSION_ID@@";
+pub(crate) const SESSION_ID_PLACEHOLDER: &str = "@@WARP_SESSION_ID@@";
 
 /// Returns the init shell script for the given `shell_type` (e.g. the script that emits the
 /// InitShell DCS hook).

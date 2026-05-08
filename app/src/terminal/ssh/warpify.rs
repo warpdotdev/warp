@@ -1,6 +1,7 @@
 use asset_macro::bundled_asset;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::theme::WarpTheme;
+use warp_core::SessionId;
 use warpui::assets::asset_cache::{AssetCache, AssetState};
 use warpui::elements::{
     Border, Container, CrossAxisAlignment, Flex, HighlightedHyperlink, Hoverable, Icon,
@@ -145,11 +146,15 @@ impl TypedActionView for SshWarpifyBlock {
 }
 
 /// Convert the begin_warpify_ssh_session script into a string.
-pub fn begin_warpify_ssh_session_command(app: &AppContext) -> String {
+pub fn begin_warpify_ssh_session_command(app: &AppContext, session_id: SessionId) -> String {
+    use crate::terminal::bootstrap::SESSION_ID_PLACEHOLDER;
     let asset = bundled_asset!("bootstrap/unknown_init_subshell.sh");
 
     match AssetCache::as_ref(app).load_asset::<String>(asset) {
-        AssetState::Loaded { data } => data.to_string().replace("HOOK_NAME", "InitSsh"),
+        AssetState::Loaded { data } => data
+            .to_string()
+            .replace("HOOK_NAME", "InitSsh")
+            .replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string()),
         _ => panic!("ssh begin warpify script should be available as a string"),
     }
 }
