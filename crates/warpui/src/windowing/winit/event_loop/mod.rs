@@ -1008,7 +1008,12 @@ impl EventLoop {
         })();
 
         match render_result {
-            Ok(_) => self.callbacks.for_window(window).frame_drawn(),
+            Ok(_) => {
+                self.callbacks.for_window(window).frame_drawn();
+                if self.ime_enabled {
+                    self.update_ime_position();
+                }
+            }
             Err(err) => {
                 log::warn!("Failed to render frame: {err:#}");
                 self.callbacks.for_window(window).frame_failed_to_draw();
