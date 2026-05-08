@@ -2033,6 +2033,100 @@ fn test_matching_indices_nested_file_paths() {
     );
 }
 
+/// Filter-contract regression test for issue #10358 (zsh nested-path completion).
+///
+/// This test does NOT exercise the OSC ingestion path that the zsh fix actually
+/// modifies — `ShellCompletion` is constructed in `app/src/terminal/model/`
+/// against the `app` crate, which we don't depend on here. Instead, this test
+/// pins the contract that `filter_by_query` relies on: once the shell-side fix
+/// emits the full path as the replacement, the filter must retain it for a
+/// directory-prefix query, and a bare-basename replacement (the pre-fix OSC
+/// payload) must be dropped. If a future change to `filter_by_query` broke
+/// either invariant, the user-visible regression in #10358 would silently
+/// return.
+#[test]
+fn test_filter_by_query_retains_file_with_full_path_replacement_after_iprefix_fix() {
+    use super::{MatchedSuggestion, Suggestion, SuggestionResults};
+    use crate::completer::matchers::Match;
+    use crate::completer::EngineFileType;
+
+    let suggestion = Suggestion {
+        display: "file1.txt".into(),
+        replacement: "some/nested/folder1/file1.txt".into(),
+        description: None,
+        suggestion_type: SuggestionType::Argument,
+        override_icon: None,
+        priority: super::Priority::default(),
+        is_hidden: false,
+        file_type: Some(EngineFileType::File),
+        is_abbreviation: false,
+    };
+
+    let results = SuggestionResults {
+        replacement_span: crate::meta::Span::new(0, 0),
+        suggestions: vec![MatchedSuggestion::new(
+            suggestion,
+            Match::Prefix {
+                is_case_sensitive: true,
+            },
+        )],
+        match_strategy: MatchStrategy::CaseSensitive,
+    };
+
+    // The query ends with '/' — this is what Warp receives when the user has
+    // typed a directory path and zsh's _path_files sets IPREFIX to the prefix.
+    // With the fix applied the replacement starts with the query, so the
+    // candidate must NOT be filtered out.
+    let retained: Vec<String> = results
+        .filter_by_query("some/nested/folder1/", &['/'])
+        .map(|s| s.suggestion.display.to_string())
+        .collect();
+
+    assert_eq!(
+        retained,
+        vec![String::from("file1.txt")],
+        "file suggestion with full-path replacement must be retained when query \
+         is the directory prefix (regression for issue #10358)"
+    );
+
+    // Also verify that a bare-basename replacement (the pre-fix OSC payload) is
+    // correctly dropped so the test documents both sides of the regression.
+    let bare_suggestion = Suggestion {
+        display: "file1.txt".into(),
+        replacement: "file1.txt".into(), // pre-fix: no IPREFIX prepended
+        description: None,
+        suggestion_type: SuggestionType::Argument,
+        override_icon: None,
+        priority: super::Priority::default(),
+        is_hidden: false,
+        file_type: Some(EngineFileType::File),
+        is_abbreviation: false,
+    };
+
+    let bare_results = SuggestionResults {
+        replacement_span: crate::meta::Span::new(0, 0),
+        suggestions: vec![MatchedSuggestion::new(
+            bare_suggestion,
+            Match::Prefix {
+                is_case_sensitive: true,
+            },
+        )],
+        match_strategy: MatchStrategy::CaseSensitive,
+    };
+
+    let dropped: Vec<String> = bare_results
+        .filter_by_query("some/nested/folder1/", &['/'])
+        .map(|s| s.suggestion.display.to_string())
+        .collect();
+
+    assert!(
+        dropped.is_empty(),
+        "bare-basename replacement must be dropped when query contains path prefix \
+         (documents pre-fix behavior — once OSC always emits full path this check \
+         can be removed)"
+    );
+}
+
 #[test]
 fn test_matching_indices_for_git_branches() {
     let registry = create_test_command_registry([git_signature()]);

@@ -1257,7 +1257,16 @@ esac
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
-        local match="$__hits[$i]$dsuf"
+        # Prepend $IPREFIX (zsh's accumulated "consumed" prefix from recursive
+        # completion such as _path_files walking nested directories) and
+        # ${hpre[2]} (the value of compadd's -p hidden-prefix flag) so the
+        # emitted match is the full insertion text rather than just the bare
+        # basename. Without this, completing e.g. `git add some/nested/dir/`
+        # would only emit `file1.txt`, which the Rust filter then drops because
+        # it does not prefix-match the slashy query token. See issue #10358.
+        # When neither IPREFIX nor -p is set both expand to empty strings, so
+        # plain command/option completion is unaffected.
+        local match="$IPREFIX${hpre[2]}$__hits[$i]$dsuf"
 
         print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
         print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END
