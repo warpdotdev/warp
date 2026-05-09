@@ -1250,23 +1250,25 @@ esac
     # descriptions in $__dscr!
 
     # display all matches
-    local dsuf dscr
+    local dsuf dscr full
     for i in {1..$#__hits}; do
-        # add a dir suffix?
-        (( dirsuf )) && [[ -d $__hits[$i] ]] && dsuf=/ || dsuf=
+        # Reconstruct the full insertion text. $IPREFIX is zsh's accumulated
+        # "consumed" prefix from recursive completion (e.g. _path_files walking
+        # nested directories) and ${hpre[2]} is the value of compadd's -p
+        # hidden-prefix flag. Without this, completing e.g. `git add
+        # some/nested/dir/` would only emit `file1.txt`, which the Rust filter
+        # then drops because it does not prefix-match the slashy query token.
+        # See issue #10358. Both expand to empty when not set, so plain
+        # command/option completion is unaffected.
+        full="$IPREFIX${hpre[2]}$__hits[$i]"
+        # add a dir suffix? Test against the prefixed path so nested directory
+        # candidates keep their trailing `/` (the bare basename may not exist
+        # relative to the current working directory).
+        (( dirsuf )) && [[ -d $full ]] && dsuf=/ || dsuf=
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
-        # Prepend $IPREFIX (zsh's accumulated "consumed" prefix from recursive
-        # completion such as _path_files walking nested directories) and
-        # ${hpre[2]} (the value of compadd's -p hidden-prefix flag) so the
-        # emitted match is the full insertion text rather than just the bare
-        # basename. Without this, completing e.g. `git add some/nested/dir/`
-        # would only emit `file1.txt`, which the Rust filter then drops because
-        # it does not prefix-match the slashy query token. See issue #10358.
-        # When neither IPREFIX nor -p is set both expand to empty strings, so
-        # plain command/option completion is unaffected.
-        local match="$IPREFIX${hpre[2]}$__hits[$i]$dsuf"
+        local match="$full$dsuf"
 
         print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
         print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END
