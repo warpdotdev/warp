@@ -165,7 +165,8 @@ impl NetworkLogItem {
             .as_ref()
             .map_or(String::new(), |payload| format!("\nBody {payload}"));
         let plain_text = format!("[{timestamp}]: {request_debug}{body_suffix}");
-        let display_text = format_request_for_display(&timestamp, request, serialized_payload.as_deref());
+        let display_text =
+            format_request_for_display(&timestamp, request, serialized_payload.as_deref());
         Self {
             display_text,
             plain_text,
@@ -208,8 +209,14 @@ fn format_request_for_display(
 ) -> String {
     let method = request.method();
     let url = request.url();
-    let path = if url.path().is_empty() { "/" } else { url.path() };
-    let query = url.query().map_or(String::new(), |query| format!("?{query}"));
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    let query = url
+        .query()
+        .map_or(String::new(), |query| format!("?{query}"));
 
     let mut lines = vec![
         format!("[{timestamp}] Request"),
@@ -229,8 +236,14 @@ fn format_request_for_display(
 fn format_response_for_display(timestamp: &str, response: &reqwest::Response) -> String {
     let status = response.status();
     let url = response.url();
-    let path = if url.path().is_empty() { "/" } else { url.path() };
-    let query = url.query().map_or(String::new(), |query| format!("?{query}"));
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    let query = url
+        .query()
+        .map_or(String::new(), |query| format!("?{query}"));
 
     [
         format!("[{timestamp}] Response"),
