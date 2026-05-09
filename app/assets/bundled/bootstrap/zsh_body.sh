@@ -1254,13 +1254,16 @@ esac
     for i in {1..$#__hits}; do
         # Reconstruct the full insertion text. $IPREFIX is zsh's accumulated
         # "consumed" prefix from recursive completion (e.g. _path_files walking
-        # nested directories) and ${hpre[2]} is the value of compadd's -p
-        # hidden-prefix flag. Without this, completing e.g. `git add
-        # some/nested/dir/` would only emit `file1.txt`, which the Rust filter
-        # then drops because it does not prefix-match the slashy query token.
-        # See issue #10358. Both expand to empty when not set, so plain
-        # command/option completion is unaffected.
-        full="$IPREFIX${hpre[2]}$__hits[$i]"
+        # nested directories) and ${hpre[-p]} is the value of compadd's -p
+        # hidden-prefix flag. `hpre` is declared with `typeset -A` above, so
+        # `zparseopts ... p:=hpre` stores the -p argument under the literal
+        # `-p` key (not numeric index 2 — that form only applies to plain
+        # arrays). Without this, completing e.g. `git add some/nested/dir/`
+        # would only emit `file1.txt`, which the Rust filter then drops
+        # because it does not prefix-match the slashy query token. See issue
+        # #10358. Both expand to empty when not set, so plain command/option
+        # completion is unaffected.
+        full="$IPREFIX${hpre[-p]}$__hits[$i]"
         # add a dir suffix? Test against the prefixed path so nested directory
         # candidates keep their trailing `/` (the bare basename may not exist
         # relative to the current working directory).
