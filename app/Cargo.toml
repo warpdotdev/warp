@@ -610,6 +610,7 @@ default = [
     "github_pr_prompt_chip",
     "conversations_as_context",
     "markdown_tables",
+    "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
     "pr_comments_slash_command",
