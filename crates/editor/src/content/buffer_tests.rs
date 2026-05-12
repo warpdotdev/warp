@@ -13020,6 +13020,71 @@ fn test_clipboard_table_copy_uses_source_offsets_for_later_formatted_cells() {
 }
 
 #[test]
+fn test_clipboard_table_copy_preserves_long_cell_spanning_text_fragments() {
+    // Regression coverage for warpdotdev/warp#10016. A long table cell exceeds the
+    // internal `TEXT_FRAGMENT_SIZE` so the source text is stored across several
+    // buffer fragments. The buffer-level clipboard pipeline used by the rendered
+    // markdown viewer must return the entire cell, never a fragment-bounded
+    // truncation, when the selection covers the full source range.
+    App::test((), |mut app| async move {
+        // 500 chars > 4x TEXT_FRAGMENT_SIZE (128) to force multi-fragment storage.
+        let long_cell: String = "abcdefghij".repeat(50);
+        assert_eq!(long_cell.chars().count(), 500);
+
+        let table_source = format!("H1\tH2\nshort\t{long_cell}");
+        let markdown = format!("```{TABLE_BLOCK_MARKDOWN_LANG}\n{table_source}\n```\n");
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let block_start = buffer.containing_block_start(CharOffset::from(1));
+            let long_cell_offset = CharOffset::from(
+                table_source
+                    .find(&long_cell)
+                    .expect("table source should contain the long cell"),
+            );
+            let long_cell_end = long_cell_offset + CharOffset::from(long_cell.chars().count());
+
+            // Direct table-clipboard path with full cell range.
+            let copied = buffer.clipboard_table_text_in_range(
+                block_start,
+                (block_start + long_cell_offset)..(block_start + long_cell_end),
+                LineEnding::LF,
+            );
+            assert_eq!(
+                copied.chars().count(),
+                long_cell.chars().count(),
+                "direct clipboard_table_text_in_range should return the full cell"
+            );
+            assert_eq!(copied, long_cell);
+
+            // End-to-end clipboard pipeline used by the rendered markdown viewer:
+            // `selected_text_as_plain_text` reads ranges from the selection model
+            // and routes through `clipboard_text_in_ranges`.
+            let selection_start = block_start + long_cell_offset;
+            let selection_end = block_start + long_cell_end;
+            selection.update(ctx, |selection, _| {
+                set_selections(selection, vec1![selection_start..selection_end]);
+            });
+
+            let selected = buffer
+                .selected_text_as_plain_text(selection.clone(), ctx)
+                .into_string();
+            assert_eq!(
+                selected.chars().count(),
+                long_cell.chars().count(),
+                "selected_text_as_plain_text should return the full long cell"
+            );
+            assert_eq!(selected, long_cell);
+        });
+    });
+}
+
+#[test]
 fn test_multiselect_text_styling() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
