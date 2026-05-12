@@ -1427,6 +1427,181 @@ fn test_link_at_offset_uses_cached_cell_links() {
     assert_eq!(table.link_at_offset(CharOffset::from(3)), None);
 }
 
+// Regression coverage for warpdotdev/warp#10016. The next four tests pin down the
+// visual ↔ source row mapping for tables whose cells soft-wrap.
+
+/// Build a `CellLayout` whose visible width is `cell_width_chars * 10.0` and which contains
+/// `total_chars` characters spread evenly across `num_lines` visual lines.
+fn make_wrapped_cell_layout(num_lines: usize, total_chars: usize) -> CellLayout {
+    assert!(num_lines >= 1);
+    let per_line = total_chars.div_ceil(num_lines);
+    let mut line_heights = Vec::with_capacity(num_lines);
+    let mut line_y_offsets = Vec::with_capacity(num_lines);
+    let mut line_char_ranges = Vec::with_capacity(num_lines);
+    let mut line_widths = Vec::with_capacity(num_lines);
+    let mut line_caret_positions = Vec::with_capacity(num_lines);
+    let mut consumed = 0usize;
+    for i in 0..num_lines {
+        let start = consumed;
+        let end = (start + per_line).min(total_chars);
+        consumed = end;
+        line_heights.push(20.0);
+        line_y_offsets.push(i as f32 * 20.0);
+        line_char_ranges.push(CharOffset::from(start)..CharOffset::from(end));
+        line_widths.push(((end - start) as f32) * 10.0);
+        line_caret_positions.push(
+            (start..end)
+                .map(|c| warpui::text_layout::CaretPosition {
+                    position_in_line: ((c - start) as f32) * 10.0,
+                    start_offset: c,
+                    last_offset: c,
+                })
+                .collect(),
+        );
+    }
+    CellLayout {
+        line_heights,
+        line_y_offsets,
+        line_char_ranges,
+        line_widths,
+        line_caret_positions,
+    }
+}
+
+/// Build a `LaidOutTable` modeled on `make_test_laid_out_table` but with the body row's
+/// second cell wrapped to `wrap_lines` visual lines containing `wrap_chars` characters.
+fn make_wrapped_test_laid_out_table(wrap_lines: usize, wrap_chars: usize) -> LaidOutTable {
+    let mut table = make_test_laid_out_table();
+    // The fixture is `aaa\tbbb\nccc\tddd\n`; we widen the body row's second cell so the
+    // (row, col) = (1, 1) cell wraps to multiple visual lines. The other layouts stay
+    // single-line.
+    let single_line = make_wrapped_cell_layout(1, 3);
+    let wrapped = make_wrapped_cell_layout(wrap_lines, wrap_chars);
+    table.cell_layouts = vec![
+        vec![single_line.clone(), single_line.clone()],
+        vec![single_line.clone(), wrapped],
+    ];
+    table
+}
+
+#[test]
+fn test_table_visual_line_count_matches_wrapped_rows() {
+    // Plain table — every cell is one visual line. Header + 1 body row = 2 visual lines.
+    let plain = make_test_laid_out_table();
+    assert_eq!(plain.lines(), LineCount(2));
+
+    // Wrap the body row to 5 visual lines. Total = header(1) + body(5) = 6.
+    let wrapped = make_wrapped_test_laid_out_table(5, 50);
+    assert_eq!(wrapped.lines(), LineCount(6));
+}
+
+#[test]
+fn test_table_softwrap_round_trip_inside_wrapped_cell() {
+    // Push the wrapped table into a real RenderState so we exercise the cursor-driven
+    // BlockItem::Table arms of softwrap_point_to_offset / offset_to_softwrap_point.
+    let table = make_wrapped_test_laid_out_table(3, 30);
+    // Plain row sources: "aaa\tbbb\nccc\tddd\n" -> 16 chars total.
+    // cell_range for (1, 1) is offset 12..15 (inclusive of the cell's 3 source chars,
+    // since the source map is built from the unwrapped source).
+    let mut model = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        200.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(BlockItem::Table(Box::new(table)));
+    model.set_content(content);
+
+    // Visual lines: 0 = header, 1..=3 = wrapped body sublines.
+    // Each visual line on the body row should map back to the source-row-1 starting offset.
+    for visual_row in 1..=3u32 {
+        let offset = model
+            .softwrap_point_to_offset(SoftWrapPoint::new(visual_row, ColumnUnit::pixels_zero()));
+        // Round-trip: the resolved offset reports a single canonical visual line for the
+        // row. Re-mapping should land on the same row's start line.
+        let round_trip = model.offset_to_softwrap_point(offset);
+        // The body row begins on visual line 1, so the round trip should resolve to
+        // visual line 1 regardless of which subline within the body row we started on
+        // (point.row() collapses to the cell's first visual line; the column is zero).
+        assert_eq!(
+            round_trip.row(),
+            1,
+            "visual subline {visual_row} should round-trip to body-row start (visual line 1)",
+        );
+    }
+}
+
+#[test]
+fn test_table_offset_to_softwrap_point_uses_visual_rows_after_wrap() {
+    // Confirm that source offsets inside a row that follows a wrapped row resolve to a
+    // visual row that accounts for the wrap's extra visual lines.
+    let table = make_wrapped_test_laid_out_table(4, 40);
+    // Inject a second body row so we can probe an offset BEYOND the wrapped row.
+    let extra_row_source = "eee\tfff\n";
+    let new_source = format!("aaa\tbbb\nccc\tddd\n{extra_row_source}");
+    let new_table = FormattedTable::from_internal_format(&new_source);
+    let new_cell_offset_maps =
+        crate::content::text::table_cell_offset_maps(&new_table, &new_source);
+    let new_offset_map = table_offset_map::TableOffsetMap::new(
+        new_cell_offset_maps
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.source_length().as_usize())
+                    .collect()
+            })
+            .collect(),
+    );
+    let new_content_length = new_offset_map.total_length();
+
+    let single_line = make_wrapped_cell_layout(1, 3);
+    let wrapped = make_wrapped_cell_layout(4, 40);
+    let mut t = table;
+    t.table = new_table;
+    t.cell_offset_maps = new_cell_offset_maps;
+    t.offset_map = new_offset_map;
+    t.content_length = new_content_length;
+    t.cell_layouts = vec![
+        vec![single_line.clone(), single_line.clone()],
+        vec![single_line.clone(), wrapped],
+        vec![single_line.clone(), single_line.clone()],
+    ];
+    // Add a row to row_heights and row_y_offsets so the table is internally consistent.
+    t.row_heights = vec![20.0.into_pixels(), 80.0.into_pixels(), 20.0.into_pixels()];
+    t.row_y_offsets = vec![0.0, 20.0, 100.0, 120.0];
+
+    // Total visual lines = 1 (header) + 4 (wrapped body) + 1 (third row) = 6.
+    assert_eq!(t.lines(), LineCount(6));
+
+    let mut model = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        200.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(BlockItem::Table(Box::new(t)));
+    model.set_content(content);
+
+    // An offset in the third source row (row index 2) should map to visual line
+    // 1 (header) + 4 (wrapped body) = 5, not 2 like the old source-row-only mapping.
+    let third_row_offset = CharOffset::from(16); // start of "eee" in the new source.
+    let point = model.offset_to_softwrap_point(third_row_offset);
+    assert_eq!(
+        point.row(),
+        5,
+        "third row should be visual line 5 after the body row wraps to 4 lines",
+    );
+}
+
+#[test]
+fn test_table_lines_falls_back_to_one_per_empty_row() {
+    // Sanity: even if a row had empty `line_heights` for every cell, the visual row height
+    // should still report at least 1 to avoid collapsing the row entirely.
+    let mut table = make_test_laid_out_table();
+    table.cell_layouts = vec![vec![CellLayout::default(), CellLayout::default()]];
+    assert_eq!(table.lines(), LineCount(1));
+}
+
 #[test]
 fn test_first_hidden_section_line_range() {
     let mut render_state = RenderState::new_for_test(

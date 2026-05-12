@@ -1730,6 +1730,17 @@ pub struct TableBlockConfig {
     pub style: TableStyle,
 }
 
+/// Visual line count for a table row (max wrapped-line count across its cells).
+///
+/// Always returns at least 1 so empty rows still occupy a visual line.
+fn visual_row_height(row_layouts: &[CellLayout]) -> usize {
+    row_layouts
+        .iter()
+        .map(|cell| cell.line_heights.len().max(1))
+        .max()
+        .unwrap_or(1)
+}
+
 /// Layout information for a single table cell, including line-level details
 /// for proper text selection rendering in cells with wrapped text.
 #[derive(Debug, Clone, Default)]
@@ -2028,8 +2039,68 @@ impl LaidOutTable {
         ))
     }
 
+    /// Number of visual lines occupied by this table.
+    ///
+    /// Cells with content that soft-wraps span multiple visual lines, so the visual line
+    /// count for a row is the maximum visual line count of any cell in that row.
+    /// The table's total visual line count is the sum across header + body rows.
+    /// This is the value softwrap point ↔ offset mapping (via [`Self::visual_row_heights`])
+    /// is keyed on; using the source-row count would undercount any wrapped row and
+    /// cause selections inside wrapped cells to resolve to the wrong source row
+    /// (see warpdotdev/warp#10016).
     pub fn lines(&self) -> LineCount {
-        LineCount(1 + self.table.rows.len())
+        LineCount(self.visual_row_heights().sum::<usize>())
+    }
+
+    /// Per-row visual line counts, in source-row order (header first, then body rows).
+    /// Each entry is at least 1.
+    pub(crate) fn visual_row_heights(&self) -> impl Iterator<Item = usize> + '_ {
+        self.cell_layouts
+            .iter()
+            .map(|row_layouts| visual_row_height(row_layouts))
+    }
+
+    /// Total number of visual lines preceding the given source row.
+    fn visual_lines_before_row(&self, row: usize) -> usize {
+        self.visual_row_heights().take(row).sum()
+    }
+
+    /// Map a visual line index within this table to its enclosing source row index
+    /// and the sub-line within that row's wrapped layout.
+    ///
+    /// Returns `None` when the visual line is past the table's last row.
+    fn visual_line_to_source_row(&self, visual_line: usize) -> Option<(usize, usize)> {
+        let mut remaining = visual_line;
+        for (row_idx, row_height) in self.visual_row_heights().enumerate() {
+            if remaining < row_height {
+                return Some((row_idx, remaining));
+            }
+            remaining -= row_height;
+        }
+        None
+    }
+
+    /// Source character offset (within the table's flattened content stream) for the
+    /// start of `sub_line` within source row `row`.
+    ///
+    /// Falls back to the start of the row's first cell when offset maps or layouts are
+    /// unavailable. Returns `None` when the row is out of bounds.
+    fn row_sub_line_source_offset(&self, row: usize, sub_line: usize) -> Option<CharOffset> {
+        let cell_range = self.offset_map.cell_range(row, 0)?;
+        let cell_offset_map = self.cell_offset_maps.get(row).and_then(|r| r.first())?;
+        let rendered_start = self
+            .cell_layouts
+            .get(row)
+            .and_then(|row_layouts| row_layouts.first())
+            .and_then(|cell_layout| cell_layout.line_char_ranges.get(sub_line))
+            .map(|range| range.start)
+            .unwrap_or(CharOffset::zero());
+        Some(
+            cell_range.start
+                + cell_offset_map
+                    .rendered_to_source(rendered_start)
+                    .as_usize(),
+        )
     }
 
     /// Maps an x/y coordinate within the table content bounds to the nearest
@@ -4520,17 +4591,17 @@ impl Positioned<'_, BlockItem> {
             | BlockItem::TemporaryBlock { .. }
             | BlockItem::Hidden { .. } => self.start_char_offset,
             BlockItem::Table(laid_out_table) => {
-                let row_in_table = point.row().saturating_sub(self.start_line.as_u32()) as usize;
-                if let Some(cell_range) = laid_out_table.offset_map.cell_range(row_in_table, 0) {
-                    let visible_cell_start = laid_out_table
-                        .cell_offset_maps
-                        .get(row_in_table)
-                        .and_then(|row| row.first())
-                        .map(|cell| cell.rendered_to_source(CharOffset::zero()))
-                        .unwrap_or(CharOffset::zero());
-                    self.start_char_offset + cell_range.start + visible_cell_start.as_usize()
-                } else {
-                    self.start_char_offset
+                // `point.row()` is a visual line index; tables may contain wrapped cells
+                // that consume multiple visual lines per source row, so we have to walk
+                // the per-row visual heights to translate visual → source coordinates.
+                // See warpdotdev/warp#10016.
+                let visual_in_table = point.row().saturating_sub(self.start_line.as_u32()) as usize;
+                match laid_out_table.visual_line_to_source_row(visual_in_table) {
+                    Some((source_row, sub_line)) => laid_out_table
+                        .row_sub_line_source_offset(source_row, sub_line)
+                        .map(|offset_in_table| self.start_char_offset + offset_in_table.as_usize())
+                        .unwrap_or(self.end_char_offset()),
+                    None => self.end_char_offset(),
                 }
             }
         }
@@ -4587,14 +4658,37 @@ impl Positioned<'_, BlockItem> {
                 SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
             }
             BlockItem::Table(laid_out_table) => {
+                // The forward direction returns visual line indices, so the inverse must
+                // also account for cells whose rendered content wraps across multiple
+                // visual lines. See warpdotdev/warp#10016.
                 let relative_offset = offset.saturating_sub(&self.start_char_offset);
-                let row = laid_out_table
-                    .offset_map
-                    .cell_at_offset(relative_offset)
-                    .map(|c| c.row)
-                    .unwrap_or(0);
+                let cell = laid_out_table.offset_map.cell_at_offset(relative_offset);
+                let (source_row, sub_line) = match cell {
+                    Some(cell) => {
+                        let sub_line = laid_out_table
+                            .cell_offset_maps
+                            .get(cell.row)
+                            .and_then(|row_maps| row_maps.get(cell.col))
+                            .map(|cell_offset_map| {
+                                cell_offset_map.source_to_rendered(cell.offset_in_cell)
+                            })
+                            .and_then(|rendered_offset| {
+                                laid_out_table
+                                    .cell_layouts
+                                    .get(cell.row)
+                                    .and_then(|row_layouts| row_layouts.get(cell.col))
+                                    .and_then(|cell_layout| {
+                                        cell_layout.line_at_char_offset(rendered_offset)
+                                    })
+                            })
+                            .unwrap_or(0);
+                        (cell.row, sub_line)
+                    }
+                    None => (0, 0),
+                };
+                let visual_row = laid_out_table.visual_lines_before_row(source_row) + sub_line;
                 SoftWrapPoint::new(
-                    self.start_line.as_u32() + row as u32,
+                    self.start_line.as_u32() + visual_row as u32,
                     ColumnUnit::pixels_zero(),
                 )
             }
