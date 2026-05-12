@@ -27,7 +27,7 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
 - In `SideBySide`, render the baseline on the left, the modified file on the right, with hunk-aligned padding so that unchanged context lines, modifications, and pure additions or deletions all sit at the same vertical position on both sides.
 - Keep edits in the diff constrained to the right, modified pane. The left, baseline pane is never editable.
 - Keep the text cursor in the right, modified pane only. The left pane does not expose an insertion cursor.
-- Allow selection on the left pane for copy, while keeping deleted-line ranges non-selectable.
+- Allow selection on the left pane for copy, including deleted-line ranges.
 - Preserve every existing Code Review diff feature in both layouts: hunk navigation (`f`/`F`), accept and reject, save, revert to base, comment threads, hidden lines, find-in-diff, and the existing nav bar.
 - Keep `Inline` byte-for-byte identical to today. No regression to the default code path.
 
@@ -38,7 +38,6 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
 - Word-level or character-level diff highlighting on changed lines. Issue #9017 and #9040 are the natural follow-up specs for that.
 - A vertical "stacked" layout (baseline on top, modified below). The roadmap and the issue specifically ask for side-by-side; a stacked variant could be a separate spec.
 - Cross-pane selection. Selection in `SideBySide` is per-pane, matching GitHub Desktop and GitLab MR review.
-- Selecting code within deleted sections. The roadmap lists this alongside side-by-side as a sibling community-driver feature; it is its own spec.
 - Per-pane width control. The split is fixed at 50/50 in this change; resizable splits can follow.
 - A separate layout choice per surface. V1 has only one participating surface: Code Review.
 - Mobile/wasm-only behavior changes beyond what falls out naturally from layout symmetry.
@@ -73,7 +72,7 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
    - Cmd-A in the modified pane selects only modified-pane content.
    - Cmd-A in the baseline pane selects only baseline-pane content that is selectable for copy.
    - Copy from a pane copies only that pane's selected text. The clipboard text is the rendered pane's content (no diff markers added).
-   - Deleted-line ranges are not selectable. The baseline pane allows copy selection only for selectable baseline content.
+   - Deleted-line ranges in the baseline pane are selectable for copy.
    - This matches GitHub Desktop and GitLab MR review behavior. Cross-pane selection is out of scope.
 
 6. Settings -> Code is the entry point for the layout choice:
@@ -83,7 +82,7 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
    - The diff toolbar continues to expose per-view ephemeral controls such as whitespace visibility, but it does not expose `code.editor.diff_layout`; the layout is a user-level preference for Code Review v1.
 
 7. The setting is read by the Code Review diff host at diff-construction time and on every change:
-   - Code Review construction reads `code.editor.diff_layout` and dispatches to inline rendering or `DiffLayout::SideBySide` rendering inside `CodeEditorView`.
+   - Code Review construction reads `code.editor.diff_layout` and dispatches to inline rendering or `DiffLayout::SideBySide` rendering.
    - The Code Review pane subscribes to setting updates and applies the new layout to every visible diff. Diffs that are scrolled out of view rebuild lazily on next render.
    - Switching the setting while a diff is open preserves the current scroll position and cursor row in both layouts. The user does not need to scroll back to where they were.
 
@@ -117,7 +116,7 @@ The two related open issues - #9017 (word wrap in diff and Markdown) and #9040 (
 
 15. Performance budget:
     - Switching layouts on a 5,000-line diff completes in under 200ms on an M1 MacBook Air, measured from settings change to first paint of the new layout.
-    - Memory overhead for `SideBySide` is bounded to the additional render state needed for the baseline pane inside the existing Code Review editor view. V1 does not create a second `CodeEditorView` per file.
+    - Memory overhead for `SideBySide` is bounded to the additional state needed to render the baseline pane alongside the modified pane.
 
 16. Feature flag gating:
     - The change ships behind a `SideBySideDiffLayout` `FeatureFlag` defined in `crates/warp_features/src/lib.rs` (the canonical flag enum, re-exported from `app/src/features.rs`) that defaults to off in shipping builds and on in dogfood/preview builds. Once stabilized, the flag is removed and the setting becomes the user-facing control.
