@@ -651,7 +651,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Validates that a hook's session_id is recognized. Returns `true` if the
     /// hook should be processed, `false` if it should be rejected.
     fn validate_hook_session_id(&mut self, hook: &DProtoHook) -> bool {
-        if !hook.requires_registered_session() {
+        if !hook.requires_registered_session()
+            || !self.handler.should_validate_dcs_hook_session_id()
+        {
             return true;
         }
 

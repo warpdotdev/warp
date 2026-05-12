@@ -145,6 +145,13 @@ fn multipart_iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> Vec<Str
     ]
 }
 
+fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
+    let mut bytes = b"\x1bP$d".to_vec();
+    bytes.extend(hex::encode(payload).bytes());
+    bytes.push(0x9c);
+    bytes
+}
+
 #[test]
 fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -1011,6 +1018,58 @@ fn test_rect_selection_in_alt_screen() {
                 (Point { row: 4, col: 2 }, Point { row: 4, col: 4 }),
             ],
         })
+    );
+}
+
+#[test]
+fn viewer_processes_dcs_hook_with_unregistered_session_id() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.set_shared_session_status(SharedSessionStatus::reader());
+
+    let bytes = hex_encoded_json_dcs(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/viewer",
+                    "session_id": 999
+                }
+            }"#,
+    );
+    terminal.process_bytes(bytes.as_slice());
+
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/viewer")
+    );
+}
+
+#[test]
+fn sharer_rejects_dcs_hook_with_unregistered_session_id() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+
+    let bytes = hex_encoded_json_dcs(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/sharer",
+                    "session_id": 999
+                }
+            }"#,
+    );
+    terminal.process_bytes(bytes.as_slice());
+
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        None
     );
 }
 

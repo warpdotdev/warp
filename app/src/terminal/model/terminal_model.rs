@@ -2471,6 +2471,10 @@ impl ansi::Handler for TerminalModel {
         self.registered_session_ids.contains(&session_id)
     }
 
+    fn should_validate_dcs_hook_session_id(&self) -> bool {
+        !self.shared_session_status().is_viewer()
+    }
+
     fn set_title(&mut self, title: Option<String>) {
         // Don't set the tab title if the title event is for a running in-band command.
         if self.block_list().is_writing_or_executing_in_band_command() {
