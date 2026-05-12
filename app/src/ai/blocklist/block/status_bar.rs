@@ -296,6 +296,11 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
+        ctx.observe(&AITipModel::handle(ctx), |me, tip_model, ctx| {
+            me.current_tip = tip_model.as_ref(ctx).current_tip().cloned();
+            ctx.notify();
+        });
+
         let summarization_cancel_dialog =
             ctx.add_typed_action_view(|_| SummarizationCancelDialog::default());
         ctx.subscribe_to_view(
