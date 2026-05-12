@@ -1901,9 +1901,9 @@ pub(crate) fn initialize_app(
     let tip_model_handle = ctx.add_singleton_model(|ctx| {
         ai::agent_tips::AITipModel::<ai::AgentTip>::new_for_agent_tips(ctx)
     });
-    // Rebuild the tip pool when voice-related settings change so that the voice tip
-    // appears/disappears without waiting for the next cooldown cycle.
     {
+        // Rebuild the tip pool when voice-related settings change so that the voice tip
+        // appears/disappears without waiting for the next cooldown cycle.
         let tip_model_handle_for_ai = tip_model_handle.clone();
         ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, event, ctx| {
             if matches!(
@@ -1919,12 +1919,21 @@ pub(crate) fn initialize_app(
         // Also revalidate when workspace/team data changes (e.g. voice toggled at
         // the org level). Billing metadata — including `warp_ai_policy.is_voice_enabled`
         // — lives inside the team data, so `TeamsChanged` covers all policy updates.
+        let tip_model_handle_for_teams = tip_model_handle.clone();
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, ctx| {
             if matches!(event, UserWorkspacesEvent::TeamsChanged) {
-                tip_model_handle.update(ctx, |model, ctx| {
+                tip_model_handle_for_teams.update(ctx, |model, ctx| {
                     model.revalidate_tips(ctx);
                 });
             }
+        });
+        // Revalidate when any keybinding changes so tips with `<keybinding>`
+        // placeholders are hidden/shown when the referenced binding is cleared
+        // or reassigned.
+        ctx.subscribe_to_model(&KeybindingChangedNotifier::handle(ctx), move |_, _, ctx| {
+            tip_model_handle.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
         });
     }
 

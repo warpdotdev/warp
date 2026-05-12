@@ -532,7 +532,14 @@ impl AITipModel<AgentTip> {
         let should_replace = self
             .current_tip
             .as_ref()
-            .map(|tip| !tip.is_tip_applicable(None, ctx))
+            .map(|current_tip| {
+                let still_in_pool = self
+                    .tips
+                    .iter()
+                    .any(|tip| tip.description == current_tip.description);
+
+                !still_in_pool || !current_tip.is_tip_applicable(None, ctx)
+            })
             .unwrap_or(true);
 
         if should_replace {
@@ -590,7 +597,7 @@ impl AITipModel<AgentTip> {
             .filter(|tip| tip.is_tip_applicable(current_working_directory, ctx))
             .collect();
         let mut rng = rand::thread_rng();
-        available.choose(&mut rng).cloned().cloned()
+        available.choose(&mut rng).copied().cloned()
     }
 
     /// Resets the cooldown timer so the current tip is shown for the full
