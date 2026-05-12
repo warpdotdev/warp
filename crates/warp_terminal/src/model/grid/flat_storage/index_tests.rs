@@ -376,235 +376,6 @@ mod offset_point_conversion {
     }
 }
 
-
-#[cfg(test)]
-mod bench {
-    use super::*;
-    use std::time::Instant;
-    use std::hint::black_box;
-
-    fn build_ascii_index(rows: usize, cols: usize) -> Index {
-        let mut index = Index::new(cols, Some(rows));
-        let info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        for _ in 0..rows {
-            let mut eb = index.start_row();
-            for _ in 0..cols {
-                eb.process_grapheme_info(info, &mut index);
-            }
-            eb.add_trailing_newline();
-            eb.append_to_index(&mut index);
-        }
-        index
-    }
-
-    #[test]
-    fn bench_rebuild_ascii_narrow_80_to_120() {
-        let index = build_ascii_index(5000, 80);
-        // Warmup
-        for _ in 0..3 { let _ = black_box(Index::rebuild(&index, 120)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild(black_box(&index), 120));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("bench_rebuild_ascii_80->120: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_rebuild_ascii_narrow_120_to_80() {
-        let index = build_ascii_index(5000, 120);
-        for _ in 0..3 { let _ = black_box(Index::rebuild(&index, 80)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild(black_box(&index), 80));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("bench_rebuild_ascii_120->80: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_rebuild_mixed_5k() {
-        // Mix of ASCII and wide chars
-        let mut index = Index::new(80, Some(5000));
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        let wide_info = GraphemeInfo { cell_width: 2, utf8_bytes: NonZeroU16::new(3).unwrap() };
-        for i in 0..5000 {
-            let mut eb = index.start_row();
-            if i % 3 == 0 {
-                // Wide char row
-                for _ in 0..40 {
-                    eb.process_grapheme_info(wide_info, &mut index);
-                }
-            } else {
-                // ASCII row
-                for _ in 0..80 {
-                    eb.process_grapheme_info(ascii_info, &mut index);
-                }
-            }
-            eb.add_trailing_newline();
-            eb.append_to_index(&mut index);
-        }
-        for _ in 0..3 { let _ = black_box(Index::rebuild(&index, 60)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild(black_box(&index), 60));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("bench_rebuild_mixed_5k: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_rebuild_softwrapped() {
-        // Rows that are soft-wrapped (no trailing newline)
-        let mut index = Index::new(80, Some(5000));
-        let info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        for i in 0..5000 {
-            let mut eb = index.start_row();
-            for _ in 0..80 {
-                eb.process_grapheme_info(info, &mut index);
-            }
-            if i % 5 == 4 {
-                eb.add_trailing_newline();
-            }
-            eb.append_to_index(&mut index);
-        }
-        for _ in 0..3 { let _ = black_box(Index::rebuild(&index, 60)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild(black_box(&index), 60));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("bench_rebuild_softwrapped: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_baseline_ascii_80_to_120() {
-        let index = build_ascii_index(5000, 80);
-        for _ in 0..3 { let _ = black_box(Index::rebuild_baseline(&index, 120)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild_baseline(black_box(&index), 120));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("BASELINE_rebuild_ascii_80->120: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_baseline_ascii_120_to_80() {
-        let index = build_ascii_index(5000, 120);
-        for _ in 0..3 { let _ = black_box(Index::rebuild_baseline(&index, 80)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild_baseline(black_box(&index), 80));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("BASELINE_rebuild_ascii_120->80: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    fn bench_baseline_mixed_5k() {
-        let mut index = Index::new(80, Some(5000));
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        let wide_info = GraphemeInfo { cell_width: 2, utf8_bytes: NonZeroU16::new(3).unwrap() };
-        for i in 0..5000 {
-            let mut eb = index.start_row();
-            if i % 3 == 0 {
-                for _ in 0..40 { eb.process_grapheme_info(wide_info, &mut index); }
-            } else {
-                for _ in 0..80 { eb.process_grapheme_info(ascii_info, &mut index); }
-            }
-            eb.add_trailing_newline();
-            eb.append_to_index(&mut index);
-        }
-        for _ in 0..3 { let _ = black_box(Index::rebuild_baseline(&index, 60)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild_baseline(black_box(&index), 60));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("BASELINE_rebuild_mixed_5k: {:?}/iter", elapsed / iters);
-    }
-
-    #[test]
-    #[test]
-    fn bench_ab_softwrapped() {
-        let mut index = Index::new(80, Some(5000));
-        let info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        for i in 0..5000 {
-            let mut eb = index.start_row();
-            for _ in 0..80 {
-                eb.process_grapheme_info(info, &mut index);
-            }
-            if i % 5 == 4 {
-                eb.add_trailing_newline();
-            }
-            eb.append_to_index(&mut index);
-        }
-
-        let rounds = 4;
-        let iters = 50;
-        let mut opt_times = Vec::new();
-        let mut base_times = Vec::new();
-
-        for round in 0..rounds {
-            // Optimized
-            {
-                for _ in 0..3 { let _ = black_box(Index::rebuild(&index, 60)); }
-                let start = Instant::now();
-                for _ in 0..iters {
-                    let _ = black_box(Index::rebuild(black_box(&index), 60));
-                }
-                opt_times.push(start.elapsed() / iters);
-            }
-            // Baseline
-            {
-                for _ in 0..3 { let _ = black_box(Index::rebuild_baseline(&index, 60)); }
-                let start = Instant::now();
-                for _ in 0..iters {
-                    let _ = black_box(Index::rebuild_baseline(black_box(&index), 60));
-                }
-                base_times.push(start.elapsed() / iters);
-            }
-            eprintln!("  Round {}: opt={:?}, base={:?}", round+1, opt_times.last().unwrap(), base_times.last().unwrap());
-        }
-
-        let opt_avg: std::time::Duration = opt_times.iter().sum::<std::time::Duration>() / rounds;
-        let base_avg: std::time::Duration = base_times.iter().sum::<std::time::Duration>() / rounds;
-        let speedup = base_avg.as_nanos() as f64 / opt_avg.as_nanos() as f64;
-        eprintln!("\nA/B SOFTWRAPPED:");
-        eprintln!("  Optimized: {:?}/iter", opt_avg);
-        eprintln!("  Baseline:  {:?}/iter", base_avg);
-        eprintln!("  Speedup:   {:.1}x", speedup);
-    }
-
-    #[test]
-        fn bench_baseline_softwrapped() {
-        let mut index = Index::new(80, Some(5000));
-        let info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        for i in 0..5000 {
-            let mut eb = index.start_row();
-            for _ in 0..80 { eb.process_grapheme_info(info, &mut index); }
-            if i % 5 == 4 { eb.add_trailing_newline(); }
-            eb.append_to_index(&mut index);
-        }
-        for _ in 0..3 { let _ = black_box(Index::rebuild_baseline(&index, 60)); }
-        let iters = 50;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let _ = black_box(Index::rebuild_baseline(black_box(&index), 60));
-        }
-        let elapsed = start.elapsed();
-        eprintln!("BASELINE_rebuild_softwrapped: {:?}/iter", elapsed / iters);
-    }
-}
-
 #[cfg(test)]
 mod property_tests {
     use super::*;
@@ -613,7 +384,9 @@ mod property_tests {
     // Inline xorshift PRNG - no external dependencies
     struct Rng(u64);
     impl Rng {
-        fn new(seed: u64) -> Self { Self(seed) }
+        fn new(seed: u64) -> Self {
+            Self(seed)
+        }
         fn next(&mut self) -> u64 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
@@ -627,19 +400,34 @@ mod property_tests {
 
     fn random_index(rng: &mut Rng, rows: usize, cols: usize) -> Index {
         let mut index = Index::new(cols, Some(rows));
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        let wide_info = GraphemeInfo { cell_width: 2, utf8_bytes: NonZeroU16::new(3).unwrap() };
-        let multi_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(3).unwrap() };
+        let ascii_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+        let wide_info = GraphemeInfo {
+            cell_width: 2,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
+        let multi_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
 
         for _ in 0..rows {
             let mut eb = index.start_row();
             let mut cells_used = 0;
             while cells_used < cols {
                 let kind = rng.next() % 10;
-                let info = if kind < 6 { ascii_info }
-                    else if kind < 8 { wide_info }
-                    else { multi_info };
-                if cells_used + info.cell_width as usize > cols { break; }
+                let info = if kind < 6 {
+                    ascii_info
+                } else if kind < 8 {
+                    wide_info
+                } else {
+                    multi_info
+                };
+                if cells_used + info.cell_width as usize > cols {
+                    break;
+                }
                 eb.process_grapheme_info(info, &mut index);
                 cells_used += info.cell_width as usize;
             }
@@ -734,7 +522,6 @@ mod property_tests {
     }
 }
 
-
 #[cfg(test)]
 mod differential_tests {
     use super::*;
@@ -742,7 +529,9 @@ mod differential_tests {
 
     struct Rng(u64);
     impl Rng {
-        fn new(seed: u64) -> Self { Self(seed) }
+        fn new(seed: u64) -> Self {
+            Self(seed)
+        }
         fn next(&mut self) -> u64 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
@@ -756,19 +545,34 @@ mod differential_tests {
 
     fn random_index(rng: &mut Rng, rows: usize, cols: usize) -> Index {
         let mut index = Index::new(cols, Some(rows));
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        let wide_info = GraphemeInfo { cell_width: 2, utf8_bytes: NonZeroU16::new(3).unwrap() };
-        let multi_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(3).unwrap() };
+        let ascii_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+        let wide_info = GraphemeInfo {
+            cell_width: 2,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
+        let multi_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
 
         for _ in 0..rows {
             let mut eb = index.start_row();
             let mut cells_used = 0;
             while cells_used < cols {
                 let kind = rng.next() % 10;
-                let info = if kind < 6 { ascii_info }
-                    else if kind < 8 { wide_info }
-                    else { multi_info };
-                if cells_used + info.cell_width as usize > cols { break; }
+                let info = if kind < 6 {
+                    ascii_info
+                } else if kind < 8 {
+                    wide_info
+                } else {
+                    multi_info
+                };
+                if cells_used + info.cell_width as usize > cols {
+                    break;
+                }
                 eb.process_grapheme_info(info, &mut index);
                 cells_used += info.cell_width as usize;
             }
@@ -782,9 +586,11 @@ mod differential_tests {
 
     fn assert_indexes_equal(optimized: &Index, baseline: &Index, context: &str) {
         assert_eq!(
-            optimized.len(), baseline.len(),
+            optimized.len(),
+            baseline.len(),
             "{context}: row count mismatch: optimized={}, baseline={}",
-            optimized.len(), baseline.len()
+            optimized.len(),
+            baseline.len()
         );
         assert_eq!(
             optimized.content_len, baseline.content_len,
@@ -886,13 +692,13 @@ mod differential_tests {
     #[test]
     fn differential_extreme_dimensions() {
         let cases: &[(usize, usize, usize)] = &[
-            (1, 100, 200),   // single row widening
-            (1, 200, 1),     // single row narrowing to 1 col
-            (1000, 1, 80),   // many single-cell rows
-            (10, 1000, 50),  // very wide rows narrowing
-            (100, 80, 80),   // same width (should be identity)
-            (500, 80, 79),   // off-by-one narrowing
-            (500, 80, 81),   // off-by-one widening
+            (1, 100, 200),  // single row widening
+            (1, 200, 1),    // single row narrowing to 1 col
+            (1000, 1, 80),  // many single-cell rows
+            (10, 1000, 50), // very wide rows narrowing
+            (100, 80, 80),  // same width (should be identity)
+            (500, 80, 79),  // off-by-one narrowing
+            (500, 80, 81),  // off-by-one widening
         ];
 
         for &(rows, old_cols, new_cols) in cases {
@@ -914,7 +720,10 @@ mod differential_tests {
     fn differential_all_softwrapped() {
         // Worst case for our optimization: no newlines at all
         let mut rng = Rng::new(0x5F5F);
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
+        let ascii_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
         for trial in 0..50 {
             let cols = rng.range(20, 120);
             let rows = rng.range(50, 300);
@@ -945,8 +754,14 @@ mod differential_tests {
     fn differential_mixed_newline_patterns() {
         // Various patterns of newline placement
         let mut rng = Rng::new(0xAAAA);
-        let ascii_info = GraphemeInfo { cell_width: 1, utf8_bytes: NonZeroU16::new(1).unwrap() };
-        let wide_info = GraphemeInfo { cell_width: 2, utf8_bytes: NonZeroU16::new(3).unwrap() };
+        let ascii_info = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+        let wide_info = GraphemeInfo {
+            cell_width: 2,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
 
         for trial in 0..50 {
             let cols = rng.range(10, 100);

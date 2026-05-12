@@ -168,16 +168,15 @@ impl Index {
                 }
             }
 
-            // Fast path: widening — row fits entirely in new width (with newline)
+            // Fast path: widening a row that fits entirely in the new width
+            // with its newline.
             if entry_builder.is_empty() && entry.has_trailing_newline {
                 let row_cells = match &entry.grapheme_sizing {
                     GraphemeSizing::Uniform(run) => Some(run.cols()),
                     GraphemeSizing::EmptyRow => Some(0),
-                    GraphemeSizing::NonUniform => {
-                        old_index.grapheme_runs_for_row(row_idx).map(|runs| {
-                            runs.iter().map(|r| r.cols()).sum()
-                        })
-                    }
+                    GraphemeSizing::NonUniform => old_index
+                        .grapheme_runs_for_row(row_idx)
+                        .map(|runs| runs.iter().map(|r| r.cols()).sum()),
                 };
                 if let Some(cells) = row_cells {
                     if cells <= columns {
@@ -187,16 +186,22 @@ impl Index {
                                 run.count.get() as usize * run.info.utf8_bytes.get() as usize
                             }
                             GraphemeSizing::EmptyRow => 0,
-                            GraphemeSizing::NonUniform => {
-                                old_index.grapheme_runs_for_row(row_idx)
-                                    .map(|runs| runs.iter().map(|r| {
-                                        r.count.get() as usize * r.info.utf8_bytes.get() as usize
-                                    }).sum())
-                                    .unwrap_or(0)
-                            }
+                            GraphemeSizing::NonUniform => old_index
+                                .grapheme_runs_for_row(row_idx)
+                                .map(|runs| {
+                                    runs.iter()
+                                        .map(|r| {
+                                            r.count.get() as usize
+                                                * r.info.utf8_bytes.get() as usize
+                                        })
+                                        .sum()
+                                })
+                                .unwrap_or(0),
                         };
-                        index.content_len += byte_len + 1; // +1 for newline
-                        // Copy grapheme sizing metadata for NonUniform rows
+                        // Include the row's trailing newline byte.
+                        index.content_len += byte_len + 1;
+
+                        // Copy grapheme sizing metadata for NonUniform rows.
                         if entry.grapheme_sizing == GraphemeSizing::NonUniform {
                             if let Some(runs) = old_index.grapheme_runs_for_row(row_idx) {
                                 index.grapheme_sizing.insert(content_offset, runs.to_vec());
@@ -212,16 +217,15 @@ impl Index {
                     }
                 }
             }
-            // Fast path: widening — soft-wrapped row fits in new width
+            // Fast path: widening a soft-wrapped row that fits in the new
+            // width.
             if entry_builder.is_empty() && !entry.has_trailing_newline {
                 let row_cells = match &entry.grapheme_sizing {
                     GraphemeSizing::Uniform(run) => Some(run.cols()),
                     GraphemeSizing::EmptyRow => Some(0),
-                    GraphemeSizing::NonUniform => {
-                        old_index.grapheme_runs_for_row(row_idx).map(|runs| {
-                            runs.iter().map(|r| r.cols()).sum()
-                        })
-                    }
+                    GraphemeSizing::NonUniform => old_index
+                        .grapheme_runs_for_row(row_idx)
+                        .map(|runs| runs.iter().map(|r| r.cols()).sum()),
                 };
                 if let Some(cells) = row_cells {
                     if cells <= columns {
@@ -234,7 +238,9 @@ impl Index {
                                     count * run.info.utf8_bytes.get() as usize;
                                 match entry_builder.grapheme_runs.last_mut() {
                                     Some(last) if last.info == run.info => {
-                                        last.count = last.count.checked_add(run.count.get())
+                                        last.count = last
+                                            .count
+                                            .checked_add(run.count.get())
                                             .expect("overflow");
                                     }
                                     _ => {
@@ -260,7 +266,8 @@ impl Index {
                     let graphemes_per_row = columns / cell_width;
 
                     // If builder is exactly full, flush it first
-                    if remaining_graphemes == 0 && entry_builder.num_cells >= columns
+                    if remaining_graphemes == 0
+                        && entry_builder.num_cells >= columns
                         && graphemes_per_row > 0
                     {
                         entry_builder.flush_to_index(&mut index);
@@ -306,7 +313,8 @@ impl Index {
                         }
                     }
 
-                    if remaining_graphemes > 0 && remaining_graphemes < count
+                    if remaining_graphemes > 0
+                        && remaining_graphemes < count
                         && graphemes_per_row > 0
                     {
                         // Fill remaining space in current row
@@ -314,7 +322,9 @@ impl Index {
                         entry_builder.incr_content_offset += remaining_graphemes * byte_len;
                         match entry_builder.grapheme_runs.last_mut() {
                             Some(last) if last.info == run.info => {
-                                last.count = last.count.checked_add(remaining_graphemes as u16)
+                                last.count = last
+                                    .count
+                                    .checked_add(remaining_graphemes as u16)
                                     .expect("overflow");
                             }
                             _ => {
@@ -371,8 +381,8 @@ impl Index {
                         entry_builder.incr_content_offset += count * byte_len;
                         match entry_builder.grapheme_runs.last_mut() {
                             Some(last) if last.info == run.info => {
-                                last.count = last.count.checked_add(count as u16)
-                                    .expect("overflow");
+                                last.count =
+                                    last.count.checked_add(count as u16).expect("overflow");
                             }
                             _ => {
                                 entry_builder.grapheme_runs.push(*run);
@@ -393,22 +403,23 @@ impl Index {
                     let run_cells = run.cols();
                     let remaining = index.columns.saturating_sub(entry_builder.num_cells);
                     if run_cells <= remaining {
-                        // Entire run fits — add without per-grapheme checks
+                        // Entire run fits; add without per-grapheme checks.
                         let count = run.count.get() as usize;
                         entry_builder.num_cells += run_cells;
                         entry_builder.incr_content_offset +=
                             count * run.info.utf8_bytes.get() as usize;
                         match entry_builder.grapheme_runs.last_mut() {
                             Some(last) if last.info == run.info => {
-                                last.count = last.count.checked_add(run.count.get())
-                                    .expect("overflow");
+                                last.count =
+                                    last.count.checked_add(run.count.get()).expect("overflow");
                             }
                             _ => {
                                 entry_builder.grapheme_runs.push(*run);
                             }
                         }
                     } else {
-                        // Run doesn't fit — fall back to per-grapheme for this run
+                        // Run doesn't fit; fall back to per-grapheme for this
+                        // run.
                         for _ in 0..run.count.get() {
                             entry_builder.process_grapheme_info(run.info, &mut index);
                         }
@@ -428,7 +439,6 @@ impl Index {
 
         index
     }
-
 
     /// BASELINE: Original rebuild algorithm for benchmarking comparison.
     #[cfg(test)]
@@ -462,7 +472,7 @@ impl Index {
         index
     }
 
-        /// Truncates the index to the given number of rows, returning the new
+    /// Truncates the index to the given number of rows, returning the new
     /// content length.
     pub fn truncate(&mut self, new_len: usize) -> ByteOffset {
         // Update our content length to be the start of the first row we're truncating.
@@ -805,13 +815,6 @@ impl EntryBuilder {
         Default::default()
     }
 
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            grapheme_runs: Vec::with_capacity(cap),
-            ..Default::default()
-        }
-    }
-
     /// Processes the next [`Grapheme`] in the row.
     pub fn process_grapheme(&mut self, grapheme: &Grapheme, index: &mut Index) {
         if grapheme.starts_new_row() {
@@ -968,9 +971,7 @@ impl EntryBuilder {
         let content_offset = index.content_len.into();
 
         let grapheme_sizing = if self.grapheme_runs.len() == 1 {
-            GraphemeSizing::Uniform(
-                unsafe { self.grapheme_runs.pop().unwrap_unchecked() },
-            )
+            GraphemeSizing::Uniform(unsafe { self.grapheme_runs.pop().unwrap_unchecked() })
         } else if self.grapheme_runs.is_empty() {
             GraphemeSizing::EmptyRow
         } else {
@@ -987,7 +988,7 @@ impl EntryBuilder {
             ends_with_leading_wide_char_spacer: self.ends_with_leading_wide_char_spacer,
         });
 
-        // Reset in-place, preserving grapheme_runs capacity
+        // Reset in-place, preserving grapheme_runs capacity.
         self.num_cells = 0;
         self.incr_content_offset = ByteOffset::zero();
         self.has_trailing_newline = false;
