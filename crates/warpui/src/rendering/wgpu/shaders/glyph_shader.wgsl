@@ -89,7 +89,7 @@ fn vs_main(
         fade_alpha = 1. - fade_dist / fade_width;
     }
 
-     // Convert the position of the item from screen coordinates into normalized device coordinates
+    // Convert the position of the item from screen coordinates into normalized device coordinates
     var device_pos: vec2<f32> = pixel_pos / uniforms.viewport_size * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
 
     var texture_coordinate: vec2<f32> = glyph.uv_bounds.xy + glyph.vertex_position * glyph.uv_bounds.zw;
