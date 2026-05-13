@@ -315,6 +315,13 @@ pub fn render_grid<'a>(
     // codepath (which is known to be less performant) if the font does not
     // even support ligatures.
     let respect_displayed_output = matches!(respect_displayed_output, RespectDisplayedOutput::Yes);
+    // RTL / complex scripts (Arabic, Hebrew, etc.) cannot be rendered through the cheap
+    // per-cell `glyph_for_char` path: that path does no bidi reorder and no Arabic
+    // shaping, so the text renders left-to-right with isolated forms. Force the
+    // ligature/`layout_line` path for frames that contain such characters; rows
+    // without complex scripts still take the fast cell-by-cell path inside it.
+    let use_ligature_rendering =
+        use_ligature_rendering || frame_contains_complex_script(grid, start_row, end_row);
     match (use_ligature_rendering, grid.displayed_output_rows()) {
         (true, Some(rows)) if respect_displayed_output => {
             let visible_rows = rows.skip(start_row).take(end_row.saturating_sub(start_row));
@@ -1442,13 +1449,17 @@ fn render_grid_with_ligatures<'a>(
         );
         let line_origin =
             grid_origin + vec2f(0., cell_size.y() * offset_row as f32) + baseline_position;
-        paint_line(
-            laid_out.as_ref(),
-            line_origin,
-            cell_size.x(),
-            &string_data.character_index_to_cell_map,
-            ctx.scene,
-        );
+        if row_needs_complex_layout(&string_data.line) {
+            paint_complex_line(laid_out.as_ref(), line_origin, ctx.scene);
+        } else {
+            paint_line(
+                laid_out.as_ref(),
+                line_origin,
+                cell_size.x(),
+                &string_data.character_index_to_cell_map,
+                ctx.scene,
+            );
+        }
 
         if grid.filter_has_context_lines() {
             maybe_render_dotted_lines(
@@ -1501,6 +1512,75 @@ fn paint_line(
         for glyph in &run.glyphs {
             let glyph_x = character_index_to_cell_map[glyph.index] as f32 * cell_width;
             let glyph_origin = baseline + vec2f(glyph_x, 0.);
+
+            scene.draw_glyph(
+                glyph_origin,
+                glyph.id,
+                run.font_id,
+                line.font_size,
+                glyph_color,
+            );
+        }
+    }
+}
+
+/// Returns true if `c` belongs to a script that requires bidi reordering and/or
+/// contextual shaping at paint time. For these characters, mapping a glyph back
+/// to its logical cell column (as `paint_line` does) destroys both visual order
+/// and joining, so the row must instead be painted at shaper-produced
+/// positions via `paint_complex_line`.
+fn is_complex_script_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0590..=0x05FF    // Hebrew
+        | 0x0600..=0x06FF  // Arabic
+        | 0x0700..=0x074F  // Syriac
+        | 0x0750..=0x077F  // Arabic Supplement
+        | 0x0780..=0x07BF  // Thaana
+        | 0x07C0..=0x07FF  // NKo
+        | 0x0860..=0x086F  // Syriac Supplement
+        | 0x0870..=0x089F  // Arabic Extended-B
+        | 0x08A0..=0x08FF  // Arabic Extended-A
+        | 0xFB1D..=0xFDFF  // Hebrew + Arabic Presentation Forms-A
+        | 0xFE70..=0xFEFF  // Arabic Presentation Forms-B
+    )
+}
+
+fn row_needs_complex_layout(line: &str) -> bool {
+    line.chars().any(is_complex_script_char)
+}
+
+/// Pre-scan visible rows in `start_row..end_row` for any character that requires
+/// bidi reorder or contextual shaping. If found, the dispatcher routes the
+/// whole frame through `render_grid_with_ligatures` so RTL rows can reach
+/// `layout_line` (the only path that runs `BidiParagraphs` + `ShapeLine`).
+///
+/// Walks rows directly via `grid.row(idx)`; short-circuits at the first hit.
+fn frame_contains_complex_script(grid: &GridHandler, start_row: usize, end_row: usize) -> bool {
+    for row_idx in start_row..end_row {
+        let Some(row) = grid.row(row_idx) else {
+            continue;
+        };
+        for col in 0..row.occ {
+            if is_complex_script_char(row[col].c) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Paint a laid-out line using the shaper's own glyph positions.
+/// Unlike `paint_line`, which forces each glyph back to its logical cell's
+/// `column * cell_width` (which undoes bidi reorder and disconnects Arabic
+/// joining), this honors `glyph.position_along_baseline` directly, so RTL
+/// reorder and contextual shaping are preserved.
+fn paint_complex_line(line: &Line, baseline: Vector2F, scene: &mut Scene) {
+    for run in &line.runs {
+        let glyph_color = run.styles.foreground_color.unwrap_or_default();
+
+        for glyph in &run.glyphs {
+            let glyph_origin = baseline + glyph.position_along_baseline;
 
             scene.draw_glyph(
                 glyph_origin,
