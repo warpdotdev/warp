@@ -41,6 +41,14 @@ impl Osc52ClipboardAccess {
     pub fn allows_read(self) -> bool {
         matches!(self, Self::ReadWrite)
     }
+
+    pub fn as_dropdown_label(self) -> &'static str {
+        match self {
+            Self::Deny => "Deny",
+            Self::WriteOnly => "Write only",
+            Self::ReadWrite => "Read and write",
+        }
+    }
 }
 
 #[derive(
