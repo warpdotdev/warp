@@ -3,8 +3,12 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::{
+    active_or_next_match, frame_contains_complex_script, is_complex_script_char,
+    row_needs_complex_layout, CachedBackgroundColor,
+};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{grid_renderer, SizeInfo};
@@ -261,4 +265,82 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(5.into_lines()); // Without scroll clipping
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
+}
+
+#[test]
+fn test_is_complex_script_char_detects_rtl_scripts() {
+    // Arabic
+    assert!(is_complex_script_char('ا')); // U+0627 ALEF
+    assert!(is_complex_script_char('ع')); // U+0639 AIN
+    assert!(is_complex_script_char('ي')); // U+064A YEH
+                                          // Arabic Supplement / Extended
+    assert!(is_complex_script_char('\u{0750}')); // Arabic Supplement
+    assert!(is_complex_script_char('\u{08A0}')); // Arabic Extended-A
+                                                 // Hebrew
+    assert!(is_complex_script_char('א')); // U+05D0 ALEF
+    assert!(is_complex_script_char('ש')); // U+05E9 SHIN
+                                          // Syriac, Thaana, NKo
+    assert!(is_complex_script_char('\u{0710}')); // Syriac ALAPH
+    assert!(is_complex_script_char('\u{0780}')); // Thaana
+    assert!(is_complex_script_char('\u{07C0}')); // NKo
+                                                 // Arabic Presentation Forms-A and -B (shaped forms emitted by the shaper).
+    assert!(is_complex_script_char('\u{FB50}'));
+    assert!(is_complex_script_char('\u{FE70}'));
+}
+
+#[test]
+fn test_is_complex_script_char_excludes_simple_scripts() {
+    // Latin
+    assert!(!is_complex_script_char('a'));
+    assert!(!is_complex_script_char('Z'));
+    // Digits and punctuation
+    assert!(!is_complex_script_char('0'));
+    assert!(!is_complex_script_char(' '));
+    assert!(!is_complex_script_char('!'));
+    // CJK (Han)
+    assert!(!is_complex_script_char('中'));
+    // Cyrillic
+    assert!(!is_complex_script_char('Я'));
+    // Emoji
+    assert!(!is_complex_script_char('😀'));
+}
+
+#[test]
+fn test_row_needs_complex_layout_positive() {
+    assert!(row_needs_complex_layout("مرحبا"));
+    assert!(row_needs_complex_layout("שלום"));
+    // Mixed LTR + RTL — also needs complex layout.
+    assert!(row_needs_complex_layout("hello مرحبا"));
+}
+
+#[test]
+fn test_row_needs_complex_layout_negative() {
+    assert!(!row_needs_complex_layout(""));
+    assert!(!row_needs_complex_layout("hello world"));
+    assert!(!row_needs_complex_layout("ls -la /tmp"));
+    assert!(!row_needs_complex_layout("中文"));
+    assert!(!row_needs_complex_layout("12345"));
+}
+
+#[test]
+fn test_frame_contains_complex_script_pure_latin() {
+    let mut grid = GridHandler::new_for_test(5, 20);
+    grid.input_at_cursor("hello world");
+    assert!(!frame_contains_complex_script(&grid, 0, 5));
+}
+
+#[test]
+fn test_frame_contains_complex_script_arabic() {
+    let mut grid = GridHandler::new_for_test(5, 20);
+    grid.input_at_cursor("مرحبا");
+    assert!(frame_contains_complex_script(&grid, 0, 5));
+}
+
+#[test]
+fn test_frame_contains_complex_script_respects_range() {
+    // Arabic content written into row 0; scanning a later range must not detect it.
+    let mut grid = GridHandler::new_for_test(5, 20);
+    grid.input_at_cursor("مرحبا");
+    assert!(frame_contains_complex_script(&grid, 0, 1));
+    assert!(!frame_contains_complex_script(&grid, 2, 5));
 }
