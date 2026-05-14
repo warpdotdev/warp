@@ -37,11 +37,9 @@ use crate::features::FeatureFlag;
 use crate::throttle::throttle;
 #[cfg(feature = "local_fs")]
 use crate::util::git::get_all_branches;
-#[cfg(feature = "local_fs")]
-use crate::util::git::get_pr_for_branch;
 use crate::util::git::{
     detect_current_branch, detect_main_branch, get_unpushed_commits, parse_unified_diff_header,
-    Commit, PrInfo,
+    Commit,
 };
 
 cfg_if::cfg_if! {
@@ -62,8 +60,6 @@ use super::{
     DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
     GitDiffWithBaseContent, GitFileStatus,
 };
-#[cfg(all(feature = "local_fs", feature = "local_tty"))]
-use crate::terminal::local_shell::LocalShellState;
 
 // Unicode bidirectional characters that should be flagged
 const BIDI_CHARS: [char; 9] = [
@@ -193,15 +189,8 @@ pub struct LocalDiffStateModel {
     metadata: Option<DiffMetadata>,
     computing_diffs_abort_handle: Option<SpawnedFutureHandle>,
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
-    refreshing_pr_info_handle: Option<SpawnedFutureHandle>,
     /// Start time for the latest caller-tracked full diff load.
     tracked_diff_load_start_time: Option<Instant>,
-    /// Branch name for which `refresh_pr_info` has been called at least once.
-    /// Gates the metadata-refresh fallback so it only retries `gh pr view` once
-    /// per branch when `pr_info` is `None` (e.g. branch has no PR, lookup
-    /// failed). Without this, every filesystem event on the repo would re-fire
-    /// `gh pr view` for branches that legitimately have no PR.
-    pr_info_attempted_for_branch: Option<String>,
     /// Controls whether periodic throttled metadata refresh is active.
     /// Refresh is suppressed when the code review pane is not open.
     metadata_refresh_enabled: bool,
@@ -274,9 +263,7 @@ impl LocalDiffStateModel {
             metadata: None,
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
-            refreshing_pr_info_handle: None,
             tracked_diff_load_start_time: None,
-            pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
             file_invalidation: FileInvalidationState::new(queue),
             pending_file_updates: None,
@@ -321,9 +308,7 @@ impl LocalDiffStateModel {
             metadata: None,
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
-            refreshing_pr_info_handle: None,
             tracked_diff_load_start_time: None,
-            pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
         }
     }
@@ -402,18 +387,6 @@ impl LocalDiffStateModel {
             (Some(upstream), Some(main)) => upstream != main,
             _ => false,
         }
-    }
-
-    /// The PR info for the current branch, if one exists.
-    pub fn pr_info(&self) -> Option<&PrInfo> {
-        self.metadata
-            .as_ref()
-            .and_then(|metadata| metadata.pr_info.as_ref())
-    }
-
-    /// Whether PR info for the current branch is currently being refreshed.
-    pub fn is_pr_info_refreshing(&self) -> bool {
-        self.refreshing_pr_info_handle.is_some()
     }
 
     /// Checks if git operations like stash or reset would be blocked due to repository state.
@@ -1212,13 +1185,12 @@ impl LocalDiffStateModel {
         }
     }
 
-    /// Refreshes metadata and PR info after a git operation (commit, push,
-    /// create PR). Does NOT reload diffs — for commits the file watcher
-    /// triggers that via `commit_updated`, and for push/create-PR the
-    /// working directory hasn't changed so the loaded diffs are still valid.
-    pub fn refresh_metadata_and_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Refreshes metadata after a git operation (commit, push, create PR).
+    /// Does NOT reload diffs — for commits the file watcher triggers that via
+    /// `commit_updated`, and for push/create-PR the working directory hasn't
+    /// changed so the loaded diffs are still valid.
+    pub fn refresh_metadata_after_git_operation(&mut self, ctx: &mut ModelContext<Self>) {
         self.refresh_diff_metadata_for_current_repo(false, ctx);
-        self.refresh_pr_info(ctx);
     }
 
     #[cfg(feature = "local_fs")]
@@ -1415,17 +1387,9 @@ impl LocalDiffStateModel {
             .metadata
             .as_ref()
             .map(|metadata| metadata.current_branch_name.clone());
-        let previous_pr_info = self
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.pr_info.clone());
 
         match metadata {
-            Ok(mut metadata) => {
-                // Carry forward cached PR info while refresh_pr_info is pending
-                // so the header doesn't flash to Commit/Create PR between
-                // branch switch and PR lookup completion.
-                metadata.pr_info = previous_pr_info;
+            Ok(metadata) => {
                 self.metadata = Some(metadata);
             }
             Err(e) => {
@@ -1448,22 +1412,6 @@ impl LocalDiffStateModel {
 
         if previous_branch != current_branch {
             ctx.emit(DiffStateModelEvent::CurrentBranchChanged);
-
-            // Refresh PR info on branch change (network call, not on every tick).
-            if FeatureFlag::GitOperationsInCodeReview.is_enabled() {
-                self.refresh_pr_info(ctx);
-            }
-        } else if FeatureFlag::GitOperationsInCodeReview.is_enabled()
-            && self.pr_info().is_none()
-            && !self.is_pr_info_refreshing()
-            && self.pr_info_attempted_for_branch != current_branch
-        {
-            // Initial-load fallback: if metadata arrived without a successful
-            // PR lookup yet on this branch, try once. Gated by
-            // `pr_info_attempted_for_branch` so subsequent metadata refreshes
-            // (every fs event on the repo) don't re-fire `gh pr view` when the
-            // branch has no PR or the lookup failed.
-            self.refresh_pr_info(ctx);
         }
 
         if should_reload_diffs {
@@ -2633,52 +2581,6 @@ pub(crate) async fn diff_metadata_against_head(
     })
 }
 
-impl LocalDiffStateModel {
-    /// Fetches PR info for the current branch via `gh pr view` (network call).
-    /// Call this on branch change or after push — not on every metadata refresh.
-    #[cfg(feature = "local_fs")]
-    pub fn refresh_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
-        if let Some(handle) = self.refreshing_pr_info_handle.take() {
-            handle.abort();
-        }
-        let Some(repo_path) = self.active_repository_path(ctx) else {
-            return;
-        };
-        // Mark this branch as attempted before spawning so the fallback in
-        // `handle_updated_metadata_for_repo` won't re-fire while the lookup
-        // is in flight or after it completes with no PR.
-        self.pr_info_attempted_for_branch = self.get_current_branch_name();
-        #[cfg(feature = "local_tty")]
-        let path_future = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
-            shell_state.get_interactive_path_env_var(ctx)
-        });
-        #[cfg(not(feature = "local_tty"))]
-        let path_future: futures::future::BoxFuture<'static, Option<String>> = {
-            use futures::FutureExt;
-            futures::future::ready(None).boxed()
-        };
-        let handle = ctx.spawn(
-            async move {
-                let path_env = path_future.await;
-                get_pr_for_branch(&repo_path, path_env.as_deref())
-                    .await
-                    .unwrap_or(None)
-            },
-            |me, pr_info, ctx| {
-                me.refreshing_pr_info_handle = None;
-                if let Some(metadata) = &mut me.metadata {
-                    metadata.pr_info = pr_info;
-                    ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata.clone()));
-                }
-            },
-        );
-        self.refreshing_pr_info_handle = Some(handle);
-    }
-
-    #[cfg(not(feature = "local_fs"))]
-    pub fn refresh_pr_info(&mut self, _ctx: &mut ModelContext<Self>) {}
-}
-
 impl warpui::Entity for LocalDiffStateModel {
     type Event = DiffStateModelEvent;
 }
@@ -2749,9 +2651,7 @@ impl LocalDiffStateModel {
             metadata: None,
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
-            refreshing_pr_info_handle: None,
             tracked_diff_load_start_time: None,
-            pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
             #[cfg(feature = "local_fs")]
             file_invalidation: FileInvalidationState::new(SyncQueue::new_streaming(
