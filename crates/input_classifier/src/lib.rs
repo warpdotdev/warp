@@ -7,22 +7,71 @@ pub mod test_utils;
 pub mod util;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 pub use heuristic_classifier::HeuristicClassifier;
 pub use input_type::InputType;
 #[cfg(feature = "onnx")]
 pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
+/// The source of the final input type decision applied to the user input.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputDecisionSource {
+    /// The user explicitly selected Agent/Shell mode via UI or keybinding.
+    ManualToggle,
+    /// The user used a prefix override.
+    ShellPrefix,
+    /// Attachments forced the input into AI mode.
+    AttachmentForcedAi,
+    /// Autodetection was disabled by settings.
+    SettingDisabled,
+    /// The first token matched the user-configurable autodetection denylist.
+    Denylist,
+    /// The input closely matched a previous shell command.
+    HistoryMatch,
+    /// The input matched a one-off natural language allowlist.
+    OneOffWhitelist,
+    /// The input was treated as a follow-up to the previous agent response.
+    AgentFollowUp,
+    /// The input was classified as shell by shell-command heuristics.
+    ShellHeuristic,
+    /// The input was classified by the NLD model.
+    NldClassifier,
+    /// The NLD model was unavailable or unusable, so the heuristic fallback made the decision.
+    NldClassifierFallbackHeuristic,
+}
+
+/// The result of input type detection, including the source that determined the final decision.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct InputClassificationDecision {
+    pub input_type: InputType,
+    pub source: InputDecisionSource,
+}
+
+impl InputClassificationDecision {
+    pub fn new(input_type: InputType, source: InputDecisionSource) -> Self {
+        Self { input_type, source }
+    }
+}
+
 /// An input classifier, which can take some parsed user input and determine
 /// what type of input it is.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait InputClassifier: 'static + Send + Sync {
+    async fn detect_input_decision(
+        &self,
+        input: warp_completer::ParsedTokensSnapshot,
+        context: &Context,
+    ) -> InputClassificationDecision;
+
     async fn detect_input_type(
         &self,
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
-    ) -> InputType;
+    ) -> InputType {
+        self.detect_input_decision(input, context).await.input_type
+    }
 
     async fn classify_input(
         &self,

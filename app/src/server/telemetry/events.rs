@@ -34,7 +34,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::AIBlockResponseRating;
 use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
-use crate::ai::blocklist::InputType;
+use crate::ai::blocklist::{InputDecisionSource, InputType};
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
 use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
@@ -2562,8 +2562,10 @@ pub enum TelemetryEvent {
         action: AgentModeSetupCreateEnvironmentActionType,
     },
     InputBufferSubmitted {
+        input: Option<String>,
         input_type: input_classifier::InputType,
         is_locked: bool,
+        decision_source: Option<InputDecisionSource>,
         was_lock_set_with_empty_buffer: bool,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
@@ -4482,12 +4484,16 @@ impl TelemetryEvent {
                 "exit_code": exit_code,
             })),
             TelemetryEvent::InputBufferSubmitted {
+                input,
                 input_type,
                 is_locked,
+                decision_source,
                 was_lock_set_with_empty_buffer,
             } => Some(json!({
+                "input": input,
                 "input_type": input_type,
                 "is_locked": is_locked,
+                "decision_source": decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
@@ -4767,6 +4773,7 @@ impl TelemetryEvent {
                     || generate_ai_input_suggestions_response.is_some()
             }
             TelemetryEvent::AgentModeChangedInputType { input, .. } => input.is_some(),
+            TelemetryEvent::InputBufferSubmitted { input, .. } => input.is_some(),
             TelemetryEvent::UnitTestSuggestionAccepted { query, .. } => query.is_some(),
             TelemetryEvent::AgentModePotentialAutoDetectionFalsePositive(payload) => {
                 // For internal dogfood users, the payload contains UGC.
@@ -5158,7 +5165,6 @@ impl TelemetryEvent {
             | TelemetryEvent::InlineConversationMenuOpened { .. }
             | TelemetryEvent::InlineConversationMenuItemSelected { .. }
             | TelemetryEvent::AgentShortcutsViewToggled { .. }
-            | TelemetryEvent::InputBufferSubmitted { .. }
             | TelemetryEvent::RecentMenuItemSelected { .. }
             | TelemetryEvent::OpenRepoFolderSubmitted { .. }
             | TelemetryEvent::OutOfCreditsBannerClosed { .. }

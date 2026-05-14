@@ -5458,6 +5458,12 @@ fn test_input_type_button_explicit_lock() {
             after_click_config.is_locked,
             "Input should be locked when user explicitly clicks AgentMode button"
         );
+        let after_click_source = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.input_decision_source()
+            })
+        });
+        assert_eq!(after_click_source, Some(InputDecisionSource::ManualToggle));
 
         // Explicitly click Terminal button - should lock to Shell mode
         input.update(&mut app, |input, ctx| {
@@ -5478,6 +5484,12 @@ fn test_input_type_button_explicit_lock() {
             final_config.is_locked,
             "Input should be locked when user explicitly clicks Terminal button"
         );
+        let final_source = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.input_decision_source()
+            })
+        });
+        assert_eq!(final_source, Some(InputDecisionSource::ManualToggle));
     });
 }
 
@@ -6124,6 +6136,35 @@ fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
             app.read_model(input.ai_input_model(), |input_model, _| {
                 assert_eq!(input_model.input_type(), InputType::AI);
                 assert!(input_model.is_input_type_locked());
+            });
+        });
+    });
+}
+
+#[test]
+fn test_terminal_prefix_sets_shell_prefix_decision_source() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(TERMINAL_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            app.read_model(input.ai_input_model(), |input_model, _| {
+                assert_eq!(input_model.input_type(), InputType::Shell);
+                assert!(input_model.is_input_type_locked());
+                assert_eq!(
+                    input_model.input_decision_source(),
+                    Some(InputDecisionSource::ShellPrefix)
+                );
             });
         });
     });
