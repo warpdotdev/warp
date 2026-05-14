@@ -396,8 +396,7 @@ define_settings_group!(SessionSettings, settings: [
         toml_path: "notifications.toast_duration_secs",
         description: "How long notification toasts are displayed, in seconds.",
     },
-    // Tracks whether the `gh` CLI is installed and authenticated on this machine,
-    // used to decide if the GitHub PR chip should be included by default.
+    // Tracks whether the `gh` CLI is installed and authenticated on this machine.
     // Not synced because `gh` CLI availability is machine-specific.
     github_pr_chip_default_validation: GithubPrChipDefaultValidation {
         type: GithubPrPromptChipDefaultValidation,

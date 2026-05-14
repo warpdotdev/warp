@@ -306,7 +306,7 @@ impl ContextChipKind {
                 let generator = builtins::github_pull_request_url();
                 let policy = ChipRuntimePolicy::new(
                     generator.dependencies().to_vec(),
-                    true,
+                    false,
                     Some(Duration::from_secs(5)),
                     [
                         ChipFingerprintInput::SessionId,
