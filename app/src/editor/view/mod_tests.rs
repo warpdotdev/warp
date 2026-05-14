@@ -4677,6 +4677,43 @@ fn test_drag_and_drop_files_applies_path_transformer() {
     });
 }
 
+/// When a Ctrl/Cmd key chord (`UnhandledModifierKey`) is received while voice input
+/// is already inactive, the editor should remain in a non-voice state.
+#[test]
+#[cfg(feature = "voice_input")]
+fn test_unhandled_modifier_key_is_noop_when_voice_inactive() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+
+        editor.read(&app, |editor, _| {
+            assert!(
+                !editor.is_voice_input_active(),
+                "Voice should be inactive initially"
+            );
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &EditorAction::UnhandledModifierKey(std::sync::Arc::new(
+                    "ctrl-shift-v".to_string(),
+                )),
+                ctx,
+            );
+        });
+
+        editor.read(&app, |editor, _| {
+            assert!(
+                !editor.is_voice_input_active(),
+                "Voice must remain inactive after UnhandledModifierKey when already inactive"
+            );
+        });
+    });
+}
+
 #[path = "vim_handler_tests.rs"]
 mod vim_handler_tests;
 
