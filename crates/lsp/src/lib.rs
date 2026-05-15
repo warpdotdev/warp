@@ -5,6 +5,7 @@ mod config;
 mod language_server_candidate;
 pub use language_server_candidate::LanguageServerCandidate;
 pub mod install;
+mod logs;
 mod manager;
 mod model;
 
