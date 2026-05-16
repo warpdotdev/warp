@@ -5,21 +5,6 @@ use crate::{
     ids::{HashedSqliteId, ObjectUid, ServerId, SyncId},
 };
 
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
-pub struct OpenWarpDriveObjectSettings {
-    /// The folder that should be focused in the Warp Drive when the object is opened.
-    pub focused_folder_id: Option<ServerId>,
-    /// The email of the user to invite to the object, if the object is being opened via the request access flow.
-    pub invitee_email: Option<String>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct OpenWarpDriveObjectArgs {
-    pub object_type: ObjectType,
-    pub server_id: ServerId,
-    pub settings: OpenWarpDriveObjectSettings,
-}
-
 /// Enum to use to pass down type and id between actions to avoid multiplying actions whenever we
 /// need to pass the object id, etc.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

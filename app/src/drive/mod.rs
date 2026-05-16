@@ -19,9 +19,7 @@ pub use index::DriveIndexVariant;
 pub use panel::{DrivePanel, DrivePanelEvent};
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
-pub use warp_server_client::drive::{
-    CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings,
-};
+pub use warp_server_client::drive::CloudObjectTypeAndId;
 use warpui::AppContext;
 
 use crate::{
@@ -29,11 +27,27 @@ use crate::{
         model::view::{CloudViewModel, UpdateTimestamp},
         CloudObject, ObjectType,
     },
+    server::ids::ServerId,
     ui_components::icons::Icon,
     workflows::CloudWorkflow,
 };
 
 type SortByComparator<'a> = dyn FnMut(&&dyn CloudObject, &&dyn CloudObject) -> Ordering + 'a;
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct OpenWarpDriveObjectSettings {
+    /// The folder that should be focused in the Warp Drive when the object is opened.
+    pub focused_folder_id: Option<ServerId>,
+    /// The email of the user to invite to the object, if the object is being opened via the request access flow.
+    pub invitee_email: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OpenWarpDriveObjectArgs {
+    pub object_type: ObjectType,
+    pub server_id: ServerId,
+    pub settings: OpenWarpDriveObjectSettings,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum DriveObjectType {
