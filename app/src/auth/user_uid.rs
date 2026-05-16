@@ -1,1 +1,1 @@
-pub use warp_server_client::auth::user_uid::*;
+pub use cloud_objects::auth::user_uid::*;

@@ -55,7 +55,7 @@ pub mod grab_edit_access_modal;
 pub mod model;
 pub mod toast_message;
 
-pub use warp_server_client::cloud_object::*;
+pub use cloud_objects::cloud_object::*;
 
 /// A CloudObject represents
 /// therefore shareable and editable (i.e. Notebooks and Workflows). In order
