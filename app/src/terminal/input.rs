@@ -199,7 +199,7 @@ use crate::cloud_object::model::actions::ObjectActionType;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::{CloudObject, Space};
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code_review::diff_state::DiffMode;
@@ -3805,6 +3805,8 @@ impl Input {
                     .flatten()
             },
             move |_input, touched_repo, ctx| {
+                use crate::cloud_object::CloudObjectLookup as _;
+
                 let Some(touched_repo) = touched_repo else {
                     return;
                 };
@@ -4013,6 +4015,8 @@ impl Input {
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        use crate::cloud_object::CloudObjectLookup as _;
+
         if !FeatureFlag::OzHandoff.is_enabled()
             || !FeatureFlag::HandoffLocalCloud.is_enabled()
             || !cfg!(all(feature = "local_fs", not(target_family = "wasm")))

@@ -232,6 +232,8 @@ impl TerminalView {
                 // Look up the environment by hardcoded ID.
                 let environment = spawner
                     .spawn(|_, ctx| {
+                        use crate::cloud_object::CloudObjectLookup as _;
+
                         let server_id = ServerId::try_from("SVhg783GBFQHk1OfdPfFU9").ok()?;
                         let sync_id = SyncId::ServerId(server_id);
                         CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)

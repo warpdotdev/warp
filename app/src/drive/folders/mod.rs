@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use warp_server_client::cloud_object::CloudObjectUpsertParams;
 // Re-exported from warp_server_client.
 pub use warp_server_client::ids::FolderId;
 
@@ -65,14 +66,14 @@ impl CloudModelType for CloudFolderModel {
         self.name.clone()
     }
 
-    fn upsert_event(&self, folder: &CloudFolder) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertFolder {
-            folder: folder.clone(),
+            folder: CloudFolder::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudFolder]) -> ModelEvent {
-        ModelEvent::UpsertFolders(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertFolders(objects.into_iter().map(CloudFolder::from).collect())
     }
 
     fn create_object_queue_item(

@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use warpui::{AppContext, SingletonEntity as _};
 
 use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, StringModel,
 };
 use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
     GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
     Revision,
 };
-use crate::server::ids::SyncId;
 use crate::server::server_api::ai::AgentConfigSnapshot;
 use crate::server::sync_queue::QueueItem;
 
@@ -55,20 +52,6 @@ impl AgentConfig {
             harness: None,
             harness_auth_secrets: None,
         }
-    }
-}
-
-impl CloudAgentConfig {
-    pub fn get_all(app: &AppContext) -> Vec<CloudAgentConfig> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudAgentConfigModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(sync_id: &'a SyncId, app: &'a AppContext) -> Option<&'a CloudAgentConfig> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudAgentConfigModel>(sync_id)
     }
 }
 
