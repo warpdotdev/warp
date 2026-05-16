@@ -9,10 +9,7 @@ use warp_core::{
     features::FeatureFlag,
     ui::{Icon, appearance::Appearance, theme::Fill},
 };
-use warp_graphql::{
-    object_permissions::AccessLevel, queries::get_updated_cloud_objects::UpdatedObjectInput,
-    scalars::time::ServerTimestamp,
-};
+use warp_graphql::{object_permissions::AccessLevel, scalars::time::ServerTimestamp};
 use warpui_core::{
     Element,
     elements::{
@@ -25,9 +22,14 @@ use warpui_core::{
 use crate::{
     auth::UserUid,
     drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind},
-    ids::{ClientId, FolderId, ServerId, ServerIdAndType, SyncId},
+    ids::{FolderId, ServerId, SyncId},
 };
 
+mod creation;
+mod update;
+
+pub use creation::*;
+pub use update::*;
 /// The type of object id each ObjectType corresponds to.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ObjectIdType {
@@ -825,127 +827,6 @@ impl From<String> for SerializedModel {
     fn from(s: String) -> Self {
         Self(s)
     }
-}
-
-/// Result of attempting to update a cloud object.
-#[derive(Debug)]
-pub enum UpdateCloudObjectResult<T> {
-    /// The update was successful and the object now has the specified revision.
-    Success {
-        revision_and_editor: RevisionAndLastEditor,
-    },
-    /// The update was rejected because the update was not sent from the current revision in
-    /// storage. The object and revision in storage are returned.
-    Rejected { object: T },
-}
-
-/// Helper struct that contains all the info needed to create an object on the server.
-pub struct CreateObjectRequest {
-    pub serialized_model: Option<SerializedModel>,
-    pub title: Option<String>,
-    pub owner: Owner,
-    pub client_id: ClientId,
-    pub initial_folder_id: Option<FolderId>,
-    pub entrypoint: CloudObjectEventEntrypoint,
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub struct BulkCreateGenericStringObjectsRequest {
-    pub id: ClientId,
-    pub format: GenericStringObjectFormat,
-    pub uniqueness_key: Option<GenericStringObjectUniqueKey>,
-    pub serialized_model: SerializedModel,
-    pub initial_folder_id: Option<FolderId>,
-    pub entrypoint: CloudObjectEventEntrypoint,
-}
-
-/// Helper struct that contains all the info needed to fetch changed objects from the server.
-#[derive(Default)]
-pub struct ObjectsToUpdate {
-    pub notebooks: Vec<UpdatedObjectInput>,
-    pub workflows: Vec<UpdatedObjectInput>,
-    pub folders: Vec<UpdatedObjectInput>,
-    pub generic_string_objects: Vec<UpdatedObjectInput>,
-}
-
-impl Clone for ObjectsToUpdate {
-    fn clone(&self) -> Self {
-        Self {
-            notebooks: self
-                .notebooks
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            workflows: self
-                .workflows
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            folders: self.folders.iter().map(copy_updated_object_input).collect(),
-            generic_string_objects: self
-                .generic_string_objects
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-        }
-    }
-}
-
-fn copy_updated_object_input(input: &UpdatedObjectInput) -> UpdatedObjectInput {
-    UpdatedObjectInput {
-        uid: input.uid.clone(),
-        actions_ts: input.actions_ts,
-        metadata_ts: input.metadata_ts,
-        permissions_ts: input.permissions_ts,
-        revision_ts: input.revision_ts,
-    }
-}
-
-/// The data returned by the server when an object is created, generic to any object type.
-#[derive(Debug)]
-pub struct CreatedCloudObject {
-    pub client_id: ClientId,
-    pub revision_and_editor: RevisionAndLastEditor,
-    pub metadata_ts: ServerTimestamp,
-    pub server_id_and_type: ServerIdAndType,
-    pub creator_uid: Option<String>,
-    pub permissions: ServerPermissions,
-}
-
-/// Result of attempting to create a cloud object.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum CreateCloudObjectResult {
-    /// The object creation was successful.
-    Success {
-        created_cloud_object: CreatedCloudObject,
-    },
-    /// The object creation was denied due to an expected user error.
-    UserFacingError(String),
-    /// The object creation was rejected because the generic string object had
-    /// already been created by another client.
-    GenericStringObjectUniqueKeyConflict,
-}
-
-/// Result of attempting to bulk create a cloud object.
-#[derive(Debug)]
-pub enum BulkCreateCloudObjectResult {
-    /// The bulk object creation was successful.
-    Success {
-        created_cloud_objects: Vec<CreatedCloudObject>,
-    },
-    /// The bulk object creation was rejected because at least one generic string object had
-    /// already been created by another client.
-    GenericStringObjectUniqueKeyConflict,
-}
-
-/// The creation-specific data returned by the server, which is inserted into CloudModel and persisted
-/// just once.
-#[derive(Debug, PartialEq, Clone)]
-pub struct ServerCreationInfo {
-    pub server_id_and_type: ServerIdAndType,
-    pub creator_uid: Option<String>,
-    pub permissions: ServerPermissions,
 }
 
 #[derive(Clone, Debug, PartialEq)]
