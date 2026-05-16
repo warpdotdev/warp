@@ -1,6 +1,9 @@
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::{cloud_object::JsonObjectType, server::sync_queue::SerializedModel};
+use crate::{
+    cloud_object::{GenericStringObjectFormat, JsonObjectType},
+    server::sync_queue::SerializedModel,
+};
 
 use super::generic_string_model::{Serializer, StringModel};
 
@@ -14,6 +17,9 @@ pub trait JsonModel: StringModel + Serialize + DeserializeOwned + 'static {
 pub struct JsonSerializer;
 
 impl<M: JsonModel> Serializer<M> for JsonSerializer {
+    fn model_format() -> GenericStringObjectFormat {
+        M::model_format()
+    }
     fn serialize(model: &M) -> SerializedModel {
         SerializedModel::new(serde_json::to_string(model).expect("model should serialize"))
     }
