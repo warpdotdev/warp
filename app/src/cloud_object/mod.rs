@@ -1303,97 +1303,77 @@ pub type ServerScheduledAmbientAgent =
     GenericServerObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
 pub type ServerCloudAgentConfig = GenericServerObject<GenericStringObjectId, CloudAgentConfigModel>;
 
-/// Creates a generic string server object from common GraphQL fields.
-pub fn generic_string_server_object_from_graphql_fields<T, S>(
-    uid: ServerId,
-    serialized_model: Option<String>,
-    metadata: ServerMetadata,
-    permissions: ServerPermissions,
-) -> Result<GenericServerObject<GenericStringObjectId, GenericStringModel<T, S>>>
+/// Converts a GraphQL object payload into a local server object.
+pub trait FromGraphql<GqlType>: Sized {
+    fn from_graphql(value: GqlType) -> Result<Self>;
+}
+
+impl<T, S> FromGraphql<warp_graphql::generic_string_object::GenericStringObject>
+    for GenericServerObject<GenericStringObjectId, GenericStringModel<T, S>>
 where
     T: StringModel<
         CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
     >,
     S: Serializer<T>,
 {
-    if let Some(serialized_model) = serialized_model {
-        let model = GenericStringModel::<T, S>::deserialize_owned(&serialized_model)?;
-        let id = SyncId::ServerId(uid);
-        Ok(GenericServerObject::new(id, model, metadata, permissions))
-    } else {
-        Err(anyhow::anyhow!(
-            "Missing serialized model in the generic string object value"
+    fn from_graphql(
+        value: warp_graphql::generic_string_object::GenericStringObject,
+    ) -> Result<Self> {
+        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
+        let model = GenericStringModel::<T, S>::deserialize_owned(&value.serialized_model)?;
+        Ok(Self::new(
+            SyncId::ServerId(uid),
+            model,
+            value.metadata.try_into()?,
+            value.permissions.try_into()?,
         ))
     }
 }
 
-/// Creates a server folder from common GraphQL fields.
-pub fn server_folder_from_graphql_fields(
-    uid: ServerId,
-    name: Option<String>,
-    metadata: ServerMetadata,
-    permissions: ServerPermissions,
-    is_warp_pack: bool,
-) -> Result<ServerFolder> {
-    match name {
-        Some(name) => Ok(ServerFolder::new(
+impl FromGraphql<warp_graphql::folder::Folder> for ServerFolder {
+    fn from_graphql(value: warp_graphql::folder::Folder) -> Result<Self> {
+        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
+        Ok(Self::new(
             SyncId::ServerId(uid),
-            CloudFolderModel::new(&name, is_warp_pack),
-            metadata,
-            permissions,
-        )),
-        _ => Err(anyhow::anyhow!("Missing fields in the folder value")),
+            CloudFolderModel::new(&value.name, value.is_warp_pack),
+            value.metadata.try_into()?,
+            value.permissions.try_into()?,
+        ))
     }
 }
 
-/// Creates a server notebook from common GraphQL fields.
-pub fn server_notebook_from_graphql_fields(
-    uid: ServerId,
-    title: Option<String>,
-    data: Option<String>,
-    ai_document_id: Option<String>,
-    metadata: ServerMetadata,
-    permissions: ServerPermissions,
-) -> Result<ServerNotebook> {
-    let ai_document_id: Option<AIDocumentId> = ai_document_id
-        .map(|id| AIDocumentId::try_from(&id[..]))
-        .transpose()?;
-    match (title, data) {
-        (Some(title), Some(data)) => Ok(ServerNotebook::new(
+impl FromGraphql<warp_graphql::notebook::Notebook> for ServerNotebook {
+    fn from_graphql(value: warp_graphql::notebook::Notebook) -> Result<Self> {
+        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
+        let ai_document_id: Option<AIDocumentId> = value
+            .ai_document_id
+            .map(|id| AIDocumentId::try_from(&id[..]))
+            .transpose()?;
+        Ok(Self::new(
             SyncId::ServerId(uid),
             CloudNotebookModel {
-                title,
-                data,
+                title: value.title,
+                data: value.data,
                 ai_document_id,
                 conversation_id: None,
             },
-            metadata,
-            permissions,
-        )),
-        (title, data) => Err(anyhow::anyhow!(
-            "Missing fields in the team notebook value - title: {}, data: {}",
-            title.is_some(),
-            data.is_some()
-        )),
+            value.metadata.try_into()?,
+            value.permissions.try_into()?,
+        ))
     }
 }
 
-/// Creates a server workflow from common GraphQL fields.
-pub fn server_workflow_from_graphql_fields(
-    uid: ServerId,
-    data: String,
-    metadata: ServerMetadata,
-    permissions: ServerPermissions,
-) -> Result<ServerWorkflow> {
-    let data = serde_json::from_str(data.as_str());
-    data.map_err(Into::into).map(|workflow| {
-        ServerWorkflow::new(
+impl FromGraphql<warp_graphql::workflow::Workflow> for ServerWorkflow {
+    fn from_graphql(value: warp_graphql::workflow::Workflow) -> Result<Self> {
+        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
+        let workflow = serde_json::from_str(value.data.as_str())?;
+        Ok(Self::new(
             SyncId::ServerId(uid),
             CloudWorkflowModel { data: workflow },
-            metadata,
-            permissions,
-        )
-    })
+            value.metadata.try_into()?,
+            value.permissions.try_into()?,
+        ))
+    }
 }
 
 #[derive(Default, Clone, Copy, Debug, Eq, Derivative)]

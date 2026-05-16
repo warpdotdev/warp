@@ -2,16 +2,12 @@ pub mod util;
 
 use crate::{
     cloud_object::{
-        generic_string_server_object_from_graphql_fields,
-        model::generic_string_model::{
-            GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-        },
-        GenericCloudObject, GenericServerObject, RevisionAndLastEditor, ServerAIExecutionProfile,
-        ServerAIFact, ServerAmbientAgentEnvironment, ServerEnvVarCollection, ServerFolder,
-        ServerMCPServer, ServerObject, ServerPreference, ServerScheduledAmbientAgent,
-        ServerTemplatableMCPServer, ServerWorkflowEnum, UpdateCloudObjectResult,
+        FromGraphql, RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact,
+        ServerAmbientAgentEnvironment, ServerEnvVarCollection, ServerFolder, ServerMCPServer,
+        ServerObject, ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer,
+        ServerWorkflowEnum, UpdateCloudObjectResult,
     },
-    server::{graphql::get_user_facing_error_message, ids::ServerId},
+    server::graphql::get_user_facing_error_message,
 };
 use anyhow::{bail, Result};
 use warp_graphql::{
@@ -22,50 +18,15 @@ use warp_graphql::{
     object::ObjectUpdateSuccess,
 };
 
-trait GenericStringServerObjectFromGraphql: Sized {
-    fn from_graphql_fields(
-        uid: ServerId,
-        serialized_model: String,
-        metadata: crate::cloud_object::ServerMetadata,
-        permissions: crate::cloud_object::ServerPermissions,
-    ) -> Result<Self>;
-}
-
-impl<T, S> GenericStringServerObjectFromGraphql
-    for GenericServerObject<GenericStringObjectId, GenericStringModel<T, S>>
-where
-    T: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
-    >,
-    S: Serializer<T>,
-{
-    fn from_graphql_fields(
-        uid: ServerId,
-        serialized_model: String,
-        metadata: crate::cloud_object::ServerMetadata,
-        permissions: crate::cloud_object::ServerPermissions,
-    ) -> Result<Self> {
-        generic_string_server_object_from_graphql_fields(
-            uid,
-            Some(serialized_model),
-            metadata,
-            permissions,
-        )
-    }
-}
-
 fn boxed_rejected_generic_string_object<T>(
     object: warp_graphql::generic_string_object::GenericStringObject,
 ) -> Result<Box<dyn ServerObject>>
 where
-    T: GenericStringServerObjectFromGraphql + ServerObject + 'static,
+    T: FromGraphql<warp_graphql::generic_string_object::GenericStringObject>
+        + ServerObject
+        + 'static,
 {
-    Ok(Box::new(T::from_graphql_fields(
-        ServerId::from_string_lossy(object.metadata.uid.inner()),
-        object.serialized_model,
-        object.metadata.try_into()?,
-        object.permissions.try_into()?,
-    )?))
+    Ok(Box::new(T::from_graphql(object)?))
 }
 
 pub fn update_generic_string_object_result_to_update_result(
