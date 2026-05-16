@@ -28,6 +28,7 @@ use crate::{
 mod creation;
 mod generic_cloud_object;
 mod generic_string_model;
+pub mod models;
 mod server_object;
 mod update;
 
