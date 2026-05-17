@@ -81,6 +81,8 @@ cfg-if.workspace = true
 channel_versions.workspace = true
 chrono.workspace = true
 clap.workspace = true
+cloud_object_client.workspace = true
+cloud_object_models.workspace = true
 cloud_objects.workspace = true
 command = { workspace = true }
 command-corrections.workspace = true
@@ -397,6 +399,7 @@ jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
 command = { workspace = true, features = ["test-util"] }
 ctor = "0.1.18"
+cloud_object_client = { workspace = true, features = ["test-util"] }
 http_client = { workspace = true, features = ["test-util"] }
 mockall = "0.13.1"
 mockito.workspace = true
@@ -798,6 +801,7 @@ voice_input = ["dep:voice_input"]
 system_theme = []
 tab_close_button_on_left = []
 team_features_override = []
+test-util = ["cloud_object_client/test-util"]
 team_workflows = ["team_features_override"]
 toggle_bootstrap_block = []
 # Feature enabled only when app is compiled for integration tests.

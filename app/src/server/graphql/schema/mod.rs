@@ -1,4 +1,5 @@
 pub mod util;
+pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
 
 use anyhow::{bail, Result};
 use warp_graphql::generic_string_object::GenericStringObjectFormat;

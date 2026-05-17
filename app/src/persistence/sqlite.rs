@@ -76,7 +76,9 @@ use crate::app_state::{
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::auth::UserUid;
-use crate::cloud_object::model::actions::{ObjectAction, ObjectActionSubtype};
+use crate::cloud_object::model::actions::{
+    object_action_from_persisted, ObjectAction, ObjectActionSubtype,
+};
 use crate::cloud_object::model::generic_string_model::{CloudStringObject, GenericStringObjectId};
 use crate::cloud_object::{
     CloudObject, CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses,
@@ -109,7 +111,7 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel};
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::team::Team as TeamMetadata;
-use crate::workspaces::user_profiles::UserProfileWithUID;
+use crate::workspaces::user_profiles::{user_profile_from_persistence, UserProfileWithUID};
 use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
 use crate::{report_error, report_if_error, safe_info, send_telemetry_from_app_ctx};
 
@@ -3245,13 +3247,13 @@ fn read_sqlite_data(
     let user_profiles = schema::user_profiles::dsl::user_profiles
         .load_iter::<model::UserProfile, DefaultLoadingMode>(conn)?
         .filter_map(|user_profile| user_profile.ok())
-        .map(UserProfileWithUID::from)
+        .map(user_profile_from_persistence)
         .collect();
 
     let object_actions: Vec<ObjectAction> = schema::object_actions::dsl::object_actions
         .load_iter::<model::PersistedObjectAction, DefaultLoadingMode>(conn)?
         .filter_map(|object_action| object_action.ok()) // parse into PersistedObjectAction
-        .filter_map(|action| action.try_into().ok())
+        .filter_map(|action| object_action_from_persisted(action).ok())
         .collect();
 
     let server_experiments = schema::server_experiments::dsl::server_experiments
@@ -3633,42 +3635,42 @@ fn load_active_mcp_servers(conn: &mut SqliteConnection) -> Result<Vec<uuid::Uuid
 
 /// Converts the ObjectAction type into a uniform type that can be inserted into
 /// the sqlite table.
-impl From<ObjectAction> for model::NewPersistedObjectAction {
-    fn from(action: ObjectAction) -> Self {
-        match action.action_subtype {
-            ObjectActionSubtype::SingleAction {
-                timestamp,
-                data,
-                pending,
-                processed_at_timestamp,
-            } => Self {
-                hashed_object_id: action.hashed_sqlite_id,
-                timestamp: Some(timestamp.naive_utc()),
-                action: action.action_type.to_string(),
-                data,
-                count: None,
-                oldest_timestamp: None,
-                latest_timestamp: None,
-                pending: Some(pending),
-                processed_at_timestamp: processed_at_timestamp.map(|t| t.naive_utc()),
-            },
-            ObjectActionSubtype::BundledActions {
-                count,
-                oldest_timestamp,
-                latest_timestamp,
-                latest_processed_at_timestamp,
-            } => Self {
-                hashed_object_id: action.hashed_sqlite_id,
-                timestamp: None,
-                action: action.action_type.to_string(),
-                data: None,
-                count: Some(count),
-                oldest_timestamp: Some(oldest_timestamp.naive_utc()),
-                latest_timestamp: Some(latest_timestamp.naive_utc()),
-                pending: None,
-                processed_at_timestamp: Some(latest_processed_at_timestamp.naive_utc()),
-            },
-        }
+fn new_persisted_object_action_from_object_action(
+    action: ObjectAction,
+) -> model::NewPersistedObjectAction {
+    match action.action_subtype {
+        ObjectActionSubtype::SingleAction {
+            timestamp,
+            data,
+            pending,
+            processed_at_timestamp,
+        } => model::NewPersistedObjectAction {
+            hashed_object_id: action.hashed_sqlite_id,
+            timestamp: Some(timestamp.naive_utc()),
+            action: action.action_type.to_string(),
+            data,
+            count: None,
+            oldest_timestamp: None,
+            latest_timestamp: None,
+            pending: Some(pending),
+            processed_at_timestamp: processed_at_timestamp.map(|t| t.naive_utc()),
+        },
+        ObjectActionSubtype::BundledActions {
+            count,
+            oldest_timestamp,
+            latest_timestamp,
+            latest_processed_at_timestamp,
+        } => model::NewPersistedObjectAction {
+            hashed_object_id: action.hashed_sqlite_id,
+            timestamp: None,
+            action: action.action_type.to_string(),
+            data: None,
+            count: Some(count),
+            oldest_timestamp: Some(oldest_timestamp.naive_utc()),
+            latest_timestamp: Some(latest_timestamp.naive_utc()),
+            pending: None,
+            processed_at_timestamp: Some(latest_processed_at_timestamp.naive_utc()),
+        },
     }
 }
 
@@ -3676,7 +3678,7 @@ fn insert_object_action(
     conn: &mut SqliteConnection,
     object_action: ObjectAction,
 ) -> Result<(), Error> {
-    let action: NewPersistedObjectAction = object_action.into();
+    let action = new_persisted_object_action_from_object_action(object_action);
     conn.transaction::<(), Error, _>(|conn| {
         diesel::insert_into(schema::object_actions::dsl::object_actions)
             .values(action)
@@ -3694,8 +3696,10 @@ fn sync_object_actions(
     let ids_to_delete: HashSet<String> =
         HashSet::from_iter(actions_to_sync.iter().map(|a| a.hashed_sqlite_id.clone()));
     // Insert the new ones
-    let new_actions: Vec<NewPersistedObjectAction> =
-        actions_to_sync.iter().map(|a| a.clone().into()).collect();
+    let new_actions: Vec<NewPersistedObjectAction> = actions_to_sync
+        .iter()
+        .map(|a| new_persisted_object_action_from_object_action(a.clone()))
+        .collect();
     conn.transaction::<(), Error, _>(|conn| {
         // Erase all the actions that currently have this object ID
         for hashed_sqlite_id in ids_to_delete {

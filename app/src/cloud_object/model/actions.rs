@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
+pub use cloud_object_client::{
+    ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
+};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::model::PersistedObjectAction;
@@ -8,180 +11,74 @@ use crate::server::ids::{parse_sqlite_id_to_uid, HashedSqliteId, ObjectUid};
 
 pub enum ObjectActionsEvent {}
 
-/// The type of action that occurred on an object, such as an execution, selection, so on
-/// and so forth.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ObjectActionType {
-    Execute,
-}
+pub fn object_action_from_persisted(other: PersistedObjectAction) -> Result<ObjectAction, ()> {
+    // Each persisted object action is either a single action or a bundled action.
+    // If there's any inconsistencies from the SQL row, we return an error.
+    let action_subtype = if let Some(count) = other.count {
+        let oldest_timestamp = other
+            .oldest_timestamp
+            .as_ref()
+            .map(|time| time.and_utc())
+            .ok_or(())?;
+        let latest_timestamp = other
+            .latest_timestamp
+            .as_ref()
+            .map(|time| time.and_utc())
+            .ok_or(())?;
 
-// In order to convert from a graphql type and from a SQLite read, the action type
-// implements to_string().
-//
-// Temporarily suppress clippy warnings about the `ToString` impl until we
-// move `ObjectType` away from using `std::fmt::Display` for serialization.
-#[allow(clippy::to_string_trait_impl)]
-impl ToString for ObjectActionType {
-    fn to_string(&self) -> String {
-        match self {
-            ObjectActionType::Execute => String::from("EXECUTE"),
+        // When the db row is a bundled action, the processed_at_timestamp field refers
+        // to the latest processed_at_timestamp in the bundle. Because bundled actions come
+        // from the server, this is a value, not an option.
+        let latest_processed_at_timestamp = other
+            .processed_at_timestamp
+            .as_ref()
+            .map(|time| time.and_utc())
+            .ok_or(())?;
+        ObjectActionSubtype::BundledActions {
+            count,
+            oldest_timestamp,
+            latest_timestamp,
+            latest_processed_at_timestamp,
         }
-    }
-}
+    } else {
+        let timestamp = other
+            .timestamp
+            .as_ref()
+            .map(|time| time.and_utc())
+            .ok_or(())?;
+        let pending = other.pending.ok_or(())?;
 
-impl ObjectActionType {
-    fn singular(&self) -> String {
-        match self {
-            ObjectActionType::Execute => "run".to_string(),
+        // The processed_at_timestamp is still None when the action hasn't been synced.
+        let processed_at_timestamp = other
+            .processed_at_timestamp
+            .as_ref()
+            .map(|time| time.and_utc());
+        ObjectActionSubtype::SingleAction {
+            timestamp,
+            data: other.data,
+            pending,
+            processed_at_timestamp,
         }
-    }
+    };
 
-    fn plural(&self) -> String {
-        match self {
-            ObjectActionType::Execute => "runs".to_string(),
-        }
-    }
-}
+    // The object_sync_id stored in SQLite is the hashed id that's used to index into the ObjectActions
+    // model.
+    let hashed_object_id = other.hashed_object_id;
+    let action_type = match other.action.as_str() {
+        s if s == ObjectActionType::Execute.to_string() => ObjectActionType::Execute,
+        _ => return Err(()),
+    };
 
-/// We track object actions, both those that have been sent to the server and not, through this
-/// type. A single ObjectAction represents an object_id, action pair and a subtype that contains data
-/// about the action(s). Each ObjectAction either represents one action or a summary of identical actions
-/// that occurred at different times. We summarize old actions in order to save memory footprint on the client.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ObjectAction {
-    pub action_type: ObjectActionType,
-    pub uid: ObjectUid,
-    pub hashed_sqlite_id: HashedSqliteId,
-    // This action either represents one action or a consolidation of multiple actions.
-    pub action_subtype: ObjectActionSubtype,
-}
+    // NOTE: This is needed since we only store the sqlite hash, but we need the uid (the second part of the hash)
+    // to index into CloudModel and store the object actions in memory.
+    let uid = parse_sqlite_id_to_uid(hashed_object_id.clone())?;
 
-impl ObjectAction {
-    pub fn is_pending(&self) -> bool {
-        match self.action_subtype {
-            ObjectActionSubtype::SingleAction { pending, .. } => pending,
-            _ => false,
-        }
-    }
-}
-
-impl TryFrom<PersistedObjectAction> for ObjectAction {
-    type Error = ();
-
-    fn try_from(other: PersistedObjectAction) -> Result<Self, Self::Error> {
-        // Each persisted object action is either a single action or a bundled action.
-        // If there's any inconsistencies from the SQL row, we return an error.
-        let action_subtype = if let Some(count) = other.count {
-            let oldest_timestamp = other
-                .oldest_timestamp
-                .as_ref()
-                .map(|time| time.and_utc())
-                .ok_or(())?;
-            let latest_timestamp = other
-                .latest_timestamp
-                .as_ref()
-                .map(|time| time.and_utc())
-                .ok_or(())?;
-
-            // When the db row is a bundled action, the processed_at_timestamp field refers
-            // to the latest processed_at_timestamp in the bundle. Because bundled actions come
-            // from the server, this is a value, not an option.
-            let latest_processed_at_timestamp = other
-                .processed_at_timestamp
-                .as_ref()
-                .map(|time| time.and_utc())
-                .ok_or(())?;
-            ObjectActionSubtype::BundledActions {
-                count,
-                oldest_timestamp,
-                latest_timestamp,
-                latest_processed_at_timestamp,
-            }
-        } else {
-            let timestamp = other
-                .timestamp
-                .as_ref()
-                .map(|time| time.and_utc())
-                .ok_or(())?;
-            let pending = other.pending.ok_or(())?;
-
-            // The processed_at_timestamp is still None when the action hasn't been synced.
-            let processed_at_timestamp = other
-                .processed_at_timestamp
-                .as_ref()
-                .map(|time| time.and_utc());
-            ObjectActionSubtype::SingleAction {
-                timestamp,
-                data: other.data,
-                pending,
-                processed_at_timestamp,
-            }
-        };
-
-        // The object_sync_id stored in SQLite is the hashed id that's used to index into the ObjectActions
-        // model.
-        let hashed_object_id = other.hashed_object_id;
-        let action_type = match other.action.as_str() {
-            s if s == ObjectActionType::Execute.to_string() => ObjectActionType::Execute,
-            _ => return Err(()),
-        };
-
-        // NOTE: This is needed since we only store the sqlite hash, but we need the uid (the second part of the hash)
-        // to index into CloudModel and store the object actions in memory.
-        let uid = parse_sqlite_id_to_uid(hashed_object_id.clone())?;
-
-        Ok(ObjectAction {
-            uid: uid.to_string(),
-            hashed_sqlite_id: hashed_object_id,
-            action_type,
-            action_subtype,
-        })
-    }
-}
-
-/// The server communicates the action history of an object via an "ObjectActionHistory" type that
-/// contains the uid, a list of actions (single or bundled), and the timestamp of the most recent action
-/// (which is redundant from the list of actions). We use this type to convert from the graphql layer into
-/// an identical type the sync_queue and update_manager can pass around.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ObjectActionHistory {
-    pub uid: ObjectUid,
-    pub hashed_sqlite_id: HashedSqliteId,
-    pub latest_processed_at_timestamp: DateTime<Utc>,
-    pub actions: Vec<ObjectAction>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ObjectActionSubtype {
-    SingleAction {
-        // When the action occurred.
-        timestamp: DateTime<Utc>,
-
-        // When the action was processed by the server (used to order actions against eachother).
-        // None if the action has not been synced.
-        processed_at_timestamp: Option<DateTime<Utc>>,
-
-        // A JSON representation of anything else we might want to track about the action.
-        // For example, the exit code of a workflow execution.
-        data: Option<String>,
-
-        // Whether or not this action has been successfully synced to the server.
-        pending: bool,
-    },
-    BundledActions {
-        // The number of distinct actions that are coalesced into one entry here.
-        count: i32,
-
-        // The timestamp of the oldest action within this bundle.
-        oldest_timestamp: DateTime<Utc>,
-
-        // The timestamp of the most recent action within the bundle.
-        latest_timestamp: DateTime<Utc>,
-
-        // The most recent processed_at timestamp contained in the bundle (used to order actions and determine
-        // how up-to-date the client's actions are.)
-        latest_processed_at_timestamp: DateTime<Utc>,
-    },
+    Ok(ObjectAction {
+        uid: uid.to_string(),
+        hashed_sqlite_id: hashed_object_id,
+        action_type,
+        action_subtype,
+    })
 }
 
 /// A singleton model representing the actions that have occurred on a per-object basis. These
