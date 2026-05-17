@@ -478,7 +478,11 @@ async fn run_git_grep_command(
         );
         grep_command.push_str(format!(" -e {escaped_query}").as_str());
     }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    // `target_path` flows verbatim into a shell command. Without escaping, a
+    // path containing `$(...)`, backticks, or other metacharacters would be
+    // re-interpreted by the shell. See `shell_escape` for details.
+    let escaped_target = warp_util::path::ShellFamily::from(shell_type).shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_target}").as_str());
 
     let command_output = session
         .execute_command(
@@ -537,7 +541,8 @@ async fn run_grep_command(
     for query in queries {
         grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
     }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let escaped_target = warp_util::path::ShellFamily::Posix.shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_target}").as_str());
 
     let command_output = session
         .execute_command(
@@ -588,9 +593,9 @@ async fn run_select_string_command(
 ) -> Result<GrepResult, GrepError> {
     // We enable the `-CaseSensitive` flag to match the default behavior of grep.
     // TODO(CODE-239): Make this command more efficient when searching a file.
+    let escaped_target = warp_util::path::ShellFamily::PowerShell.shell_escape(target_path);
     let select_string_command = format!(
-        "Get-ChildItem -Path \"{}\" -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
-        target_path,
+        "Get-ChildItem -Path {escaped_target} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
         queries
             .iter()
             .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
