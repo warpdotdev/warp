@@ -4,8 +4,8 @@
 use warpui::AppContext;
 use warpui::SingletonEntity;
 
-use crate::env_vars::EnvVarCollection;
 use crate::env_vars::EnvVarValue;
+use crate::env_vars::{EnvVarCollection, EnvVarCollectionExt, EnvVarExt};
 use crate::notebooks::CloudNotebookModel;
 use crate::terminal::shell::ShellType;
 use crate::{

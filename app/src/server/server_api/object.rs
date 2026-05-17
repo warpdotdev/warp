@@ -9,33 +9,24 @@ use crate::{
     },
     channel::ChannelState,
     cloud_object::{
-        model::{
-            actions::{ObjectActionHistory, ObjectActionType},
-            generic_string_model::{
-                GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-            },
-            json_model::JsonSerializer,
+        model::generic_string_model::{
+            GenericStringModel, GenericStringObjectId, Serializer, StringModel,
         },
         BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest,
         CreateCloudObjectResult, CreateObjectRequest, CreatedCloudObject, GenericCloudObject,
         GenericServerObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult,
-        ObjectPermissionUpdateResult, ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate,
-        Owner, Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerMetadata,
-        ServerNotebook, ServerObject, ServerPermissions, ServerWorkflow, TryFromGql,
-        UpdateCloudObjectResult,
+        JsonObjectType, ObjectIdType, ObjectType, ObjectsToUpdate, Owner, Revision,
+        RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerMetadata, ServerNotebook,
+        ServerObject, ServerPermissions, ServerWorkflow, TryFromGql, UpdateCloudObjectResult,
     },
     drive::{folders::FolderId, sharing::SharingAccessLevel},
     env_vars::EnvVarCollection,
     notebooks::{NotebookId, SerializedNotebook},
     server::{
-        cloud_objects::{
-            listener::ObjectUpdateMessage,
-            update_manager::{GetCloudObjectResponse, InitialLoadResponse},
-        },
         graphql::{
             get_request_context, get_user_facing_error_message,
             schema::{
+                action_type_to_gql_action_type, object_action_history_from_gql,
                 object_update_success_to_update_result,
                 update_generic_string_object_result_to_update_result,
             },
@@ -46,15 +37,20 @@ use crate::{
     },
     settings::Preference,
     workflows::{workflow_enum::WorkflowEnum, WorkflowId},
+    workspaces::gql_convert::object_update_message_from_gql,
     workspaces::user_profiles::UserProfileWithUID,
 };
 use anyhow::{anyhow, Context, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_object_client::{
+    GetCloudObjectResponse, InitialLoadResponse, ObjectActionHistory, ObjectActionType,
+    ObjectDeleteResult, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,
+    ObjectPermissionsUpdateData, ObjectUpdateMessage,
+};
+use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-#[cfg(test)]
-use mockall::{automock, predicate::*};
 use std::collections::HashMap;
 use warp_core::report_error;
 use warp_graphql::{
@@ -162,181 +158,9 @@ use warp_graphql::{
     },
 };
 
-/// Identifies a guest to remove from an object.
-#[derive(Clone, Debug)]
-pub enum GuestIdentifier {
-    /// Remove a user guest by their email address.
-    Email(String),
-    /// Remove a team guest by their team UID.
-    TeamUid(ServerId),
-}
-
-#[cfg_attr(test, automock)]
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
-pub trait ObjectClient: 'static + Send + Sync {
-    /// This method saves a workflow for a given owner and returns it on success.
-    async fn create_workflow(
-        &self,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Updates a workflow with the new data. The update may be rejected if a revision
-    /// is specified _and_ that revision is not the current revision of the object in storage.
-    async fn update_workflow(
-        &self,
-        workflow_id: WorkflowId,
-        data: SerializedModel,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<ServerWorkflow>>;
-
-    /// Creates n generic string objects in a single graphql request. Use
-    /// this rather than calling create_generic_string_object multiple times
-    /// in a loop.
-    async fn bulk_create_generic_string_objects(
-        &self,
-        owner: Owner,
-        objects: &[BulkCreateGenericStringObjectsRequest],
-    ) -> Result<BulkCreateCloudObjectResult>;
-
-    async fn create_generic_string_object(
-        &self,
-        format: GenericStringObjectFormat,
-        uniqueness_key: Option<GenericStringObjectUniqueKey>,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Creates a notebook on the server, returning the ID and revision of the object after
-    /// creation.
-    async fn create_notebook(
-        &self,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Updates a notebook with the new title and data. The update may be rejected if a revision
-    /// is specified _and_ that revision is not the current revision of the object in storage.
-    async fn update_notebook(
-        &self,
-        notebook_id: NotebookId,
-        title: Option<String>,
-        data: Option<SerializedModel>,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<ServerNotebook>>;
-
-    async fn create_folder(&self, request: CreateObjectRequest) -> Result<CreateCloudObjectResult>;
-
-    async fn update_folder(
-        &self,
-        folder_id: FolderId,
-        name: SerializedModel,
-    ) -> Result<UpdateCloudObjectResult<ServerFolder>>;
-
-    async fn update_generic_string_object(
-        &self,
-        object_id: GenericStringObjectId,
-        model: SerializedModel,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<Box<dyn ServerObject>>>;
-
-    /// Sets the current editor of the notebook to be the logged in user
-    async fn grab_notebook_edit_access(&self, notebook_id: NotebookId) -> Result<ServerMetadata>;
-    /// Sets the current editor of the notebook to be null
-    async fn give_up_notebook_edit_access(&self, notebook_id: NotebookId)
-        -> Result<ServerMetadata>;
-
-    /// Gets updates for all Warp Drive actions.
-    async fn get_warp_drive_updates(
-        &self,
-        message_sender: Sender<ObjectUpdateMessage>,
-        stream_ready_sender: Sender<()>,
-    ) -> Result<()>;
-
-    async fn fetch_changed_objects(
-        &self,
-        objects_to_update: ObjectsToUpdate,
-        force_refresh: bool,
-    ) -> Result<InitialLoadResponse>;
-
-    async fn fetch_single_cloud_object(&self, id: ServerId) -> Result<GetCloudObjectResponse>;
-
-    // Transfers a notebook to the given owner
-    async fn transfer_notebook_owner(&self, notebook_id: NotebookId, owner: Owner) -> Result<bool>;
-
-    async fn transfer_workflow_owner(&self, workflow_id: WorkflowId, owner: Owner) -> Result<bool>;
-
-    async fn transfer_generic_string_object_owner(
-        &self,
-        workflow_id: GenericStringObjectId,
-        owner: Owner,
-    ) -> Result<bool>;
-
-    async fn trash_object(&self, id: ServerId) -> Result<bool>;
-
-    async fn untrash_object(&self, id: ServerId) -> Result<ObjectMetadataUpdateResult>;
-
-    async fn delete_object(&self, id: ServerId) -> Result<ObjectDeleteResult>;
-
-    async fn empty_trash(&self, owner: Owner) -> Result<ObjectDeleteResult>;
-
-    async fn move_object(
-        &self,
-        id: ServerId,
-        folder_id: Option<FolderId>,
-        owner: Owner,
-        object_type: ObjectType,
-    ) -> Result<bool>;
-
-    async fn record_object_action(
-        &self,
-        id: ServerId,
-        action_type: ObjectActionType,
-        timestamp: DateTime<Utc>,
-        data: Option<String>,
-    ) -> Result<ObjectActionHistory>;
-
-    async fn leave_object(&self, id: ServerId) -> Result<ObjectDeleteResult>;
-
-    async fn set_object_link_permissions(
-        &self,
-        object_id: ServerId,
-        access_level: SharingAccessLevel,
-    ) -> Result<ObjectPermissionUpdateResult>;
-
-    async fn remove_object_link_permissions(
-        &self,
-        object_id: ServerId,
-    ) -> Result<ObjectPermissionUpdateResult>;
-
-    async fn add_object_guests(
-        &self,
-        object_id: ServerId,
-        guest_emails: Vec<String>,
-        access_level: AccessLevel,
-    ) -> Result<ObjectPermissionsUpdateData>;
-
-    async fn update_object_guests(
-        &self,
-        object_id: ServerId,
-        guest_emails: Vec<String>,
-        access_level: AccessLevel,
-    ) -> Result<ServerPermissions>;
-
-    async fn remove_object_guest(
-        &self,
-        object_id: ServerId,
-        guest: GuestIdentifier,
-    ) -> Result<ServerPermissions>;
-
-    /// Fetches the last-used timestamps for all cloud environments.
-    ///
-    /// This is derived from `CloudEnvironment.lastTaskCreated.createdAt` (not `lastTaskRunTimestamp`)
-    /// so that "Last used" reflects the most recently created task.
-    ///
-    /// Returns a map from environment UID to timestamp.
-    async fn fetch_environment_last_task_run_timestamps(
-        &self,
-    ) -> Result<HashMap<String, DateTime<Utc>>>;
-}
+#[cfg(any(test, feature = "test-util"))]
+pub use cloud_object_client::MockObjectClient;
+pub use cloud_object_client::{GuestIdentifier, ObjectClient};
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -875,7 +699,7 @@ impl ObjectClient for ServerApi {
                 res.ok_or_else(|| {
                     anyhow!("missing response data for message in get_warp_drive_updates")
                 })
-                .and_then(|data| data.warp_drive_updates.try_into())
+                .and_then(|data| object_update_message_from_gql(data.warp_drive_updates))
             },
             message_sender,
             stream_ready_sender,
@@ -1065,7 +889,7 @@ impl ObjectClient for ServerApi {
                     .map(|histories| {
                         histories
                             .into_iter()
-                            .filter_map(|history| history.try_into().ok())
+                            .filter_map(|history| object_action_history_from_gql(history).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1114,7 +938,7 @@ impl ObjectClient for ServerApi {
                     .map(|histories| {
                         histories
                             .into_iter()
-                            .filter_map(|history| history.try_into().ok())
+                            .filter_map(|history| object_action_history_from_gql(history).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1327,7 +1151,7 @@ impl ObjectClient for ServerApi {
     ) -> Result<ObjectActionHistory> {
         let variables = RecordObjectActionVariables {
             input: RecordObjectActionInput {
-                action: action_type.into(),
+                action: action_type_to_gql_action_type(action_type),
                 json_data: data,
                 timestamp: timestamp.into(),
                 uid: id.into(),
@@ -1338,7 +1162,9 @@ impl ObjectClient for ServerApi {
         let operation = RecordObjectAction::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
         match response.record_object_action {
-            RecordObjectActionResult::RecordObjectActionOutput(output) => output.history.try_into(),
+            RecordObjectActionResult::RecordObjectActionOutput(output) => {
+                object_action_history_from_gql(output.history)
+            }
             RecordObjectActionResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }

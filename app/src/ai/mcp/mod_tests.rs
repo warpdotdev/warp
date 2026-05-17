@@ -2,7 +2,7 @@
 use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::{
-    mcp_provider_from_file_path, CLIServer, JsonTemplate, MCPProvider, MCPServer,
+    mcp_provider_from_file_path, CLIServer, JsonTemplate, MCPProvider, MCPServer, MCPServerExt,
     ParsedTemplatableMCPServerResult, ServerSentEvents, StaticEnvVar, StaticHeader,
     TemplatableMCPServer, TemplatableMCPServerInstallation, TemplateVariable, TransportType,
     VariableType, VariableValue,

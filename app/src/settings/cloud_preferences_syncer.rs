@@ -16,10 +16,7 @@ use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 use crate::{
     auth::auth_state::AuthState,
     cloud_object::{
-        model::{
-            generic_string_model::GenericStringObjectId, json_model::JsonSerializer,
-            persistence::CloudModel,
-        },
+        model::{generic_string_model::GenericStringObjectId, persistence::CloudModel},
         CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType,
     },
     debounce::debounce,
@@ -39,6 +36,7 @@ use crate::{
     workspaces::user_workspaces::UserWorkspaces,
 };
 
+use cloud_object_models::JsonSerializer;
 use warp_core::execution_mode::AppExecutionMode;
 
 use super::{

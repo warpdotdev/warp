@@ -26,7 +26,9 @@ use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::execution_profiles::{CloudAgentComputerUseState, ComputerUsePermission};
+use crate::ai::execution_profiles::{
+    resolve_cloud_agent_computer_use_state, CloudAgentComputerUseState,
+};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -1064,7 +1066,7 @@ impl AmbientAgentViewModel {
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
             let CloudAgentComputerUseState { enabled, .. } =
-                ComputerUsePermission::resolve_cloud_agent_state(ctx);
+                resolve_cloud_agent_computer_use_state(ctx);
             Some(enabled)
         } else {
             None

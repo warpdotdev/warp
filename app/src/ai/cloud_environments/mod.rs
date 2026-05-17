@@ -1,28 +1,19 @@
-pub use warp_server_client::cloud_object::models::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
-    ProvidersConfig,
+pub use cloud_object_models::{
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CloudAmbientAgentEnvironment,
+    CloudAmbientAgentEnvironmentModel, GcpProviderConfig, GithubRepo, ProvidersConfig,
 };
 use warp_server_client::cloud_object::Owner;
 
 use crate::{
     auth::AuthStateProvider,
     cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision,
+        model::{generic_string_model::StringModel, json_model::JsonModel},
+        GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
     },
     server::sync_queue::QueueItem,
     workspaces::user_workspaces::UserWorkspaces,
 };
 use warpui::{AppContext, SingletonEntity as _};
-
-pub type CloudAmbientAgentEnvironment =
-    GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
-pub type CloudAmbientAgentEnvironmentModel =
-    GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
 
 impl StringModel for AmbientAgentEnvironment {
     type CloudObjectType = CloudAmbientAgentEnvironment;

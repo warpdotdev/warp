@@ -23,6 +23,7 @@ use anyhow::{anyhow, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_object_client::ObjectPermissionUpdateResult;
 use warp_graphql::object_permissions::AccessLevel;
 
 use crate::{
@@ -34,10 +35,10 @@ use crate::{
         BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest,
         CreateCloudObjectResult, CreateObjectRequest, CreatedCloudObject,
         GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
-        ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,
-        ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner, Revision,
-        RevisionAndLastEditor, ServerFolder, ServerMetadata, ServerNotebook, ServerObject,
-        ServerPermissions, ServerPreference, ServerWorkflow, UpdateCloudObjectResult,
+        ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
+        ObjectType, ObjectsToUpdate, Owner, Revision, RevisionAndLastEditor, ServerFolder,
+        ServerMetadata, ServerNotebook, ServerObject, ServerPermissions, ServerPreference,
+        ServerWorkflow, UpdateCloudObjectResult,
     },
     drive::{folders::FolderId, sharing::SharingAccessLevel},
     notebooks::NotebookId,

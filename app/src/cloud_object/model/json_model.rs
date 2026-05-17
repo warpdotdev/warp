@@ -13,6 +13,7 @@ pub trait JsonModel: StringModel + Serialize + DeserializeOwned + 'static {
     fn json_object_type() -> JsonObjectType;
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct JsonSerializer;
 
