@@ -15,6 +15,8 @@ use warpui::{
     ViewHandle, WeakModelHandle,
 };
 
+use crate::pane_group::focus_state::PaneGroupFocusEvent;
+
 use super::super::{AmbientAgentViewModelEvent, Status};
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
@@ -70,6 +72,17 @@ impl AmbientAgentEntryBlock {
             | AgentConversationsModelEvent::ConversationUpdated { .. } => ctx.notify(),
             AgentConversationsModelEvent::ConversationArtifactsUpdated { .. } => {}
         });
+
+        if let Some(focus_handle) = terminal_view.as_ref(ctx).focus_handle().cloned() {
+            let focus_state = focus_handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && focus_handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
 
         Self {
             terminal_view,
@@ -241,6 +254,10 @@ impl View for AmbientAgentEntryBlock {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let font_size = self
+            .terminal_view
+            .as_ref(app)
+            .effective_monospace_font_size(app);
 
         let title = self.get_title(app);
 
@@ -250,19 +267,15 @@ impl View for AmbientAgentEntryBlock {
         title_row.add_child(
             Shrinkable::new(
                 1.,
-                Text::new(
-                    title,
-                    appearance.ui_font_family(),
-                    appearance.monospace_font_size(),
-                )
-                .with_color(theme.main_text_color(theme.background()).into_solid())
-                .with_style(Properties {
-                    weight: warpui::fonts::Weight::Bold,
-                    ..Default::default()
-                })
-                .soft_wrap(false)
-                .with_clip(ClipConfig::ellipsis())
-                .finish(),
+                Text::new(title, appearance.ui_font_family(), font_size)
+                    .with_color(theme.main_text_color(theme.background()).into_solid())
+                    .with_style(Properties {
+                        weight: warpui::fonts::Weight::Bold,
+                        ..Default::default()
+                    })
+                    .soft_wrap(false)
+                    .with_clip(ClipConfig::ellipsis())
+                    .finish(),
             )
             .finish(),
         );

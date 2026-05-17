@@ -508,6 +508,7 @@ impl TerminalView {
                         insert_below_long_running_block: false,
                     },
                 };
+                let focus_handle = self.focus_handle.clone();
                 self.insert_agent_view_entry_block(
                     AgentViewEntryBlockParams {
                         conversation_id,
@@ -515,6 +516,7 @@ impl TerminalView {
                         is_restored: true,
                         origin: AgentViewEntryOrigin::RestoreExistingConversation,
                         agent_view_controller: self.agent_view_controller.clone(),
+                        focus_handle,
                     },
                     position,
                     ctx,
@@ -1009,6 +1011,7 @@ impl TerminalView {
                 self.agent_view_controller.clone(),
                 self.ambient_agent_view_model.clone(),
                 self.view_handle.clone(),
+                self.focus_handle.clone(),
                 params.terminal_view_id,
                 ctx,
             )

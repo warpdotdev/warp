@@ -553,6 +553,7 @@ impl TerminalView {
                     self.agent_view_controller.as_ref(app),
                     self.mouse_states.parent_conversation_header_link.clone(),
                     self.mouse_states.breadcrumbs_horizontal_scroll.clone(),
+                    self.effective_monospace_font_size(app),
                     app,
                 )
                 .unwrap_or_else(|| Empty::new().finish())
@@ -779,7 +780,10 @@ impl BackingView for TerminalView {
             Self::handle_focus_state_event,
         );
         self.input.update(ctx, |input, ctx| {
-            input.set_focus_handle(focus_handle, ctx);
+            input.set_focus_handle(focus_handle.clone(), ctx);
+        });
+        self.orchestration_pill_bar.update(ctx, |pill_bar, ctx| {
+            pill_bar.set_focus_handle(focus_handle, ctx);
         });
         self.on_pane_state_change(ctx);
     }

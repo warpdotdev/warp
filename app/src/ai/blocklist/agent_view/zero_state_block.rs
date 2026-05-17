@@ -34,6 +34,7 @@ use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHi
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::appearance::Appearance;
 use crate::changelog_model::{self, ChangelogModel};
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::BlockType;
 use crate::terminal::input::message_bar::common::render_standard_message;
@@ -81,6 +82,9 @@ pub struct AgentViewZeroStateBlock {
     has_parent_terminal: bool,
     state_handles: StateHandles,
     is_oz_updates_expanded: bool,
+    /// Per-pane font-size override handle. When set, render reads
+    /// `effective_monospace_font_size` from it; otherwise falls back to global.
+    focus_handle: Option<PaneFocusHandle>,
 }
 
 impl AgentViewZeroStateBlock {
@@ -94,6 +98,7 @@ impl AgentViewZeroStateBlock {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         model_events_dispatcher: &ModelHandle<ModelEventDispatcher>,
         should_show_init_callout: bool,
+        focus_handle: Option<PaneFocusHandle>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let cloud_agent_view_model_clone = cloud_agent_view_model.cloned();
@@ -255,6 +260,17 @@ impl AgentViewZeroStateBlock {
             })
             .unwrap_or_default();
 
+        if let Some(handle) = focus_handle.clone() {
+            let focus_state = handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
+
         Self {
             conversation_id,
             origin,
@@ -270,7 +286,15 @@ impl AgentViewZeroStateBlock {
             state_handles,
             is_oz_updates_expanded: !origin.is_cloud_agent()
                 && *AISettings::handle(ctx).as_ref(ctx).should_expand_oz_updates,
+            focus_handle,
         }
+    }
+
+    fn effective_monospace_font_size(&self, app: &AppContext) -> f32 {
+        self.focus_handle
+            .as_ref()
+            .map(|h| h.effective_monospace_font_size(app))
+            .unwrap_or_else(|| Appearance::as_ref(app).monospace_font_size())
     }
 
     fn should_hide(&self, app: &AppContext) -> bool {
@@ -396,12 +420,14 @@ impl View for AgentViewZeroStateBlock {
 
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let font_size = self.effective_monospace_font_size(app);
 
         let header_props = if self.origin.is_cloud_agent() {
             HeaderProps {
                 title: "New Oz cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
                 icon: Icon::OzCloud,
+                font_size,
             }
         } else {
             let mut local_description =
@@ -418,6 +444,7 @@ impl View for AgentViewZeroStateBlock {
                 title: "New Oz agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
                 icon: Icon::Oz,
+                font_size,
             }
         };
 
@@ -430,6 +457,7 @@ impl View for AgentViewZeroStateBlock {
                 OzUpdatesProps {
                     is_expanded: self.is_oz_updates_expanded,
                     state_handles: &self.state_handles,
+                    font_size,
                 },
                 app,
             ) {
@@ -450,6 +478,7 @@ impl View for AgentViewZeroStateBlock {
                 active_session: active_session.as_deref(),
                 current_working_directory: self.current_working_directory.as_deref(),
                 state_handles: &self.state_handles,
+                font_size,
             },
             app,
         );
@@ -565,19 +594,22 @@ struct HeaderProps {
     title: Cow<'static, str>,
     description: AgentViewDescription,
     icon: Icon,
+    font_size: f32,
 }
 
 fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box<dyn Element>> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let font_size = props.font_size;
 
     let HeaderProps {
         title,
         description,
         icon,
+        font_size: _,
     } = props;
 
-    let title_font_size = styles::title_font_size(appearance);
+    let title_font_size = styles::title_font_size(appearance, font_size);
     let title = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
@@ -622,7 +654,7 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             let description_items = text_items.into_iter().map(|description_item| {
                 FormattedTextElement::new(
                     parse_markdown(&description_item).expect("is valid markdown"),
-                    appearance.monospace_font_size(),
+                    font_size,
                     appearance.ui_font_family(),
                     appearance.ui_font_family(),
                     sub_text_color,
@@ -644,7 +676,7 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
                     Text::new(
                         "Run your agent task in an isolated cloud environment.",
                         appearance.ui_font_family(),
-                        appearance.monospace_font_size(),
+                        font_size,
                     )
                     .with_color(sub_text_color)
                     .finish(),
@@ -665,7 +697,7 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
                 Container::new(
                     FormattedTextElement::new(
                         description_with_link,
-                        appearance.monospace_font_size(),
+                        font_size,
                         appearance.ui_font_family(),
                         appearance.monospace_font_family(),
                         sub_text_color,
@@ -694,6 +726,7 @@ struct ZeroStateBodyProps<'a> {
     active_session: Option<&'a Session>,
     current_working_directory: Option<&'a str>,
     state_handles: &'a StateHandles,
+    font_size: f32,
 }
 
 fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn Element>> {
@@ -705,6 +738,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
         active_session,
         current_working_directory,
         state_handles,
+        font_size,
     } = props;
 
     // Cloud agent mode doesn't show keyboard shortcuts.
@@ -718,6 +752,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                 active_session,
                 current_working_directory,
                 state_handles,
+                font_size,
             },
             app,
         ) {
@@ -839,6 +874,7 @@ struct RecentConversationProps<'a> {
     active_session: Option<&'a Session>,
     current_working_directory: Option<&'a str>,
     state_handles: &'a StateHandles,
+    font_size: f32,
 }
 
 fn render_recent_conversations_section(
@@ -850,6 +886,7 @@ fn render_recent_conversations_section(
         active_session,
         current_working_directory,
         state_handles,
+        font_size,
     } = props;
 
     if recent_conversations.is_empty() {
@@ -870,7 +907,7 @@ fn render_recent_conversations_section(
         .and_then(|working_directory| Path::new(working_directory).iter().next_back())
         .map(|path_segment| path_segment.to_string_lossy().into_owned())?;
     let disabled_text_color = theme.disabled_text_color(theme.background()).into_solid();
-    let header_font_size = appearance.monospace_font_size() - 4.;
+    let header_font_size = font_size - 4.;
     let section_header = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
@@ -936,7 +973,7 @@ fn render_recent_conversations_section(
                             Text::new_inline(
                                 title.clone(),
                                 appearance.ui_font_family(),
-                                appearance.monospace_font_size() - 2.,
+                                font_size - 2.,
                             )
                             .with_color(title_text_color)
                             .soft_wrap(false)
@@ -947,7 +984,7 @@ fn render_recent_conversations_section(
                         Text::new_inline(
                             format_approx_duration_from_now_utc(last_updated.to_utc()),
                             appearance.ui_font_family(),
-                            appearance.monospace_font_size() - 1.,
+                            font_size - 1.,
                         )
                         .with_color(secondary_text_color)
                         .soft_wrap(false)
@@ -984,6 +1021,7 @@ fn render_recent_conversations_section(
 struct OzUpdatesProps<'a> {
     is_expanded: bool,
     state_handles: &'a StateHandles,
+    font_size: f32,
 }
 fn should_render_oz_updates_section(
     is_oz_changelog_updates_enabled: bool,
@@ -1009,6 +1047,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
     let OzUpdatesProps {
         is_expanded,
         state_handles,
+        font_size,
     } = props;
 
     let appearance = Appearance::as_ref(app);
@@ -1037,8 +1076,8 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                     .to_warpui_icon(theme.sub_text_color(theme.background()))
                                     .finish(),
                                 )
-                                .with_height(appearance.monospace_font_size())
-                                .with_width(appearance.monospace_font_size())
+                                .with_height(font_size)
+                                .with_width(font_size)
                                 .finish(),
                             )
                             .with_margin_right(4.)
@@ -1049,7 +1088,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                 Text::new(
                                     OZ_UPDATES_SECTION_HEADER,
                                     appearance.ui_font_family(),
-                                    appearance.monospace_font_size() - 2.,
+                                    font_size - 2.,
                                 )
                                 .with_color(theme.sub_text_color(theme.background()).into_solid())
                                 .with_style(Properties::default().weight(Weight::Semibold))
@@ -1073,7 +1112,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                         )
                                     },
                                     appearance.ui_font_family(),
-                                    appearance.monospace_font_size() - 2.,
+                                    font_size - 2.,
                                 )
                                 .with_color(
                                     theme.disabled_text_color(theme.background()).into_solid(),
@@ -1109,7 +1148,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                         Text::new(
                                             "View changelog",
                                             appearance.ui_font_family(),
-                                            appearance.monospace_font_size() - 2.,
+                                            font_size - 2.,
                                         )
                                         .with_color(text_color)
                                         .finish(),
@@ -1125,8 +1164,8 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                             )
                                             .finish(),
                                     )
-                                    .with_width(appearance.monospace_font_size() - 2.)
-                                    .with_height(appearance.monospace_font_size() - 2.)
+                                    .with_width(font_size - 2.)
+                                    .with_height(font_size - 2.)
                                     .finish(),
                                 )
                                 .finish()
@@ -1167,7 +1206,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
         {
             let mut text = FormattedTextElement::new(
                 update.clone(),
-                appearance.monospace_font_size() - 2.,
+                font_size - 2.,
                 appearance.ui_font_family(),
                 appearance.monospace_font_family(),
                 theme
@@ -1247,8 +1286,8 @@ mod styles {
     pub const DESCRIPTION_LINE_MARGIN_BOTTOM: f32 = 6.;
     pub const CREDITS_BANNER_FONT_SIZE: f32 = 12.;
 
-    pub fn title_font_size(appearance: &Appearance) -> f32 {
-        appearance.monospace_font_size() + 6.
+    pub fn title_font_size(_appearance: &Appearance, base_font_size: f32) -> f32 {
+        base_font_size + 6.
     }
 }
 

@@ -2724,6 +2724,12 @@ impl Input {
 
                             // Render the AI mode indicator to the left of the editor if we're in AI mode or the AI suggested a command.
                             // Also renders the reply icon when following up in an existing conversation.
+                            let indicator_font_size = weak_input_handle
+                                .upgrade(app)
+                                .map(|handle: ViewHandle<Input>| {
+                                    handle.as_ref(app).effective_monospace_font_size(app)
+                                })
+                                .unwrap_or_else(|| Appearance::as_ref(app).monospace_font_size());
                             if let Some(ai_input_indicator) = maybe_render_ai_input_indicators(
                                 &ai_input_model,
                                 &ai_context_model_clone,
@@ -2731,6 +2737,7 @@ impl Input {
                                 &handoff_compose_state_for_decorator,
                                 ai_follow_up_icon_mouse_state_clone.clone(),
                                 terminal_view_id,
+                                indicator_font_size,
                                 app,
                             ) {
                                 editor_decorator_elements.left_notch =
@@ -15467,19 +15474,16 @@ fn render_prefix_mode_indicator(
     color: ColorU,
     appearance: &Appearance,
     em_width: f32,
+    font_size: f32,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let indicator_size = ai_indicator_height(app);
+    let indicator_size = ai_indicator_height(font_size, app);
     Container::new(
         ConstrainedBox::new(
             Align::new(
-                Text::new(
-                    prefix,
-                    appearance.monospace_font_family(),
-                    appearance.monospace_font_size(),
-                )
-                .with_color(color)
-                .finish(),
+                Text::new(prefix, appearance.monospace_font_family(), font_size)
+                    .with_color(color)
+                    .finish(),
             )
             .finish(),
         )
@@ -15490,6 +15494,7 @@ fn render_prefix_mode_indicator(
     .with_margin_right(em_width)
     .finish()
 }
+#[allow(clippy::too_many_arguments)]
 fn maybe_render_ai_input_indicators(
     ai_input_model: &ModelHandle<BlocklistAIInputModel>,
     ai_context_model: &ModelHandle<BlocklistAIContextModel>,
@@ -15497,14 +15502,14 @@ fn maybe_render_ai_input_indicators(
     handoff_compose_state: &ModelHandle<HandoffComposeState>,
     ai_follow_up_icon_mouse_state: MouseStateHandle,
     terminal_view_id: EntityId,
+    font_size: f32,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let ai_input_model = ai_input_model.as_ref(app);
     let appearance = Appearance::as_ref(app);
-    let em_width = app.font_cache().em_width(
-        appearance.monospace_font_family(),
-        appearance.monospace_font_size(),
-    );
+    let em_width = app
+        .font_cache()
+        .em_width(appearance.monospace_font_family(), font_size);
 
     let is_agent_view_active = agent_view_controller.as_ref(app).is_fullscreen();
     let is_ai_input_enabled = ai_input_model.is_ai_input_enabled();
@@ -15521,6 +15526,7 @@ fn maybe_render_ai_input_indicators(
             ai_brand_color(appearance.theme()),
             appearance,
             em_width,
+            font_size,
             app,
         ));
     }
@@ -15531,6 +15537,7 @@ fn maybe_render_ai_input_indicators(
             appearance.theme().ansi_fg_blue(),
             appearance,
             em_width,
+            font_size,
             app,
         ));
     }

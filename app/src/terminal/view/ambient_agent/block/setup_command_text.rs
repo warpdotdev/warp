@@ -13,6 +13,7 @@ use warpui::{
 use crate::ai::blocklist::agent_view::{agent_view_bg_color, AgentViewController};
 use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,6 +99,7 @@ pub struct CloudModeSetupTextBlock {
     group_id: SetupCommandGroupId,
     ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
     mouse_state: MouseStateHandle,
+    focus_handle: Option<PaneFocusHandle>,
 }
 
 impl CloudModeSetupTextBlock {
@@ -105,6 +107,7 @@ impl CloudModeSetupTextBlock {
         group_id: SetupCommandGroupId,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
+        focus_handle: Option<PaneFocusHandle>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         if let Some(conversation_id) = agent_view_controller
@@ -138,10 +141,22 @@ impl CloudModeSetupTextBlock {
             }
         });
 
+        if let Some(handle) = focus_handle.clone() {
+            let focus_state = handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
+
         Self {
             group_id,
             ambient_agent_view_model,
             mouse_state: Default::default(),
+            focus_handle,
         }
     }
 }
@@ -173,6 +188,11 @@ impl View for CloudModeSetupTextBlock {
             .theme()
             .disabled_text_color(agent_view_bg_color(app).into())
             .into_solid();
+        let font_size = self
+            .focus_handle
+            .as_ref()
+            .map(|h| h.effective_monospace_font_size(app))
+            .unwrap_or_else(|| appearance.monospace_font_size());
         let expandable = Hoverable::new(self.mouse_state.clone(), move |_is_hovered| {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -189,7 +209,7 @@ impl View for CloudModeSetupTextBlock {
                             "Ran setup commands"
                         },
                         appearance.ai_font_family(),
-                        appearance.monospace_font_size(),
+                        font_size,
                     )
                     .with_color(text_color)
                     .with_selectable(false)
