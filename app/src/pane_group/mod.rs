@@ -115,6 +115,7 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
+use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty;
@@ -1321,6 +1322,7 @@ impl PaneGroup {
                         // TODO(CORE-3187): On Windows, support WSL directory restoration.
                         Some(cwd).filter(|p| p.exists()),
                         HashMap::new(),
+                        uuid.as_bytes(),
                         IsSharedSessionCreator::No,
                         resources,
                         None,
@@ -1621,6 +1623,7 @@ impl PaneGroup {
                 let (terminal_view, terminal_manager) = PaneGroup::create_session(
                     startup_directory,
                     HashMap::new(),
+                    uuid.0.as_slice(),
                     IsSharedSessionCreator::No,
                     resources,
                     block_list,
@@ -3815,9 +3818,11 @@ impl PaneGroup {
         pane_history: &mut Vec<PaneId>,
         ctx: &mut ViewContext<Self>,
     ) -> (PaneData, InitialFocus) {
+        let uuid = Uuid::new_v4();
         let (view, terminal_manager) = PaneGroup::create_session(
             options.initial_directory,
             options.env_vars,
+            uuid.as_bytes(),
             options.is_shared_session_creator,
             resources,
             None,
@@ -3829,7 +3834,6 @@ impl PaneGroup {
             None,
             ctx,
         );
-        let uuid = Uuid::new_v4();
 
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
@@ -6253,7 +6257,8 @@ impl PaneGroup {
     #[allow(clippy::too_many_arguments, unused_variables)]
     fn create_session(
         startup_directory: Option<PathBuf>,
-        env_vars: HashMap<OsString, OsString>,
+        mut env_vars: HashMap<OsString, OsString>,
+        terminal_session_uuid: &[u8],
         is_shared_session: IsSharedSessionCreator,
         resources: TerminalViewResources,
         restored_blocks: Option<&Vec<SerializedBlockListItem>>,
@@ -6268,6 +6273,8 @@ impl PaneGroup {
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
+        add_session_focus_env_vars(&mut env_vars, terminal_session_uuid);
+
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
                 let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
@@ -6566,6 +6573,7 @@ impl PaneGroup {
         let (view, terminal_manager) = PaneGroup::create_session(
             startup_directory,
             HashMap::new(),
+            uuid.as_bytes(),
             IsSharedSessionCreator::No,
             resources,
             None,
@@ -6682,6 +6690,7 @@ impl PaneGroup {
         let (view, terminal_manager) = PaneGroup::create_session(
             startup_directory,
             env_vars,
+            uuid.as_bytes(),
             is_shared_session_creator,
             resources,
             None,
