@@ -4,7 +4,10 @@ use warpui::elements::{
     Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
 };
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::cloud_environments;
@@ -239,4 +242,14 @@ impl View for HandoffEnvironmentCreationModal {
         let appearance = Appearance::as_ref(app);
         self.render_dialog(appearance, app)
     }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            ctx.focus(&self.environment_form);
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "handoff_environment_creation_modal_tests.rs"]
+mod tests;
