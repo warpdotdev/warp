@@ -115,9 +115,15 @@ impl DetectedRepositories {
                                 repository: repository.clone(),
                                 source,
                             });
+                            // Watcher is alive — use the cached result.
+                            return Either::Right(ready(path.to_local_path()));
                         }
+                        // Watcher was cleaned up (e.g. diff state model dropped
+                        // and recreated). Fall through to the full scan which
+                        // will re-register the watcher.
+                    } else {
+                        return Either::Right(ready(path.to_local_path()));
                     }
-                    return Either::Right(ready(path.to_local_path()));
                 }
             }
 

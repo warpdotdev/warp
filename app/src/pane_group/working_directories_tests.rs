@@ -4,10 +4,15 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::code::buffer_location::LocalOrRemotePath;
 use repo_metadata::repositories::DetectedRepositories;
 use warpui::{App, EntityId};
 
 use crate::pane_group::WorkingDirectoriesModel;
+
+fn local(path: &std::path::Path) -> LocalOrRemotePath {
+    LocalOrRemotePath::Local(path.to_path_buf())
+}
 
 #[test]
 fn refresh_working_directories_collapses_subroots_to_nearest_repo_root() {
@@ -44,8 +49,8 @@ fn refresh_working_directories_collapses_subroots_to_nearest_repo_root() {
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 vec![
-                    (terminal_1, repo_a.to_string_lossy().to_string()),
-                    (terminal_2, repo_b.to_string_lossy().to_string()),
+                    (terminal_1, LocalOrRemotePath::Local(repo_a.clone())),
+                    (terminal_2, LocalOrRemotePath::Local(repo_b.clone())),
                 ],
                 vec![],
                 Some(terminal_1),
@@ -90,10 +95,10 @@ fn refresh_working_directories_preserves_non_repo_paths_and_dedupes() {
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 vec![
-                    (terminal_1, dir_1.to_string_lossy().to_string()),
-                    (terminal_2, dir_2.to_string_lossy().to_string()),
+                    (terminal_1, LocalOrRemotePath::Local(dir_1.clone())),
+                    (terminal_2, LocalOrRemotePath::Local(dir_2.clone())),
                     // Duplicate root should be deduped.
-                    (terminal_3, dir_1.to_string_lossy().to_string()),
+                    (terminal_3, LocalOrRemotePath::Local(dir_1.clone())),
                 ],
                 vec![],
                 Some(terminal_1),
@@ -139,14 +144,14 @@ fn selected_review_repo_is_remembered_per_pane_group() {
 
         // User selects repo Y in pane group A.
         working_directories_handle.update(&mut app, |model, _ctx| {
-            model.set_selected_review_repo(pane_group_a, repo_y.clone());
+            model.set_selected_review_repo(pane_group_a, local(&repo_y));
         });
 
         // The selection for A is remembered and is independent from B's.
         working_directories_handle.update(&mut app, |model, _ctx| {
             assert_eq!(
-                model.get_selected_review_repo(pane_group_a),
-                Some(repo_y.as_path()),
+                model.get_selected_review_repo(pane_group_a).cloned(),
+                Some(local(&repo_y)),
                 "pane group A should remember its manual selection"
             );
             assert!(
@@ -157,24 +162,24 @@ fn selected_review_repo_is_remembered_per_pane_group() {
 
         // User selects repo P in pane group B; A's selection must not change.
         working_directories_handle.update(&mut app, |model, _ctx| {
-            model.set_selected_review_repo(pane_group_b, repo_p.clone());
+            model.set_selected_review_repo(pane_group_b, local(&repo_p));
             assert_eq!(
-                model.get_selected_review_repo(pane_group_a),
-                Some(repo_y.as_path()),
+                model.get_selected_review_repo(pane_group_a).cloned(),
+                Some(local(&repo_y)),
                 "selecting in B must not clobber A's saved selection"
             );
             assert_eq!(
-                model.get_selected_review_repo(pane_group_b),
-                Some(repo_p.as_path()),
+                model.get_selected_review_repo(pane_group_b).cloned(),
+                Some(local(&repo_p)),
             );
         });
 
         // Updating A's selection overwrites the previous saved value for A.
         working_directories_handle.update(&mut app, |model, _ctx| {
-            model.set_selected_review_repo(pane_group_a, repo_x.clone());
+            model.set_selected_review_repo(pane_group_a, local(&repo_x));
             assert_eq!(
-                model.get_selected_review_repo(pane_group_a),
-                Some(repo_x.as_path()),
+                model.get_selected_review_repo(pane_group_a).cloned(),
+                Some(local(&repo_x)),
             );
         });
     });
@@ -194,10 +199,10 @@ fn selected_review_repo_is_cleared_when_pane_group_is_removed() {
         let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
 
         working_directories_handle.update(&mut app, |model, ctx| {
-            model.set_selected_review_repo(pane_group_id, repo.clone());
+            model.set_selected_review_repo(pane_group_id, local(&repo));
             assert_eq!(
-                model.get_selected_review_repo(pane_group_id),
-                Some(repo.as_path()),
+                model.get_selected_review_repo(pane_group_id).cloned(),
+                Some(local(&repo)),
             );
 
             model.remove_pane_group(pane_group_id, ctx);
@@ -222,15 +227,15 @@ fn clear_selected_review_repo_removes_only_the_targeted_pane_group_entry() {
         let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
 
         working_directories_handle.update(&mut app, |model, _ctx| {
-            model.set_selected_review_repo(pane_group_a, repo_a.clone());
-            model.set_selected_review_repo(pane_group_b, repo_b.clone());
+            model.set_selected_review_repo(pane_group_a, local(&repo_a));
+            model.set_selected_review_repo(pane_group_b, local(&repo_b));
 
             model.clear_selected_review_repo(pane_group_a);
 
             assert!(model.get_selected_review_repo(pane_group_a).is_none());
             assert_eq!(
-                model.get_selected_review_repo(pane_group_b),
-                Some(repo_b.as_path()),
+                model.get_selected_review_repo(pane_group_b).cloned(),
+                Some(local(&repo_b)),
             );
         });
     });

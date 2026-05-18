@@ -406,7 +406,6 @@ enum CodebaseIndexStatusState {
   CODEBASE_INDEX_STATUS_STATE_STALE = 7;
   CODEBASE_INDEX_STATUS_STATE_FAILED = 8;
 }
-
 message CodebaseIndexStatus {
   string repo_path = 1;
   CodebaseIndexStatusState state = 2;

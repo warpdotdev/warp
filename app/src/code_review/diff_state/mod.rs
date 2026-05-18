@@ -5,7 +5,7 @@
 //! operations to whichever is active.
 //! All consumers should use `DiffStateModel` rather than accessing sub-models directly.
 
-use crate::util::git::{Commit, PrInfo};
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 use warpui::{AppContext, ModelContext, ModelHandle};
@@ -255,6 +255,7 @@ impl DiffMode {
 
 /// User-visible representation of the diffs we've loaded,
 /// which only includes changes against the specific base the user has selected.
+#[derive(Debug)]
 pub enum DiffState {
     NotInRepository,
     Loading,
@@ -318,6 +319,8 @@ pub enum DiffStateModelEvent {
     /// The remote connection was lost. Stale diffs should be preserved while
     /// the model waits for a new subscription.
     ConnectionLost,
+    /// Branch list received from the backend (local git or remote server).
+    BranchesReceived(Vec<BranchEntry>),
 }
 
 // ── Unified model ────────────────────────────────────────────────────────
@@ -383,6 +386,9 @@ impl DiffStateModel {
             }
             DiffStateModelEvent::ConnectionLost => {
                 ctx.emit(DiffStateModelEvent::ConnectionLost);
+            }
+            DiffStateModelEvent::BranchesReceived(branches) => {
+                ctx.emit(DiffStateModelEvent::BranchesReceived(branches.clone()));
             }
         }
     }
@@ -521,18 +527,20 @@ impl DiffStateModel {
         }
     }
 
-    pub(crate) fn load_diffs_for_current_repo(
-        &self,
-        should_fetch_base: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub(crate) fn load_diffs_for_current_repo(&self, force: bool, ctx: &mut ModelContext<Self>) {
         match self {
             Self::Local(local) => {
                 local.update(ctx, |local, ctx| {
-                    local.load_diffs_for_current_repo(should_fetch_base, ctx);
+                    local.load_diffs_for_current_repo(force, ctx);
                 });
             }
-            Self::Remote(_) => {}
+            Self::Remote(remote) => {
+                if force {
+                    remote.update(ctx, |remote, ctx| {
+                        remote.replay_latest_diffs(ctx);
+                    });
+                }
+            }
         }
     }
 
@@ -548,6 +556,21 @@ impl DiffStateModel {
                 });
             }
             Self::Remote(_) => {}
+        }
+    }
+
+    pub(crate) fn fetch_branches(&self, ctx: &mut ModelContext<Self>) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.fetch_branches(ctx);
+                });
+            }
+            Self::Remote(model) => {
+                model.update(ctx, |model, ctx| {
+                    model.fetch_branches(ctx);
+                });
+            }
         }
     }
 

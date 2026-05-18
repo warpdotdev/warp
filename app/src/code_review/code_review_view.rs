@@ -93,7 +93,7 @@ use crate::terminal::cli_agent::{
 };
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::git::{get_all_branches, BranchEntry};
+use crate::util::git::BranchEntry;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 #[cfg(feature = "local_fs")]
@@ -734,8 +734,7 @@ impl CodeReviewView {
         self.is_open = true;
 
         ctx.subscribe_to_model(&self.diff_state_model, Self::handle_diff_state_model_event);
-        if self.repo_path().is_some_and(LocalOrRemotePath::is_local) {
-            // TODO: add support for remote repositories
+        if self.repo_path().is_some() {
             self.fetch_branches_and_setup_dropdown(ctx);
         }
         ctx.notify();
@@ -774,9 +773,17 @@ impl CodeReviewView {
             }
         }
 
+        // If the view is freshly created (state is None/loading) but the model
+        // already holds computed diffs (DiffState::Loaded), a non-forced load
+        // will no-op because the model thinks it's done. Force a reload so
+        // the model re-emits NewDiffsComputed and the view gets populated.
+        let view_needs_diffs = matches!(self.state(), CodeReviewViewState::None);
+        let model_already_loaded = matches!(self.diff_state(ctx), DiffState::Loaded);
+        let force = view_needs_diffs && model_already_loaded;
+
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
-            model.load_diffs_for_current_repo(false, ctx);
+            model.load_diffs_for_current_repo(force, ctx);
         });
     }
 
@@ -1323,7 +1330,6 @@ impl CodeReviewView {
         });
 
         let has_repo = repo_path.is_some();
-        let has_local_repo = repo_path.as_ref().is_some_and(LocalOrRemotePath::is_local);
         let active_repo = repo_path.clone().map(RepositoryState::new);
 
         let mut view = Self {
@@ -1371,7 +1377,7 @@ impl CodeReviewView {
             git_dialog: None,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
-        if has_local_repo {
+        if has_repo {
             view.fetch_branches_and_setup_dropdown(ctx);
         }
         if has_repo {
@@ -1484,64 +1490,9 @@ impl CodeReviewView {
     }
 
     fn fetch_branches_and_setup_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        // TODO: add support for remote repositories
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
-            return;
-        };
-        let fetched_repo_path = repo_path.clone();
-        ctx.spawn(
-            async move {
-                get_all_branches(&repo_path, None, false /* include_remotes */)
-                    .await
-            },
-            move |me, branches_result, ctx| {
-                // If the active repo changed while branches were being fetched,
-                // discard the stale result.
-                if me.repo_path().and_then(LocalOrRemotePath::to_local_path)
-                    != Some(fetched_repo_path.as_path())
-                {
-                    return;
-                }
-                match branches_result {
-                    Ok(branches) => {
-                        if let Some(repo) = me.active_repo.as_mut() {
-                            let branch_count = branches.len();
-                            let repo_path = &repo.repo_path;
-                            safe_info!(
-                                safe: ("Code Review: Set available_branches with {} branches", branch_count),
-                                full: (
-                                    "Code Review: Set available_branches for repo {:?} with {} branches",
-                                    repo_path,
-                                    branch_count
-                                )
-                            );
-                            repo.available_branches = branches;
-                        }
-                        me.update_diff_selector_selection(ctx);
-                    }
-                    Err(err) => {
-                        log::warn!("Failed to fetch branches: {err}");
-                        // Fallback to default dropdown with just uncommitted changes and main branch
-                        if let Some(repo) = me.active_repo.as_mut() {
-                            let repo_path = &repo.repo_path;
-                            safe_info!(
-                                safe: ("Code Review: Set available_branches to empty (fallback after error)"),
-                                full: (
-                                    "Code Review: Set available_branches to empty for repo {:?} (fallback after error)",
-                                    repo_path
-                                )
-                            );
-                            repo.available_branches = vec![];
-                        }
-                        me.update_diff_selector_selection(ctx);
-                    }
-                }
-            },
-        );
+        self.diff_state_model.update(ctx, |model, ctx| {
+            model.fetch_branches(ctx);
+        });
     }
 
     pub(crate) fn build_diff_targets(&self, ctx: &ViewContext<Self>) -> Vec<DiffTarget> {
@@ -2407,6 +2358,21 @@ impl CodeReviewView {
                 // so the user can still see what they were looking at.
                 ctx.notify();
             }
+            DiffStateModelEvent::BranchesReceived(branches) => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    let branch_count = branches.len();
+                    safe_info!(
+                        safe: ("Code Review: Set available_branches with {} branches", branch_count),
+                        full: (
+                            "Code Review: Set available_branches for repo {:?} with {} branches",
+                            &repo.repo_path,
+                            branch_count
+                        )
+                    );
+                    repo.available_branches = branches.clone();
+                }
+                self.update_diff_selector_selection(ctx);
+            }
         }
     }
 
@@ -2518,16 +2484,15 @@ impl CodeReviewView {
                 return;
             }
             DiffState::NotInRepository => {
-                // `repo_path` is set at construction time and never reset to
-                // an empty path, so receiving `NotInRepository` while we
-                // have an active repo means the diff data isn't ready yet
-                // (e.g. just (re)opened the panel). Fall back to the
-                // loading state and wait for a real result.
+                // `NotInRepository` is a terminal state from the diff model —
+                // the path has been checked and is definitively not inside a
+                // git repository. Show the "no repo found" UI instead of
+                // the loading spinner.
                 if let Some(repo) = self.active_repo.as_mut() {
                     log::info!(
-                        "Code Review Panel: Setting state to loading after receiving 'not in repository' message."
+                        "Code Review Panel: Setting state to no repo found after receiving 'not in repository' message."
                     );
-                    repo.state = CodeReviewViewState::None;
+                    repo.state = CodeReviewViewState::NoRepoFound;
                 }
                 ctx.notify();
                 return;
@@ -2549,7 +2514,12 @@ impl CodeReviewView {
         };
 
         let Some(diff_data) = diff_data else {
-            log::warn!("Trying to reload diff but there is no git diff base");
+            // Stale event: the model advanced to Loaded via a later snapshot
+            // before this earlier NewDiffsComputed(None) was processed.
+            // Preserve the existing view state rather than clobbering it.
+            log::info!(
+                "Code Review Panel: Ignoring NewDiffsComputed(None) for already-loaded model"
+            );
             return;
         };
 

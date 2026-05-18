@@ -26,6 +26,8 @@ use warpui::{r#async::SpawnedFutureHandle, ModelContext};
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
+use crate::util::git::get_all_branches;
+#[cfg(feature = "local_fs")]
 use crate::util::git::get_pr_for_branch;
 use crate::util::git::{
     detect_current_branch, detect_main_branch, get_unpushed_commits, parse_unified_diff_header,
@@ -461,6 +463,35 @@ impl LocalDiffStateModel {
     fn queue_full_invalidation(&mut self) {
         self.file_invalidation.cancel_all();
         self.file_invalidation.invalidate_all_pending = true;
+    }
+
+    /// Fetches branches for the active repository and emits
+    /// `DiffStateModelEvent::BranchesReceived` on completion.
+    #[cfg(feature = "local_fs")]
+    pub fn fetch_branches(&self, ctx: &mut ModelContext<Self>) {
+        let Some(repo_path) = self.active_repository_path(ctx) else {
+            return;
+        };
+        ctx.spawn(
+            async move {
+                get_all_branches(&repo_path, None, false /* include_remotes */).await
+            },
+            |_me, branches_result, ctx| {
+                let branches = match branches_result {
+                    Ok(branches) => branches,
+                    Err(err) => {
+                        log::warn!("LocalDiffStateModel: failed to fetch branches: {err}");
+                        vec![]
+                    }
+                };
+                ctx.emit(DiffStateModelEvent::BranchesReceived(branches));
+            },
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn fetch_branches(&self, _ctx: &mut ModelContext<Self>) {
+        // Noop on WASM builds.
     }
 
     pub fn set_diff_mode(

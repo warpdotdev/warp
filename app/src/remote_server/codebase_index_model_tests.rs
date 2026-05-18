@@ -421,19 +421,19 @@ fn remote_auto_indexing_requires_feature_codebase_context_and_auto_indexing() {
     {
         let _remote_flag = FeatureFlag::RemoteCodebaseIndexing.override_enabled(true);
         let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(false);
-        assert!(!remote_auto_indexing_enabled(true, true));
+        assert!(!remote_codebase_auto_indexing_enabled(true, true));
     }
     {
         let _remote_flag = FeatureFlag::RemoteCodebaseIndexing.override_enabled(true);
         let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
-        assert!(remote_auto_indexing_enabled(true, true));
-        assert!(!remote_auto_indexing_enabled(false, true));
-        assert!(!remote_auto_indexing_enabled(true, false));
-        assert!(!remote_auto_indexing_enabled(false, false));
+        assert!(remote_codebase_auto_indexing_enabled(true, true));
+        assert!(!remote_codebase_auto_indexing_enabled(false, true));
+        assert!(!remote_codebase_auto_indexing_enabled(true, false));
+        assert!(!remote_codebase_auto_indexing_enabled(false, false));
     }
     {
         let _remote_flag = FeatureFlag::RemoteCodebaseIndexing.override_enabled(false);
         let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
-        assert!(!remote_auto_indexing_enabled(true, true));
+        assert!(!remote_codebase_auto_indexing_enabled(true, true));
     }
 }

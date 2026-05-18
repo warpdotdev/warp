@@ -1369,7 +1369,8 @@ impl ServerModel {
 
     /// Handles `Abort` by cancelling the in-progress request it targets.
     /// Checks `ServerModel`'s own in-progress map first, then delegates to
-    /// the diff state manager for content reload requests.
+    /// the diff state manager for content reload requests, and finally checks
+    /// queued pending responses.
     /// This is a notification — no response is sent.
     fn handle_abort(&mut self, abort: Abort, request_id: &RequestId, ctx: &mut ModelContext<Self>) {
         let target_id = RequestId::from(abort.request_id_to_abort);
@@ -1384,10 +1385,17 @@ impl ServerModel {
                 .diff_states
                 .update(ctx, |mgr, _| mgr.abort_request(&target_id));
             if !found {
-                log::info!(
-                    "Abort for unknown/completed request (request_id={target_id}, \
-                     abort_request_id={request_id})"
-                );
+                // Check if the target is a queued pending response
+                // (not an in-flight reload).
+                let found_pending = self
+                    .diff_states
+                    .update(ctx, |mgr, _| mgr.abort_pending_response(&target_id));
+                if !found_pending {
+                    log::info!(
+                        "Abort for unknown/completed request (request_id={target_id}, \
+                         abort_request_id={request_id})"
+                    );
+                }
             }
         }
     }

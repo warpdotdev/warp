@@ -21,7 +21,10 @@ use crate::{
             conversation::{AIConversationId, ConversationStatus},
             StartAgentExecutionMode,
         },
-        ambient_agents::{task::HarnessConfig, AgentConfigSnapshot, AmbientAgentTaskId},
+        ambient_agents::{
+            task::{normalize_orchestrator_agent_name, HarnessConfig},
+            AgentConfigSnapshot, AmbientAgentTaskId,
+        },
         blocklist::{
             agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin},
             orchestration_event_streamer::OrchestrationEventStreamer,
@@ -1698,7 +1701,8 @@ fn launch_local_no_harness_child(
 ) {
     let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
     let request_id = request.id;
-    let request_name = request.name.clone();
+    let agent_name = normalize_orchestrator_agent_name(&request.name);
+    let request_name = agent_name.clone().unwrap_or_default();
     let parent_conversation_id = request.parent_conversation_id;
     let parent_run_id = request.parent_run_id.clone();
     let prompt = request.prompt.clone();
@@ -1714,10 +1718,19 @@ fn launch_local_no_harness_child(
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
 
     let prompt_for_create = prompt.clone();
+    let agent_name_for_create = agent_name.clone();
     let _ = ctx.spawn(
         async move {
             ai_client
-                .create_agent_task(prompt_for_create, None, parent_run_id, None)
+                .create_agent_task(
+                    prompt_for_create,
+                    None,
+                    parent_run_id,
+                    Some(AgentConfigSnapshot {
+                        name: agent_name_for_create,
+                        ..Default::default()
+                    }),
+                )
                 .await
         },
         move |group, result, ctx| match result {
@@ -1841,7 +1854,8 @@ fn launch_local_harness_child(
     let startup_directory = group.startup_path_for_new_session(Some(terminal_pane_id), ctx);
     let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
     let request_id = request.id;
-    let request_name = request.name.clone();
+    let agent_name = normalize_orchestrator_agent_name(&request.name);
+    let request_name = agent_name.clone().unwrap_or_default();
     let parent_conversation_id = request.parent_conversation_id;
     let parent_run_id = request.parent_run_id.clone();
     let prompt = request.prompt.clone();
@@ -1861,6 +1875,7 @@ fn launch_local_harness_child(
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
 
     let model_id_for_harness_env = model_id.clone();
+    let agent_name_for_task = agent_name.clone();
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1868,6 +1883,7 @@ fn launch_local_harness_child(
                 harness_type,
                 model_id_for_harness_env,
                 parent_run_id,
+                agent_name_for_task,
                 shell_type,
                 startup_directory,
                 ai_client,
@@ -2034,6 +2050,9 @@ fn launch_remote_child(
         return None;
     };
 
+    let agent_name = normalize_orchestrator_agent_name(&request.name);
+    let request_name = agent_name.clone().unwrap_or_default();
+
     let new_pane_id = group.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
 
     let Some(new_terminal_view) = group.terminal_view_from_pane_id(new_pane_id, ctx) else {
@@ -2046,7 +2065,7 @@ fn launch_remote_child(
     let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
         let id = history_model.start_new_child_conversation(
             terminal_view_id,
-            request.name,
+            request_name.clone(),
             request.parent_conversation_id,
             Some(orchestration_harness),
             ctx,
@@ -2137,6 +2156,7 @@ fn launch_remote_child(
         prompt: request.prompt,
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
+            name: agent_name,
             environment_id,
             model_id: (!model_id.is_empty()).then_some(model_id),
             worker_host: (!worker_host.is_empty()).then_some(worker_host),

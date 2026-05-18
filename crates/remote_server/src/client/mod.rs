@@ -374,9 +374,10 @@ impl RemoteServerClient {
                         .ok_or(ClientError::UnexpectedResponse)?;
                 log::info!(
                     "[Remote codebase indexing] Client received {operation} response: \
-                     repo_path={} state={:?}",
+                     repo_path={} state={:?} root_hash_present={}",
                     status.repo_path,
-                    status.state
+                    status.state,
+                    status.root_hash.is_some(),
                 );
                 Ok(status)
             }
@@ -818,9 +819,10 @@ impl RemoteServerClient {
                 let status = proto_to_codebase_index_status_updated(&update)?;
                 log::info!(
                     "[Remote codebase indexing] Client received codebase index status push: \
-                     repo_path={} state={:?}",
+                     repo_path={} state={:?} root_hash_present={}",
                     status.repo_path,
-                    status.state
+                    status.state,
+                    status.root_hash.is_some(),
                 );
                 Some(ClientEvent::CodebaseIndexStatusUpdated { status })
             }

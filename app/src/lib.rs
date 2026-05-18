@@ -3012,6 +3012,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HandoffCloudCloud,
         #[cfg(feature = "git_credential_refresh")]
         FeatureFlag::GitCredentialRefresh,
+        #[cfg(feature = "remote_code_review")]
+        FeatureFlag::RemoteCodeReview,
     ]);
 
     flags

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use ai::index::full_source_code_embedding::{EmbeddingConfig, NodeHash};
+use ai::index::full_source_code_embedding::NodeHash;
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 use warp_core::HostId;
 use warp_util::remote_path::RemotePath;
@@ -21,7 +21,6 @@ use super::manager::{
 pub struct RemoteCodebaseSearchContext {
     pub remote_path: RemotePath,
     pub root_hash: NodeHash,
-    pub embedding_config: EmbeddingConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +174,12 @@ impl RemoteCodebaseIndexModel {
 
     pub fn request_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.ensure_codebase_indexed(remote_path, ctx);
+        });
+    }
+
+    pub fn resync_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.resync_codebase(remote_path, ctx);
         });
     }
@@ -235,9 +240,8 @@ impl RemoteCodebaseIndexModel {
                     && should_auto_index_remote_codebase(ctx)
                     && self.should_request_auto_index_for_navigated_git_repo(remote_path)
                 {
-                    // Mirrors local auto-indexing for the thin remote E2E path. TODO(APP-3792):
-                    // route remote indexing through the speedbump/consent flow instead of
-                    // requesting immediately on navigation.
+                    // Mirrors local auto-indexing: remote navigation silently requests indexing
+                    // only when the shared auto-index setting allows it.
                     let remote_path = remote_path.clone();
                     RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.ensure_codebase_indexed(remote_path, ctx);
@@ -526,7 +530,6 @@ fn search_availability_for_status(
             RemoteCodebaseSearchAvailability::Ready(RemoteCodebaseSearchContext {
                 remote_path,
                 root_hash,
-                embedding_config: EmbeddingConfig::default(),
             })
         }
         RemoteCodebaseIndexState::Queued | RemoteCodebaseIndexState::Indexing => {
@@ -546,13 +549,13 @@ fn search_availability_for_status(
 }
 
 fn should_auto_index_remote_codebase(ctx: &mut ModelContext<RemoteCodebaseIndexModel>) -> bool {
-    remote_auto_indexing_enabled(
+    remote_codebase_auto_indexing_enabled(
         UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
         *CodeSettings::as_ref(ctx).auto_indexing_enabled,
     )
 }
 
-fn remote_auto_indexing_enabled(
+fn remote_codebase_auto_indexing_enabled(
     codebase_context_enabled: bool,
     auto_indexing_enabled: bool,
 ) -> bool {

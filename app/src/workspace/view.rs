@@ -8145,17 +8145,8 @@ impl Workspace {
         };
 
         if let Some((repo, diff_state_model, terminal_view)) = context_data {
-            let local_repo_path = repo
-                .as_ref()
-                .and_then(LocalOrRemotePath::to_local_path)
-                .map(Path::to_path_buf);
             self.right_panel_view.update(ctx, |right_pane_view, ctx| {
-                right_pane_view.open_code_review(
-                    local_repo_path,
-                    diff_state_model,
-                    terminal_view,
-                    ctx,
-                );
+                right_pane_view.open_code_review(repo, diff_state_model, terminal_view, ctx);
             });
         } else {
             self.right_panel_view.update(ctx, |right_panel_view, ctx| {
@@ -8176,11 +8167,7 @@ impl Workspace {
                 .repo_path
                 .as_ref()
                 .is_some_and(|target_repo_path| {
-                    self.right_panel_view.as_ref(ctx).selected_repo_path()
-                        == target_repo_path
-                            .to_local_path()
-                            .map(Path::to_path_buf)
-                            .as_ref()
+                    self.right_panel_view.as_ref(ctx).selected_repo_path() == Some(target_repo_path)
                 });
         if panel_already_showing_repo {
             return;
@@ -8343,11 +8330,9 @@ impl Workspace {
     ) {
         if pane_group_handle.as_ref(ctx).right_panel_open {
             if let Some(repo_path) = &context.repo_path {
-                if let Some(local_repo_path) = repo_path.to_local_path() {
-                    self.right_panel_view.update(ctx, |right_panel, ctx| {
-                        right_panel.update_selected_repo(local_repo_path.to_path_buf(), ctx);
-                    });
-                }
+                self.right_panel_view.update(ctx, |right_panel, ctx| {
+                    right_panel.update_selected_repo(repo_path.clone(), ctx);
+                });
             }
             return;
         }
@@ -8363,11 +8348,9 @@ impl Workspace {
             ctx,
         );
         if let Some(repo_path) = &context.repo_path {
-            if let Some(local_repo_path) = repo_path.to_local_path() {
-                self.right_panel_view.update(ctx, |right_panel, ctx| {
-                    right_panel.update_selected_repo(local_repo_path.to_path_buf(), ctx);
-                });
-            }
+            self.right_panel_view.update(ctx, |right_panel, ctx| {
+                right_panel.update_selected_repo(repo_path.clone(), ctx);
+            });
         }
     }
 
@@ -10419,9 +10402,15 @@ impl Workspace {
 
         match index.cmp(&self.active_tab_index) {
             Ordering::Equal => {
-                // If there's a previous tab, activate it. Otherwise, keep the active
-                // tab at index 0.
-                self.activate_tab_internal(index.saturating_sub(1), ctx);
+                // Horizontal tabs should activate the tab that was immediately to the
+                // right of the closed tab. After removal, that tab has the same index.
+                // If the closed tab was the last tab, fall back to the previous tab.
+                let active_index = if uses_vertical_tabs(ctx) {
+                    index.saturating_sub(1)
+                } else {
+                    index.min(self.tabs.len() - 1)
+                };
+                self.activate_tab_internal(active_index, ctx);
             }
             Ordering::Less => {
                 // If we are closing a tab before the active tab we need to adjust
@@ -13128,7 +13117,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let pane_group_id = pane_group.id();
-        let terminal_cwds: Vec<(EntityId, String)> = pane_group
+        let terminal_cwds: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
             .terminal_view_working_directories(ctx)
             .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
@@ -14352,10 +14341,6 @@ impl Workspace {
                     .as_ref(ctx)
                     .active_session_view(ctx)
                 {
-                    #[cfg(feature = "local_fs")]
-                    if self.active_tab_pane_group().as_ref(ctx).right_panel_open {
-                        self.setup_code_review_panel(None, ctx);
-                    }
                     // Get the ID of the workflow that's active in the pane, if there is one.
                     let active_workflow_id = terminal_view
                         .read(ctx, |terminal_view, _| terminal_view.input().clone())
@@ -14469,10 +14454,11 @@ impl Workspace {
             }
             pane_group::Event::RepoChanged => {
                 self.refresh_working_directories_for_pane_group(&pane_group, ctx);
-                #[cfg(feature = "local_fs")]
-                if self.active_tab_pane_group().as_ref(ctx).right_panel_open {
-                    self.setup_code_review_panel(None, ctx);
-                }
+                // Code review panel setup is handled by the RepositoriesChanged
+                // event emitted from refresh_working_directories, which triggers
+                // ensure_code_review_view_exists on the right panel. Calling
+                // setup_code_review_panel here would race with refresh and
+                // re-create models that were just dropped.
 
                 if FeatureFlag::DirectoryTabColors.is_enabled() {
                     if let Some(tab) = self
@@ -14500,6 +14486,12 @@ impl Workspace {
                         view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);
                     });
                 }
+
+                // Remote repos now enter repository_roots through
+                // refresh_working_directories_for_pane_group (via
+                // pwd_as_local_or_remote). No need to register here —
+                // doing so would race with refresh and prevent stale
+                // DiffStateModels from being dropped.
             }
             #[cfg(not(feature = "local_fs"))]
             pane_group::Event::RemoteRepoNavigated { .. } => {}
@@ -15098,13 +15090,10 @@ impl Workspace {
                         );
                     });
 
-                let Some(local_repo_path) = repo_path.to_local_path() else {
-                    return;
-                };
                 let Some(code_review_view) = self
                     .working_directories_model
                     .as_ref(ctx)
-                    .get_code_review_view(pane_group.id(), local_repo_path)
+                    .get_code_review_view(pane_group.id(), repo_path)
                 else {
                     return;
                 };
@@ -15131,13 +15120,10 @@ impl Workspace {
                         );
                     });
 
-                let Some(local_repo_path) = repo_path.to_local_path() else {
-                    return;
-                };
                 if let Some(code_review_view) = self
                     .working_directories_model
                     .as_ref(ctx)
-                    .get_code_review_view(pane_group.id(), local_repo_path)
+                    .get_code_review_view(pane_group.id(), repo_path)
                 {
                     code_review_view.update(ctx, |code_review_view, ctx| {
                         code_review_view.set_diff_base(diff_mode.clone(), ctx);
@@ -15455,9 +15441,10 @@ impl Workspace {
                     right_panel.update_session_env(is_remote, is_wsl_session, ctx);
                 });
 
-                if self.active_tab_pane_group().as_ref(ctx).right_panel_open {
-                    self.setup_code_review_panel(None, ctx);
-                }
+                // Code review panel setup is handled by the RepositoriesChanged
+                // event emitted from refresh_working_directories earlier in this
+                // function. Calling setup_code_review_panel here would race
+                // with that path and re-create models that were just dropped.
             }
         } else {
             let enablement = CodingPanelEnablementState::from_session_env(

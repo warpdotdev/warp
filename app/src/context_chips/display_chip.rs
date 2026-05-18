@@ -19,6 +19,7 @@ use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
+use crate::terminal::model::session::SessionType;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::blended_colors;
@@ -1213,13 +1214,21 @@ impl DisplayChip {
             appearance,
         );
 
-        let is_local_session = self
+        // Code review is only supported on local sessions and
+        // on remote sessions with a connected host ID.
+        let supports_code_review = self
             .session_context
             .as_ref()
-            .map(|ctx| ctx.session.is_local())
-            .unwrap_or(true);
+            .map(|ctx| match ctx.session.session_type() {
+                SessionType::Local => true,
+                SessionType::WarpifiedRemote { host_id: Some(_) } => {
+                    FeatureFlag::RemoteCodeReview.is_enabled()
+                }
+                SessionType::WarpifiedRemote { host_id: None } => false,
+            })
+            .unwrap_or(false);
 
-        let diff_stats_display = if is_local_session {
+        let diff_stats_display = if supports_code_review {
             // Get the keybinding for the tooltip
             let code_review_keybinding = self.code_review_keybinding.clone().unwrap_or_default();
 
@@ -1259,7 +1268,6 @@ impl DisplayChip {
             .with_cursor(Cursor::PointingHand)
             .finish()
         } else {
-            // Remote session: chip is non-interactive (no tooltip, no click handler)
             Container::new(git_diff_stats_content)
                 .with_vertical_padding(2.)
                 .with_horizontal_padding(4.)
