@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::App;
+use warpui::{App, EntityId};
 
 use super::{
     is_query_refinement, AbsoluteMatch, AsyncFindConfig, AsyncFindController, AsyncFindStatus,
@@ -13,11 +13,13 @@ use super::{
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::find::model::block_list::run_find_on_block_list;
 use crate::terminal::find::model::{FindOptions, TerminalFindModel};
-use crate::terminal::find::BlockListMatch;
+use crate::terminal::find::{BlockListMatch, RichContentMatchId};
+use crate::terminal::model::blocks::TotalIndex;
 use crate::terminal::model::grid::grid_handler::AbsolutePoint;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
 use crate::terminal::model::TerminalModel;
+use crate::view_components::find::FindDirection;
 
 /// Helper to create an AbsoluteMatch at a given row with default column span.
 fn make_match(row: u64) -> AbsoluteMatch {
@@ -353,8 +355,6 @@ fn test_block_invalidation_with_dirty_range() {
 
 #[test]
 fn test_focus_next_match_wraps_around() {
-    use crate::view_components::find::FindDirection;
-
     let mock_terminal_model = TerminalModel::mock(None, None);
     let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
     let mut controller = AsyncFindController::new(terminal_model);
@@ -796,4 +796,144 @@ fn test_async_focused_order_matches_sync_most_recent_last() {
 #[test]
 fn test_async_focused_order_matches_sync_most_recent_first() {
     assert_async_focused_order_matches_sync(BlockSortDirection::MostRecentFirst);
+}
+
+#[test]
+fn test_focused_ai_match_resolves_only_ai_block() {
+    let mock_terminal_model = TerminalModel::mock(None, None);
+    let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+    let mut controller = AsyncFindController::new(terminal_model);
+
+    // Seed a single AI block with two matches. Default block sort direction is
+    // MostRecentLast, which reverses per-AI-block traversal at iteration time.
+    let view_id = EntityId::from_usize(42);
+    let ai_match_a = RichContentMatchId::default();
+    let ai_match_b = RichContentMatchId::default();
+    {
+        let results = controller.block_results_mut();
+        results
+            .ai_matches
+            .insert(view_id, vec![ai_match_a, ai_match_b]);
+        results.ai_total_indices.insert(view_id, TotalIndex(7));
+    }
+
+    assert_eq!(controller.match_count(), 2);
+    assert!(
+        controller.focused_terminal_match().is_none(),
+        "There are no terminal matches; focused_terminal_match should be None."
+    );
+
+    // MostRecentLast reverses per-AI-block iteration, so index 0 resolves to
+    // the last stored match (ai_match_b) and index 1 to the first.
+    controller.focused_match_index = Some(0);
+    controller.update_cached_focused_match();
+    let focused = controller
+        .focused_ai_match()
+        .expect("AI match should be focused at index 0.");
+    assert_eq!(focused.view_id, view_id);
+    assert_eq!(focused.match_id, ai_match_b);
+    assert_eq!(focused.total_index, TotalIndex(7));
+    assert!(
+        controller.focused_terminal_match().is_none(),
+        "Terminal cache must be cleared when focus lands on an AI match."
+    );
+
+    controller.focused_match_index = Some(1);
+    controller.update_cached_focused_match();
+    let focused = controller
+        .focused_ai_match()
+        .expect("AI match should be focused at index 1.");
+    assert_eq!(focused.match_id, ai_match_a);
+}
+
+#[test]
+fn test_focused_ai_match_most_recent_first_preserves_storage_order() {
+    let mock_terminal_model = TerminalModel::mock(None, None);
+    let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+    let mut controller = AsyncFindController::new(terminal_model);
+
+    // Override the default MostRecentLast so we exercise the un-reversed
+    // per-AI-block iteration path.
+    controller.block_sort_direction = BlockSortDirection::MostRecentFirst;
+
+    let view_id = EntityId::from_usize(99);
+    let ai_match_a = RichContentMatchId::default();
+    let ai_match_b = RichContentMatchId::default();
+    {
+        let results = controller.block_results_mut();
+        results
+            .ai_matches
+            .insert(view_id, vec![ai_match_a, ai_match_b]);
+        results.ai_total_indices.insert(view_id, TotalIndex(3));
+    }
+
+    // MostRecentFirst iterates storage order: index 0 -> first, index 1 -> last.
+    controller.focused_match_index = Some(0);
+    controller.update_cached_focused_match();
+    let focused = controller
+        .focused_ai_match()
+        .expect("AI match should be focused at index 0.");
+    assert_eq!(focused.match_id, ai_match_a);
+
+    controller.focused_match_index = Some(1);
+    controller.update_cached_focused_match();
+    let focused = controller
+        .focused_ai_match()
+        .expect("AI match should be focused at index 1.");
+    assert_eq!(focused.match_id, ai_match_b);
+}
+
+#[test]
+fn test_focused_match_index_walks_across_terminal_and_ai_blocks() {
+    let mock_terminal_model = TerminalModel::mock(None, None);
+    let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+    let mut controller = AsyncFindController::new(terminal_model);
+
+    // Two blocks at different TotalIndex positions:
+    //  - AI block (TotalIndex 5, newer) with one match.
+    //  - Terminal block at BlockIndex(0) (TotalIndex 1, older) with one
+    //    Output match. The AI block is sorted first because its TotalIndex
+    //    is higher.
+    let ai_view_id = EntityId::from_usize(11);
+    let ai_match = RichContentMatchId::default();
+    let terminal_match = make_match(0);
+    {
+        let results = controller.block_results_mut();
+        results.ai_matches.insert(ai_view_id, vec![ai_match]);
+        results.ai_total_indices.insert(ai_view_id, TotalIndex(5));
+        results
+            .terminal_matches
+            .insert((BlockIndex(0), GridType::Output), vec![terminal_match]);
+        results
+            .terminal_total_indices
+            .insert(BlockIndex(0), TotalIndex(1));
+    }
+
+    assert_eq!(controller.match_count(), 2);
+
+    // Index 0 -> AI match (newest block, AI block in this fixture).
+    controller.focused_match_index = Some(0);
+    controller.update_cached_focused_match();
+    let focused_ai = controller
+        .focused_ai_match()
+        .expect("Index 0 should resolve to AI match.");
+    assert_eq!(focused_ai.view_id, ai_view_id);
+    assert_eq!(focused_ai.match_id, ai_match);
+    assert!(
+        controller.focused_terminal_match().is_none(),
+        "Terminal cache must be empty when focus is on AI block."
+    );
+
+    // Index 1 -> terminal match (older block).
+    controller.focused_match_index = Some(1);
+    controller.update_cached_focused_match();
+    assert!(
+        controller.focused_ai_match().is_none(),
+        "AI cache must be empty when focus is on terminal block."
+    );
+    let focused_terminal = controller
+        .focused_terminal_match()
+        .expect("Index 1 should resolve to terminal match.");
+    assert_eq!(focused_terminal.block_index, BlockIndex(0));
+    assert_eq!(focused_terminal.grid_type, GridType::Output);
 }
