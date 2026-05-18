@@ -35,6 +35,7 @@ use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::connected_self_hosted_workers::{ConnectedSelfHostedWorkersModel, WARP_WORKER_HOST};
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
@@ -57,7 +58,7 @@ const DEFAULT_HOST_ENV_VAR: &str = "WARP_CLOUD_MODE_DEFAULT_HOST";
 
 // ── Shared constants ────────────────────────────────────────────────
 
-pub const ORCHESTRATION_WARP_WORKER_HOST: &str = "warp";
+pub const ORCHESTRATION_WARP_WORKER_HOST: &str = WARP_WORKER_HOST;
 pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "Empty environment";
 
 pub const ORCHESTRATION_PICKER_HEIGHT: f32 = 36.;
@@ -847,8 +848,17 @@ pub fn populate_host_picker<V: View>(
     } else {
         initial_host.to_string()
     };
+    let mut connected_hosts =
+        ConnectedSelfHostedWorkersModel::as_ref(ctx).worker_hosts_excluding(default_host.as_deref());
+    if !initial.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST)
+        && default_host.as_deref() != Some(initial.as_str())
+    {
+        connected_hosts.push(initial.clone());
+    }
+    connected_hosts.sort();
+    connected_hosts.dedup();
     picker.update(ctx, |picker, picker_ctx| {
-        picker.set_options(default_host, recent_host, picker_ctx);
+        picker.set_options(default_host, recent_host, connected_hosts, picker_ctx);
         picker.set_selected(&initial, picker_ctx);
     });
 }
@@ -1378,6 +1388,13 @@ pub fn apply_execution_mode_change<A: OrchestrationControlAction, V: View>(
             ctx,
         );
     }
+    if let Some(handle) = &handles.host_picker {
+        let initial_host = match &state.execution_mode {
+            RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
+            RunAgentsExecutionMode::Local => ORCHESTRATION_WARP_WORKER_HOST,
+        };
+        populate_host_picker(handle, initial_host, ctx);
+    }
     sync_picker_selections(state, handles, ctx);
 }
 
@@ -1444,6 +1461,13 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
             &state.harness_type,
             ctx,
         );
+    }
+    if let Some(handle) = &handles.host_picker {
+        let initial_host = match &state.execution_mode {
+            RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
+            RunAgentsExecutionMode::Local => ORCHESTRATION_WARP_WORKER_HOST,
+        };
+        populate_host_picker(handle, initial_host, ctx);
     }
     sync_picker_selections(state, handles, ctx);
 }

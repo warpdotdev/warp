@@ -18,6 +18,7 @@ use warp_core::ui::theme::Fill;
 use settings::Setting as _;
 
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -125,6 +126,12 @@ impl HostSelector {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| {
             me.refresh_menu(ctx);
         });
+        ctx.subscribe_to_model(
+            &ConnectedSelfHostedWorkersModel::handle(ctx),
+            |me, _, _, ctx| {
+                me.refresh_menu(ctx);
+            },
+        );
 
         let mut me = Self {
             button,
@@ -233,6 +240,8 @@ impl HostSelector {
             hover_background,
             header_text_color,
             self.default_host.as_ref(),
+            &self.selected,
+            ctx,
         );
         self.menu.update(ctx, |menu, ctx| {
             menu.set_border(Some(border));
@@ -262,6 +271,8 @@ fn build_menu_items(
     hover_background: Fill,
     header_text_color: ColorU,
     default_host: Option<&Host>,
+    selected: &Host,
+    ctx: &mut ViewContext<HostSelector>,
 ) -> Vec<MenuItem<HostSelectorAction>> {
     let header = MenuItem::Header {
         fields: MenuItemFields::new(MENU_HEADER_LABEL)
@@ -289,6 +300,25 @@ fn build_menu_items(
         items.push(item_for(host.clone()));
     }
     items.push(item_for(Host::Warp));
+    let default_slug = match default_host {
+        Some(Host::SelfHosted { slug }) => Some(slug.as_str()),
+        Some(Host::Warp) | None => None,
+    };
+    let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
+        .worker_hosts_excluding(default_slug)
+        .into_iter()
+        .filter(|host| host != "warp")
+        .collect::<Vec<_>>();
+    if let Host::SelfHosted { slug } = selected {
+        if default_slug != Some(slug.as_str()) {
+            connected_hosts.push(slug.clone());
+        }
+    }
+    connected_hosts.sort();
+    connected_hosts.dedup();
+    for host in connected_hosts {
+        items.push(item_for(Host::SelfHosted { slug: host }));
+    }
     items
 }
 
