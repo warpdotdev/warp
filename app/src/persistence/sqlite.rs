@@ -15,8 +15,8 @@ use std::{
 use ai::project_context::model::ProjectRulePath;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use cloud_object_models::notebook::persistence::upsert_notebooks;
 use cloud_object_models::folder::persistence::upsert_folders;
+use cloud_object_models::notebook::persistence::upsert_notebooks;
 use cloud_object_models::workflow::persistence::upsert_workflows;
 use cloud_object_models::{
     folder::persistence as folder_persistence,
