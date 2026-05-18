@@ -148,18 +148,10 @@ pub enum DeserializationError {
     Transport(reqwest::Error),
 }
 
-#[derive(Deserialize, Debug)]
-struct OutOfCreditsResponse {
-    #[serde(default, rename = "userDisplayMessage")]
-    user_display_message: Option<String>,
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum AIApiError {
     #[error("Request failed due to lack of AI quota.")]
-    QuotaLimit {
-        user_display_message: Option<String>,
-    },
+    QuotaLimit,
 
     #[error("Warp is currently overloaded. Please try again later.")]
     ServerOverloaded,
@@ -189,12 +181,7 @@ pub enum AIApiError {
 
 impl From<http_client::ResponseError> for AIApiError {
     fn from(err: http_client::ResponseError) -> Self {
-        let http_client::ResponseError {
-            source,
-            headers,
-            body,
-        } = err;
-        Self::from_response_error(source, &headers, body)
+        Self::from_response_error(err.source, &err.headers)
     }
 }
 
@@ -213,15 +200,11 @@ impl From<serde_json::Error> for AIApiError {
 impl AIApiError {
     /// Converts a reqwest error to an AIApiError, using response headers to distinguish
     /// between different types of 429 errors.
-    fn from_response_error(
-        err: reqwest::Error,
-        headers: &::http::HeaderMap,
-        body: Option<String>,
-    ) -> Self {
+    fn from_response_error(err: reqwest::Error, headers: &::http::HeaderMap) -> Self {
         // For HTTP 429 errors, check the X-Warp-Error-Code header to distinguish
         // between out-of-credits and server-overload.
         if err.status() == Some(http::StatusCode::TOO_MANY_REQUESTS) {
-            return Self::error_for_429(headers, body);
+            return Self::error_for_429(headers);
         }
 
         Self::from_transport_error(err)
@@ -257,18 +240,13 @@ impl AIApiError {
     }
 
     /// Returns the appropriate error for a 429 response by checking the X-Warp-Error-Code header.
-    fn error_for_429(headers: &::http::HeaderMap, body: Option<String>) -> Self {
+    fn error_for_429(headers: &::http::HeaderMap) -> Self {
         if headers
             .get(WARP_ERROR_CODE_HEADER)
             .and_then(|v| v.to_str().ok())
             == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
         {
-            let user_display_message = body
-                .and_then(|body| serde_json::from_str::<OutOfCreditsResponse>(&body).ok())
-                .and_then(|r| r.user_display_message);
-            AIApiError::QuotaLimit {
-                user_display_message,
-            }
+            AIApiError::QuotaLimit
         } else {
             AIApiError::ServerOverloaded
         }
@@ -280,12 +258,8 @@ impl AIApiError {
         match err {
             reqwest_eventsource::Error::InvalidStatusCode(
                 http::StatusCode::TOO_MANY_REQUESTS,
-                res,
-            ) => {
-                let headers = res.headers().clone();
-                let body = res.text().await.ok();
-                Self::error_for_429(&headers, body)
-            }
+                ref res,
+            ) => Self::error_for_429(res.headers()),
             reqwest_eventsource::Error::InvalidStatusCode(status, res) => Self::ErrorStatus(
                 status,
                 res.text()
@@ -336,9 +310,9 @@ impl ErrorExt for AIApiError {
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
             AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::QuotaLimit { .. }
-            | AIApiError::ServerOverloaded
-            | AIApiError::NoContextFound => false,
+            AIApiError::QuotaLimit | AIApiError::ServerOverloaded | AIApiError::NoContextFound => {
+                false
+            }
         }
     }
 }
@@ -892,13 +866,7 @@ impl ServerApi {
             }
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
-            let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
-                .ok()
-                .and_then(|r| r.user_display_message);
-            return AIApiError::QuotaLimit {
-                user_display_message,
-            }
-            .into();
+            return AIApiError::QuotaLimit.into();
         }
 
         // Try to deserialize error response as { "error": "message" }
@@ -926,6 +894,57 @@ impl ServerApi {
             .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
+    /// Sends a PUT request to a public API endpoint and returns the raw response on success.
+    async fn put_public_api_response<B>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.put(&url).json(body);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
+    }
+
+    /// Sends a PUT request to a public API endpoint.
+    async fn put_public_api<B, R>(&self, path: &str, body: &B) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self.put_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
     /// Sends a POST request to a public API endpoint that returns no response body.
     async fn post_public_api_unit<B>(&self, path: &str, body: &B) -> Result<()>
     where
@@ -933,6 +952,36 @@ impl ServerApi {
     {
         self.post_public_api_response(path, body).await?;
         Ok(())
+    }
+
+    /// Sends a DELETE request to a public API endpoint that returns no response body.
+    async fn delete_public_api_unit(&self, path: &str) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.delete(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Sends a PATCH request to a public API endpoint that returns no response body.
@@ -1070,8 +1119,7 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status_with_body()
-        .await?
+        .error_for_status()?
         .json()
         .await?;
         Ok(response)
@@ -1095,8 +1143,7 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status_with_body()
-        .await?
+        .error_for_status()?
         .json()
         .await?;
 
@@ -1133,8 +1180,7 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status_with_body()
-        .await?
+        .error_for_status()?
         .json()
         .await?;
         Ok(response)
@@ -1157,8 +1203,7 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status_with_body()
-        .await?
+        .error_for_status()?
         .json()
         .await?;
         Ok(response)

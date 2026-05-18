@@ -69,6 +69,7 @@ use crate::workflows::workflow::Workflow;
 
 mod admin;
 mod agent_config;
+mod agent_management;
 mod ambient;
 mod api_key;
 mod artifact;
@@ -307,7 +308,22 @@ fn run_agent(
             ambient::run_ambient_agent(ctx, args)
         }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),
-        AgentCommand::List(args) => agent_config::list_agents(ctx, args),
+        AgentCommand::List(args) => {
+            agent_management::list_agents(ctx, global_options.output_format, args)
+        }
+        AgentCommand::Get(args) => {
+            agent_management::get_agent(ctx, global_options.output_format, args)
+        }
+        AgentCommand::Create(args) => {
+            agent_management::create_agent(ctx, global_options.output_format, args)
+        }
+        AgentCommand::Update(args) => {
+            agent_management::update_agent(ctx, global_options.output_format, args)
+        }
+        AgentCommand::Delete(args) => {
+            agent_management::delete_agent(ctx, global_options.output_format, args)
+        }
+        AgentCommand::Skills(args) => agent_config::list_skills(ctx, args),
     }
 }
 
@@ -351,7 +367,6 @@ fn build_merged_config_and_task(
     let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
         harness_type: args.harness,
         model_id: harness_model_id,
-        reasoning_level: None,
     });
 
     let oz_model = if args.harness == Harness::Oz {
@@ -452,7 +467,6 @@ fn build_server_side_task(
     let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
         harness_type: args.harness,
         model_id: harness_model_id,
-        reasoning_level: None,
     });
 
     let skill_name = resolved_skill.as_ref().map(|s| s.name.clone());
@@ -840,10 +854,10 @@ impl AgentDriverRunner {
                 let should_share = (args.share.is_shared() || args.task_id.is_some())
                     && FeatureFlag::AgentSharedSessions.is_enabled();
 
-                let third_party_harness_model_config = merged_config
+                let third_party_harness_model_id = merged_config
                     .harness
                     .as_ref()
-                    .and_then(|h| h.model_config());
+                    .and_then(|h| h.model_id.clone());
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
@@ -855,7 +869,7 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     selected_harness: args.harness,
-                    third_party_harness_model_config,
+                    third_party_harness_model_id,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1140,7 +1154,7 @@ impl AgentDriverRunner {
                 }
             }
         };
-        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_config) =
+        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_id) =
             match task_metadata_result {
                 Ok(Some(task_metadata)) => {
                     // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1151,13 +1165,13 @@ impl AgentDriverRunner {
                     let task_harness = task_harness_config
                         .map(|h| h.harness_type)
                         .unwrap_or(Harness::Oz);
-                    let task_harness_model_config =
-                        task_harness_config.and_then(|h| h.model_config());
+                    let task_harness_model_id =
+                        task_harness_config.and_then(|h| h.model_id.clone());
                     (
                         task_metadata.parent_run_id,
                         task_metadata.conversation_id,
                         Some(task_harness),
-                        task_harness_model_config,
+                        task_harness_model_id,
                     )
                 }
                 Ok(None) => (None, None, None, None),
@@ -1193,8 +1207,8 @@ impl AgentDriverRunner {
         driver_options.parent_run_id = parent_run_id;
         driver_options.secrets = secrets;
         // CLI flags continue to take precedence so users can still override per-invocation.
-        if driver_options.third_party_harness_model_config.is_none() {
-            driver_options.third_party_harness_model_config = task_harness_model_config;
+        if driver_options.third_party_harness_model_id.is_none() {
+            driver_options.third_party_harness_model_id = task_harness_model_id;
         }
 
         // Update the task prompt to include the downloaded attachments dir
@@ -1369,6 +1383,11 @@ fn command_requires_auth(command: &CliCommand) -> bool {
                 AgentProfileCommand::List => true,
             },
             AgentCommand::List(_) => true,
+            AgentCommand::Get(_) => true,
+            AgentCommand::Create(_) => true,
+            AgentCommand::Update(_) => true,
+            AgentCommand::Delete(_) => true,
+            AgentCommand::Skills(_) => true,
         },
         CliCommand::Environment(environment_cmd) => match environment_cmd {
             EnvironmentCommand::List => true,
@@ -1528,6 +1547,11 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             AgentProfileCommand::List => CliTelemetryEvent::AgentProfileList,
         },
         CliCommand::Agent(AgentCommand::List(_)) => CliTelemetryEvent::AgentList,
+        CliCommand::Agent(AgentCommand::Get(_)) => CliTelemetryEvent::AgentGet,
+        CliCommand::Agent(AgentCommand::Create(_)) => CliTelemetryEvent::AgentCreate,
+        CliCommand::Agent(AgentCommand::Update(_)) => CliTelemetryEvent::AgentUpdate,
+        CliCommand::Agent(AgentCommand::Delete(_)) => CliTelemetryEvent::AgentDelete,
+        CliCommand::Agent(AgentCommand::Skills(_)) => CliTelemetryEvent::AgentSkills,
         CliCommand::Environment(EnvironmentCommand::List) => CliTelemetryEvent::EnvironmentList,
         CliCommand::Environment(EnvironmentCommand::Create { .. }) => {
             CliTelemetryEvent::EnvironmentCreate
