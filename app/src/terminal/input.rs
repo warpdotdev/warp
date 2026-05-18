@@ -6035,7 +6035,6 @@ impl Input {
             InputDecisionSource::AttachmentForcedAi,
             ctx,
         );
-        self.ensure_agent_mode_for_ai_features(true, ctx);
 
         // Update image context options immediately after switching to AI mode
         // to ensure attach_images has the correct state
