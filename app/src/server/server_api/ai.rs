@@ -365,6 +365,38 @@ pub struct ReportAgentEventRequest {
 pub struct ReportAgentEventResponse {
     pub sequence: i64,
 }
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentRunClientEventRequest {
+    pub event_id: String,
+    pub event_type: String,
+    pub timestamp: DateTime<Utc>,
+    pub start_timestamp: DateTime<Utc>,
+    pub finish_timestamp: DateTime<Utc>,
+    pub latency_ms: i64,
+    pub is_error: bool,
+}
+
+impl AgentRunClientEventRequest {
+    pub fn new(
+        event_type: impl Into<String>,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            event_type: event_type.into(),
+            timestamp: finish_timestamp,
+            start_timestamp,
+            finish_timestamp,
+            latency_ms: finish_timestamp
+                .signed_duration_since(start_timestamp)
+                .num_milliseconds()
+                .max(0),
+            is_error,
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReadAgentMessageResponse {
@@ -1087,6 +1119,11 @@ pub trait AIClient: 'static + Send + Sync {
         run_id: &str,
         request: ReportAgentEventRequest,
     ) -> anyhow::Result<ReportAgentEventResponse, anyhow::Error>;
+    async fn post_agent_run_client_event(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
 
@@ -2262,6 +2299,19 @@ impl AIClient for ServerApi {
             .post_public_api(&format!("agent/events/{run_id}"), &request)
             .await?;
         Ok(response)
+    }
+    async fn post_agent_run_client_event(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        self.post_public_api_response_for_task(
+            run_id,
+            &format!("agent/runs/{run_id}/client-events"),
+            &request,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error> {

@@ -13,6 +13,7 @@ use warp_cli::agent::Harness;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
@@ -479,6 +480,7 @@ pub(crate) trait HarnessRunner: Send + Sync {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError>;
 
     /// Save the current conversation state (transcript upload, etc.).

@@ -15,6 +15,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
 use crate::ai::llms::LLMId;
@@ -100,6 +101,7 @@ mod provider;
 pub(crate) mod retry;
 mod schedule;
 mod secret;
+pub(crate) mod setup_observability;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
@@ -593,26 +595,39 @@ impl AgentDriverRunner {
         server_api: Arc<dyn AIClient>,
         output_format: OutputFormat,
     ) -> Result<(), AgentDriverError> {
+        // Extract the task ID as early as possible for best-effort setup observability.
+        // Local CLI-created runs may not have a task yet, so those setup events no-op.
+        let mut task_id: Option<AmbientAgentTaskId> =
+            args.task_id.as_deref().and_then(|s| s.parse().ok());
+        let setup_events = SetupClientEventReporter::new(task_id, server_api.clone());
+        setup_events
+            .post_instant(SetupStep::WorkerContainerReady)
+            .await;
+
         // Ensure we've synced team state before starting the driver.
-        Self::refresh_team_metadata(&foreground).await?;
+        setup_events
+            .record_result(
+                SetupStep::TeamMetadataRefresh,
+                Self::refresh_team_metadata(&foreground),
+            )
+            .await?;
 
         // Wait for Warp Drive to sync before building the task config, since
         // prompt resolution (SavedPrompt -> workflow lookup) and environment
         // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
-        if foreground
-            .spawn(|_, ctx| common::refresh_warp_drive(ctx))
-            .await?
-            .await
-            .is_err()
-        {
-            return Err(AgentDriverError::WarpDriveSyncFailed);
-        }
-
-        // Extract the task ID if available, so that if there are setup errors and we have
-        // a server-provided task ID, we can report them. If we create a task for a local CLI
-        // run, its ID will be stored in the inner future.
-        let mut task_id: Option<AmbientAgentTaskId> =
-            args.task_id.as_deref().and_then(|s| s.parse().ok());
+        setup_events
+            .record_result(SetupStep::WarpDriveSync, async {
+                if foreground
+                    .spawn(|_, ctx| common::refresh_warp_drive(ctx))
+                    .await?
+                    .await
+                    .is_err()
+                {
+                    return Err(AgentDriverError::WarpDriveSyncFailed);
+                }
+                Ok(())
+            })
+            .await?;
 
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
@@ -645,7 +660,8 @@ impl AgentDriverRunner {
             // the fetched `AmbientAgentTask` (set by the server when linking the task to an
             // existing conversation, e.g. via `run-cloud --conversation`).
             let (mut driver_options, task, task_conversation_id) =
-                Self::build_driver_options_and_task(&foreground, args, &server_api).await?;
+                Self::build_driver_options_and_task(&foreground, args, &server_api, &setup_events)
+                    .await?;
 
             // Update the effective task ID so errors are reported correctly.
             // This only matters if we created a task ID locally.
@@ -819,6 +835,7 @@ impl AgentDriverRunner {
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
         server_api: &Arc<dyn AIClient>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
         // Get the working directory
         let working_dir = match args.cwd.as_ref() {
@@ -885,13 +902,17 @@ impl AgentDriverRunner {
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
-            Self::fetch_secrets_and_attachments(
-                foreground,
-                task_id_str,
-                &mut driver_options,
-                &mut task,
-            )
-            .await?
+            setup_events
+                .record_result(
+                    SetupStep::TaskMetadataSecretsAttachmentsGitCredentialsFetch,
+                    Self::fetch_secrets_and_attachments(
+                        foreground,
+                        task_id_str,
+                        &mut driver_options,
+                        &mut task,
+                    ),
+                )
+                .await?
         } else {
             // Extract the prompt text that we'll pass up to the server when we create the task.
             let prompt_for_task_creation = match &prompt {
@@ -916,7 +937,12 @@ impl AgentDriverRunner {
             None
         };
         // Resolve environment and cloud providers.
-        Self::resolve_environment(foreground, environment_id, &mut driver_options).await?;
+        setup_events
+            .record_result(
+                SetupStep::EnvironmentResolution,
+                Self::resolve_environment(foreground, environment_id, &mut driver_options),
+            )
+            .await?;
 
         Ok((driver_options, task, task_conversation_id))
     }
