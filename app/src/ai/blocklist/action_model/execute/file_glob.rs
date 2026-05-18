@@ -29,6 +29,66 @@ use super::{
     ExecuteActionInput, PreprocessActionInput,
 };
 
+/// Builds the `git ls-files` command emitted by [`run_git_ls_files_command`].
+/// Both `target_path` and `patterns` are agent-controlled; without shell
+/// escaping a pattern containing `'` could close the surrounding single-quote
+/// pair and append a second command. Each joined path is escaped with
+/// `ShellFamily::Posix::escape` (no tilde preservation, since these are
+/// pathspecs rather than user paths).
+pub(crate) fn build_git_ls_files_command(
+    patterns: &[String],
+    target_path: &str,
+    shell_launch_data: Option<&ShellLaunchData>,
+) -> String {
+    let shell_family = warp_util::path::ShellFamily::Posix;
+    let pattern_args = patterns
+        .iter()
+        .flat_map(|pattern| {
+            [
+                // Matches on files in the target path.
+                join_paths(&[target_path, pattern], shell_launch_data),
+                // Matches on files in any subdirectory of the target path.
+                join_paths(&[target_path, "*", pattern], shell_launch_data),
+            ]
+        })
+        .map(|joined| shell_family.escape(&joined).into_owned())
+        .join(" ");
+    format!("git ls-files -c -o --exclude-standard -- {pattern_args}")
+}
+
+/// Builds the `find` command emitted by [`run_find_command`]. See
+/// [`build_git_ls_files_command`] for the threat model.
+pub(crate) fn build_find_command(patterns: &[String], target_path: &str) -> String {
+    let shell_family = warp_util::path::ShellFamily::Posix;
+    // Build a find command with -name for each pattern. Each pattern is
+    // shell-escaped to neutralise embedded `'`, `$(...)`, backticks, etc.
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| format!(" -name {}", shell_family.escape(pattern)))
+        .join(" -o");
+    let escaped_target = shell_family.shell_escape(target_path);
+    format!("find {escaped_target} -type f {pattern_args}")
+}
+
+/// Builds the PowerShell `Get-ChildItem` command emitted by
+/// [`run_powershell_get_childitem_command`]. See
+/// [`build_git_ls_files_command`] for the threat model.
+pub(crate) fn build_powershell_get_childitem_command(
+    patterns: &[String],
+    target_path: &str,
+) -> String {
+    let shell_family = warp_util::path::ShellFamily::PowerShell;
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| shell_family.escape(pattern))
+        .collect::<Vec<_>>()
+        .join(",");
+    let escaped_target = shell_family.shell_escape(target_path);
+    format!(
+        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_target} | ForEach-Object {{ $_.FullName }}"
+    )
+}
+
 pub struct FileGlobExecutor {
     active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
@@ -235,19 +295,7 @@ async fn run_git_ls_files_command(
     session: &Session,
     shell_launch_data: Option<ShellLaunchData>,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .flat_map(|pattern| {
-            [
-                // Matches on files in the target path.
-                join_paths(&[target_path, pattern], shell_launch_data.as_ref()),
-                // Matches on files in any subdirectory of the target path.
-                join_paths(&[target_path, "*", pattern], shell_launch_data.as_ref()),
-            ]
-        })
-        .map(|pattern| format!("'{pattern}'"))
-        .join(" ");
-    let command = format!("git ls-files -c -o --exclude-standard -- {pattern_args}");
+    let command = build_git_ls_files_command(patterns, target_path, shell_launch_data.as_ref());
 
     let command_output = session
         .execute_command(
@@ -283,16 +331,7 @@ async fn run_find_command(
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    // Build a find command with -name for each pattern
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!(" -name '{pattern}'"))
-        .join(" -o");
-    // `target_path` flows verbatim into a shell command, so escape it for the
-    // POSIX shell. Without this, a path containing `$(...)`, backticks, or
-    // other metacharacters would be re-interpreted by the shell.
-    let escaped_target = warp_util::path::ShellFamily::Posix.shell_escape(target_path);
-    let find_command = format!("find {escaped_target} -type f {pattern_args}");
+    let find_command = build_find_command(patterns, target_path);
 
     let command_output = session
         .execute_command(
@@ -331,14 +370,7 @@ async fn run_powershell_get_childitem_command(
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!("'{pattern}'"))
-        .join(",");
-    let escaped_target = warp_util::path::ShellFamily::PowerShell.shell_escape(target_path);
-    let command = format!(
-        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_target} | ForEach-Object {{ $_.FullName }}"
-    );
+    let command = build_powershell_get_childitem_command(patterns, target_path);
 
     let command_output = session
         .execute_command(

