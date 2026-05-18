@@ -64,23 +64,6 @@ impl From<ServerConversationToken> for String {
     }
 }
 
-// Conversions between AI ServerConversationToken and protocol ServerConversationToken
-impl From<session_sharing_protocol::common::ServerConversationToken> for ServerConversationToken {
-    fn from(token: session_sharing_protocol::common::ServerConversationToken) -> Self {
-        Self(token.to_string())
-    }
-}
-
-impl TryFrom<ServerConversationToken>
-    for session_sharing_protocol::common::ServerConversationToken
-{
-    type Error = uuid::Error;
-
-    fn try_from(token: ServerConversationToken) -> Result<Self, Self::Error> {
-        token.as_str().parse()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct RequestParams {
     pub input: Vec<AIAgentInput>,

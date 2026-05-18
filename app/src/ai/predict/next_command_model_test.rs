@@ -219,18 +219,18 @@ fn test_feature_flag_arg_is_valid_with_no_whitespace_before_arg() {
     App::test((), |app| async move {
         let ctx = test_session_context(TypedPathBuf::from("/test/home/"), &app);
 
-        let full_command = "cargo run --features=with_local_server,fast_dev";
-        let with_local_server_arg = ParsedExpression::new(
+        let full_command = "cargo run --features=release_bundle,fast_dev";
+        let release_bundle_arg = ParsedExpression::new(
             Expression::ValidatableArgument(vec![ArgType::Generator("feature_flags".into())]),
-            ParsedToken::new("with_local_server".to_string()),
+            ParsedToken::new("release_bundle".to_string()),
         )
-        .spanned((21, 38));
+        .spanned((21, 35));
         let fast_dev_arg = ParsedExpression::new(
             Expression::ValidatableArgument(vec![ArgType::Generator("feature_flags".into())]),
             ParsedToken::new("fast_dev".to_string()),
         )
-        .spanned((39, 47));
-        let is_valid = is_arg_valid(full_command, &with_local_server_arg, &ctx, None).await;
+        .spanned((36, 44));
+        let is_valid = is_arg_valid(full_command, &release_bundle_arg, &ctx, None).await;
         assert!(is_valid);
 
         let is_valid = is_arg_valid(full_command, &fast_dev_arg, &ctx, None).await;

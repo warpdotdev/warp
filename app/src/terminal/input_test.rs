@@ -57,7 +57,6 @@ use crate::{
     terminal::TerminalView,
 };
 use fuzzy_match::FuzzyMatchResult;
-use session_sharing_protocol::common::Role;
 use smol_str::SmolStr;
 use warp_completer::completer::{
     EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,

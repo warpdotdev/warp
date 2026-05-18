@@ -38,7 +38,6 @@ thiserror.workspace = true
 concat-idents.workspace = true
 url.workspace = true
 regex.workspace = true
-websocket.workspace = true
 instant.workspace = true
 schemars = "1"
 settings_value = { workspace = true, features = ["derive"] }

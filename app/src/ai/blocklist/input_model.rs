@@ -12,7 +12,6 @@ use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_langua
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::{InputMode, InputType as ProtocolInputType};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -112,17 +111,6 @@ impl InputConfig {
 
     pub fn is_shell(&self) -> bool {
         self.input_type == InputType::Shell
-    }
-}
-
-impl From<InputConfig> for InputMode {
-    fn from(config: InputConfig) -> Self {
-        let protocol_input_type = match config.input_type {
-            InputType::Shell => ProtocolInputType::Shell,
-            InputType::AI => ProtocolInputType::AI,
-        };
-
-        InputMode::new(protocol_input_type, config.is_locked)
     }
 }
 
