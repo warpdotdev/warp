@@ -544,7 +544,7 @@ fn test_deserialize_corrupted_guests() {
     };
 
     // The overall permissions should successfully convert, minus the object guests.
-    let cloud_permissions = super::to_cloud_object_permissions(&db_permissions, None);
+    let cloud_permissions = to_cloud_object_permissions(&db_permissions, None);
     assert_eq!(
         cloud_permissions,
         Some(CloudObjectPermissions {
