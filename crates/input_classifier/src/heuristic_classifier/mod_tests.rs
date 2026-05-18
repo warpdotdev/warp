@@ -8,6 +8,7 @@ use crate::{Context, test_utils::CompletionContext};
 use super::*;
 
 async fn mock_parsed_input_token(buffer_text: String) -> ParsedTokensSnapshot {
+    warp_features::mark_initialized();
     let completion_context = CompletionContext::new();
     parse_current_commands_and_tokens(buffer_text, &completion_context).await
 }

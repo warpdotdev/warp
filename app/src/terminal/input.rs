@@ -498,7 +498,8 @@ fn submitted_input_decision_source(
             | InputDecisionSource::AgentFollowUp
             | InputDecisionSource::ShellHeuristic
             | InputDecisionSource::NldClassifier
-            | InputDecisionSource::NldClassifierFallbackHeuristic,
+            | InputDecisionSource::NldClassifierFallbackHeuristic
+            | InputDecisionSource::NldClassifierFallbackCurrentInput,
         )
         | None => Some(InputDecisionSource::ManualToggle),
     }

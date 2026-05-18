@@ -39,6 +39,8 @@ pub enum InputDecisionSource {
     NldClassifier,
     /// The NLD model was unavailable or unusable, so the heuristic fallback made the decision.
     NldClassifierFallbackHeuristic,
+    /// The NLD model returned an error, so the current input type was kept.
+    NldClassifierFallbackCurrentInput,
 }
 
 /// The result of input type detection, including the source that determined the final decision.
