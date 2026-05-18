@@ -61,9 +61,8 @@ use crate::terminal::shared_session::{
     SharedSessionStatus, COPY_LINK_TEXT,
 };
 use crate::terminal::view::{
-    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
-    RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
-    TerminalView,
+    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, RichContentInsertionPosition,
+    SharedSessionBanners, SizeUpdateBuilder, TerminalAction, TerminalView,
 };
 use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
@@ -1747,14 +1746,6 @@ impl TerminalView {
             }
         });
         let tombstone_view_id = tombstone_view_handle.id();
-        if self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode) {
-            if let Some(pending_query_view_id) = self.pending_user_query_view_id {
-                self.model
-                    .lock()
-                    .block_list_mut()
-                    .unpin_rich_content_from_bottom(pending_query_view_id);
-            }
-        }
         self.insert_rich_content(
             None,
             tombstone_view_handle,

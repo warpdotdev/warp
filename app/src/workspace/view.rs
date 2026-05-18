@@ -22665,10 +22665,9 @@ impl TypedActionView for Workspace {
                 };
 
                 terminal_view.update(ctx, |terminal, ctx| {
-                    terminal.send_user_query_after_next_conversation_finished(
+                    terminal.enqueue_prompt(
                         prompt.clone(),
-                        /* show_close_button */ true,
-                        /* show_send_now_button */ true,
+                        crate::ai::blocklist::QueuedQueryOrigin::AutoQueueToggle,
                         ctx,
                     );
                 });

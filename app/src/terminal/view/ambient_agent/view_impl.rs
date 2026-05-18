@@ -106,11 +106,9 @@ impl TerminalView {
             return;
         };
 
-        // Tear down the cloud-mode queued-prompt block on terminal / transition
-        // events that replace it. Legacy `Failed`, `NeedsGithubAuth`, and `Cancelled` hand off
-        // to the existing error / auth / cancelled UI; `HarnessCommandStarted` hands
-        // off to the live third-party harness CLI block. Idempotent and cheap when no
-        // block exists.
+        // Tear down the Cloud Mode pending prompt on terminal / transition events that replace it.
+        // Legacy `Failed`, `NeedsGithubAuth`, and `Cancelled` hand off to the existing error /
+        // auth / cancelled UI; `HarnessCommandStarted` hands off to the live harness CLI block.
         let should_remove_pending_user_query = match event {
             AmbientAgentViewModelEvent::Failed { .. } => {
                 !FeatureFlag::CloudModeSetupV2.is_enabled()
@@ -151,10 +149,13 @@ impl TerminalView {
                     return;
                 }
                 if FeatureFlag::CloudModeSetupV2.is_enabled() {
-                    // Render the submitted cloud prompt via the queued-prompt UI while the
-                    // real shared-session transcript catches up. `request.prompt` is stored
-                    // stripped of any `/plan` / `/orchestrate` prefix; rebuild the display
-                    // form from `request.mode` so the user sees exactly what they typed.
+                    // Render the submitted cloud prompt while the real shared-session transcript
+                    // catches up. The pending block is removed later by
+                    // `HarnessCommandStarted` / failure / cancel / auth handlers.
+                    //
+                    // `request.prompt` is stored stripped of any `/plan` / `/orchestrate`
+                    // prefix; rebuild the display form from `request.mode` so the user sees
+                    // exactly what they typed.
                     let prompt = ambient_agent_view_model
                         .as_ref(ctx)
                         .request()
