@@ -528,23 +528,18 @@ impl AsyncFindController {
         }
     }
 
-    /// Recomputes the cached focused match from the current matches and focus index.
+    /// Recomputes the cached focused match by iterating through all matches
+    /// (terminal and AI) in visual display order, derived from the TotalIndex
+    /// maps stored in the block results.
     ///
     /// Resolves the global `focused_match_index` to either a terminal match or
     /// an AI match (or `None`, if out of range) and stores it in the unified
     /// cache.
     fn update_cached_focused_match(&mut self) {
-        self.cached_focused_match = self.compute_focused_match();
-    }
-
-    /// Computes the focused match by iterating through all matches
-    /// (terminal and AI) in visual display order, derived from the TotalIndex
-    /// maps stored in the block results.
-    ///
-    /// Returns the matched item (terminal or AI) at the focused index, or
-    /// `None` if the index is out of range.
-    fn compute_focused_match(&self) -> Option<FocusedMatchResolution> {
-        let focused_idx = self.focused_match_index?;
+        let Some(focused_idx) = self.focused_match_index else {
+            self.cached_focused_match = None;
+            return;
+        };
         let mut current_idx = 0;
 
         // Determine grid iteration order within each terminal block.
@@ -602,13 +597,14 @@ impl AsyncFindController {
                                 };
                             for match_range in iter {
                                 if current_idx == focused_idx {
-                                    return Some(FocusedMatchResolution::Terminal(
-                                        AsyncBlockGridMatch {
+                                    self.cached_focused_match = Some(
+                                        FocusedMatchResolution::Terminal(AsyncBlockGridMatch {
                                             block_index: *block_index,
                                             grid_type,
                                             range: match_range.clone(),
-                                        },
-                                    ));
+                                        }),
+                                    );
+                                    return;
                                 }
                                 current_idx += 1;
                             }
@@ -633,11 +629,13 @@ impl AsyncFindController {
                             };
                         for &match_id in iter {
                             if current_idx == focused_idx {
-                                return Some(FocusedMatchResolution::Ai(AsyncFocusedAiMatch {
-                                    view_id: *view_id,
-                                    match_id,
-                                    total_index: *total_index,
-                                }));
+                                self.cached_focused_match =
+                                    Some(FocusedMatchResolution::Ai(AsyncFocusedAiMatch {
+                                        view_id: *view_id,
+                                        match_id,
+                                        total_index: *total_index,
+                                    }));
+                                return;
                             }
                             current_idx += 1;
                         }
@@ -646,7 +644,8 @@ impl AsyncFindController {
             }
         }
 
-        None
+        // No match at the focused index (index out of range).
+        self.cached_focused_match = None;
     }
 
     /// Registers a rich content view for AI block searching.
