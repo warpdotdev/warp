@@ -191,7 +191,7 @@ fn additional_properties_schema_is_applied() {
 
 #[test]
 fn fractional_value_is_not_coerced_to_int() {
-    let mut args = obj(json!({ "x": 3.14 }));
+    let mut args = obj(json!({ "x": 2.5 }));
     let schema = obj(json!({
         "properties": { "x": { "type": "integer" } }
     }));
@@ -199,14 +199,14 @@ fn fractional_value_is_not_coerced_to_int() {
     coerce_integer_args(&mut args, &schema);
 
     // Schema mismatch (server will reject) but we must not silently truncate.
-    assert_eq!(args["x"].as_f64(), Some(3.14));
+    assert_eq!(args["x"].as_f64(), Some(2.5));
 }
 
 #[test]
 fn root_level_one_of_branch_with_integer_is_coerced() {
-    // Reviewer-found gap: when the root schema uses a combinator instead of
-    // (or alongside) `properties`, the entrypoint must walk every branch, not
-    // stop at the first one. This caught a real bug pre-refactor.
+    // When the root schema uses a combinator instead of (or alongside)
+    // `properties`, the entrypoint must walk every branch, not stop at the
+    // first one.
     let mut args = obj(json!({ "x": 6.0 }));
     let schema = obj(json!({
         "oneOf": [
@@ -269,10 +269,9 @@ fn tuple_style_items_coerces_positional_schemas() {
 
 #[test]
 fn multiple_combinators_at_same_level_are_all_traversed() {
-    // Regression for Oz review: a schema may declare more than one of
-    // {oneOf, anyOf, allOf} at the same level, and every combinator must be
-    // walked. Earlier, the walker used `.or_else` chain that stopped at the
-    // first present key.
+    // A schema may declare more than one of {oneOf, anyOf, allOf} at the
+    // same level, and every combinator must be walked — not just the first
+    // present key.
     let mut args = obj(json!({ "a": 1.0, "b": 2.0, "c": 3.0 }));
     let schema = obj(json!({
         "oneOf": [{ "properties": { "a": { "type": "integer" } } }],
@@ -289,10 +288,9 @@ fn multiple_combinators_at_same_level_are_all_traversed() {
 
 #[test]
 fn one_of_with_multiple_branches_all_visited() {
-    // Regression for Oz review: every branch under a combinator must be
-    // visited, not just the first match. The same property name across
-    // branches with different types should still get the integer branch's
-    // coercion when applicable.
+    // Every branch under a combinator must be visited, not just the first
+    // match. The same property name across branches with different types
+    // should still get the integer branch's coercion when applicable.
     let mut args = obj(json!({ "v": 11.0 }));
     let schema = obj(json!({
         "oneOf": [
