@@ -848,8 +848,8 @@ pub fn populate_host_picker<V: View>(
     } else {
         initial_host.to_string()
     };
-    let mut connected_hosts =
-        ConnectedSelfHostedWorkersModel::as_ref(ctx).worker_hosts_excluding(default_host.as_deref());
+    let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
+        .worker_hosts_excluding(default_host.as_deref());
     if !initial.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST)
         && default_host.as_deref() != Some(initial.as_str())
     {

@@ -17,6 +17,7 @@ use warp_core::ui::theme::Fill;
 
 use settings::Setting as _;
 
+use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -59,7 +60,7 @@ impl Host {
     /// Returns the value to send as `worker_host` in the config snapshot.
     pub fn worker_host_value(&self) -> Option<String> {
         match self {
-            Host::Warp => Some("warp".to_string()),
+            Host::Warp => Some(ORCHESTRATION_WARP_WORKER_HOST.to_string()),
             Host::SelfHosted { slug } => Some(slug.clone()),
         }
     }
@@ -147,7 +148,7 @@ impl HostSelector {
             .value()
             .as_deref()
         {
-            let restored = if saved_slug == "warp" {
+            let restored = if saved_slug == ORCHESTRATION_WARP_WORKER_HOST {
                 Host::Warp
             } else {
                 Host::SelfHosted {
@@ -223,6 +224,9 @@ impl HostSelector {
         }
         self.is_menu_open = is_open;
         if is_open {
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(ctx);
+            });
             ctx.focus(&self.menu);
             self.highlight_selected_host(ctx);
         }
@@ -307,7 +311,6 @@ fn build_menu_items(
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
         .worker_hosts_excluding(default_slug)
         .into_iter()
-        .filter(|host| host != "warp")
         .collect::<Vec<_>>();
     if let Host::SelfHosted { slug } = selected {
         if default_slug != Some(slug.as_str()) {

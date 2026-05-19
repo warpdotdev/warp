@@ -39,7 +39,8 @@ use crate::view_components::dropdown::{
 
 #[derive(Debug, Clone)]
 pub enum HostPickerEvent {
-    /// Emitted when the dropdown opens so parents can refresh connected hosts.
+    /// Emitted when the dropdown opens so the parent can refresh dynamic
+    /// host sources before/while the menu is visible.
     Opened,
     /// Emitted with a non-empty, trimmed slug whenever the user picks a
     /// known host or commits a custom entry.
@@ -109,7 +110,6 @@ impl HostPicker {
             match event {
                 DropdownEvent::ToggleExpanded => {
                     ctx.emit(HostPickerEvent::Opened);
-                    ctx.notify();
                 }
                 DropdownEvent::Close => {
                     // Don't propagate Closed while transitioning into custom
