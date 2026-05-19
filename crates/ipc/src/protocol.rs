@@ -189,3 +189,135 @@ where
     let message: M = bincode::deserialize(&payload_buf[..])?;
     Ok(message)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_new_assigns_service_id_bytes_and_unique_ids() {
+        let service_id = "test-service".to_string();
+        let bytes = vec![1, 2, 3];
+
+        let request = Request::new(service_id.clone(), bytes.clone());
+        let other_request = Request::new(service_id.clone(), bytes.clone());
+
+        assert_eq!(request.service_id, service_id);
+        assert_eq!(request.bytes, bytes);
+        assert_eq!(request.id(), &request.id);
+        assert_ne!(request.id, other_request.id);
+    }
+
+    #[test]
+    fn response_constructors_preserve_payloads() {
+        let request_id = Uuid::from_u128(0x1234567890abcdef1234567890abcdef);
+        let service_id = "test-service".to_string();
+        let bytes = vec![4, 5, 6];
+
+        let success = Response::success(request_id, service_id.clone(), bytes.clone());
+        match success {
+            Response::Success {
+                request_id: actual_request_id,
+                service_id: actual_service_id,
+                bytes: actual_bytes,
+            } => {
+                assert_eq!(actual_request_id, request_id);
+                assert_eq!(actual_service_id, service_id);
+                assert_eq!(actual_bytes, bytes);
+            }
+            Response::Failure { .. } => panic!("expected success response"),
+        }
+
+        let error_message = "service not registered".to_string();
+        let failure = Response::failure(request_id, error_message.clone());
+        match failure {
+            Response::Failure {
+                request_id: actual_request_id,
+                error_message: actual_error_message,
+            } => {
+                assert_eq!(actual_request_id, request_id);
+                assert_eq!(actual_error_message, error_message);
+            }
+            Response::Success { .. } => panic!("expected failure response"),
+        }
+    }
+
+    #[test]
+    fn request_serializes_and_deserializes_round_trip() {
+        let request_id = Uuid::from_u128(0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);
+        let request = Request {
+            id: request_id,
+            service_id: "test-service".to_string(),
+            bytes: vec![7, 8, 9],
+        };
+
+        let serialized = bincode::serialize(&request).expect("request should serialize");
+        let deserialized: Request =
+            bincode::deserialize(&serialized).expect("request should deserialize");
+
+        assert_eq!(deserialized.id, request_id);
+        assert_eq!(deserialized.service_id, request.service_id);
+        assert_eq!(deserialized.bytes, request.bytes);
+    }
+
+    #[test]
+    fn response_serializes_and_deserializes_round_trip() {
+        let request_id = Uuid::from_u128(0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb);
+        let success = Response::success(request_id, "test-service".to_string(), vec![10, 11]);
+        let failure = Response::failure(request_id, "boom".to_string());
+
+        let serialized_success = bincode::serialize(&success).expect("success should serialize");
+        let deserialized_success: Response =
+            bincode::deserialize(&serialized_success).expect("success should deserialize");
+        match deserialized_success {
+            Response::Success {
+                request_id: actual_request_id,
+                service_id,
+                bytes,
+            } => {
+                assert_eq!(actual_request_id, request_id);
+                assert_eq!(service_id, "test-service");
+                assert_eq!(bytes, vec![10, 11]);
+            }
+            Response::Failure { .. } => panic!("expected success response"),
+        }
+
+        let serialized_failure = bincode::serialize(&failure).expect("failure should serialize");
+        let deserialized_failure: Response =
+            bincode::deserialize(&serialized_failure).expect("failure should deserialize");
+        match deserialized_failure {
+            Response::Failure {
+                request_id: actual_request_id,
+                error_message,
+            } => {
+                assert_eq!(actual_request_id, request_id);
+                assert_eq!(error_message, "boom");
+            }
+            Response::Success { .. } => panic!("expected failure response"),
+        }
+    }
+
+    #[test]
+    fn connection_address_from_string_displays_and_serializes_round_trip() {
+        let path = "/tmp/warp-ipc-test.sock".to_string();
+        let address = ConnectionAddress::from(path.clone());
+
+        assert_eq!(address.to_string(), path);
+
+        let serialized = bincode::serialize(&address).expect("address should serialize");
+        let deserialized: ConnectionAddress =
+            bincode::deserialize(&serialized).expect("address should deserialize");
+
+        assert_eq!(deserialized, address);
+        assert_eq!(deserialized.to_string(), path);
+    }
+
+    #[test]
+    fn connection_address_new_uses_tmp_warp_ipc_socket_path() {
+        let address = ConnectionAddress::new();
+        let address = address.to_string();
+
+        assert!(address.starts_with("/tmp/warp-ipc-"));
+        assert!(address.ends_with(".sock"));
+    }
+}
