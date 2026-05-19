@@ -334,10 +334,11 @@ impl ShellType {
 
     /// Returns the potential paths to the RC file relative to the `home` directory.
     pub fn rc_file_paths(&self, os: TargetOS) -> Vec<PathBuf> {
-        let home_dir = Path::new(match os {
+        let home_dir = match os {
             TargetOS::Windows => "$HOME",
             _ => "~",
-        });
+        };
+        let is_windows = os == TargetOS::Windows;
         let relative_paths = match (self, os) {
             (ShellType::PowerShell, TargetOS::Windows) => {
                 vec![Path::new(
@@ -357,7 +358,13 @@ impl ShellType {
         };
         relative_paths
             .iter()
-            .map(|relative_path| home_dir.join(relative_path))
+            .map(|relative_path| {
+                if is_windows {
+                    Path::new(home_dir).join(relative_path)
+                } else {
+                    PathBuf::from(format!("{home_dir}/{}", relative_path.to_string_lossy()))
+                }
+            })
             .collect()
     }
 

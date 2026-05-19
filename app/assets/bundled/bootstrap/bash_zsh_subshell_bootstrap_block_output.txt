@@ -1,1 +1,1 @@
-echo -e '\n# Auto-Warpify\n[[ "$-" == *i* ]] && printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x9c'\'' ' >> %
+rcfile=%; target=$(readlink -f "$rcfile" 2>/dev/null || realpath "$rcfile" 2>/dev/null || printf '%s' "$rcfile"); echo -e '\n# Auto-Warpify\n[[ "$-" == *i* ]] && printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x9c'\'' ' >> "$target" || echo "Auto-Warpify failed to update $target" >&2

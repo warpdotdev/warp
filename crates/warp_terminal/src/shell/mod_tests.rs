@@ -163,6 +163,14 @@ fn test_from_markdown_language_spec() {
     assert_eq!(None, ShellType::from_markdown_language_spec("/bin/bash"));
     assert_eq!(None, ShellType::from_markdown_language_spec("-bash"));
 }
+#[test]
+fn rc_file_paths_for_unix_targets_use_forward_slashes() {
+    let paths = ShellType::Bash.rc_file_paths(TargetOS::Linux);
+    assert_eq!(paths, vec![PathBuf::from("~/.bashrc")]);
+
+    let paths = ShellType::Fish.rc_file_paths(TargetOS::Linux);
+    assert_eq!(paths, vec![PathBuf::from("~/.config/fish/config.fish")]);
+}
 
 #[test]
 fn test_fish_parse_abbrs() {
