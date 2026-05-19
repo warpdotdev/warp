@@ -136,6 +136,15 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
     argument: Some(Argument::required().with_hint_text("<tab name>")),
 });
 
+pub static RENAME_PANE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/rename-pane",
+    description: "Rename the current pane",
+    icon_path: "bundled/svg/pencil-line.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument::required().with_hint_text("<pane name>")),
+});
+
 static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
     let mut hint = String::from("<");
     for color in color_dot::TAB_COLOR_OPTIONS {
@@ -627,6 +636,7 @@ fn all_commands() -> Vec<StaticCommand> {
         NEW.clone(),
         PLAN.clone(),
         RENAME_TAB.clone(),
+        RENAME_PANE.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,
         CONVERSATIONS,
@@ -817,6 +827,21 @@ mod tests {
             assert!(hint.contains(&lower), "hint should mention `{lower}`");
         }
         assert!(hint.contains("none"), "hint should mention `none`");
+    }
+
+    #[test]
+    fn rename_pane_command_requires_argument() {
+        let command = COMMAND_REGISTRY
+            .get_command_with_name(RENAME_PANE.name)
+            .expect("expected /rename-pane to be registered");
+        let argument = command
+            .argument
+            .as_ref()
+            .expect("expected /rename-pane to require an argument");
+
+        assert!(!argument.is_optional);
+        assert!(!argument.should_execute_on_selection);
+        assert_eq!(argument.hint_text, Some("<pane name>"));
     }
 
     #[test]

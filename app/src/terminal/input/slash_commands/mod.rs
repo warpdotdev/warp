@@ -501,6 +501,20 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
             }
+            rename_pane if command.name == commands::RENAME_PANE.name => {
+                let Some(name) = argument
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                else {
+                    show_error_toast(
+                        "Please provide a pane name after /rename-pane".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                ctx.dispatch_typed_action(&WorkspaceAction::SetActivePaneName(name.to_owned()));
+            }
             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
                 let supported_options = || {
                     color_dot::TAB_COLOR_OPTIONS

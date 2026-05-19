@@ -137,6 +137,7 @@ pub enum CustomAction {
     GoToLine,
     ToggleGlobalSearch,
     ToggleConversationListView,
+    RenamePane,
 }
 
 lazy_static! {
@@ -441,6 +442,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         | CustomAction::SplitPaneUp
         | CustomAction::ConfigureKeybindings
         | CustomAction::RenameTab
+        | CustomAction::RenamePane
         | CustomAction::CloseTab
         | CustomAction::CloseOtherTabs
         | CustomAction::CloseTabsRight

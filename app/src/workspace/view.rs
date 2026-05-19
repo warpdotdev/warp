@@ -22,8 +22,8 @@ mod wasm_view;
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    render_detail_sidecar, render_settings_popup, resolve_vertical_tabs_mode,
+    VerticalTabsPanelState, VerticalTabsResolvedMode, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
@@ -5412,6 +5412,82 @@ impl Workspace {
             editor.insert_selected_text(&title, ctx);
         });
         ctx.focus(&self.pane_rename_editor);
+        ctx.notify();
+    }
+
+    pub fn rename_active_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        // The inline pane-rename editor is rendered whenever the vertical-tabs
+        // panel enters its pane-row loop — i.e. in every resolved mode EXCEPT
+        // Summary. In Summary mode the panel emits a single
+        // `render_summary_tab_item` row with `pane_rename_editor: None`, so
+        // focusing the editor would leave the user in an invisible edit state.
+        // Both Panes and FocusedSession resolve into the row loop and thread
+        // the editor through `PaneProps::new` → `render_title_override`, so the
+        // inline path is correct there. (`resolve_vertical_tabs_mode` also
+        // collapses Summary to FocusedSession when the
+        // `VerticalTabsSummaryMode` feature flag is off, keeping the gate
+        // consistent with the renderer.)
+        let inline_editor_visible = FeatureFlag::VerticalTabs.is_enabled()
+            && *TabSettings::as_ref(ctx).use_vertical_tabs
+            && !matches!(
+                resolve_vertical_tabs_mode(ctx),
+                VerticalTabsResolvedMode::Summary,
+            );
+
+        if inline_editor_visible {
+            if !self.vertical_tabs_panel_open {
+                self.vertical_tabs_panel_open = true;
+            }
+            let active_pane_group = self.active_tab_pane_group().clone();
+            let pane_group_id = active_pane_group.id();
+            let pane_id = active_pane_group.as_ref(ctx).focused_pane_id(ctx);
+            self.rename_pane(
+                PaneViewLocator {
+                    pane_group_id,
+                    pane_id,
+                },
+                ctx,
+            );
+            return;
+        }
+
+        if let Some(input_handle) = self.get_active_input_view_handle(ctx) {
+            input_handle.update(ctx, |input, input_ctx| {
+                input.replace_buffer_content("/rename-pane ", input_ctx);
+                input.focus_input_box(input_ctx);
+            });
+        } else {
+            let message = "Open a terminal to rename a pane.".to_string();
+            self.toast_stack.update(ctx, |view, ctx| {
+                view.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+            });
+        }
+    }
+
+    fn set_active_pane_name(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
+        let active_pane_group = self.active_tab_pane_group().clone();
+        let pane_group_id = active_pane_group.id();
+        let pane_id = active_pane_group.as_ref(ctx).focused_pane_id(ctx);
+
+        if self.current_workspace_state.is_any_pane_being_renamed() {
+            self.current_workspace_state.clear_pane_being_renamed();
+            self.clear_pane_name_editor(ctx);
+        }
+
+        let title = name.trim();
+        if title.is_empty() {
+            ctx.notify();
+            return;
+        }
+        self.set_custom_pane_name(
+            PaneViewLocator {
+                pane_group_id,
+                pane_id,
+            },
+            title.to_owned(),
+            ctx,
+        );
+        ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
 
@@ -21094,19 +21170,9 @@ impl TypedActionView for Workspace {
             RenamePane(locator) => self.rename_pane(*locator, ctx),
             ResetPaneName(locator) => self.clear_pane_name(*locator, ctx),
             RenameActiveTab => self.rename_tab(self.active_tab_index, ctx),
-            RenameActivePane => {
-                let pane_group = self.active_tab_pane_group().clone();
-                let pane_group_id = pane_group.id();
-                let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
-                self.rename_pane(
-                    PaneViewLocator {
-                        pane_group_id,
-                        pane_id,
-                    },
-                    ctx,
-                );
-            }
+            RenameActivePane => self.rename_active_pane(ctx),
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
+            SetActivePaneName(name) => self.set_active_pane_name(name, ctx),
             SetActiveTabColor(color) => self.set_tab_color(self.active_tab_index, *color, ctx),
             ToggleTabRightClickMenu { tab_index, anchor } => {
                 self.toggle_tab_right_click_menu(*tab_index, *anchor, ctx)

@@ -729,7 +729,7 @@ enum TabGroupColorMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum VerticalTabsResolvedMode {
+pub(super) enum VerticalTabsResolvedMode {
     Panes,
     FocusedSession,
     Summary,
@@ -819,7 +819,7 @@ struct TabGroupDragState {
     insert_after_index: Option<usize>,
 }
 
-fn resolve_vertical_tabs_mode(app: &AppContext) -> VerticalTabsResolvedMode {
+pub(super) fn resolve_vertical_tabs_mode(app: &AppContext) -> VerticalTabsResolvedMode {
     let settings = TabSettings::as_ref(app);
     match *settings.vertical_tabs_display_granularity.value() {
         VerticalTabsDisplayGranularity::Panes => VerticalTabsResolvedMode::Panes,
