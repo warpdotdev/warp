@@ -290,6 +290,7 @@ pub enum PaneGroupAction {
     Activate(PaneId, ActivationReason),
     ResizeMove(Vector2F),
     StartResizing(DraggedBorder),
+    ResetPaneSizes(EntityId),
     Move {
         id: PaneId,
         target_pane_id: PaneId,
@@ -6156,6 +6157,14 @@ impl PaneGroup {
         self.dragged_border = Some(info);
     }
 
+    pub fn reset_pane_sizes(&mut self, border_id: EntityId, ctx: &mut ViewContext<Self>) {
+        self.dragged_border = None;
+        if self.panes.reset_pane_sizes(border_id) {
+            ctx.notify();
+            ctx.emit(Event::AppStateChanged);
+        }
+    }
+
     pub fn end_resizing(&mut self, ctx: &mut ViewContext<Self>) {
         self.dragged_border = None;
         ctx.emit(Event::AppStateChanged);
@@ -8153,6 +8162,7 @@ impl TypedActionView for PaneGroup {
             Activate(view_id, reason) => self.focus_pane_on_mouse_event(*view_id, *reason, ctx),
             ResizeMove(position) => self.maybe_resize_pane(*position, ctx),
             StartResizing(border) => self.start_resizing(*border, ctx),
+            ResetPaneSizes(border_id) => self.reset_pane_sizes(*border_id, ctx),
             EndResizing => self.end_resizing(ctx),
             ResizeLeft => self.resize_left(ctx),
             ResizeRight => self.resize_right(ctx),
