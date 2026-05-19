@@ -608,3 +608,105 @@ fn test_update_file_based_servers_removes_server_only_when_no_refs() {
         });
     });
 }
+
+/// Regression test for warpdotdev/warp#9111. When the agent enumerates MCP
+/// servers in a fresh conversation that has no exchanges yet,
+/// `current_working_directory()` returns `None`. Before the fix, the entire
+/// file-based-servers branch was gated behind `if let Some(cwd) = ...`, which
+/// excluded global servers in `~/.warp/.mcp.json` even though the home dir is
+/// already a candidate root inside `get_servers_for_working_directory`.
+///
+/// With `cwd: Option<&Path>`, passing `None` should still return home-rooted
+/// servers — that's the agent-context-with-no-cwd path.
+#[test]
+fn test_get_servers_for_working_directory_returns_home_servers_when_cwd_is_none() {
+    let Some(home) = dirs::home_dir() else {
+        // CI runner without a home dir would skip the home-rooted candidate
+        // entirely; the test isn't meaningful there.
+        return;
+    };
+    let parsed = parse_mcp_json(
+        r#"{"global-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}"#,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            // Seed a global server rooted at the home directory.
+            manager.apply_parsed_servers(home.clone(), MCPProvider::Claude, parsed, ctx);
+            assert_eq!(manager.file_based_servers.len(), 1);
+        });
+
+        manager_handle.read(&app, |manager, app_ctx| {
+            let servers = manager.get_servers_for_working_directory(None, app_ctx);
+            assert_eq!(
+                servers.len(),
+                1,
+                "global (home-rooted) server must be returned even when cwd is None"
+            );
+        });
+    });
+}
+
+/// When `cwd` is `None`, repo-scoped servers (rooted at a project directory,
+/// not the home dir) must NOT be returned — without a cwd there is no project
+/// to anchor them to. This guards against a future refactor that accidentally
+/// always returns every file-based server regardless of scope.
+#[test]
+fn test_get_servers_for_working_directory_excludes_repo_servers_when_cwd_is_none() {
+    let repo_path = PathBuf::from("/tmp/test-9111-repo-only");
+    let parsed = parse_mcp_json(
+        r#"{"project-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}"#,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            // Seed a project-scoped server rooted at a repo path (not home).
+            manager.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, parsed, ctx);
+            assert_eq!(manager.file_based_servers.len(), 1);
+        });
+
+        manager_handle.read(&app, |manager, app_ctx| {
+            let servers = manager.get_servers_for_working_directory(None, app_ctx);
+            assert!(
+                servers.is_empty(),
+                "repo-rooted server must not be returned when cwd is None: {servers:?}"
+            );
+        });
+    });
+}
+
+/// Pre-existing behavior preserved: when `cwd` is `Some`, home-rooted (global)
+/// servers are still returned. This is the path that already worked before the
+/// fix; the test guards against a regression in the cwd-Some branch while we
+/// add the cwd-None branch.
+#[test]
+fn test_get_servers_for_working_directory_returns_home_servers_when_cwd_is_some() {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let parsed = parse_mcp_json(
+        r#"{"global-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}"#,
+    );
+    let cwd = PathBuf::from("/tmp/test-9111-some-cwd");
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers(home.clone(), MCPProvider::Claude, parsed, ctx);
+        });
+
+        manager_handle.read(&app, |manager, app_ctx| {
+            let servers = manager.get_servers_for_working_directory(Some(&cwd), app_ctx);
+            assert_eq!(
+                servers.len(),
+                1,
+                "global (home-rooted) server must still be returned when cwd is Some"
+            );
+        });
+    });
+}

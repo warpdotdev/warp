@@ -76,13 +76,25 @@ impl FileBasedMCPManager {
     }
 
     /// Get file-based MCP servers in scope for the given current working directory.
+    ///
+    /// When `cwd` is `Some`, returns servers rooted at either the user's home
+    /// directory (global servers in `~/.warp/.mcp.json`) or the repo containing
+    /// `cwd` (project-scoped servers in `<repo>/.warp/.mcp.json`).
+    ///
+    /// When `cwd` is `None`, returns only the home-rooted servers. This matters
+    /// for callers that need to enumerate available MCP servers before any
+    /// concrete cwd is known — for example, the agent in a brand-new
+    /// conversation that has no exchanges yet (#9111).
     pub fn get_servers_for_working_directory(
         &self,
-        cwd: &Path,
+        cwd: Option<&Path>,
         app: &AppContext,
     ) -> Vec<&TemplatableMCPServerInstallation> {
-        let repo_root = DetectedRepositories::as_ref(app)
-            .get_root_for_path(&LocalOrRemotePath::Local(cwd.to_path_buf()))
+        let repo_root = cwd
+            .and_then(|c| {
+                DetectedRepositories::as_ref(app)
+                    .get_root_for_path(&LocalOrRemotePath::Local(c.to_path_buf()))
+            })
             .and_then(|r| PathBuf::try_from(r).ok());
         let candidate_roots = [dirs::home_dir(), repo_root];
 

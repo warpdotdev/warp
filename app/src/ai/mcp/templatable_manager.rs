@@ -320,10 +320,16 @@ impl TemplatableMCPServerManager {
             .collect()
     }
 
-    /// Returns file-based MCP servers that are currently active and in scope for the given working directory.
+    /// Returns file-based MCP servers that are currently active and in scope.
+    ///
+    /// When `cwd` is `Some`, includes both home-rooted (global) servers and
+    /// servers rooted at the repo containing `cwd`. When `cwd` is `None` (e.g.,
+    /// a fresh agent conversation with no exchanges yet — #9111), includes only
+    /// home-rooted servers; project-scoped servers are excluded since there's
+    /// no cwd to anchor them.
     pub fn get_active_file_based_servers(
         &self,
-        cwd: &std::path::Path,
+        cwd: Option<&std::path::Path>,
         app: &warpui::AppContext,
     ) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
         FileBasedMCPManager::as_ref(app)

@@ -14,7 +14,7 @@ impl FileBasedMCPManager {
 
     pub fn get_servers_for_working_directory(
         &self,
-        _cwd: &Path,
+        _cwd: Option<&Path>,
         _app: &AppContext,
     ) -> Vec<&TemplatableMCPServerInstallation> {
         vec![]
