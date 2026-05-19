@@ -311,6 +311,7 @@ pub enum Icon {
     HeartHand,
     MessageChatSquare,
     Pin,
+    PinFilled,
     Atom02,
     Cognition,
     Dataflow04,
@@ -332,6 +333,7 @@ impl From<Icon> for &'static str {
         match icon {
             Icon::Menu => "bundled/svg/layout-left.svg",
             Icon::Pin => "bundled/svg/pin-01.svg",
+            Icon::PinFilled => "bundled/svg/pin-filled.svg",
             Icon::AtSign => "bundled/svg/at-sign.svg",
             Icon::Plus => "bundled/svg/plus.svg",
             Icon::Copy => "bundled/svg/copy.svg",

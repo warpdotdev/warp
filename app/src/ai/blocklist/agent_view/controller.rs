@@ -260,6 +260,13 @@ impl AgentViewState {
         }
     }
 
+    pub fn origin(&self) -> Option<AgentViewEntryOrigin> {
+        match self {
+            AgentViewState::Active { origin, .. } => Some(*origin),
+            AgentViewState::Inactive => None,
+        }
+    }
+
     /// Returns `true` if in an active agent view state.
     pub fn is_active(&self) -> bool {
         matches!(self, AgentViewState::Active { .. })
@@ -424,8 +431,10 @@ impl AgentViewController {
                 .active_block()
                 .is_active_and_long_running();
 
-        // In a non-ambient agent case, users cannot exit the fullscreen agent view with an active long running command.
-        if is_fullscreen_with_long_running {
+        // Cloud agent panes do not have the same underlying terminal ownership
+        // constraint (no local shell process), so long-running third party agent
+        // commands should not trap the user in agent view.
+        if is_fullscreen_with_long_running && !model.is_dummy_cloud_mode_session() {
             return Err(ExitAgentViewError::LongRunningCommand);
         }
 

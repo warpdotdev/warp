@@ -9,6 +9,7 @@ mod inline_agent_view_header;
 pub(crate) mod orchestration_avatar;
 pub(crate) mod orchestration_conversation_links;
 pub mod orchestration_pill_bar;
+pub mod orchestration_pill_bar_model;
 pub mod shortcuts;
 mod zero_state_block;
 
@@ -30,6 +31,7 @@ use warp_core::ui::{appearance::Appearance, color::blend::Blend};
 use warpui::keymap::Keystroke;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::terminal::model::TerminalModel;
 use crate::view_components::action_button::ActionButtonTheme;
 
 pub static ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke> = LazyLock::new(|| {
@@ -71,6 +73,26 @@ pub static ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke
             }
         }
     });
+
+/// Returns `true` when the current pane is in a cloud or remote context where
+/// local-to-cloud handoff is not applicable. Use this to gate the `&` hint,
+/// handoff chip, `/handoff` command activation, and `&` prefix activation.
+pub fn is_in_cloud_context(
+    agent_view_state: &AgentViewState,
+    terminal_model: &TerminalModel,
+) -> bool {
+    let origin_is_cloud = matches!(
+        agent_view_state,
+        AgentViewState::Active { origin, .. }
+            if matches!(
+                origin,
+                AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
+            )
+    );
+    origin_is_cloud
+        || terminal_model.is_conversation_transcript_viewer()
+        || terminal_model.is_dummy_cloud_mode_session()
+}
 
 pub fn agent_view_bg_fill(app: &AppContext) -> Fill {
     let appearance = Appearance::as_ref(app);

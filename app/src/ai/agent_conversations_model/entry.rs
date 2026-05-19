@@ -6,6 +6,7 @@ use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
+use crate::workspace::RestoreConversationLayout;
 use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
@@ -259,6 +260,19 @@ impl AgentConversationEntry {
             HarnessFilter::All => true,
             HarnessFilter::Specific(harness) => self.display.harness == Some(*harness),
         }
+    }
+
+    pub fn has_open_action(
+        &self,
+        restore_layout: Option<RestoreConversationLayout>,
+        app: &AppContext,
+    ) -> bool {
+        super::AgentConversationsModel::resolve_open_action(
+            AgentConversationNavigationSubject::Entry(self.id),
+            restore_layout,
+            app,
+        )
+        .is_some()
     }
 }
 

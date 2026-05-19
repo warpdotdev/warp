@@ -11,25 +11,25 @@ use persistence::model::AgentConversationRecord;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::api::convert_conversation::{
-    RestorationMode, convert_conversation_data_to_ai_conversation,
+    convert_conversation_data_to_ai_conversation, RestorationMode,
 };
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
 use crate::ai::agent::task::Task;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
-use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::SerializedBlock;
 
 #[cfg(feature = "local_fs")]
 use crate::persistence::agent::read_agent_conversation_by_id;
 
 use super::{
-    AIConversationMetadata, BlocklistAIHistoryModel, MAX_HISTORICAL_CONVERSATIONS,
-    agent_id_key_from_persisted_data,
+    agent_id_key_from_persisted_data, AIConversationMetadata, BlocklistAIHistoryModel,
+    MAX_HISTORICAL_CONVERSATIONS,
 };
 
 /// A conversation transcript from a CLI agent harness (e.g. Claude Code).
@@ -399,13 +399,11 @@ impl BlocklistAIHistoryModel {
 
             if let Some(conversation) = self.conversations_by_id.get_mut(&canonical_conversation_id)
             {
-                if conversation.server_metadata().is_none() {
-                    conversation.set_server_metadata(server_meta.clone());
-                    restored_conversations_updated += 1;
-                    log::debug!(
-                        "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
-                    );
-                }
+                conversation.set_server_metadata(server_meta.clone());
+                restored_conversations_updated += 1;
+                log::debug!(
+                    "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
+                );
             }
 
             let stale_metadata: Vec<(AIConversationId, AIConversationMetadata)> = self

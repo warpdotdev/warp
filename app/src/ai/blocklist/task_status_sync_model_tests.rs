@@ -1,9 +1,8 @@
+use super::{classify_renderable_error, map_cli_session_status};
 use crate::ai::agent::RenderableAIError;
 use crate::server::server_api::ai::TaskStatusUpdate;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionStatus;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-
-use super::{classify_renderable_error, map_cli_session_status};
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(
@@ -35,7 +34,9 @@ fn assert_update(
 #[test]
 fn quota_limit_is_failed_with_insufficient_credits() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::QuotaLimit),
+        classify_renderable_error(&RenderableAIError::QuotaLimit {
+            user_display_message: None,
+        }),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::InsufficientCredits),
         Some("credits"),

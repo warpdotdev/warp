@@ -5,6 +5,7 @@ use languages::{language_by_filename, Language};
 use warp_editor::content::buffer::{Buffer, BufferSnapshot};
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::IndentBehavior;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use crate::SyntaxTreeState;
@@ -24,10 +25,14 @@ fn mock_buffer_and_tree(text_content: &str, language: Arc<Language>) -> (Buffer,
     (buffer, tree)
 }
 
+fn test_path(filename: &str) -> StandardizedPath {
+    StandardizedPath::try_new(&format!("/{filename}")).expect("test path should be absolute")
+}
+
 #[test]
 fn test_indent_query() {
     App::test((), |mut app| async move {
-        let language = language_by_filename(std::path::Path::new("test.rs"))
+        let language = language_by_filename(&test_path("test.rs"))
             .expect("Should contain language rule for rust");
         let text_content = r#"impl Test {
         fn first_func() {
@@ -116,7 +121,7 @@ fn test_indent_query() {
 #[test]
 fn test_indent_query_on_go() {
     App::test((), |mut app| async move {
-        let language = language_by_filename(std::path::Path::new("test.go"))
+        let language = language_by_filename(&test_path("test.go"))
             .expect("Should contain language rule for go");
         let text_content = r#"package logic
         import (
@@ -210,8 +215,8 @@ fn test_indent_query_on_go() {
 
 #[test]
 fn test_indent_query_on_go_bracket_expansion() {
-    let language = language_by_filename(std::path::Path::new("test.go"))
-        .expect("Should contain language rule for go");
+    let language =
+        language_by_filename(&test_path("test.go")).expect("Should contain language rule for go");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"func test(){}
         func test() {
@@ -250,7 +255,7 @@ fn test_indent_query_on_go_bracket_expansion() {
 // source: https://peps.python.org/pep-0008/#indentation
 #[test]
 fn test_indent_query_on_python() {
-    let language = language_by_filename(std::path::Path::new("test.py"))
+    let language = language_by_filename(&test_path("test.py"))
         .expect("Should contain language rule for python");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"# Aligned with opening delimiter.
@@ -300,7 +305,7 @@ fn test_indent_query_on_python() {
 
 #[test]
 fn test_indent_query_on_python_colon() {
-    let language = language_by_filename(std::path::Path::new("test.py"))
+    let language = language_by_filename(&test_path("test.py"))
         .expect("Should contain language rule for python");
     let (if_buffer, if_tree) = mock_buffer_and_tree(r#"if x:"#, language.clone());
     let query = &language.as_ref().indents_query.as_ref().unwrap();
@@ -601,7 +606,7 @@ def foo():
 
 #[test]
 fn test_indent_query_on_javascript() {
-    let language = language_by_filename(std::path::Path::new("test.js"))
+    let language = language_by_filename(&test_path("test.js"))
         .expect("Should contain language rule for javascript");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"// Import the 'fs' module, commonly used for file operations
@@ -661,7 +666,7 @@ fn test_indent_query_on_javascript() {
 
 #[test]
 fn test_indent_query_on_typescript() {
-    let language = language_by_filename(std::path::Path::new("test.ts"))
+    let language = language_by_filename(&test_path("test.ts"))
         .expect("Should contain language rule for typescript");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"import { User } from './types';

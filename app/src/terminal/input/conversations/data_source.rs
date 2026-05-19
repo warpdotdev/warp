@@ -2,16 +2,20 @@
 
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use warpui::{AppContext, Entity, ModelHandle};
+use warpui::{AppContext, Entity, ModelHandle, SingletonEntity};
 
+use crate::ai::agent_conversations_model::AgentConversationEntry;
+use crate::ai::agent_conversations_model::AgentConversationEntryId;
+use crate::ai::agent_conversations_model::AgentManagementFilters;
 use crate::ai::blocklist::agent_view::AgentViewController;
-use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
 use crate::terminal::input::conversations::search_item::ConversationSearchItem;
 use crate::terminal::input::conversations::AcceptConversation;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspace::RestoreConversationLayout;
+use crate::AgentConversationsModel;
 
 pub struct ConversationMenuDataSource {
     agent_view_controller: ModelHandle<AgentViewController>,
@@ -28,6 +32,16 @@ impl ConversationMenuDataSource {
             active_session,
         }
     }
+
+    fn entries(&self, app: &AppContext) -> Vec<AgentConversationEntry> {
+        AgentConversationsModel::as_ref(app)
+            .get_entries(&AgentManagementFilters::default(), app)
+            .into_iter()
+            .filter(|entry: &AgentConversationEntry| {
+                entry.has_open_action(Some(RestoreConversationLayout::ActivePane), app)
+            })
+            .collect()
+    }
 }
 
 impl SyncDataSource for ConversationMenuDataSource {
@@ -38,14 +52,14 @@ impl SyncDataSource for ConversationMenuDataSource {
         query: &Query,
         app: &AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
-        let conversation_navigation_data = ConversationNavigationData::all_conversations(app);
+        let conversation_entries = self.entries(app);
         let query_text = query.text.trim().to_lowercase();
-
-        let active_conversation_id = self
+        let active_item_id = self
             .agent_view_controller
             .as_ref(app)
             .agent_view_state()
-            .active_conversation_id();
+            .active_conversation_id()
+            .map(AgentConversationEntryId::Conversation);
 
         let filter_by_cwd = query
             .filters
@@ -63,16 +77,17 @@ impl SyncDataSource for ConversationMenuDataSource {
         // whose most recent directory (falling back to initial directory) matches
         // the session's current working directory. If we can't determine the
         // session CWD, leave the results unfiltered.
-        let matches_directory = |data: &ConversationNavigationData| -> bool {
+        let matches_directory = |entry: &AgentConversationEntry| -> bool {
             if !filter_by_cwd {
                 return true;
             }
             let Some(session_pwd) = session_pwd.as_deref() else {
                 return true;
             };
-            data.latest_working_directory
+            entry
+                .display
+                .working_directory
                 .as_deref()
-                .or(data.initial_working_directory.as_deref())
                 .is_some_and(|dir| {
                     dir.trim_end_matches(std::path::MAIN_SEPARATOR)
                         == session_pwd.trim_end_matches(std::path::MAIN_SEPARATOR)
@@ -85,31 +100,31 @@ impl SyncDataSource for ConversationMenuDataSource {
 
             // In the zero state, sort conversations in the active pane above all other conversations.
             // Within each segment, sort to reverse chronological order.
-            Ok(conversation_navigation_data
+            Ok(conversation_entries
                 .into_iter()
                 // Don't show the currently open conversation, that's redundant.
-                .filter(|data| Some(data.id()) != active_conversation_id)
-                .filter(|data| matches_directory(data))
-                .sorted_by(|a, b| b.last_updated.cmp(&a.last_updated))
+                .filter(|entry| Some(entry.id) != active_item_id)
+                .filter(|entry| matches_directory(entry))
+                .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
                 .take(DEFAULT_RESULT_COUNT)
-                .map(|navigation_data| {
-                    QueryResult::from(ConversationSearchItem::new(navigation_data, app))
+                .map(|conversation_entry| {
+                    QueryResult::from(ConversationSearchItem::new(conversation_entry))
                 })
                 .rev()
                 .collect())
         } else {
-            let mut search_results = conversation_navigation_data
+            let mut search_results = conversation_entries
                 .into_iter()
-                .filter_map(|navigation_data| {
-                    if Some(navigation_data.id()) == active_conversation_id {
+                .filter_map(|entry| {
+                    if Some(entry.id) == active_item_id {
                         // Don't show the currently open conversation, that's redundant.
                         return None;
                     }
-                    if !matches_directory(&navigation_data) {
+                    if !matches_directory(&entry) {
                         return None;
                     }
                     let match_result = fuzzy_match::match_indices_case_insensitive(
-                        &navigation_data.title,
+                        &entry.display.title,
                         &query_text,
                     )?;
 
@@ -119,7 +134,7 @@ impl SyncDataSource for ConversationMenuDataSource {
                     }
 
                     Some(QueryResult::from(
-                        ConversationSearchItem::new(navigation_data, app)
+                        ConversationSearchItem::new(entry)
                             .with_name_match_result(Some(match_result.clone()))
                             .with_score(OrderedFloat(match_result.score as f64)),
                     ))

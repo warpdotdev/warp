@@ -89,7 +89,7 @@ impl GitStatusUpdateModel {
 
         // Create a new sub-model.
         let Some(repository_model) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
         else {
             anyhow::bail!(
                 "No watched repository found for path: {}",

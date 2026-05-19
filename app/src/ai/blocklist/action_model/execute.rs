@@ -90,8 +90,9 @@ use crate::{
     ai::{
         agent::{
             conversation::AIConversationId, task::TaskId, AIAgentAction, AIAgentActionId,
-            AIAgentActionResult, AIAgentActionResultType, AIAgentActionType, CancellationReason,
-            FileContext, FileLocations, ServerOutputId,
+            AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
+            AIAgentActionTypeDiscriminants, CancellationReason, FileContext, FileLocations,
+            ServerOutputId,
         },
         ambient_agents::AmbientAgentTaskId,
         get_relevant_files::controller::GetRelevantFilesController,
@@ -815,6 +816,11 @@ impl BlocklistAIActionExecutor {
             return;
         }
         if let Some(running) = self.async_executing_actions.remove(action_id) {
+            let action_kind = AIAgentActionTypeDiscriminants::from(&running.action.action);
+            log::info!(
+                "Canceling running async action of type {action_kind:?} action_id={action_id:?}, reason={reason:?}, backtrace=\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
             if running.is_shell_command_action() {
                 self.shell_command_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);

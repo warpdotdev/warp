@@ -10,25 +10,29 @@ use warpui::{
     },
     fonts::Properties,
     platform::Cursor,
-    prelude::{CornerRadius, Radius},
     text_layout::ClipConfig,
     Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     WeakModelHandle,
 };
 
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{render_block_container, AgentViewEntryOrigin};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::{
     pane_group::pane::{PaneConfiguration, PaneConfigurationEvent, PaneStack},
     terminal::{BlockListSettings, TerminalManager, TerminalView},
-    ui_components::blended_colors,
+    ui_components::{
+        agent_icon::terminal_view_agent_icon_variant,
+        blended_colors,
+        icon_with_status::{render_icon_with_status, IconWithStatusVariant},
+    },
 };
 
 use super::super::{AmbientAgentViewModelEvent, Status};
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
-
-/// Icon size for the status indicator
-const STATUS_ICON_SIZE: f32 = 16.;
+const DEFAULT_CLOUD_AGENT_TITLE: &str = "New cloud agent";
 
 #[derive(Default)]
 struct StateHandles {
@@ -41,6 +45,7 @@ pub struct AmbientAgentEntryBlock {
     terminal_manager: ModelHandle<Box<dyn TerminalManager>>,
     pane_stack: WeakModelHandle<PaneStack<TerminalView>>,
     state_handles: StateHandles,
+    fetched_task_id: Option<AmbientAgentTaskId>,
 }
 
 impl AmbientAgentEntryBlock {
@@ -62,12 +67,21 @@ impl AmbientAgentEntryBlock {
 
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().clone();
         ctx.subscribe_to_model(&pane_configuration, Self::handle_pane_configuration_event);
+        let agent_conversations_model = AgentConversationsModel::handle(ctx);
+        ctx.subscribe_to_model(&agent_conversations_model, |_, _, event, ctx| match event {
+            AgentConversationsModelEvent::ConversationsLoaded
+            | AgentConversationsModelEvent::NewTasksReceived
+            | AgentConversationsModelEvent::TasksUpdated
+            | AgentConversationsModelEvent::ConversationUpdated { .. } => ctx.notify(),
+            AgentConversationsModelEvent::ConversationArtifactsUpdated { .. } => {}
+        });
 
         Self {
             terminal_view,
             terminal_manager,
             pane_stack,
             state_handles: Default::default(),
+            fetched_task_id: None,
         }
     }
 }
@@ -85,7 +99,10 @@ impl AmbientAgentEntryBlock {
             | AmbientAgentViewModelEvent::SessionReady { .. }
             | AmbientAgentViewModelEvent::Failed { .. }
             | AmbientAgentViewModelEvent::NeedsGithubAuth
-            | AmbientAgentViewModelEvent::Cancelled => ctx.notify(),
+            | AmbientAgentViewModelEvent::Cancelled => {
+                self.maybe_fetch_task_data(ctx);
+                ctx.notify();
+            }
             _ => (),
         }
     }
@@ -103,16 +120,56 @@ impl AmbientAgentEntryBlock {
         }
     }
 
-    /// Gets the title to display for this ambient agent block.
-    /// Derives the title from the terminal view's selected conversation or a default.
+    fn maybe_fetch_task_data(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(task_id) = self
+            .ambient_agent_view_model(ctx)
+            .and_then(AmbientAgentViewModel::task_id)
+        else {
+            return;
+        };
+
+        if self.fetched_task_id == Some(task_id) {
+            return;
+        }
+        self.fetched_task_id = Some(task_id);
+
+        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&task_id, ctx);
+        });
+    }
+
+    fn meaningful_title(title: &str) -> Option<String> {
+        let title = title.trim();
+        (!title.is_empty() && !title.eq_ignore_ascii_case(DEFAULT_CLOUD_AGENT_TITLE))
+            .then(|| title.to_owned())
+    }
+
+    fn title_from_task_data(&self, app: &AppContext) -> Option<String> {
+        let task_id = self.ambient_agent_view_model(app)?.task_id()?;
+        let task = AgentConversationsModel::as_ref(app).get_task_data(&task_id)?;
+
+        Self::meaningful_title(&task.title).or_else(|| Self::meaningful_title(&task.prompt))
+    }
+
+    fn title_from_spawn_request(&self, app: &AppContext) -> Option<String> {
+        let request = self.ambient_agent_view_model(app)?.request()?;
+        request
+            .title
+            .as_deref()
+            .and_then(Self::meaningful_title)
+            .or_else(|| Self::meaningful_title(&request.prompt))
+    }
     fn get_title(&self, app: &AppContext) -> String {
         let terminal_view = self.terminal_view.as_ref(app);
         let ai_context_model = terminal_view.ai_context_model().as_ref(app);
 
         ai_context_model
             .selected_conversation(app)
-            .and_then(|c| c.title())
-            .unwrap_or_else(|| "New cloud agent".to_owned())
+            .and_then(|conversation| conversation.title())
+            .and_then(|title| Self::meaningful_title(&title))
+            .or_else(|| self.title_from_task_data(app))
+            .or_else(|| self.title_from_spawn_request(app))
+            .unwrap_or_else(|| DEFAULT_CLOUD_AGENT_TITLE.to_owned())
     }
 
     fn ambient_agent_view_model<'a>(
@@ -137,45 +194,47 @@ impl AmbientAgentEntryBlock {
         }
     }
 
-    /// Renders the status icon based on the ambient agent status.
-    fn render_status_icon(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn warpui::Element> {
-        let theme = appearance.theme();
+    fn ambient_status_for_icon(&self, app: &AppContext) -> Option<ConversationStatus> {
+        match self.ambient_agent_view_model(app)?.status() {
+            Status::Setup | Status::Composing => None,
+            Status::WaitingForSession { .. } | Status::AgentRunning => {
+                Some(ConversationStatus::InProgress)
+            }
+            Status::Failed { .. } => Some(ConversationStatus::Error),
+            Status::NeedsGithubAuth { .. } => Some(ConversationStatus::Blocked {
+                blocked_action: "GitHub authentication required".to_owned(),
+            }),
+            Status::Cancelled { .. } => Some(ConversationStatus::Cancelled),
+        }
+    }
 
-        let Some(view_model) = self.ambient_agent_view_model(app) else {
-            return Empty::new().finish();
-        };
-        let (icon, color) = if view_model.is_failed() {
-            (Icon::AlertTriangle, theme.ui_error_color())
-        } else if view_model.is_needs_github_auth() {
-            (Icon::Info, blended_colors::accent(theme).into_solid())
-        } else if view_model.is_cancelled() {
-            (
-                Icon::Cancelled,
-                theme.disabled_text_color(theme.background()).into_solid(),
-            )
-        } else if view_model.is_waiting_for_session() {
-            (Icon::ClockLoader, theme.ansi_fg_magenta())
-        } else {
-            (
-                Icon::OzCloud,
-                theme.main_text_color(theme.background()).into_solid(),
-            )
-        };
+    fn icon_variant(&self, app: &AppContext) -> IconWithStatusVariant {
+        let fallback_status = self.ambient_status_for_icon(app);
+        let terminal_view = self.terminal_view.as_ref(app);
 
-        Container::new(
-            ConstrainedBox::new(icon.to_warpui_icon(color.into()).finish())
-                .with_width(STATUS_ICON_SIZE)
-                .with_height(STATUS_ICON_SIZE)
-                .finish(),
-        )
-        .with_uniform_padding(2.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .with_margin_right(8.)
-        .finish()
+        match terminal_view_agent_icon_variant(terminal_view, app) {
+            Some(IconWithStatusVariant::OzAgent {
+                status: None,
+                is_ambient,
+            }) => IconWithStatusVariant::OzAgent {
+                status: fallback_status,
+                is_ambient,
+            },
+            Some(IconWithStatusVariant::CLIAgent {
+                agent,
+                status: None,
+                is_ambient,
+            }) => IconWithStatusVariant::CLIAgent {
+                agent,
+                status: fallback_status,
+                is_ambient,
+            },
+            Some(variant) => variant,
+            None => IconWithStatusVariant::OzAgent {
+                status: fallback_status,
+                is_ambient: true,
+            },
+        }
     }
 }
 
@@ -231,10 +290,13 @@ impl View for AmbientAgentEntryBlock {
             );
         }
 
+        let icon_variant = self.icon_variant(app);
+        let agent_icon = render_icon_with_status(icon_variant, 24., 0., theme, theme.background());
+
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_child(self.render_status_icon(appearance, app))
+            .with_child(Container::new(agent_icon).with_margin_right(8.).finish())
             .with_child(Shrinkable::new(1., title_row.finish()).finish())
             .with_child(
                 Container::new(Empty::new().finish())

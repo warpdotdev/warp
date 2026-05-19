@@ -2,6 +2,6 @@
 pub mod model;
 
 pub use model::{
-    BlockGridMatch, BlockListFindRun, BlockListMatch, FindOptions, FindableRichContentView,
-    RichContentMatchId, TerminalFindModel,
+    BlockFindRenderData, BlockGridMatch, BlockListFindRun, BlockListMatch, FindOptions,
+    FindableRichContentView, RichContentMatchId, TerminalFindModel,
 };

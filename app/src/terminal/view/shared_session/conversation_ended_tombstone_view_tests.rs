@@ -1,9 +1,6 @@
 use chrono::{Duration, Utc};
-use warp_cli::agent::Harness;
 
-use crate::ai::ambient_agents::task::{
-    AgentConfigSnapshot, HarnessConfig, RequestUsage, TaskPrincipalInfo,
-};
+use crate::ai::ambient_agents::task::{RequestUsage, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::format_credits;
@@ -65,6 +62,26 @@ fn data_with_conversation_values() -> TombstoneDisplayData {
         credits: Some("conv credits".to_string()),
         ..Default::default()
     }
+}
+
+#[test]
+fn task_failure_status_message_overrides_conversation_error() {
+    let mut task = task_with_run_time_and_credits();
+    task.state = AmbientAgentTaskState::Failed;
+    task.status_message = Some(TaskStatusMessage {
+        message: "task failed".to_string(),
+        error_code: None,
+    });
+    let mut data = TombstoneDisplayData {
+        is_error: true,
+        error_message: Some("setup failed".to_string()),
+        ..Default::default()
+    };
+
+    data.enrich_from_task(task);
+
+    assert!(data.is_error);
+    assert_eq!(data.error_message.as_deref(), Some("task failed"));
 }
 
 fn pr_artifact(branch: &str) -> Artifact {
@@ -155,47 +172,4 @@ fn empty_task_artifacts_preserve_conversation_artifacts() {
     data.enrich_from_task(task);
 
     assert_eq!(data.artifacts, conversation_artifacts);
-}
-
-#[test]
-fn task_without_snapshot_leaves_harness_unset() {
-    let task = task_with_run_time_and_credits();
-    assert!(task.agent_config_snapshot.is_none());
-    let mut data = TombstoneDisplayData::default();
-
-    data.enrich_from_task(task);
-
-    assert_eq!(data.harness, None);
-}
-
-#[test]
-fn snapshot_without_explicit_harness_defaults_to_oz() {
-    let mut task = task_with_run_time_and_credits();
-    task.agent_config_snapshot = Some(AgentConfigSnapshot::default());
-    let mut data = TombstoneDisplayData::default();
-
-    data.enrich_from_task(task);
-
-    assert_eq!(data.harness, Some(Harness::Oz));
-}
-
-#[test]
-fn snapshot_with_explicit_harness_propagates() {
-    for harness in [
-        Harness::Oz,
-        Harness::Claude,
-        Harness::Gemini,
-        Harness::Unknown,
-    ] {
-        let mut task = task_with_run_time_and_credits();
-        task.agent_config_snapshot = Some(AgentConfigSnapshot {
-            harness: Some(HarnessConfig::from_harness_type(harness)),
-            ..Default::default()
-        });
-        let mut data = TombstoneDisplayData::default();
-
-        data.enrich_from_task(task);
-
-        assert_eq!(data.harness, Some(harness), "harness {harness:?}");
-    }
 }

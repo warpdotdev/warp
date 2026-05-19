@@ -5,8 +5,8 @@
 //! Some conversions may be lossy if it's not important to recover that UI state.
 
 use crate::ai::agent::api::convert_from::{
-    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
-    convert_user_query_mode,
+    convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
+    MaybeAIAgentOutputMessage,
 };
 use crate::ai::agent::conversation::update_todo_list_from_todo_op;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -46,8 +46,8 @@ use warp_core::command::ExitCode;
 use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
 
-use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
+use crate::ai::agent::UserQueryMode;
 
 /// How to restore a conversation from the cloud.
 pub enum RestorationMode {
@@ -88,6 +88,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         },
         RestorationMode::Continue => AgentConversationData {
             server_conversation_token: Some(
@@ -108,6 +109,7 @@ pub fn convert_conversation_data_to_ai_conversation(
                 .map(|task_id| task_id.to_string()),
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         },
     };
 
@@ -239,7 +241,7 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::{Engine, engine::general_purpose};
+            use base64::{engine::general_purpose, Engine};
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {

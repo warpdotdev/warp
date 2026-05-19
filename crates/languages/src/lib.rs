@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use warp_editor::content::text::IndentUnit;
+use warp_util::standardized_path::StandardizedPath;
 
 #[derive(RustEmbed)]
 #[folder = "grammars"]
@@ -86,6 +87,19 @@ impl LanguageRegistry {
     }
 }
 
+/// Find the corresponding language entry by a standardized filename.
+pub fn language_by_filename(path: &StandardizedPath) -> Option<Arc<Language>> {
+    language_by_filename_parts(path.file_name(), path.extension())
+}
+
+/// Find the corresponding language entry by a local filesystem filename.
+pub fn language_by_local_filename(path: &Path) -> Option<Arc<Language>> {
+    language_by_filename_parts(
+        path.file_name().and_then(|file_name| file_name.to_str()),
+        path.extension().and_then(|extension| extension.to_str()),
+    )
+}
+
 /// Normalizes common markdown language aliases to their internal names.
 /// For example, "go" -> "golang", "bash" -> "shell", etc.
 fn normalize_language_name(name: &str) -> &str {
@@ -112,10 +126,12 @@ pub fn language_by_name(name: &str) -> Option<Arc<Language>> {
     LANGUAGE_REGISTRY.language_by_name(normalized)
 }
 
-/// Find the corresponding language entry by the filename.
-pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
+fn language_by_filename_parts(
+    filename: Option<&str>,
+    extension: Option<&str>,
+) -> Option<Arc<Language>> {
     // First check for specific filenames that don't use extensions.
-    if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
+    if let Some(filename) = filename {
         match filename {
             // Bash config files
             ".bashrc" | ".bash_profile" => {
@@ -142,7 +158,7 @@ pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
         }
     }
 
-    let extension = path.extension()?.to_str()?;
+    let extension = extension?;
     match extension {
         "rs" => language_by_name("rust"),
         "go" => language_by_name("golang"),

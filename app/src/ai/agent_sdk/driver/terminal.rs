@@ -23,13 +23,20 @@ use warpui::{
 };
 
 use crate::terminal::model::session::ExecuteCommandOptions;
+use warp_terminal::model::grid::Dimensions;
 
 use crate::{
     ai::ambient_agents::AmbientAgentTaskId,
     pane_group::NewTerminalOptions,
     root_view::{open_new_with_workspace_source, NewWorkspaceSource},
     terminal::{
-        model::block::{BlockId, SerializedBlock},
+        model::{
+            block::{BlockId, SerializedBlock},
+            find::RegexDFAs,
+            grid::RespectDisplayedOutput,
+            index::Point,
+            RespectObfuscatedSecrets,
+        },
         shared_session::{self, IsSharedSessionCreator},
         shell::ShellType,
         view::ConversationRestorationInNewPaneType,
@@ -212,6 +219,7 @@ impl TerminalDriver {
                 let _ = tx.send(Err(ShareSessionError::Disabled));
                 (None, Some(rx))
             } else {
+                log::info!("Waiting for requested session sharing to start");
                 let (tx, rx) = oneshot::channel();
                 (Some(tx), Some(rx))
             }
@@ -359,6 +367,62 @@ impl TerminalDriver {
             .block_list()
             .block_with_id(block_id)
             .map(SerializedBlock::from)
+    }
+
+    /// Full visible plaintext of `block_id`'s output grid (no ANSI escape
+    /// sequences; secrets obfuscated). Used by the harness output monitor
+    /// to detect whether the block has stalled — two byte-identical
+    /// snapshots taken N seconds apart imply the harness has produced no
+    /// new output and no spinner activity.
+    ///
+    /// We intentionally pass `None` for `max_rows` so we compare the entire
+    /// visible output; capping the row count could falsely report "stalled"
+    /// when content scrolled below the cap actually changed.
+    pub fn block_output_plaintext(&self, block_id: &BlockId, ctx: &AppContext) -> Option<String> {
+        let terminal = self.terminal_view.as_ref(ctx);
+        let model = terminal.model.lock();
+        let block = model.block_list().block_with_id(block_id)?;
+        Some(block.output_grid().contents_to_string(
+            false, // include_escape_sequences
+            None,  // max_rows: full visible output
+        ))
+    }
+
+    pub fn find_first_match_in_block_output(
+        &self,
+        block_id: &BlockId,
+        dfas: &RegexDFAs,
+        ctx: &AppContext,
+    ) -> Option<BlockOutputMatch> {
+        let terminal = self.terminal_view.as_ref(ctx);
+        let model = terminal.model.lock();
+        let block = model.block_list().block_with_id(block_id)?;
+        let grid = block.output_grid();
+        let m = grid.find(dfas).next()?;
+        let handler = grid.grid_handler();
+        let matched_text = handler.bounds_to_string(
+            *m.start(),
+            *m.end(),
+            false, // include_esc_sequences
+            RespectObfuscatedSecrets::Yes,
+            false, // force_secrets_obfuscated
+            RespectDisplayedOutput::Yes,
+        );
+        let cols = handler.columns();
+        let row_start = Point::new(m.start().row, 0);
+        let row_end = Point::new(m.end().row, cols.saturating_sub(1));
+        let excerpt = handler.bounds_to_string(
+            row_start,
+            row_end,
+            false,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::Yes,
+        );
+        Some(BlockOutputMatch {
+            matched_text: matched_text.trim().to_owned(),
+            excerpt: excerpt.trim().to_owned(),
+        })
     }
 
     /// Execute a command in the terminal and return a future that resolves to a
@@ -544,6 +608,19 @@ impl TerminalDriver {
             }
         }
     }
+}
+
+/// The first DFA match returned by
+/// [`TerminalDriver::find_first_match_in_block_output`].
+///
+/// `matched_text` is the exact substring from the grid (no ANSI escapes),
+/// used by the harness output monitor to map the hit back to the originating
+/// pattern. `excerpt` is the full row(s) containing the match, also as
+/// plaintext, suitable for surfacing in user-visible error messages.
+#[derive(Debug, Clone)]
+pub(crate) struct BlockOutputMatch {
+    pub matched_text: String,
+    pub excerpt: String,
 }
 
 /// A handle to a running terminal command.

@@ -25,7 +25,7 @@ const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
 
 // Keep in sync with the plugin version in warpdotdev/claude-code-warp.
 // (See the Versioning section of that repo's README.)
-const MINIMUM_PLUGIN_VERSION: &str = "2.0.0";
+const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,

@@ -263,3 +263,36 @@ message DiscardFilesSuccess {}
 message DiscardFilesError {
   string message = 1;
 }
+
+// ── Branch listing ────────────────────────────────────────────────
+
+// Client → server: list branches for a repository.
+message GetBranches {
+  string repo_path = 1;
+  // Maximum number of branches to return. Absent = server default (100).
+  optional uint32 max_branch_count = 2;
+  // Whether to include remote-tracking branches (refs/remotes).
+  bool include_remotes = 3;
+}
+
+// A single branch entry.
+message BranchInfo {
+  string name = 1;
+  bool is_main = 2;
+}
+
+// Server → client: result of a GetBranches request.
+message GetBranchesResponse {
+  oneof result {
+    GetBranchesSuccess success = 1;
+    GetBranchesError error = 2;
+  }
+}
+
+message GetBranchesSuccess {
+  repeated BranchInfo branches = 1;
+}
+
+message GetBranchesError {
+  string message = 1;
+}

@@ -6,18 +6,18 @@ use warp_core::features::FeatureFlag;
 use warpui::{EntityId, ViewContext};
 
 use super::blocklist_filter::exchanges_for_blocklist;
-use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::history_model::{CLIAgentConversation, CloudConversationData};
-use crate::terminal::TerminalModel;
+use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::terminal::input::message_bar::Message as InputMessage;
 use crate::terminal::input::message_bar::MessageItem;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
 use chrono::{DateTime, Local};
 use itertools::Itertools;
@@ -37,12 +37,12 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::{
     ai::{
         agent::{
-            AIAgentExchange, AIAgentExchangeId, AIAgentOutput,
             conversation::{AIConversation, AIConversationId},
+            AIAgentExchange, AIAgentExchangeId, AIAgentOutput,
         },
         blocklist::{
-            AIBlock, BlocklistAIActionModel, BlocklistAIController, ClientIdentifiers,
-            history_model::BlocklistAIHistoryModel, model::AIBlockModelImpl,
+            history_model::BlocklistAIHistoryModel, model::AIBlockModelImpl, AIBlock,
+            BlocklistAIActionModel, BlocklistAIController, ClientIdentifiers,
         },
         get_relevant_files::controller::GetRelevantFilesController,
     },
@@ -947,6 +947,7 @@ impl TerminalView {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         };
 
         match AIConversation::new_restored(conversation_id, tasks, Some(conversation_data)) {

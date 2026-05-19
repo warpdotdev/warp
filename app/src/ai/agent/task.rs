@@ -16,28 +16,28 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_multi_agent_api::{
     self as api,
-    message::{Message, tool_call::subagent::Metadata},
+    message::{tool_call::subagent::Metadata, Message},
 };
 
 use crate::{
-    AIAgentTodoList,
     ai::{
         agent::comment::CodeReview,
         document::ai_document_model::{AIDocumentId, AIDocumentVersion},
     },
     server::datetime_ext::DateTimeExt,
     terminal::model::block::BlockId,
+    AIAgentTodoList,
 };
 
 use super::{
+    api::{
+        convert_conversation::convert_tool_call_result_to_input, user_inputs_from_messages,
+        ConversionParams, ConvertAPIMessageToClientOutputMessage,
+    },
+    conversation::{context_in_exchanges, update_todo_list_from_todo_op},
     AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputStatus, MaybeAIAgentOutputMessage, MessageId, MessageToAIAgentOutputMessageError,
     Shared,
-    api::{
-        ConversionParams, ConvertAPIMessageToClientOutputMessage,
-        convert_conversation::convert_tool_call_result_to_input, user_inputs_from_messages,
-    },
-    conversation::{context_in_exchanges, update_todo_list_from_todo_op},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

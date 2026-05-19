@@ -127,6 +127,30 @@ impl CompactibleActionButton {
         });
     }
 
+    /// Sets the disabled state on both the compact and expanded buttons.
+    pub fn set_disabled<T: View>(&mut self, disabled: bool, ctx: &mut ViewContext<T>) {
+        self.compact_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+        self.expanded_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+    }
+
+    /// Sets the tooltip on both buttons. Passing `None` clears the compact
+    /// button's hover affordance; use [`set_label`](Self::set_label) to
+    /// preserve the label tooltip.
+    pub fn set_tooltip<T: View>(&mut self, tooltip: Option<String>, ctx: &mut ViewContext<T>) {
+        let compact_tooltip = tooltip.clone();
+        let expanded_tooltip = tooltip;
+        self.compact_button.update(ctx, |button, ctx| {
+            button.set_tooltip(compact_tooltip, ctx);
+        });
+        self.expanded_button.update(ctx, |button, ctx| {
+            button.set_tooltip(expanded_tooltip, ctx);
+        });
+    }
+
     pub fn compact_button(&self) -> &ViewHandle<ActionButton> {
         &self.compact_button
     }

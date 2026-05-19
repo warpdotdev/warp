@@ -1,0 +1,71 @@
+name: Changelog Draft
+
+on:
+  # workflow_dispatch is restricted to users with write access to the repo.
+  # External contributors (fork-based) cannot trigger this workflow.
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel (stable, preview, dev)"
+        required: true
+        type: choice
+        options:
+          - stable
+          - preview
+          - dev
+      release_tag:
+        description: "Release tag (e.g. v0.2026.05.06.09.12.stable_00)"
+        required: true
+        type: string
+      attribution:
+        description: "Attribution mode"
+        required: false
+        type: choice
+        options:
+          - external-only
+          - all
+          - none
+        default: external-only
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  draft:
+    name: Generate changelog draft
+    runs-on: namespace-profile-ubuntu-small
+    steps:
+      - name: Check out code
+        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        with:
+          # Check out the default branch (not the release tag) so the skill
+          # files and scripts are always available — older release tags may
+          # not contain them. The release_tag is used only as the git range
+          # endpoint by the skill.
+          fetch-depth: 0
+
+      - name: Generate changelog draft
+        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        with:
+          prompt: |
+            Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ inputs.release_tag }}.
+
+            Attribution mode: ${{ inputs.attribution }}
+            Output directory: ${{ runner.temp }}/changelog-draft
+
+            Follow the workflow in .agents/skills/changelog-draft/SKILL.md exactly.
+
+            After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
+
+            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD). Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
+          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          share: team
+
+      - name: Upload changelog artifacts
+        uses: namespace-actions/upload-artifact@f6ccaacc655aec41b93af180d1d7eef21af862d2 # v1.0.3
+        with:
+          name: changelog-draft
+          path: |
+            ${{ runner.temp }}/changelog-draft/changelog-draft.md
+            ${{ runner.temp }}/changelog-draft/changelog-draft.json

@@ -19,6 +19,21 @@ pub enum CloudModeEntryPoint {
     EntryBlock,
 }
 
+/// The entry point through which a local-to-cloud handoff was initiated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffEntryPoint {
+    /// User typed `&` in the input to enter handoff compose mode.
+    #[default]
+    Ampersand,
+    /// User used the `/handoff` slash command.
+    SlashCommand,
+    /// User clicked the "Hand off to cloud" chip in the footer toolbar.
+    FooterChip,
+    /// The client automatically initiated handoff for an eligible local agent.
+    Automatic,
+}
+
 /// Telemetry events for client interactions with cloud agents.
 #[derive(Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
@@ -69,6 +84,14 @@ pub enum CloudAgentTelemetryEvent {
         /// Error message describing the failure.
         error: String,
     },
+    /// User initiated a local-to-cloud handoff.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    HandoffInitiated {
+        /// How the handoff was triggered.
+        entry_point: HandoffEntryPoint,
+        /// Whether the handoff forked an existing conversation.
+        forked_existing_conversation: bool,
+    },
 }
 
 impl TelemetryEvent for CloudAgentTelemetryEvent {
@@ -107,6 +130,13 @@ impl TelemetryEvent for CloudAgentTelemetryEvent {
             CloudAgentTelemetryEvent::GitHubAuthFromEnvironmentForm => None,
             CloudAgentTelemetryEvent::DispatchFailed { error } => Some(json!({
                 "error": error,
+            })),
+            CloudAgentTelemetryEvent::HandoffInitiated {
+                entry_point,
+                forked_existing_conversation,
+            } => Some(json!({
+                "entry_point": entry_point,
+                "forked_existing_conversation": forked_existing_conversation,
             })),
         }
     }
@@ -149,6 +179,7 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
                 "AmbientAgent.CloudMode.EnvironmentSettings.GitHubAuth"
             }
             Self::DispatchFailed => "AmbientAgent.DispatchFailed",
+            Self::HandoffInitiated => "AmbientAgent.Handoff.Initiated",
         }
     }
 
@@ -170,6 +201,7 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
                 "User started GitHub authentication from the environment form"
             }
             Self::DispatchFailed => "Ambient agent failed to dispatch or encountered an error",
+            Self::HandoffInitiated => "User initiated a local-to-cloud handoff",
         }
     }
 

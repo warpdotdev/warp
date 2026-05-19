@@ -206,7 +206,7 @@ impl SkillWatcher {
 
         // Get the repository handle from DetectedRepositories.
         if let Some(repo_handle) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(&repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&repo_path, ctx)
         {
             // Optimistically add the repository to the set of watched repositories to prevent duplicate subscriptions
             self.watched_repos.insert(repo_path.clone());

@@ -239,7 +239,7 @@ impl FileMCPWatcher {
         }
 
         let Some(repo_handle) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(&repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&repo_path, ctx)
         else {
             return;
         };

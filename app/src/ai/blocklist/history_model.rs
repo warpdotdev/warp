@@ -21,43 +21,43 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "local_fs")]
 use diesel::SqliteConnection;
 
-use crate::GlobalResourceHandlesProvider;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::conversation::{ServerAIConversationMetadata, UpdateConversationError};
-use crate::ai::agent::task::TaskId;
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::CancellationReason;
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
-use crate::persistence::ModelEvent;
 use crate::persistence::model::AgentConversationData;
+use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
+use crate::GlobalResourceHandlesProvider;
 use crate::{
     ai::agent::{
+        conversation::{AIConversation, AIConversationId},
         AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
         MessageId, RenderableAIError, RequestCost, Suggestions,
-        conversation::{AIConversation, AIConversationId},
     },
     persistence::model::AgentConversation,
     ui_components::icons::Icon,
 };
 
 #[cfg(feature = "local_fs")]
-use crate::persistence::{PersistenceScope, database_file_path_for_scope, establish_ro_connection};
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 
-use super::RequestInput;
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
+use super::RequestInput;
 
 mod conversation_loader;
 pub use conversation_loader::{
-    CLIAgentConversation, CloudConversationData,
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
+    CLIAgentConversation, CloudConversationData,
 };
 
 pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 100;
@@ -544,6 +544,29 @@ impl BlocklistAIHistoryModel {
             conversation.set_last_event_sequence(sequence);
         }
         self.persist_conversation_state(conversation_id, ctx);
+    }
+
+    /// Updates the persisted `pinned` state for a conversation and writes
+    /// the change to SQLite. Used by the orchestration pin singleton to
+    /// keep the per-conversation source of truth in sync with toggles.
+    pub fn set_conversation_pinned(
+        &mut self,
+        conversation_id: AIConversationId,
+        pinned: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            log::warn!(
+                "set_conversation_pinned called for conversation {conversation_id:?} that is \
+                 not loaded; pin state change to {pinned} will not be persisted."
+            );
+            return;
+        };
+        if conversation.is_pinned() == pinned {
+            return;
+        }
+        conversation.set_pinned(pinned);
+        conversation.write_updated_conversation_state(ctx);
     }
 
     /// Sets a live conversation's server token, and updates the mapping in the history
@@ -1260,6 +1283,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1418,6 +1442,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -1492,7 +1517,13 @@ impl BlocklistAIHistoryModel {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &mut ModelContext<Self>,
     ) {
+        // Track whether this update changes any state derived by
+        // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
+        // subscribers (e.g. the orchestration credit rollup). We emit the
+        // event only when there's actual data to react to.
+        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
@@ -1503,6 +1534,11 @@ impl BlocklistAIHistoryModel {
                 log::warn!(
                     "Failed to update request cost for conversation {conversation_id}: {e:#}"
                 );
+            }
+            if emits_usage_event {
+                ctx.emit(BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                });
             }
         } else {
             log::warn!(
@@ -2116,6 +2152,22 @@ impl BlocklistAIHistoryModel {
         None
     }
 
+    pub fn get_server_conversation_metadata_by_server_token(
+        &self,
+        server_token: &ServerConversationToken,
+    ) -> Option<&ServerAIConversationMetadata> {
+        self.find_conversation_id_by_server_token(server_token)
+            .and_then(|conversation_id| self.get_server_conversation_metadata(&conversation_id))
+            .or_else(|| {
+                self.all_conversations_metadata
+                    .values()
+                    .find(|metadata| {
+                        metadata.server_conversation_token.as_ref() == Some(server_token)
+                    })
+                    .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
+            })
+    }
+
     /// Finds an AIConversationId by its server conversation token.
     ///
     /// O(1) lookup via `server_token_to_conversation_id`, which is maintained
@@ -2450,9 +2502,20 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
     },
 
-    /// Emitted when a conversation's orchestration config is updated reactively
-    /// from an incoming `OrchestrationConfigSnapshot` message.
+    /// Emitted when a conversation's orchestration config is updated
+    /// (live wire snapshot, user edit, or restore-hydration).
+    /// Consumers that perform UI side effects should gate on `!from_restore`.
     OrchestrationConfigUpdated {
+        conversation_id: AIConversationId,
+        from_restore: bool,
+    },
+
+    /// Emitted when a conversation's `conversation_usage_metadata` is updated
+    /// (for example after a `StreamFinished` event). Subscribers that derive
+    /// data from cross-conversation usage — e.g. the orchestration credit
+    /// rollup in the agent-mode footer — can listen for this to re-render
+    /// when a descendant's credits change.
+    ConversationUsageMetadataUpdated {
         conversation_id: AIConversationId,
     },
 }
@@ -2531,6 +2594,11 @@ impl BlocklistAIHistoryEvent {
             // OrchestrationConfigUpdated is conversation-scoped and has no
             // terminal_view_id.
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => None,
+            // ConversationUsageMetadataUpdated is conversation-scoped and
+            // has no terminal_view_id. Cross-pane consumers (e.g. the
+            // orchestrator footer reading descendant credits) can't be
+            // disambiguated by a single owner pane.
+            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
         }
     }
 }

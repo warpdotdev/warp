@@ -2953,16 +2953,22 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     let appearance = Appearance::as_ref(app);
 
     let error_text = match props.error {
-        RenderableAIError::QuotaLimit => {
-            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-            let formatted_next_refresh_time = ai_request_usage_model
-                .next_refresh_time()
-                .format("%B %d")
-                .to_string();
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => {
+            if let Some(message) = user_display_message {
+                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else {
+                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
+                let formatted_next_refresh_time = ai_request_usage_model
+                    .next_refresh_time()
+                    .format("%B %d")
+                    .to_string();
 
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-            )
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
+                )
+            }
         }
         RenderableAIError::ServerOverloaded => {
             "Warp is currently overloaded. Please try again later.".to_string()

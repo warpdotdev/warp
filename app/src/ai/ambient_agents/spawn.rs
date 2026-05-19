@@ -24,6 +24,14 @@ const TASK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(3);
 #[cfg(test)]
 const TASK_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
+/// Maximum number of consecutive polls that may observe a non-working, non-cancelled task
+/// state for a follow-up before we give up and surface a failure. Bounds the worst-case
+/// wait when the server is wedged and never transitions the task off its prior terminal
+/// state. At the production `TASK_STATUS_POLL_INTERVAL` of 3s, 10 skipped observations
+/// is ~30s — comfortably longer than the dispatcher's `ProcessingInterval` plus typical
+/// worker claim latency.
+const MAX_STALE_POLLS_BEFORE_FAILURE: usize = 10;
+
 /// Information about a session join link for an ambient agent task.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionJoinInfo {
@@ -169,6 +177,19 @@ fn poll_run_until_joinable_session(
             None => warpui::r#async::Timer::never(),
         });
         let mut last_state = None;
+        // For follow-ups, the server does NOT synchronously transition the task off its
+        // prior terminal state when `submit_run_followup` returns — the transition happens
+        // later, asynchronously, when the dispatcher loop picks up the newly enqueued
+        // execution and the worker claims it. If we treated the first observed state as
+        // the follow-up's outcome we'd misreport the prior run's `status_message` as a
+        // failure and end the stream, leaving the model permanently stuck in `Failed`
+        // even though the new run is actually about to start.
+        //
+        // To avoid that, gate event emission for follow-ups on having observed at least
+        // one working state. Initial spawns don't need this — they start from a fresh
+        // task whose first observation reflects the spawn itself.
+        let mut seen_working_state = matches!(&mode, RunPollMode::InitialRun);
+        let mut skipped_stale_polls: usize = 0;
         loop {
             let mut poll_timer = FutureExt::fuse(warpui::r#async::Timer::after(TASK_STATUS_POLL_INTERVAL));
 
@@ -194,6 +215,34 @@ fn poll_run_until_joinable_session(
                     };
                     match poll_result {
                         Ok(task) => {
+                            // Log every non-InProgress observation BEFORE the skip check
+                            // so we retain visibility into stalls where the server is
+                            // wedged on the prior terminal state.
+                            if task.state != AmbientAgentTaskState::InProgress {
+                                log::info!("Agent {run_id} state: {:?}", task.state);
+                            }
+
+                            if task.state.is_working() {
+                                seen_working_state = true;
+                            } else if !seen_working_state
+                                && task.state != AmbientAgentTaskState::Cancelled
+                                && skipped_stale_polls < MAX_STALE_POLLS_BEFORE_FAILURE
+                            {
+                                // Likely the prior run's residual terminal state; the
+                                // server hasn't transitioned the task yet. Skip without
+                                // emitting events or ending the stream.
+                                //
+                                // Carve-outs:
+                                // - `Cancelled` always falls through: it's only reached
+                                //   via explicit user/admin/server cancellation and the
+                                //   server will never transition out of it on its own.
+                                // - After `MAX_STALE_POLLS_BEFORE_FAILURE` skipped polls
+                                //   we give up so a wedged server can't keep the stream
+                                //   alive indefinitely.
+                                skipped_stale_polls += 1;
+                                continue;
+                            }
+
                             if last_state.as_ref() != Some(&task.state) {
                                 last_state = Some(task.state.clone());
                                 yield Ok(AmbientAgentEvent::StateChanged {
@@ -204,17 +253,22 @@ fn poll_run_until_joinable_session(
 
                             if task.state.is_terminal() {
                                 if matches!(&mode, RunPollMode::Followup { .. }) {
-                                    let message = task
-                                        .status_message
-                                        .as_ref()
-                                        .map(|msg| msg.message.clone())
-                                        .unwrap_or_else(|| {
-                                            if task.state.is_failure_like() {
-                                                "Cloud agent failed".to_string()
-                                            } else {
-                                                "Cloud follow-up finished before a new session became available".to_string()
-                                            }
-                                        });
+                                    let exhausted_stale_skips = !seen_working_state
+                                        && skipped_stale_polls >= MAX_STALE_POLLS_BEFORE_FAILURE;
+                                    let message = if exhausted_stale_skips {
+                                        "Cloud follow-up did not start in time".to_string()
+                                    } else {
+                                        task.status_message
+                                            .as_ref()
+                                            .map(|msg| msg.message.clone())
+                                            .unwrap_or_else(|| {
+                                                if task.state.is_failure_like() {
+                                                    "Cloud agent failed".to_string()
+                                                } else {
+                                                    "Cloud follow-up finished before a new session became available".to_string()
+                                                }
+                                            })
+                                    };
                                     yield Err(anyhow!(message));
                                 }
                                 return;
@@ -241,8 +295,6 @@ fn poll_run_until_joinable_session(
                                         return;
                                     }
                                 }
-                            } else {
-                                log::info!("Agent {run_id} state: {:?}", task.state);
                             }
                         }
                         Err(err) => {

@@ -15,7 +15,10 @@ use crate::completer::{
     context::CompletionContext,
     engine::{
         self,
-        path::{sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType},
+        path::{
+            sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to,
+            EngineFileType,
+        },
     },
     matchers::MatchStrategy,
     suggest::{
@@ -668,10 +671,19 @@ async fn generate_suggestions_for_argument_type(
             type_name: TemplateType::Folders { .. },
             filter_name,
         }) => {
+            let is_cd = tokens_from_command.first().is_some_and(|t| *t == "cd");
             let path_suggestions = match ctx.path_completion_context() {
                 Some(path_completion_context) => {
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    if is_cd {
+                        sorted_cd_directories(parsed_token, matcher, path_completion_context).await
+                    } else {
+                        sorted_directories_relative_to(
+                            parsed_token,
+                            matcher,
+                            path_completion_context,
+                        )
                         .await
+                    }
                 }
                 None => Vec::new(),
             };

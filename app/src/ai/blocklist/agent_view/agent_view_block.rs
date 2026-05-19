@@ -17,12 +17,14 @@ use warpui::{
 
 use crate::{
     ai::{
-        active_agent_views_model::ActiveAgentViewsModel,
-        agent::conversation::{AIConversationId, ConversationStatus},
+        active_agent_views_model::ActiveAgentViewsModel, agent::conversation::AIConversationId,
         blocklist::BlocklistAIHistoryEvent,
     },
     terminal::BlockListSettings,
-    ui_components::blended_colors,
+    ui_components::{
+        blended_colors,
+        icon_with_status::{render_icon_with_status, IconWithStatusVariant},
+    },
     view_components::DismissibleToast,
     workspace::{ToastStack, WorkspaceAction},
     BlocklistAIHistoryModel,
@@ -273,25 +275,16 @@ impl View for AgentViewEntryBlock {
             return Empty::new().finish();
         }
 
-        fn with_opacity(mut color: ColorU, opacity: u8) -> ColorU {
-            color.a = opacity;
-            color
-        }
-
-        let status_icon = conversation.status().render_icon(appearance);
-        let status_icon_bg = match conversation.status() {
-            ConversationStatus::InProgress => {
-                with_opacity(appearance.theme().ansi_fg_magenta(), 25)
-            }
-            ConversationStatus::Success => with_opacity(appearance.theme().ansi_fg_green(), 25),
-            ConversationStatus::Error => with_opacity(appearance.theme().ansi_fg_red(), 25),
-            ConversationStatus::Cancelled => {
-                with_opacity(blended_colors::neutral_5(appearance.theme()), 25)
-            }
-            ConversationStatus::Blocked { .. } => {
-                with_opacity(appearance.theme().ansi_fg_yellow(), 25)
-            }
-        };
+        let agent_icon = render_icon_with_status(
+            IconWithStatusVariant::OzAgent {
+                status: Some(conversation.status().clone()),
+                is_ambient: false,
+            },
+            24.,
+            0.,
+            theme,
+            theme.background(),
+        );
 
         let is_active =
             ActiveAgentViewsModel::as_ref(app).is_conversation_open(self.conversation_id, app);
@@ -385,19 +378,7 @@ impl View for AgentViewEntryBlock {
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_child(
-                Container::new(
-                    ConstrainedBox::new(status_icon.finish())
-                        .with_height(16.)
-                        .with_width(16.)
-                        .finish(),
-                )
-                .with_uniform_padding(2.)
-                .with_background_color(status_icon_bg)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                .with_margin_right(8.)
-                .finish(),
-            )
+            .with_child(Container::new(agent_icon).with_margin_right(8.).finish())
             // Expanded fills all remaining space, pushing buttons to the right.
             .with_child(Expanded::new(1., title_section.finish()).finish())
             .with_child(Container::new(fork_button).with_margin_left(8.).finish())

@@ -22,6 +22,7 @@ use ai::skills::{
 use warp_core::{
     channel::ChannelState, features::FeatureFlag, report_error, safe_warn, ui::icons::Icon,
 };
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 /// Activation condition for a bundled skill.
@@ -154,7 +155,8 @@ impl SkillManager {
             }
         } else if let Some(working_directory) = working_directory {
             let repo_root = repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
-                .get_root_for_path(working_directory);
+                .get_root_for_path(&LocalOrRemotePath::Local(working_directory.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok());
 
             for (dir, dir_skill_paths) in &self.directory_skills {
                 if is_home_directory(dir) {

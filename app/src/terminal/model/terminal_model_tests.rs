@@ -128,6 +128,7 @@ fn ssh_bootstraps_if_blocklist_empty() {
         shell: String::from("bash"),
         home_dir: None,
         path: None,
+        cdpath: None,
         editor: None,
         env_var_names: None,
         aliases: None,

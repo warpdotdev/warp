@@ -2,40 +2,39 @@ use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::server::ids::ServerId;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::{
-    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ai::{
-        AIRequestUsageModel,
         active_agent_views_model::ActiveAgentViewsModel,
         agent::{
-            PassiveSuggestionTrigger,
             api::ServerConversationToken,
             conversation::{
                 AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
             },
+            PassiveSuggestionTrigger,
         },
         agent_conversations_model::AgentConversationsModel,
         ambient_agents::github_auth_notifier::GitHubAuthNotifier,
         ambient_agents::{
-            AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
-            task::TaskPrincipalInfo,
+            task::TaskPrincipalInfo, AgentSource, AmbientAgentTask, AmbientAgentTaskId,
+            AmbientAgentTaskState,
         },
         blocklist::{
-            BlocklistAIHistoryModel, agent_view::AgentViewEntryOrigin,
+            agent_view::AgentViewEntryOrigin,
             orchestration_event_streamer::OrchestrationEventStreamer,
             orchestration_events::OrchestrationEventService,
-            task_status_sync_model::TaskStatusSyncModel,
+            task_status_sync_model::TaskStatusSyncModel, BlocklistAIHistoryModel,
         },
         document::ai_document_model::AIDocumentModel,
         execution_profiles::profiles::AIExecutionProfilesModel,
         harness_availability::HarnessAvailabilityModel,
         llms::LLMPreferences,
         mcp::{
-            FileBasedMCPManager, FileMCPWatcher, templatable_manager::TemplatableMCPServerManager,
+            templatable_manager::TemplatableMCPServerManager, FileBasedMCPManager, FileMCPWatcher,
         },
         outline::RepoOutlines,
         persisted_workspace::PersistedWorkspace,
         restored_conversations::RestoredAgentConversations,
         skills::SkillManager,
+        AIRequestUsageModel,
     },
     auth::{auth_manager::AuthManager, user::TEST_USER_UID},
     changelog_model::ChangelogModel,
@@ -65,9 +64,10 @@ use crate::{
     terminal::{
         alt_screen_reporting::AltScreenReporting,
         keys::TerminalKeybindings,
-        local_tty::{TerminalManager, spawner::PtySpawner},
+        local_tty::{spawner::PtySpawner, TerminalManager},
         shared_session::{
-            SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
+            IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
+            SharedSessionStatus,
         },
     },
     test_util::settings::initialize_settings_for_tests,
@@ -75,12 +75,13 @@ use crate::{
     warp_managed_paths_watcher::WarpManagedPathsWatcher,
     workflows::local_workflows::LocalWorkflows,
     workspace::{
-        ActiveSession, OneTimeModalModel, WorkspaceRegistry, sync_inputs::SyncedInputState,
+        sync_inputs::SyncedInputState, ActiveSession, OneTimeModalModel, WorkspaceRegistry,
     },
     workspaces::{
         team_tester::TeamTesterStatus, update_manager::TeamUpdateManager,
         user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
     },
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
 };
 use chrono::Utc;
 use persistence::model::{
@@ -95,8 +96,8 @@ use warp_core::features::FeatureFlag;
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::{
-    HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
-    create_hidden_child_agent_conversation,
+    create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
+    HiddenChildAgentTaskContext,
 };
 use super::*;
 use crate::terminal::resizable_data::ResizableData;
@@ -106,10 +107,10 @@ use ai::{
 };
 use pathfinder_geometry::rect::RectF;
 use shared_session::permissions_manager::SessionPermissionsManager;
-use warpui::windowing::{WindowManager, state::ApplicationStage};
+use warpui::windowing::{state::ApplicationStage, WindowManager};
 use warpui::{
-    App, ModelHandle,
     platform::{WindowBounds, WindowStyle},
+    App, ModelHandle,
 };
 
 fn initialize_app(app: &mut App) {
@@ -156,6 +157,14 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // Pill bar model subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(|ctx| {
+        crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel::new(
+            Default::default(),
+            ctx,
+        )
+    });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(TaskStatusSyncModel::new);
@@ -375,6 +384,7 @@ fn persisted_remote_child_conversation(
                 run_id: Some(task_id.to_string()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),
@@ -532,8 +542,14 @@ fn create_already_fullscreen_parent_pane_data(
     panes: &PaneGroup,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> (TerminalPane, PaneId, AIConversationId) {
-    let (pane_data, terminal_view) =
-        panes.create_terminal_pane_data(None, HashMap::new(), None, None, ctx);
+    let (pane_data, terminal_view) = panes.create_terminal_pane_data(
+        None,
+        HashMap::new(),
+        IsSharedSessionCreator::No,
+        None,
+        None,
+        ctx,
+    );
     let pane_id = pane_data.terminal_pane_id().into();
     let parent_conversation_id =
         start_parent_conversation_for_terminal_view(terminal_view.id(), ctx);
@@ -739,6 +755,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
                 parent_pane_id,
                 HashMap::new(),
+                IsSharedSessionCreator::No,
                 ctx,
             );
 
@@ -759,6 +776,30 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     });
 }
 
+#[test]
+fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let child_pane_id =
+                panes.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
+
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("hidden ambient child pane should have a terminal view");
+            assert!(
+                terminal_view
+                    .as_ref(ctx)
+                    .is_initial_conversation_details_panel_auto_open_suppressed_for_test(),
+                "hidden ambient child panes opened from the parent orchestration UI should not \
+                 auto-open details during environment setup or session readiness"
+            );
+        });
+    });
+}
 #[test]
 fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
     let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -784,6 +825,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                         task_id,
                         working_dir: None,
                     }),
+                    is_shared_session_creator: IsSharedSessionCreator::No,
                 },
                 ctx,
             )
@@ -883,6 +925,17 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
                 "remote child restore should view the existing ambient session"
             );
             assert_eq!(active_conversation_id, Some(child_conversation_id));
+
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("remote child pane should have a terminal view");
+            assert!(
+                terminal_view
+                    .as_ref(ctx)
+                    .is_initial_conversation_details_panel_auto_open_suppressed_for_test(),
+                "remote child panes opened from the parent orchestration UI should not auto-open \
+                 details when the ambient session becomes ready"
+            );
         });
     });
 }
@@ -1115,11 +1168,9 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(
-                !panes
-                    .child_agent_panes
-                    .contains_key(&local_child_conversation_id)
-            );
+            assert!(!panes
+                .child_agent_panes
+                .contains_key(&local_child_conversation_id));
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1199,11 +1250,9 @@ fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pa
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(
-                !panes
-                    .child_agent_panes
-                    .contains_key(&remote_child_conversation_id)
-            );
+            assert!(!panes
+                .child_agent_panes
+                .contains_key(&remote_child_conversation_id));
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1451,8 +1500,8 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 }
 
 #[test]
-fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id()
- {
+fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
+) {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
     let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
@@ -2229,14 +2278,12 @@ fn test_start_shared_session_from_modal() {
             assert_eq!(shared_views[0].id(), terminal_view.id());
 
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            assert!(
-                terminal_pane
-                    .pane_view()
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .has_shareable_object(ctx)
-            );
+            assert!(terminal_pane
+                .pane_view()
+                .as_ref(ctx)
+                .header()
+                .as_ref(ctx)
+                .has_shareable_object(ctx));
         });
     });
 }
@@ -2321,14 +2368,12 @@ fn test_stop_shared_session() {
             let shared_views = manager.shared_views(ctx).collect_vec();
             assert!(shared_views.is_empty());
 
-            assert!(
-                !terminal_pane
-                    .pane_view()
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .has_shareable_object(ctx)
-            );
+            assert!(!terminal_pane
+                .pane_view()
+                .as_ref(ctx)
+                .header()
+                .as_ref(ctx)
+                .has_shareable_object(ctx));
         });
     });
 }
@@ -2405,13 +2450,11 @@ fn test_terminal_pane_headers() {
 
             for terminal_pane in terminal_panes {
                 let pane_view = terminal_pane.pane_view();
-                assert!(
-                    pane_view
-                        .as_ref(ctx)
-                        .header()
-                        .as_ref(ctx)
-                        .is_visible_in_pane_group()
-                );
+                assert!(pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group());
             }
         });
 
@@ -2427,13 +2470,11 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(
-                pane_view
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .is_visible_in_pane_group()
-            );
+            assert!(pane_view
+                .as_ref(ctx)
+                .header()
+                .as_ref(ctx)
+                .is_visible_in_pane_group());
         });
 
         // Create a non-terminal split pane. Terminal pane header remains visible.
@@ -2453,13 +2494,11 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(
-                pane_view
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .is_visible_in_pane_group()
-            );
+            assert!(pane_view
+                .as_ref(ctx)
+                .header()
+                .as_ref(ctx)
+                .is_visible_in_pane_group());
         });
     });
 }

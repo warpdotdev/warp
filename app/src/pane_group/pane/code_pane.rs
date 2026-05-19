@@ -1,15 +1,18 @@
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
 
+#[cfg(feature = "local_fs")]
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::{
     app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents},
     code::{
-        buffer_location::FileLocation,
         editor_management::{CodeEditorStatus, CodeManager, CodeSource},
         view::{CodeView, CodeViewEvent},
     },
     pane_group::PaneGroup,
 };
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
 
 use super::{
     DetachType, PaneConfiguration, PaneContent, PaneId, PaneView, ShareableLink, ShareableLinkError,
@@ -67,13 +70,13 @@ impl PaneContent for CodePane {
 
     fn pre_attach(&self, group: &PaneGroup, ctx: &mut ViewContext<PaneGroup>) -> bool {
         let source = self.file_view(ctx).as_ref(ctx).source().clone();
-        let Some(path) = source.path() else {
+        let Some(location) = source.location() else {
             return true;
         };
         let pane_group_id = ctx.view_id();
 
         let existing_locator = CodeManager::handle(ctx).read(ctx, |manager, _ctx| {
-            manager.get_locator_for_path_in_tab(pane_group_id, path.as_path())
+            manager.get_locator_for_location_in_tab(pane_group_id, &location)
         });
 
         // If the file is already open in the same tab, don't restore it, just focus it (and jump).
@@ -84,11 +87,7 @@ impl PaneContent for CodePane {
                     _ => None,
                 };
                 code_pane.file_view(ctx).update(ctx, |code_view, ctx| {
-                    code_view.open_or_focus_existing(
-                        Some(FileLocation::Local(path.clone())),
-                        line_col,
-                        ctx,
-                    );
+                    code_view.open_or_focus_existing(Some(location.clone()), line_col, ctx);
                 });
             }
 
@@ -100,13 +99,11 @@ impl PaneContent for CodePane {
 
         #[cfg(feature = "local_fs")]
         self.file_view(ctx).update(ctx, |code_view, ctx| {
-            if let Some(path) = source.path() {
-                let line_col = match &source {
-                    CodeSource::Link { range_start, .. } => *range_start,
-                    _ => None,
-                };
-                code_view.open_or_focus_existing(Some(FileLocation::Local(path)), line_col, ctx);
-            }
+            let line_col = match &source {
+                CodeSource::Link { range_start, .. } => *range_start,
+                _ => None,
+            };
+            code_view.open_or_focus_existing(Some(location.clone()), line_col, ctx);
         });
 
         true
@@ -129,26 +126,27 @@ impl PaneContent for CodePane {
                 CodeViewEvent::Pane(pane_event) => {
                     pane_group.handle_pane_event(pane_id, pane_event, ctx)
                 }
-                CodeViewEvent::TabChanged { file_path, .. } => {
-                    if let Some(path) = file_path {
+                CodeViewEvent::TabChanged { location, .. } => {
+                    if let Some(loc) = location {
                         pane_group.active_file_model().update(ctx, |model, ctx| {
-                            model.active_file_changed(path.clone(), ctx);
+                            model.active_file_changed(loc.clone(), ctx);
                         });
                     }
                 }
-                CodeViewEvent::FileOpened { file_path, .. } => {
+                CodeViewEvent::FileOpened { location, .. } => {
                     pane_group.active_file_model().update(ctx, |model, ctx| {
-                        model.active_file_changed(file_path.clone(), ctx);
+                        model.active_file_changed(location.clone(), ctx);
                     });
 
-                    // Track the opened file in the OpenedFilesModel
+                    // Track the opened file in the OpenedFilesModel (local files only)
                     #[cfg(feature = "local_fs")]
-                    {
+                    if let LocalOrRemotePath::Local(file_path) = location {
                         use crate::code::opened_files::OpenedFilesModel;
                         use repo_metadata::repositories::DetectedRepositories;
 
-                        if let Some(repo_path) =
-                            DetectedRepositories::as_ref(ctx).get_root_for_path(file_path)
+                        if let Some(repo_path) = DetectedRepositories::as_ref(ctx)
+                            .get_root_for_path(&LocalOrRemotePath::Local(file_path.to_path_buf()))
+                            .and_then(|r| PathBuf::try_from(r).ok())
                         {
                             OpenedFilesModel::handle(ctx).update(ctx, |opened_files, ctx| {
                                 opened_files.file_opened(repo_path, file_path.clone(), ctx);
@@ -217,7 +215,9 @@ impl PaneContent for CodePane {
 
         let tabs: Vec<CodePaneTabSnapshot> = (0..code_view_ref.tab_count())
             .filter_map(|i| code_view_ref.tab_at(i))
-            .map(|tab| CodePaneTabSnapshot { path: tab.path() })
+            .map(|tab| CodePaneTabSnapshot {
+                path: tab.local_path(),
+            })
             .collect();
 
         let active_tab_index = code_view_ref.active_tab_index();

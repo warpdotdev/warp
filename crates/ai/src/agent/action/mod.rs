@@ -193,6 +193,8 @@ pub struct RunAgentsRequest {
     pub execution_mode: RunAgentsExecutionMode,
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
     pub plan_id: String,
+    /// Resolved client-side at dispatch time; not serialized to the wire.
+    pub harness_auth_secret_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -238,6 +240,11 @@ pub enum StartAgentExecutionMode {
         worker_host: String,
         harness_type: String,
         title: String,
+        /// Name of a managed secret to forward as the authentication
+        /// credential for the remote child when running a non-Oz harness.
+        /// `None` means no client-side secret was selected — the remote
+        /// environment falls back to its own ambient credentials.
+        auth_secret_name: Option<String>,
     },
 }
 
@@ -267,6 +274,7 @@ impl StartAgentExecutionMode {
             worker_host: String::new(),
             harness_type: String::new(),
             title: String::new(),
+            auth_secret_name: None,
         }
     }
 }

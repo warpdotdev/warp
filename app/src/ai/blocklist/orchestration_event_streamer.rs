@@ -9,7 +9,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_events::{
     run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, MessageHydrator, ServerApiAgentEventSource,
+    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
@@ -66,9 +66,9 @@ struct SseForwardingConsumer {
 }
 
 /// State for a wake-only listener. Unlike `SseConnectionState`, this listener
-/// never forwards or persists events; it stops on the first event and asks the
-/// controller to cold-start the dormant Claude run so the parent bridge can
-/// take over delivery.
+/// observes the first wake-triggering message event, then asks the controller
+/// to cold-start the dormant Claude run so the parent bridge can take over
+/// delivery.
 struct WakeConnectionState {
     generation: u64,
     task: SpawnedFutureHandle,
@@ -76,14 +76,14 @@ struct WakeConnectionState {
 
 struct DormantClaudeWakeConsumer {
     run_id: String,
-    wake_sequence: Option<i64>,
+    wake_message: Option<AgentMessageEventMetadata>,
 }
 
 impl DormantClaudeWakeConsumer {
     fn new(run_id: String) -> Self {
         Self {
             run_id,
-            wake_sequence: None,
+            wake_message: None,
         }
     }
 }
@@ -98,8 +98,11 @@ impl AgentEventConsumer for DormantClaudeWakeConsumer {
         if event.run_id != self.run_id {
             return Ok(AgentEventConsumerControlFlow::Continue);
         }
+        let Some(wake_message) = AgentMessageEventMetadata::from_event(&event) else {
+            return Ok(AgentEventConsumerControlFlow::Continue);
+        };
 
-        self.wake_sequence = Some(event.sequence);
+        self.wake_message = Some(wake_message);
         Ok(AgentEventConsumerControlFlow::Stop)
     }
 }
@@ -196,7 +199,10 @@ pub struct OrchestrationEventStreamer {
 }
 
 pub enum OrchestrationEventStreamerEvent {
-    DormantClaudeWakeReady { conversation_id: AIConversationId },
+    DormantClaudeWakeReady {
+        conversation_id: AIConversationId,
+        wake_message: AgentMessageEventMetadata,
+    },
 }
 
 impl OrchestrationEventStreamer {
@@ -205,6 +211,58 @@ impl OrchestrationEventStreamer {
             Ok(task_id) => MessageHydrator::for_task(self.server_api.clone(), task_id),
             Err(_) => MessageHydrator::new(self.ai_client.clone()),
         }
+    }
+
+    fn persist_event_cursor(
+        &mut self,
+        conversation_id: AIConversationId,
+        sequence: i64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let sequence = self
+            .streams
+            .get(&conversation_id)
+            .map(|stream| stream.event_cursor.max(sequence))
+            .unwrap_or(sequence);
+        self.streams
+            .entry(conversation_id)
+            .or_default()
+            .event_cursor = sequence;
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.update_event_sequence(conversation_id, sequence, ctx);
+        });
+
+        let own_run_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.run_id());
+        if let Some(run_id) = own_run_id {
+            let ai_client = self.ai_client.clone();
+            ctx.spawn(
+                async move {
+                    ai_client
+                        .update_event_sequence_on_server(&run_id, sequence)
+                        .await
+                },
+                move |_, result, _| {
+                    if let Err(err) = result {
+                        log::warn!(
+                            "Failed to persist event cursor to server for {conversation_id:?}: {err:#}"
+                        );
+                    }
+                },
+            );
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn persist_dormant_claude_wake_cursor(
+        &mut self,
+        conversation_id: AIConversationId,
+        wake_message: &AgentMessageEventMetadata,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.persist_event_cursor(conversation_id, wake_message.sequence, ctx);
     }
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let provider = ServerApiProvider::as_ref(ctx);
@@ -412,7 +470,8 @@ impl OrchestrationEventStreamer {
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
-            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
         }
     }
 
@@ -1003,9 +1062,8 @@ impl OrchestrationEventStreamer {
 
     /// Opens a wake-only listener for a dormant local Claude child. The
     /// listener observes the child's run_id, stops on the first event, and
-    /// emits a controller signal without enqueueing any event data or
-    /// persisting any cursor. The Claude parent bridge will consume the event
-    /// after the CLI has been relaunched.
+    /// emits the triggering message metadata so the controller can prime the
+    /// Claude parent bridge before the CLI resumes.
     fn start_dormant_claude_wake_listener(
         &mut self,
         conversation_id: AIConversationId,
@@ -1045,7 +1103,7 @@ impl OrchestrationEventStreamer {
                 );
                 let mut consumer = DormantClaudeWakeConsumer::new(task_run_id);
                 run_agent_event_driver(source, config, &mut consumer).await?;
-                Ok::<_, anyhow::Error>(consumer.wake_sequence)
+                Ok::<_, anyhow::Error>(consumer.wake_message)
             },
             move |me, result, ctx| {
                 let is_current = me
@@ -1057,39 +1115,7 @@ impl OrchestrationEventStreamer {
                     return;
                 }
 
-                if let Some(stream) = me.streams.get_mut(&conversation_id) {
-                    stream.wake_connection = None;
-                }
-
-                match result {
-                    Ok(Some(sequence)) => {
-                        log::info!(
-                            "Dormant Claude wake listener observed event for \
-                             {conversation_id:?} at sequence {sequence}"
-                        );
-                        ctx.emit(OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
-                            conversation_id,
-                        });
-                    }
-                    Ok(None) => {
-                        log::warn!(
-                            "Dormant Claude wake listener stopped for {conversation_id:?} \
-                             without observing an event"
-                        );
-                        if me.is_dormant_claude_wake_listener_eligible(conversation_id, ctx) {
-                            me.start_dormant_claude_wake_listener(conversation_id, ctx);
-                        }
-                    }
-                    Err(err) => {
-                        log::warn!(
-                            "Dormant Claude wake listener failed for {conversation_id:?} \
-                             (gen={generation}): {err:#}"
-                        );
-                        if me.is_dormant_claude_wake_listener_eligible(conversation_id, ctx) {
-                            me.start_dormant_claude_wake_listener(conversation_id, ctx);
-                        }
-                    }
-                }
+                me.finish_dormant_claude_wake_listener(conversation_id, generation, result, ctx);
             },
         );
 
@@ -1098,6 +1124,55 @@ impl OrchestrationEventStreamer {
             generation,
             task: handle,
         });
+    }
+
+    fn finish_dormant_claude_wake_listener(
+        &mut self,
+        conversation_id: AIConversationId,
+        generation: u64,
+        result: anyhow::Result<Option<AgentMessageEventMetadata>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(stream) = self.streams.get_mut(&conversation_id) {
+            stream.wake_connection = None;
+        }
+
+        match result {
+            Ok(Some(wake_message)) => {
+                log::info!(
+                    "Dormant Claude wake listener observed wake message for \
+                     {conversation_id:?} at sequence {} message_id={}",
+                    wake_message.sequence,
+                    wake_message.message_id
+                );
+                // Leave the durable cursor untouched here. The controller only
+                // persists the wake sequence after Claude wake preparation
+                // successfully stages/surfaces the message into the parent
+                // bridge, so failed prepares can still replay the event.
+                ctx.emit(OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
+                    conversation_id,
+                    wake_message,
+                });
+            }
+            Ok(None) => {
+                log::warn!(
+                    "Dormant Claude wake listener stopped for {conversation_id:?} \
+                     without observing an event"
+                );
+                if self.is_dormant_claude_wake_listener_eligible(conversation_id, ctx) {
+                    self.start_dormant_claude_wake_listener(conversation_id, ctx);
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "Dormant Claude wake listener failed for {conversation_id:?} \
+                     (gen={generation}): {err:#}"
+                );
+                if self.is_dormant_claude_wake_listener_eligible(conversation_id, ctx) {
+                    self.start_dormant_claude_wake_listener(conversation_id, ctx);
+                }
+            }
+        }
     }
 
     fn teardown_dormant_claude_wake_listener(&mut self, conversation_id: AIConversationId) {
@@ -1273,43 +1348,9 @@ impl OrchestrationEventStreamer {
             .map(|e| e.sequence)
             .max()
             .unwrap_or(previous_cursor);
-        self.streams
-            .entry(conversation_id)
-            .or_default()
-            .event_cursor = max_seq;
-
         // Advance the cursor before filtering so dropped killed-run events
         // are not replayed later.
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.update_event_sequence(conversation_id, max_seq, ctx);
-        });
-
-        // Also persist the cursor to the server so driver / cloud
-        // restarts can resume without local SQLite state. Fire-and-forget:
-        // log on failure, don't block event delivery. The server persists
-        // the cursor on `ai_tasks.last_event_sequence`.
-        let own_run_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .and_then(|c| c.run_id());
-        if let Some(run_id) = own_run_id {
-            // TODO: consider debouncing this server write (see
-            // specs/replay-agent-events-on-restore/TECH.md Risks).
-            let ai_client = self.ai_client.clone();
-            ctx.spawn(
-                async move {
-                    ai_client
-                        .update_event_sequence_on_server(&run_id, max_seq)
-                        .await
-                },
-                move |_, result, _| {
-                    if let Err(err) = result {
-                        log::warn!(
-                            "Failed to persist event cursor to server for {conversation_id:?}: {err:#}"
-                        );
-                    }
-                },
-            );
-        }
+        self.persist_event_cursor(conversation_id, max_seq, ctx);
 
         if !self.killed_run_ids.is_empty() {
             let dropped_message_ids: HashSet<String> = events

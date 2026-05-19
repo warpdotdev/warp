@@ -5,7 +5,6 @@ use crate::ai::mcp::templatable_manager::oauth::{
 };
 use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;
-use itertools::Itertools;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::{collections::HashMap, future::Future};
@@ -1679,15 +1678,25 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         // First, check if the servers are already spawned.
-        let new_installations = installations
-            .iter()
-            .filter(|installation| {
-                let uuid = installation.uuid();
-                !self.active_servers.contains_key(&uuid)
-                    && !self.spawned_servers.contains_key(&uuid)
-            })
-            .cloned()
-            .collect_vec();
+        let mut new_installations = Vec::new();
+        for installation in installations {
+            let uuid = installation.uuid();
+            let server_name = &installation.templatable_mcp_server().name;
+            if self.active_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already running"
+                );
+                continue;
+            }
+            if self.spawned_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already starting"
+                );
+                continue;
+            }
+            log::info!("Spawning file-based MCP server '{server_name}' ({uuid})");
+            new_installations.push(installation.clone());
+        }
 
         // If not, spawn them.
         for installation in new_installations {

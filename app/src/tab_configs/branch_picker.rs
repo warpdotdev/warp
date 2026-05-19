@@ -9,7 +9,7 @@ use crate::{
     tab_configs::PickerStyle,
     util::git::{
         detect_current_branch, get_all_branches, get_all_branches_with_known_main,
-        sort_branches_main_first,
+        sort_branches_main_first, BranchEntry,
     },
     view_components::{DropdownItem, FilterableDropdown},
 };
@@ -154,7 +154,10 @@ impl BranchPicker {
                         if let Ok(current) = detect_current_branch(&cwd).await {
                             let trimmed = current.trim().to_string();
                             if !trimmed.is_empty() {
-                                return Ok(vec![(trimmed, true)]);
+                                return Ok(vec![BranchEntry {
+                                    name: trimmed,
+                                    is_main: true,
+                                }]);
                             }
                         }
                         branches
@@ -186,19 +189,19 @@ impl BranchPicker {
                 if me.cached_main_branch.is_none() {
                     me.cached_main_branch = branches
                         .iter()
-                        .find(|(_, is_main)| *is_main)
-                        .map(|(name, _)| name.clone());
+                        .find(|entry| entry.is_main)
+                        .map(|entry| entry.name.clone());
                 }
 
                 // Main branches first, then the rest in recency order.
                 let mut items: Vec<DropdownItem<String>> = sort_branches_main_first(&branches)
-                    .map(|(name, _)| DropdownItem::new(name.clone(), name.clone()))
+                    .map(|entry| DropdownItem::new(entry.name.clone(), entry.name.clone()))
                     .collect();
 
                 // Add the default as the first item if it isn't already in the list
                 // (e.g. the user typed a branch name that doesn't exist locally yet).
                 if let Some(ref default) = me.default_value {
-                    if !branches.iter().any(|(name, _)| name == default) {
+                    if !branches.iter().any(|entry| entry.name == *default) {
                         items.insert(0, DropdownItem::new(default.clone(), default.clone()));
                     }
                 }

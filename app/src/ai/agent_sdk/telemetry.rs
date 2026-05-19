@@ -78,6 +78,12 @@ pub(super) enum CliTelemetryEvent {
     ArtifactGet,
     /// Executing `warp artifact download`
     ArtifactDownload,
+    /// Executing `warp api-key list`
+    ApiKeyList,
+    /// Executing `warp api-key create`
+    ApiKeyCreate,
+    /// Executing `warp api-key expire`
+    ApiKeyExpire,
     /// Executing `warp schedule create`
     ScheduleCreate,
     /// Executing `warp schedule list`
@@ -169,6 +175,9 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::ArtifactUpload => None,
             CliTelemetryEvent::ArtifactGet => None,
             CliTelemetryEvent::ArtifactDownload => None,
+            CliTelemetryEvent::ApiKeyList => None,
+            CliTelemetryEvent::ApiKeyCreate => None,
+            CliTelemetryEvent::ApiKeyExpire => None,
             CliTelemetryEvent::ScheduleCreate => None,
             CliTelemetryEvent::ScheduleList => None,
             CliTelemetryEvent::ScheduleGet => None,
@@ -252,6 +261,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::ArtifactUpload => "CLI.Execute.Artifact.Upload",
             CliTelemetryEventDiscriminants::ArtifactGet => "CLI.Execute.Artifact.Get",
             CliTelemetryEventDiscriminants::ArtifactDownload => "CLI.Execute.Artifact.Download",
+            CliTelemetryEventDiscriminants::ApiKeyList => "CLI.Execute.ApiKey.List",
+            CliTelemetryEventDiscriminants::ApiKeyCreate => "CLI.Execute.ApiKey.Create",
+            CliTelemetryEventDiscriminants::ApiKeyExpire => "CLI.Execute.ApiKey.Expire",
             CliTelemetryEventDiscriminants::ScheduleCreate => "CLI.Execute.Schedule.Create",
             CliTelemetryEventDiscriminants::ScheduleList => "CLI.Execute.Schedule.List",
             CliTelemetryEventDiscriminants::ScheduleGet => "CLI.Execute.Schedule.Get",
@@ -359,6 +371,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::ArtifactDownload => {
                 "Downloaded an artifact from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::ApiKeyList => "Listed API keys from the Warp CLI",
+            CliTelemetryEventDiscriminants::ApiKeyCreate => "Created an API key from the Warp CLI",
+            CliTelemetryEventDiscriminants::ApiKeyExpire => "Expired an API key from the Warp CLI",
             CliTelemetryEventDiscriminants::ScheduleCreate => {
                 "Created a scheduled agent from the Warp CLI"
             }
@@ -419,6 +434,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             | Self::HarnessSupportFinishTask => EnablementState::Flag(FeatureFlag::AgentHarness),
             Self::ArtifactUpload | Self::ArtifactGet | Self::ArtifactDownload => {
                 EnablementState::Flag(FeatureFlag::ArtifactCommand)
+            }
+            Self::ApiKeyList | Self::ApiKeyCreate | Self::ApiKeyExpire => {
+                EnablementState::Flag(FeatureFlag::APIKeyManagement)
             }
             Self::RunMessageWatch
             | Self::RunMessageSend
