@@ -1870,6 +1870,26 @@ impl CodeEditorModel {
         render_state.styles().base_line_height().as_f32()
     }
 
+    fn page_line_count(&self, ctx: &AppContext) -> u32 {
+        self.lines_in_viewport(ctx).max(1) as u32
+    }
+
+    pub fn move_page_up(&mut self, ctx: &mut ModelContext<Self>) {
+        let line_count = self.page_line_count(ctx);
+        self.selection_model().update(ctx, |selection, ctx| {
+            selection.move_selection_by(TextDirection::Backwards, TextUnit::Line, line_count, ctx);
+        });
+        self.validate(ctx);
+    }
+
+    pub fn move_page_down(&mut self, ctx: &mut ModelContext<Self>) {
+        let line_count = self.page_line_count(ctx);
+        self.selection_model().update(ctx, |selection, ctx| {
+            selection.move_selection_by(TextDirection::Forwards, TextUnit::Line, line_count, ctx);
+        });
+        self.validate(ctx);
+    }
+
     pub fn paste(&mut self, ctx: &mut ModelContext<Self>) {
         // We only want to read the plain text contents for code editor.
         let content = ctx.clipboard().read();

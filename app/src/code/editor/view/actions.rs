@@ -141,6 +141,16 @@ pub fn init(app: &mut AppContext) {
             editable_state.clone(),
         ),
         FixedBinding::new(
+            "pageup",
+            CodeEditorViewAction::PageUp,
+            editable_state.clone() & !id!("Vim"),
+        ),
+        FixedBinding::new(
+            "pagedown",
+            CodeEditorViewAction::PageDown,
+            editable_state.clone() & !id!("Vim"),
+        ),
+        FixedBinding::new(
             "left",
             CodeEditorViewAction::MoveLeft,
             editable_state.clone(),
@@ -673,6 +683,8 @@ pub enum CodeEditorViewAction {
     CutWordRight,
     MoveUp,
     MoveDown,
+    PageUp,
+    PageDown,
     MoveLeft,
     MoveRight,
     MoveBackwardsByWord,
@@ -785,6 +797,8 @@ impl CodeEditorViewAction {
             | Self::ToggleDiffNav(_)
             | Self::MoveUp
             | Self::MoveDown
+            | Self::PageUp
+            | Self::PageDown
             | Self::MoveLeft
             | Self::MoveRight
             | Self::MoveBackwardsByWord
@@ -955,6 +969,10 @@ impl TypedActionView for CodeEditorView {
             }),
             MoveUp => self.model.update(ctx, |model, ctx| model.move_up(ctx)),
             MoveDown => self.model.update(ctx, |model, ctx| model.move_down(ctx)),
+            PageUp => self.model.update(ctx, |model, ctx| model.move_page_up(ctx)),
+            PageDown => self
+                .model
+                .update(ctx, |model, ctx| model.move_page_down(ctx)),
             MoveLeft => self.model.update(ctx, |model, ctx| {
                 model.move_left(ctx);
             }),
