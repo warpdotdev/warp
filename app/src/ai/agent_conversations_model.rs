@@ -689,7 +689,7 @@ impl AgentConversationsModel {
             .get_terminal_view_id_for_ambient_task(*task_id)
             .is_some();
         if has_open_tab {
-            self.get_or_async_fetch_task_data_internal(task_id, true, ctx);
+            self.force_refresh_task(task_id, ctx);
         }
 
         let has_list_consumers = self
@@ -1558,44 +1558,45 @@ impl AgentConversationsModel {
         task_id: &AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<AmbientAgentTask> {
-        self.get_or_async_fetch_task_data_internal(task_id, false, ctx)
-    }
-
-    // If `force_refresh` is true, this will invalidate the cache entry for the stored
-    // task's data and refetch the data from the server. We use this for handling RTC
-    // invalidations.
-    fn get_or_async_fetch_task_data_internal(
-        &mut self,
-        task_id: &AmbientAgentTaskId,
-        force_refresh: bool,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<AmbientAgentTask> {
-        if !force_refresh {
-            if let Some(task) = self.tasks.get(task_id) {
-                return Some(task.clone());
-            }
+        if let Some(task) = self.tasks.get(task_id) {
+            return Some(task.clone());
         }
 
-        // Consult the per-task fetch state unless force-refreshing.
-        if !force_refresh {
-            match self.task_fetch_state.get(task_id) {
-                Some(TaskFetchState::InFlight) => return None,
-                Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
-                    if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
-                        return None;
-                    }
-                    self.task_fetch_state.remove(task_id);
+        self.async_fetch_task(task_id, ctx);
+        None
+    }
+
+    /// Invalidate the cached task and re-fetch from server. In-flight dedup and
+    /// failure cooldowns still apply.
+    fn force_refresh_task(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.async_fetch_task(task_id, ctx);
+    }
+
+    /// Consult fetch-state guards and spawn a fetch if allowed.
+    fn async_fetch_task(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self.task_fetch_state.get(task_id) {
+            Some(TaskFetchState::InFlight) => return,
+            Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
+                if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
+                    return;
                 }
-                Some(TaskFetchState::TransientlyFailed { at, .. }) => {
-                    if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
-                        return None;
-                    }
-                    self.task_fetch_state.remove(task_id);
-                }
-                None => {}
+                self.task_fetch_state.remove(task_id);
             }
-        } else {
-            self.task_fetch_state.remove(task_id);
+            Some(TaskFetchState::TransientlyFailed { at, .. }) => {
+                if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
+                    return;
+                }
+                self.task_fetch_state.remove(task_id);
+            }
+            None => {}
         }
 
         // Opportunistically purge other expired entries so the map doesn't grow unbounded.
@@ -1651,9 +1652,6 @@ impl AgentConversationsModel {
                 }
             },
         );
-
-        // Return the stale cached copy if available (force_refresh keeps it in the map).
-        self.tasks.get(task_id).cloned()
     }
 
     /// Returns all (name, uid) pairs for creators of tasks in the model.
