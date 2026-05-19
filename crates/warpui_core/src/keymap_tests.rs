@@ -274,10 +274,13 @@ fn test_custom_triggers() {
         Some(Trigger::Keystrokes(vec![first_custom_trigger.clone()])),
     );
 
+    // User-customized bindings take precedence in iteration order over defaults, so an
+    // explicit override is not shadowed by a default binding that happens to share the same
+    // keystroke. See https://github.com/warpdotdev/warp/issues/9128.
     {
         let mut bindings = map.bindings();
-        let second = bindings.next().unwrap();
         let first = bindings.next().unwrap();
+        let second = bindings.next().unwrap();
         assert!(bindings.next().is_none());
 
         match first.trigger {
@@ -297,8 +300,8 @@ fn test_custom_triggers() {
 
     {
         let mut editable_bindings = map.editable_bindings();
-        let second = editable_bindings.next().unwrap();
         let first = editable_bindings.next().unwrap();
+        let second = editable_bindings.next().unwrap();
         assert!(editable_bindings.next().is_none());
 
         match first.trigger {
