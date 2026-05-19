@@ -917,6 +917,8 @@ fn bundled_appearance_catalogs_include_theme_and_icon_copy() {
         "search.command_search.out_of_credits_suffix",
         "search.command_search.upgrade",
         "search.command_search.upgrade_ai_usage",
+        "search.filter.display.tabs",
+        "search.filter.placeholder.tabs",
         "search.loading",
         "code_review.action.cancel",
         "code_review.action.close_panel",

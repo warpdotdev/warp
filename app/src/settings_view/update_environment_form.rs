@@ -875,10 +875,9 @@ impl UpdateEnvironmentForm {
             (EnvironmentFormMode::Edit { .. }, true) => {
                 crate::localization::text_for_app(ctx, "settings.environment.form.save")
             }
-            (EnvironmentFormMode::Edit { .. }, false) => crate::localization::text_for_app(
-                ctx,
-                "settings.environment.form.save_environment",
-            ),
+            (EnvironmentFormMode::Edit { .. }, false) => {
+                crate::localization::text_for_app(ctx, "settings.environment.form.save_environment")
+            }
         };
         self.submit_button.update(ctx, |button, ctx| {
             button.set_label(button_text, ctx);
@@ -1423,12 +1422,11 @@ impl UpdateEnvironmentForm {
                         me.update_repos_input_placeholder(ctx);
                     }
                     Ok(UserGithubInfoResult::Unknown) => {
-                        me.github_dropdown_state.load_error_message = Some(
-                            crate::localization::text_for_app(
+                        me.github_dropdown_state.load_error_message =
+                            Some(crate::localization::text_for_app(
                                 ctx,
                                 "settings.environment.form.repos.error.load_failed_short",
-                            ),
-                        );
+                            ));
                         me.update_repos_input_placeholder(ctx);
                     }
                     Err(e) => {

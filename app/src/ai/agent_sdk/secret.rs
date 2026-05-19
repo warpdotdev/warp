@@ -150,7 +150,7 @@ impl SecretInput {
             SecretInput::OpenaiApiKey {
                 value_args,
                 base_url,
-            } => read_openai_api_key_secret_value(&value_args, base_url),
+            } => read_openai_api_key_secret_value(&value_args, base_url, app),
         }
     }
 }
@@ -634,8 +634,9 @@ fn make_secret_value_from_gql_type(
 fn read_openai_api_key_secret_value(
     value_args: &ValueArgs,
     base_url: Option<String>,
+    app: &AppContext,
 ) -> Result<Option<ManagedSecretValue>> {
-    let api_key = match read_simple_secret_value(value_args)? {
+    let api_key = match read_simple_secret_value(value_args, app)? {
         Some(v) => v,
         None => return Ok(None),
     };

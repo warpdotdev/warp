@@ -25,6 +25,7 @@ use crate::{
         ContextChipKind,
     },
     features::FeatureFlag,
+    localization,
     network::NetworkStatus,
     send_telemetry_from_ctx,
     server::telemetry::{PluginChipTelemetryKind, TelemetryEvent},
@@ -125,15 +126,6 @@ use crate::terminal::cli_agent_sessions::plugin_manager::{
 use crate::view_components::ToastLink;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
-
-const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
-const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
-
-const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
-const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
-
-const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
-const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
@@ -273,9 +265,15 @@ impl AgentInputFooter {
             button.set_active(is_nld_enabled, ctx);
             button.set_tooltip(
                 Some(if is_nld_enabled {
-                    DISABLE_NLD_TOOLTIP
+                    localization::text_for_app(
+                        ctx,
+                        "agent.input_footer.disable_command_autodetection",
+                    )
                 } else {
-                    ENABLE_NLD_TOOLTIP
+                    localization::text_for_app(
+                        ctx,
+                        "agent.input_footer.enable_command_autodetection",
+                    )
                 }),
                 ctx,
             );
@@ -290,19 +288,28 @@ impl AgentInputFooter {
                 button.set_active(is_nld_enabled, ctx);
                 button.set_tooltip(
                     Some(if is_nld_enabled {
-                        DISABLE_NLD_TOOLTIP
+                        localization::text_for_app(
+                            ctx,
+                            "agent.input_footer.disable_command_autodetection",
+                        )
                     } else {
-                        ENABLE_NLD_TOOLTIP
+                        localization::text_for_app(
+                            ctx,
+                            "agent.input_footer.enable_command_autodetection",
+                        )
                     }),
                     ctx,
                 );
             });
         });
 
-        let mic_button = ctx.add_typed_action_view(|_ctx| {
+        let mic_button = ctx.add_typed_action_view(|ctx| {
             let button = ActionButton::new("", ActiveMicButtonTheme)
                 .with_icon(Icon::Microphone)
-                .with_tooltip("Voice input")
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.voice_input",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left);
             #[cfg(feature = "voice_input")]
@@ -335,10 +342,13 @@ impl AgentInputFooter {
             });
         }
 
-        let file_button = ctx.add_typed_action_view(|_ctx| {
+        let file_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Plus)
-                .with_tooltip("Attach file")
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.attach_file",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -349,10 +359,13 @@ impl AgentInputFooter {
         // Fast-forward (auto-approve) toggle button.
         // Uses FastForwardButtonTheme so the button keeps its one-off semantics.
         // The theme still delegates its fill to the shared chip background.
-        let fast_forward_button = ctx.add_typed_action_view(|_ctx| {
+        let fast_forward_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", FastForwardButtonTheme)
                 .with_icon(Icon::FastForward)
-                .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.auto_approve_tooltip",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -363,10 +376,13 @@ impl AgentInputFooter {
         // "Hand off to cloud" chip. On click dispatches the workspace action that
         // splits a new cloud-mode pane next to the local pane; that pane handles
         // the rest of the handoff flow when native/local handoff is available.
-        let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
+        let handoff_to_cloud_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud (or type &)")
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.handoff_to_cloud_tooltip",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -377,39 +393,54 @@ impl AgentInputFooter {
         // CLI agent-specific buttons (only rendered when a CLI agent session is active).
         let cli_button_size = ButtonSize::AgentInputButton;
         let file_explorer_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("File explorer", AgentInputButtonTheme)
-                .with_icon(Icon::FileCopy)
-                .with_tooltip("Open file explorer")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_keybinding(
-                    KeystrokeSource::Binding(TOGGLE_PROJECT_EXPLORER_BINDING_NAME),
-                    ctx,
-                )
-                .with_compact_keybinding(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleFileExplorer);
-                })
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.file_explorer"),
+                AgentInputButtonTheme,
+            )
+            .with_icon(Icon::FileCopy)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.open_file_explorer",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_keybinding(
+                KeystrokeSource::Binding(TOGGLE_PROJECT_EXPLORER_BINDING_NAME),
+                ctx,
+            )
+            .with_compact_keybinding(true)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::ToggleFileExplorer);
+            })
         });
         let rich_input_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Rich Input", AgentInputButtonTheme)
-                .with_icon(Icon::TextInput)
-                .with_tooltip("Open Rich Input")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_keybinding(
-                    KeystrokeSource::Binding(OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING),
-                    ctx,
-                )
-                .with_compact_keybinding(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleRichInput);
-                })
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.rich_input"),
+                AgentInputButtonTheme,
+            )
+            .with_icon(Icon::TextInput)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.open_rich_input",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_keybinding(
+                KeystrokeSource::Binding(OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING),
+                ctx,
+            )
+            .with_compact_keybinding(true)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::ToggleRichInput);
+            })
         });
-        let settings_button = ctx.add_typed_action_view(|_ctx| {
+        let settings_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Settings)
-                .with_tooltip("Open coding agent settings")
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.open_coding_agent_settings",
+                ))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -417,58 +448,81 @@ impl AgentInputFooter {
                 })
         });
 
-        let install_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Enable notifications", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip(
-                    "Install the Warp plugin to enable rich agent notifications within Warp",
-                )
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
-                })
+        let install_plugin_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.enable_notifications"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.install_plugin_tooltip",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
+            })
         });
 
-        let plugin_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Notifications setup instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to install the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginInstallInstructionsPane,
-                    );
-                })
+        let plugin_instructions_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.notifications_setup_instructions",
+                ),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.install_plugin_instructions_tooltip",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(
+                    AgentInputFooterAction::OpenPluginInstallInstructionsPane,
+                );
+            })
         });
 
-        let update_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Update Warp plugin", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip("A new version of the Warp plugin is available")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
-                })
+        let update_plugin_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.update_plugin"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.update_plugin_tooltip",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
+            })
         });
 
-        let update_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Plugin update instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to update the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginUpdateInstructionsPane,
-                    );
-                })
+        let update_instructions_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.plugin_update_instructions"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.update_plugin_instructions_tooltip",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::OpenPluginUpdateInstructionsPane);
+            })
         });
 
         let dismiss_plugin_chip_button = ctx.add_typed_action_view(|_ctx| {
@@ -515,7 +569,11 @@ impl AgentInputFooter {
                 #[cfg(not(target_family = "wasm"))]
                 if let CLIAgentSessionsModelEvent::Started { .. } = event {
                     if let Some(agent) = me.cli_agent(ctx) {
-                        let label = format!("Enable {} notifications", agent.display_name());
+                        let label = localization::text_for_app_with_args(
+                            ctx,
+                            "agent.input_footer.enable_agent_notifications",
+                            &[("agent", agent.display_name())],
+                        );
                         me.install_plugin_button.update(ctx, |button, ctx| {
                             button.set_label(label, ctx);
                         });
@@ -551,8 +609,17 @@ impl AgentInputFooter {
                 let is_open = matches!(new_input_state, CLIAgentInputState::Open { .. });
                 me.rich_input_button.update(ctx, |button, ctx| {
                     if is_open {
-                        button.set_label("Hide Rich Input", ctx);
-                        button.set_tooltip(Some("Hide Rich Input"), ctx);
+                        button.set_label(
+                            localization::text_for_app(ctx, "agent.input_footer.hide_rich_input"),
+                            ctx,
+                        );
+                        button.set_tooltip(
+                            Some(localization::text_for_app(
+                                ctx,
+                                "agent.input_footer.hide_rich_input",
+                            )),
+                            ctx,
+                        );
                         button.set_keybinding(
                             Some(KeystrokeSource::Binding(
                                 OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
@@ -560,8 +627,17 @@ impl AgentInputFooter {
                             ctx,
                         );
                     } else {
-                        button.set_label("Rich Input", ctx);
-                        button.set_tooltip(Some("Open Rich Input"), ctx);
+                        button.set_label(
+                            localization::text_for_app(ctx, "agent.input_footer.rich_input"),
+                            ctx,
+                        );
+                        button.set_tooltip(
+                            Some(localization::text_for_app(
+                                ctx,
+                                "agent.input_footer.open_rich_input",
+                            )),
+                            ctx,
+                        );
                         button.set_keybinding(
                             Some(KeystrokeSource::Binding(
                                 OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
@@ -574,10 +650,13 @@ impl AgentInputFooter {
             },
         );
 
-        let start_remote_control_button = ctx.add_typed_action_view(|_ctx| {
+        let start_remote_control_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("/remote-control", RemoteControlButtonTheme)
                 .with_icon(Icon::Phone01)
-                .with_tooltip(START_REMOTE_CONTROL_TOOLTIP)
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.start_remote_control",
+                ))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -585,22 +664,31 @@ impl AgentInputFooter {
                 })
         });
 
-        let stop_remote_control_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Stop sharing", RemoteControlButtonTheme)
-                .with_icon(Icon::StopFilled)
-                .with_icon_ansi_color(AnsiColorIdentifier::Red)
-                .with_tooltip("Stop sharing")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::StopRemoteControl);
-                })
+        let stop_remote_control_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent.input_footer.stop_sharing"),
+                RemoteControlButtonTheme,
+            )
+            .with_icon(Icon::StopFilled)
+            .with_icon_ansi_color(AnsiColorIdentifier::Red)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "agent.input_footer.stop_sharing",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::StopRemoteControl);
+            })
         });
 
-        let context_window_button = ctx.add_typed_action_view(|_ctx| {
+        let context_window_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::ConversationContext0)
-                .with_tooltip("Context window usage")
+                .with_tooltip(localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.context_window_usage",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
@@ -1337,10 +1425,13 @@ impl AgentInputFooter {
                                 DismissibleToast::error(format!("{error_label}: {err}"));
                             if let Some(log_path) = log_path {
                                 toast = toast.with_link(
-                                    ToastLink::new("See logs for details".to_owned())
-                                        .with_onclick_action(WorkspaceAction::OpenFilePath {
-                                            path: log_path,
-                                        }),
+                                    ToastLink::new(localization::text_for_app(
+                                        ctx,
+                                        "agent.input_footer.see_logs_details",
+                                    ))
+                                    .with_onclick_action(
+                                        WorkspaceAction::OpenFilePath { path: log_path },
+                                    ),
                                 );
                             }
                             toast
@@ -1362,13 +1453,24 @@ impl AgentInputFooter {
     fn handle_install_plugin(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let success_msg = self
             .cli_agent(ctx)
-            .and_then(plugin_manager_for)
-            .map(|m| m.install_success_message())
-            .unwrap_or("Warp plugin installed. Please restart the session to activate.");
+            .map(|agent| match agent {
+                CLIAgent::Claude => localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.plugin_installed_reload_plugins",
+                ),
+                CLIAgent::Gemini => localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.plugin_installed_restart_gemini",
+                ),
+                _ => localization::text_for_app(ctx, "agent.input_footer.plugin_installed_restart"),
+            })
+            .unwrap_or_else(|| {
+                localization::text_for_app(ctx, "agent.input_footer.plugin_installed_restart")
+            });
         self.handle_plugin_operation(
-            "Installing Warp plugin...",
-            "Failed to install Warp plugin",
-            success_msg,
+            &localization::text_for_app(ctx, "agent.input_footer.installing_plugin"),
+            &localization::text_for_app(ctx, "agent.input_footer.install_plugin_failed"),
+            &success_msg,
             PluginChipTelemetryKind::Install,
             |manager| async move { manager.install().await },
             ctx,
@@ -1379,13 +1481,24 @@ impl AgentInputFooter {
     fn handle_update_plugin(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let success_msg = self
             .cli_agent(ctx)
-            .and_then(plugin_manager_for)
-            .map(|m| m.update_success_message())
-            .unwrap_or("Warp plugin updated. Please restart the session to activate.");
+            .map(|agent| match agent {
+                CLIAgent::Claude => localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.plugin_updated_reload_plugins",
+                ),
+                CLIAgent::Gemini => localization::text_for_app(
+                    ctx,
+                    "agent.input_footer.plugin_updated_restart_gemini",
+                ),
+                _ => localization::text_for_app(ctx, "agent.input_footer.plugin_updated_restart"),
+            })
+            .unwrap_or_else(|| {
+                localization::text_for_app(ctx, "agent.input_footer.plugin_updated_restart")
+            });
         self.handle_plugin_operation(
-            "Updating Warp plugin...",
-            "Failed to update Warp plugin",
-            success_msg,
+            &localization::text_for_app(ctx, "agent.input_footer.updating_plugin"),
+            &localization::text_for_app(ctx, "agent.input_footer.update_plugin_failed"),
+            &success_msg,
             PluginChipTelemetryKind::Update,
             |manager| async move { manager.update().await },
             ctx,
@@ -1737,7 +1850,10 @@ impl AgentInputFooter {
         match &self.cli_voice_input_state {
             CLIVoiceInputState::Stopped => {
                 if !crate::ai::AIRequestUsageModel::as_ref(ctx).can_request_voice() {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        &localization::text_for_app(ctx, "agent.input_footer.voice_limit_reached"),
+                        ctx,
+                    );
                     return;
                 }
 
@@ -1853,11 +1969,20 @@ impl AgentInputFooter {
             }
             Err(e) => match e {
                 TranscribeError::QuotaLimit => {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        &localization::text_for_app(ctx, "agent.input_footer.voice_limit_reached"),
+                        ctx,
+                    );
                 }
                 _ => {
                     log::error!("Failed to transcribe CLI voice input: {e:?}");
-                    self.show_cli_voice_error_toast("Failed to transcribe voice input", ctx);
+                    self.show_cli_voice_error_toast(
+                        &localization::text_for_app(
+                            ctx,
+                            "agent.input_footer.voice_transcribe_failed",
+                        ),
+                        ctx,
+                    );
                 }
             },
         }
@@ -1897,8 +2022,9 @@ impl AgentInputFooter {
     fn show_cli_microphone_access_toast(&self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
-                "Failed to start voice input (you may need to enable Microphone access)",
+            let toast = DismissibleToast::error(localization::text_for_app(
+                ctx,
+                "agent.input_footer.voice_microphone_access_failed",
             ));
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
@@ -1910,9 +2036,10 @@ impl AgentInputFooter {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
             if let Some(toggle_key) = settings.maybe_setup_first_time_voice(ctx) {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::success(format!(
-                        "Voice input is enabled. You can also press and hold the `{}` key to activate voice input (configure in Settings > AI > Voice)",
-                        toggle_key.display_name()
+                    let toast = DismissibleToast::success(localization::text_for_app_with_args(
+                        ctx,
+                        "agent.input_footer.voice_enabled_toast",
+                        &[("key", &toggle_key.display_name())],
                     ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
@@ -1933,9 +2060,9 @@ impl AgentInputFooter {
             Icon::FastForward
         };
         let tooltip = if is_active {
-            FAST_FORWARD_ON_TOOLTIP
+            localization::text_for_app(ctx, "agent.input_footer.auto_approve_disable_tooltip")
         } else {
-            FAST_FORWARD_OFF_TOOLTIP
+            localization::text_for_app(ctx, "agent.input_footer.auto_approve_tooltip")
         };
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
@@ -1952,9 +2079,9 @@ impl AgentInputFooter {
             .get()
             .is_anonymous_or_logged_out();
         let tooltip = if login_required {
-            START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP
+            localization::text_for_app(ctx, "agent.input_footer.remote_control_login_required")
         } else {
-            START_REMOTE_CONTROL_TOOLTIP
+            localization::text_for_app(ctx, "agent.input_footer.start_remote_control")
         };
         self.start_remote_control_button.update(ctx, |button, ctx| {
             button.set_disabled(login_required, ctx);
@@ -2260,7 +2387,10 @@ fn render_ftu_callout(
                     Expanded::new(
                         1.,
                         Text::new(
-                            "Now using Full Terminal Agent's default model.",
+                            localization::text_for_app(
+                                app,
+                                "agent.input_footer.full_terminal_default_model",
+                            ),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size() - 2.,
                         )

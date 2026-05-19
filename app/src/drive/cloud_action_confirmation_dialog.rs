@@ -82,9 +82,10 @@ impl CloudActionConfirmationDialog {
             CloudActionConfirmationDialogVariant::DeleteTeam => {
                 text(app, "drive.confirmation.delete_team.title")
             }
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                text(app, "drive.confirmation.remove_team_member_reload_credits.title")
-            }
+            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => text(
+                app,
+                "drive.confirmation.remove_team_member_reload_credits.title",
+            ),
             CloudActionConfirmationDialogVariant::None => String::new(),
         }
     }
@@ -100,9 +101,10 @@ impl CloudActionConfirmationDialog {
             CloudActionConfirmationDialogVariant::DeleteTeam => {
                 text(app, "drive.confirmation.delete_team.body")
             }
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                text(app, "drive.confirmation.remove_team_member_reload_credits.body")
-            }
+            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => text(
+                app,
+                "drive.confirmation.remove_team_member_reload_credits.body",
+            ),
             CloudActionConfirmationDialogVariant::None => String::new(),
         }
     }
@@ -118,9 +120,10 @@ impl CloudActionConfirmationDialog {
             CloudActionConfirmationDialogVariant::DeleteTeam => {
                 text(app, "drive.confirmation.delete_team.confirm")
             }
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                text(app, "drive.confirmation.remove_team_member_reload_credits.confirm")
-            }
+            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => text(
+                app,
+                "drive.confirmation.remove_team_member_reload_credits.confirm",
+            ),
             CloudActionConfirmationDialogVariant::None => String::new(),
         }
     }

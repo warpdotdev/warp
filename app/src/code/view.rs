@@ -2021,7 +2021,7 @@ impl CodeView {
             MenuItemFields::new_with_label("Close saved", &format!("{modifier_keys} U"))
                 .with_on_select_action(CodeViewAction::CloseSaved)
                 .into_item(),
-            MenuItemFields::toggle_pane_action(is_maximized)
+            MenuItemFields::toggle_pane_action(is_maximized, ctx)
                 .with_on_select_action(CodeViewAction::ToggleMaximized)
                 .into_item(),
         ];

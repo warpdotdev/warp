@@ -434,14 +434,39 @@ impl AITip for AgentTip {
 }
 
 impl WorkspaceAction {
-    pub fn display_text(&self) -> Option<String> {
+    pub fn display_text(&self, app: &AppContext) -> Option<String> {
         match self {
-            WorkspaceAction::OpenPalette { .. } => Some("Open palette".to_string()),
-            WorkspaceAction::OpenWarpDrive => Some("Warp Drive.".to_string()),
-            WorkspaceAction::ToggleRightPanel => Some("Show diff view".to_string()),
+            WorkspaceAction::OpenPalette { .. } => Some(crate::localization::text_for_app(
+                app,
+                "agent.tips.action.open_palette",
+            )),
+            WorkspaceAction::OpenWarpDrive => Some(crate::localization::text_for_app(
+                app,
+                "agent.tips.action.open_warp_drive",
+            )),
+            WorkspaceAction::ToggleRightPanel => Some(crate::localization::text_for_app(
+                app,
+                "agent.tips.action.show_diff_view",
+            )),
             _ => None,
         }
     }
+}
+
+pub fn tip_text_fragments(text: String) -> Vec<FormattedTextFragment> {
+    let parts: Vec<&str> = text.split('`').collect();
+    let mut fragments = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i % 2 == 0 {
+            fragments.push(FormattedTextFragment::plain_text(part.to_string()));
+        } else {
+            fragments.push(FormattedTextFragment::inline_code(part.to_string()));
+        }
+    }
+    fragments
 }
 
 /// Helper function to build the list of agent tips, including the voice tip if enabled.

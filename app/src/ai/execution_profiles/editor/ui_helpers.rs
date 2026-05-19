@@ -675,7 +675,7 @@ pub fn render_permissions_section(
             .clone(),
     ));
     column.add_child(render_permission_row(
-        appearance,
+        permission_row_context,
         Icon::Atom,
         "Run orchestrated agents",
         &view.run_agents_dropdown,

@@ -772,6 +772,9 @@ fn ctrl_tab_behavior_dropdown_label(app: &AppContext, behavior: CtrlTabBehavior)
         CtrlTabBehavior::CycleMostRecentSession => {
             "settings.features.ctrl_tab_behavior.option.cycle_most_recent_session"
         }
+        CtrlTabBehavior::CycleMostRecentTab => {
+            "settings.features.ctrl_tab_behavior.option.cycle_most_recent_tab"
+        }
     };
     feature_text(app, key)
 }
@@ -5522,7 +5525,7 @@ impl SettingsWidget for ExtraMetaKeysWidget {
         Flex::column()
             .with_child(render_body_item::<FeaturesPageAction>(
                 app,
-                EXTRA_META_KEYS_LEFT_KEY,
+                EXTRA_META_KEYS_LEFT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
                     crate::terminal::keys_settings::ExtraMetaKeys::storage_key(),
@@ -5544,7 +5547,7 @@ impl SettingsWidget for ExtraMetaKeysWidget {
             ))
             .with_child(render_body_item::<FeaturesPageAction>(
                 app,
-                EXTRA_META_KEYS_RIGHT_KEY,
+                EXTRA_META_KEYS_RIGHT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
                     crate::terminal::keys_settings::ExtraMetaKeys::storage_key(),
@@ -6634,7 +6637,6 @@ impl SettingsWidget for TabKeyBehaviorWidget {
             );
         if *CloudPreferencesSettings::as_ref(app).settings_sync_enabled {
             tab_key_span.add_child(render_local_only_icon(
-                app,
                 appearance,
                 view.button_mouse_states
                     .tab_behavior_local_only_icon
