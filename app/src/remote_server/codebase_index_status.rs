@@ -82,14 +82,21 @@ fn codebase_index_status_state_from_parts(
     has_synced_version: bool,
     last_sync_result: Option<&CodebaseIndexFinishedStatus>,
 ) -> CodebaseIndexStatusState {
-    match (has_pending, has_synced_version, last_sync_result) {
-        (true, true, _) => CodebaseIndexStatusState::Stale,
-        (true, false, _) => CodebaseIndexStatusState::Indexing,
-        (false, _, Some(CodebaseIndexFinishedStatus::Completed)) => CodebaseIndexStatusState::Ready,
-        (false, _, Some(CodebaseIndexFinishedStatus::Failed(_))) => {
+    match (has_synced_version, has_pending, last_sync_result) {
+        (true, false, Some(CodebaseIndexFinishedStatus::Completed)) => {
+            CodebaseIndexStatusState::Ready
+        }
+        // Match local search behavior: any status with a synced root can still serve search
+        // requests from that last good root while new incremental work catches up.
+        (true, _, _) => CodebaseIndexStatusState::Stale,
+        (false, true, _) => CodebaseIndexStatusState::Indexing,
+        (false, false, Some(CodebaseIndexFinishedStatus::Failed(_))) => {
             CodebaseIndexStatusState::Failed
         }
-        (false, _, None) => CodebaseIndexStatusState::Queued,
+        (false, false, Some(CodebaseIndexFinishedStatus::Completed)) => {
+            CodebaseIndexStatusState::Ready
+        }
+        (false, false, None) => CodebaseIndexStatusState::Queued,
     }
 }
 
@@ -151,6 +158,23 @@ mod tests {
         assert_eq!(
             codebase_index_status_state_from_parts(false, true, Some(&result)),
             CodebaseIndexStatusState::Ready
+        );
+    }
+    #[test]
+    fn syncing_codebase_index_with_synced_version_maps_to_stale() {
+        assert_eq!(
+            codebase_index_status_state_from_parts(false, true, None),
+            CodebaseIndexStatusState::Stale
+        );
+    }
+
+    #[test]
+    fn failed_codebase_index_with_synced_version_maps_to_stale() {
+        let result = CodebaseIndexFinishedStatus::Failed(CodebaseIndexingError::BuildTreeError);
+
+        assert_eq!(
+            codebase_index_status_state_from_parts(false, true, Some(&result)),
+            CodebaseIndexStatusState::Stale
         );
     }
 

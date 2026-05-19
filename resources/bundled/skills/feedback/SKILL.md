@@ -12,9 +12,10 @@ Treat Warp client, Warp app, Warp terminal, and Warp UX feedback as `warpdotdev/
 ## Overview
 - Use the `gh` CLI to search for and fetch code from `warpdotdev/warp` when product or implementation context would improve the report.
 - If those repos are not available, draft the issue from the user's report alone rather than blocking on more context.
-- This skill is strictly for issue filing and duplicate detection. Never modify code, generate patches, propose implementation diffs, or open a pull request as part of this workflow.
+- This skill is strictly for issue drafting, duplicate detection, confirmation, and filing. Never modify code, generate patches, propose implementation diffs, or open a pull request as part of this workflow.
 - If you cannot file an issue, say so explicitly in the response instead of attempting another side effect.
 - The helper script applies the `in-app-feedback` label to filed issues for tracking.
+- Never post anything publicly until the user has explicitly confirmed the final drafted issue title and description.
 
 ## Code access boundaries
 
@@ -96,7 +97,7 @@ Load the bundled reference files only when relevant:
 - In your final response, explicitly instruct the user to paste or drag each attached image into the body at the corresponding `_Paste screenshot N here_` line(s) and then submit the issue. Reference the count of attached images so the user knows how many to paste. Do not claim the issue has been filed until the user submits.
 - If the user's query has no image attachments, do not add captions or placeholders, pass `--use gh` as usual, and do not add drag-and-drop instructions to your final response.
 
-### 7. Check for likely duplicates before filing
+### 7. Check for likely duplicates before asking to file
 
 - Before invoking `scripts/file_feedback_issue.py`, search issues in `warpdotdev/warp` for likely title matches using the drafted title as the primary query.
 - Use a lightweight title-based check only. Prefer precision over recall, and do not run a broad semantic fishing expedition.
@@ -114,7 +115,18 @@ GH_PAGER=cat gh issue list \
 
 - Treat a result as a duplicate candidate only when the existing issue title clearly refers to the same underlying problem or request.
 - If you find a clear title match, do not file a new issue. Respond by pointing the user to the existing issue and explain briefly why it appears to match.
-- If no clear title match is found, proceed to file the new issue.
+- If no clear title match is found, proceed to final confirmation.
+
+### 8. Ask for final filing confirmation
+
+- Before invoking `scripts/file_feedback_issue.py` or otherwise opening a public GitHub issue form, use the `ask_user_question` tool to ask whether the user wants the issue filed.
+- The confirmation question must include the exact issue title and issue description/body that will be filed before asking for confirmation. Present them as a prerequisite to the question, using a concise format like:
+  - `Issue title: <title>`
+  - `Issue description:` followed by the drafted body.
+  - `Would you like me to file this issue publicly in warpdotdev/warp?`
+- Provide clear answer options, including a positive confirmation such as `Yes, file this issue` and a negative option such as `No, do not file it`.
+- Do not call the helper script, open the browser issue form, or create an issue unless the user explicitly chooses the positive confirmation option.
+- If the user declines or does not clearly confirm, respond that no issue was filed. If they request edits to the title or description instead, revise the draft and repeat this final confirmation step before filing.
 
 ## Issue Structure
 Use these sections in order when they apply:
@@ -227,7 +239,7 @@ Issue body:
 - path or symbol: why it may be relevant
 ```
 
-After completing the duplicate-check and filing workflow:
+After completing the duplicate-check, confirmation, and filing workflow:
 - If the duplicate-check step finds an existing matching issue, respond with the existing issue link and a brief summary (2–4 sentences max) explaining that a likely duplicate already exists, including the matching title, whether that issue is open or closed, and why it appears to match. Do not create another issue.
 
 - If the JSON result has `status: "created"` and `browser_unavailable: true`, explicitly tell the user that the browser could not be opened (include the `message` field from the result) and that the issue was filed programmatically with the available text contents. Make clear that image attachments were not uploaded to the issue. Then provide the issue link and a brief summary (3–5 sentences max) of what was filed.

@@ -4390,6 +4390,7 @@ impl TerminalView {
                                 remote_arch,
                                 exit_code: None,
                                 signal_killed: None,
+                                proxy_stderr: None,
                             },
                             ctx
                         );
@@ -4399,6 +4400,7 @@ impl TerminalView {
                         phase,
                         error,
                         exit_status,
+                        proxy_stderr,
                         is_cancelled,
                     } => {
                         me.model.lock().event_proxy.send_terminal_event(
@@ -4427,6 +4429,7 @@ impl TerminalView {
                                     remote_arch,
                                     exit_code: exit_status.as_ref().and_then(|s| s.code),
                                     signal_killed: exit_status.as_ref().map(|s| s.signal_killed),
+                                    proxy_stderr: proxy_stderr.clone(),
                                 },
                                 ctx
                             );
@@ -4659,6 +4662,7 @@ impl TerminalView {
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+                    | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
                     | RemoteServerManagerEvent::BufferUpdated { .. }
                     | RemoteServerManagerEvent::BufferConflictDetected { .. }
                     | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
@@ -20318,6 +20322,14 @@ impl TerminalView {
         active_block.index() == block_index && active_block.is_active_and_long_running()
     }
 
+    pub fn has_active_long_running_command(&self) -> bool {
+        let model = self.model.lock();
+        model
+            .block_list()
+            .active_block()
+            .is_active_and_long_running()
+    }
+
     /// If password notification settings enabled, send a notification.
     /// Otherwise, set the banner trigger so that we show the banner the next
     /// time a block completes.
@@ -26515,7 +26527,7 @@ impl View for TerminalView {
 
                     let stack = Stack::new()
                         .with_constrain_absolute_children()
-                        .with_child(column.finish());
+                        .with_child(Clipped::new(column.finish()).finish());
                     if matches!(input_mode, InputMode::Waterfall) && !is_alt_screen_active {
                         self.render_waterfall_mode_background(&model, stack, app)
                     } else {

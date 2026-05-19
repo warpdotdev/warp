@@ -345,7 +345,10 @@ async fn subscribe_to_codebase_index_events(
             ctx.subscribe_to_model(
                 &CodebaseIndexManager::handle(ctx),
                 move |_, event, ctx| {
-                    if !matches!(event, CodebaseIndexManagerEvent::SyncStateUpdated) {
+                    if !matches!(
+                        event,
+                        CodebaseIndexManagerEvent::SyncStateUpdated { .. }
+                    ) {
                         return;
                     }
 

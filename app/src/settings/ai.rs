@@ -1497,6 +1497,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
         description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
     }
+
+    auto_handoff_on_sleep_enabled: AutoHandoffOnSleepEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
+        description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
+    }
 ]);
 
 impl AISettings {
@@ -1738,6 +1748,14 @@ impl AISettings {
     ) -> bool {
         self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
             && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && self
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            && *self.auto_handoff_on_sleep_enabled
     }
 
     /// Determines whether a quota reset banner should be displayed to the user.

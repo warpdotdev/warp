@@ -5,20 +5,27 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use std::collections::HashMap;
 use warp_cli::agent::Harness;
 use warp_core::send_telemetry_from_ctx;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::workspace::WorkspaceAction;
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::inline_action::create_environment_modal::{
+    CreateEnvironmentModal, CreateEnvironmentModalEvent,
+};
 use crate::ai::blocklist::inline_action::host_picker::{HostPicker, HostPickerEvent};
 use crate::ai::blocklist::inline_action::orchestration_controls::{
     self as oc, AuthSecretSelection, OrchestrationControlAction, OrchestrationEditState,
@@ -118,6 +125,7 @@ pub enum OrchestrationConfigBlockAction {
     EnvironmentChanged {
         environment_id: String,
     },
+    CreateEnvironmentRequested,
     WorkerHostChanged {
         worker_host: String,
     },
@@ -141,6 +149,9 @@ impl OrchestrationControlAction for OrchestrationConfigBlockAction {
     fn environment_changed(environment_id: String) -> Self {
         Self::EnvironmentChanged { environment_id }
     }
+    fn create_environment_requested() -> Self {
+        Self::CreateEnvironmentRequested
+    }
     fn auth_secret_changed(auth_secret_name: Option<String>) -> Self {
         Self::AuthSecretChanged { auth_secret_name }
     }
@@ -156,6 +167,7 @@ pub struct OrchestrationConfigBlockView {
     plan_id: String,
     edit_state: OrchestrationEditState,
     pickers: OrchestrationPickerHandles<OrchestrationConfigBlockAction>,
+    create_environment_modal: ViewHandle<CreateEnvironmentModal>,
     is_approved: bool,
     details_expanded: bool,
     pickers_initialized: bool,
@@ -278,11 +290,22 @@ impl OrchestrationConfigBlockView {
             },
         );
 
+        let create_environment_modal = ctx.add_typed_action_view(CreateEnvironmentModal::new);
+        ctx.subscribe_to_view(&create_environment_modal, |me, _, event, ctx| match event {
+            CreateEnvironmentModalEvent::Created { environment_id } => {
+                me.select_created_environment(environment_id.clone(), ctx);
+            }
+            CreateEnvironmentModalEvent::Cancelled => {
+                ctx.notify();
+            }
+        });
+
         let mut view = Self {
             conversation_id,
             plan_id,
             edit_state,
             pickers: OrchestrationPickerHandles::default(),
+            create_environment_modal,
             is_approved,
             details_expanded: false,
             pickers_initialized: false,
@@ -506,6 +529,25 @@ impl OrchestrationConfigBlockView {
         oc::sync_picker_selections(&self.edit_state, &self.pickers, ctx);
     }
 
+    fn open_create_environment_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(environment_picker) = &self.pickers.environment_picker {
+            environment_picker.update(ctx, |dropdown, ctx| dropdown.close(ctx));
+        }
+        self.create_environment_modal.update(ctx, |modal, ctx| {
+            modal.show(ctx);
+        });
+        ctx.notify();
+    }
+
+    fn select_created_environment(&mut self, environment_id: String, ctx: &mut ViewContext<Self>) {
+        self.edit_state.set_environment_id(environment_id.clone());
+        if let Some(environment_picker) = &self.pickers.environment_picker {
+            oc::populate_environment_picker(environment_picker, &environment_id, ctx);
+        }
+        self.apply_field_change(ctx);
+        ctx.notify();
+    }
+
     fn apply_field_change(&mut self, ctx: &mut ViewContext<Self>) {
         self.suppress_refresh = true;
         let config = self.edit_state.to_orchestration_config();
@@ -683,12 +725,26 @@ impl View for OrchestrationConfigBlockView {
         }
 
         // Outer container with accent styling per Figma
-        Container::new(column.finish())
+        let card = Container::new(column.finish())
             .with_uniform_padding(12.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .with_background(warp_core::ui::theme::color::internal_colors::accent_overlay_1(theme))
             .with_border(warpui::elements::Border::all(1.).with_border_fill(theme.accent()))
-            .finish()
+            .finish();
+
+        let mut stack = Stack::new().with_child(card);
+        if self.create_environment_modal.as_ref(app).is_visible() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.create_environment_modal).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+        stack.finish()
     }
 }
 
@@ -776,6 +832,9 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 oc::persist_environment_selection(environment_id, ctx);
                 self.apply_field_change(ctx);
                 ctx.notify();
+            }
+            OrchestrationConfigBlockAction::CreateEnvironmentRequested => {
+                self.open_create_environment_modal(ctx);
             }
             OrchestrationConfigBlockAction::WorkerHostChanged { worker_host } => {
                 self.edit_state.set_worker_host(worker_host.clone());

@@ -13,9 +13,9 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use warpui::elements::{
-    ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius,
-    Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Point, Radius, Text,
 };
 use warpui::event::DispatchedEvent;
 use warpui::platform::Cursor;
@@ -45,6 +45,7 @@ use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::report_if_error;
 use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{Dropdown, DropdownAction, DropdownStyle};
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -84,6 +85,7 @@ pub trait OrchestrationControlAction: Clone + Debug + Send + Sync + 'static {
     fn model_changed(model_id: String) -> Self;
     fn harness_changed(harness_type: String) -> Self;
     fn environment_changed(environment_id: String) -> Self;
+    fn create_environment_requested() -> Self;
     /// `None` means Inherit; `Some(name)` means a named managed secret.
     fn auth_secret_changed(name: Option<String>) -> Self;
     /// User picked the "New API key…" item; opens the workspace create modal.
@@ -684,6 +686,7 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
 ) -> ViewHandle<FilterableDropdown<A>> {
     let initial_env = initial_env_id.to_string();
     let styles = *styles;
+    let footer_mouse_state = MouseStateHandle::default();
     let dropdown_handle = ctx.add_typed_action_view(move |ctx_dropdown| {
         let mut dropdown = FilterableDropdown::<A>::new(ctx_dropdown);
         dropdown.set_use_overlay_layer(false, ctx_dropdown);
@@ -696,6 +699,11 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
     });
     dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
         dropdown.set_menu_width(280.0, ctx_dropdown);
+        let footer_mouse_state = footer_mouse_state.clone();
+        dropdown.set_footer(
+            move |app| render_new_environment_footer::<A>(footer_mouse_state.clone(), app),
+            ctx_dropdown,
+        );
         let all_envs = CloudAmbientAgentEnvironment::get_all(ctx_dropdown);
         let mut sorted_envs: Vec<(String, String)> = all_envs
             .iter()
@@ -732,6 +740,101 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
     dropdown_handle
 }
 
+pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
+    dropdown_handle: &ViewHandle<FilterableDropdown<A>>,
+    initial_env_id: &str,
+    ctx: &mut ViewContext<V>,
+) {
+    let initial_env = initial_env_id.to_string();
+    dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
+        let all_envs = CloudAmbientAgentEnvironment::get_all(ctx_dropdown);
+        let mut sorted_envs: Vec<(String, String)> = all_envs
+            .iter()
+            .map(|env| (env.id.uid(), env.model().string_model.name.clone()))
+            .collect();
+        sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut items: Vec<MenuItem<DropdownAction<A>>> = Vec::new();
+        let mut selected_name: Option<String> = None;
+        items.push(MenuItem::Item(
+            MenuItemFields::new(ORCHESTRATION_ENV_NONE_LABEL).with_on_select_action(
+                DropdownAction::SelectActionAndClose(A::environment_changed(String::new())),
+            ),
+        ));
+        if initial_env.is_empty() {
+            selected_name = Some(ORCHESTRATION_ENV_NONE_LABEL.to_string());
+        }
+        for (env_id, env_name) in &sorted_envs {
+            if env_id == &initial_env {
+                selected_name = Some(env_name.clone());
+            }
+            let env_id_for_item = env_id.clone();
+            items.push(MenuItem::Item(
+                MenuItemFields::new(env_name).with_on_select_action(
+                    DropdownAction::SelectActionAndClose(A::environment_changed(env_id_for_item)),
+                ),
+            ));
+        }
+        dropdown.set_rich_items(items, ctx_dropdown);
+        if let Some(name) = selected_name {
+            dropdown.set_selected_by_name(&name, ctx_dropdown);
+        }
+    });
+}
+
+fn render_new_environment_footer<A: OrchestrationControlAction>(
+    mouse_state: MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let is_hovered = mouse_state.lock().unwrap().is_hovered();
+    let bg = if is_hovered {
+        theme.surface_3()
+    } else {
+        theme.surface_2()
+    };
+    let font_family = appearance.ui_font_family();
+    let font_size = appearance.ui_font_size();
+    let text_color = theme.active_ui_text_color();
+    let icon_size = font_size;
+    let mouse_state = mouse_state.clone();
+
+    Hoverable::new(mouse_state, move |_| {
+        ConstrainedBox::new(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(8.)
+                    .with_child(
+                        ConstrainedBox::new(Icon::Plus.to_warpui_icon(text_color).finish())
+                            .with_width(icon_size)
+                            .with_height(icon_size)
+                            .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline("New environment", font_family, font_size)
+                            .with_color(text_color.into())
+                            .finish(),
+                    )
+                    .finish(),
+            )
+            .with_horizontal_padding(12.)
+            .with_vertical_padding(8.)
+            .with_background(bg)
+            .with_border(Border::top(1.).with_border_fill(theme.outline()))
+            .finish(),
+        )
+        .with_width(280.)
+        .finish()
+    })
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(A::create_environment_requested());
+    })
+    .with_cursor(Cursor::PointingHand)
+    .finish()
+}
 /// Repopulates the host picker with the workspace default (if any) and
 /// the user's last-selected custom host (if any), then sets the current
 /// selection to `initial_host`.
