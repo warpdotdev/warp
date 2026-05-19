@@ -1749,6 +1749,79 @@ fn test_cursor_line_start() {
 }
 
 #[test]
+fn test_move_to_line_start_previous_line_when_at_start() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let options = EditorOptions {
+                line_start_behavior: LineStartBehavior::PreviousLineWhenAtStart,
+                ..Default::default()
+            };
+            let mut editor = EditorView::new_with_base_text("first\nsecond", options, ctx);
+            editor
+                .select_ranges(vec![DisplayPoint::new(1, 3)..DisplayPoint::new(1, 3)], ctx)
+                .unwrap();
+            editor.handle_action(&EditorAction::MoveToLineStart, ctx);
+            editor
+        });
+
+        editor.read(&app, |view, app| {
+            assert_eq!(
+                view.selected_ranges(app),
+                vec![DisplayPoint::new(1, 0)..DisplayPoint::new(1, 0),]
+            );
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&EditorAction::MoveToLineStart, ctx);
+        });
+
+        editor.read(&app, |view, app| {
+            assert_eq!(
+                view.selected_ranges(app),
+                vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0),]
+            );
+        });
+    })
+}
+
+#[test]
+fn test_move_to_line_start_previous_line_when_at_start_from_soft_wrap_row() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let options = EditorOptions {
+                line_start_behavior: LineStartBehavior::PreviousLineWhenAtStart,
+                ..Default::default()
+            };
+            let mut editor = EditorView::new_with_base_text("firstsecond", options, ctx);
+            let frame_layouts =
+                FrameLayouts::new(vec![Arc::new(TextFrame::mock("first\nsecond"))], 0, 2);
+            editor
+                .editor_model
+                .as_ref(ctx)
+                .display_map(ctx)
+                .soft_wrap_state()
+                .update(frame_layouts);
+            editor
+                .select_ranges(vec![DisplayPoint::new(0, 5)..DisplayPoint::new(0, 5)], ctx)
+                .unwrap();
+            editor.handle_action(&EditorAction::MoveToLineStart, ctx);
+            editor
+        });
+
+        editor.read(&app, |view, app| {
+            assert_eq!(
+                view.selected_ranges(app),
+                vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0),]
+            );
+        });
+    })
+}
+
+#[test]
 fn test_cursor_line_end() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

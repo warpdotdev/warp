@@ -3745,6 +3745,48 @@ fn test_should_not_insert_newline_on_enter_in_empty_buffer() {
     })
 }
 
+#[test]
+fn test_terminal_input_line_start_moves_to_previous_line_when_at_start() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("first\nsecond", ctx);
+            input.editor.update(ctx, |editor, ctx| {
+                editor.reset_selections_to_point(&Point::new(1, 3), ctx);
+                editor.handle_action(&EditorAction::MoveToLineStart, ctx);
+            });
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.editor.as_ref(ctx).single_cursor_to_point(ctx),
+                Some(Point::new(1, 0))
+            );
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, ctx| {
+                editor.handle_action(&EditorAction::MoveToLineStart, ctx);
+            });
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.editor.as_ref(ctx).single_cursor_to_point(ctx),
+                Some(Point::new(0, 0))
+            );
+        });
+    })
+}
+
 #[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
 #[test]
 fn test_should_insert_newline_on_enter() {

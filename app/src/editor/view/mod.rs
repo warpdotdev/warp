@@ -1437,6 +1437,7 @@ pub struct EditorOptions {
     pub autocomplete_symbols: bool,
     pub soft_wrap: bool,
     pub placeholder_soft_wrap: bool,
+    pub line_start_behavior: LineStartBehavior,
     /// Whether or not this editor should acknowledge the AppEditorSettings::vim_mode option.
     pub supports_vim_mode: bool,
     /// Closures that should return a top section, left notch and right notch elements, if we want to paint them
@@ -1471,6 +1472,13 @@ pub struct EditorOptions {
     pub keymap_context_modifier: Option<KeymapContextModifierFn>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineStartBehavior {
+    #[default]
+    CurrentLine,
+    PreviousLineWhenAtStart,
+}
+
 impl Default for EditorOptions {
     fn default() -> Self {
         Self {
@@ -1486,6 +1494,7 @@ impl Default for EditorOptions {
             autocomplete_symbols: false,
             soft_wrap: false,
             placeholder_soft_wrap: false,
+            line_start_behavior: LineStartBehavior::CurrentLine,
             supports_vim_mode: false,
             render_decorator_elements: None,
             select_all_on_focus: false,
@@ -1521,6 +1530,7 @@ impl From<SingleLineEditorOptions> for EditorOptions {
             autocomplete_symbols: options.autocomplete_symbols,
             soft_wrap: options.soft_wrap,
             placeholder_soft_wrap: options.placeholder_soft_wrap,
+            line_start_behavior: LineStartBehavior::CurrentLine,
             supports_vim_mode: false,
             render_decorator_elements: None,
             select_all_on_focus: options.select_all_on_focus,
@@ -1805,6 +1815,7 @@ pub struct EditorView {
     enter_settings: EnterSettings,
     soft_wrap: bool,
     placeholder_soft_wrap: bool,
+    line_start_behavior: LineStartBehavior,
     /// What the starting text of the view was. Helpful for determining if the editor is
     /// "dirty", i.e., a user has changed the contents from what is persisted elsewhere.
     base_buffer_text: String,
@@ -3154,6 +3165,7 @@ impl EditorView {
             enter_settings: options.enter_settings,
             soft_wrap: options.soft_wrap,
             placeholder_soft_wrap: options.placeholder_soft_wrap,
+            line_start_behavior: options.line_start_behavior,
             base_buffer_text: base_text,
             supports_vim_mode: options.supports_vim_mode,
             vim_model,
@@ -5678,6 +5690,13 @@ impl EditorView {
         self.change_selections(ctx, |editor_model, ctx| {
             editor_model.cursor_line_start(false, ctx);
         });
+    }
+
+    fn handle_move_to_line_start_action(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.line_start_behavior {
+            LineStartBehavior::CurrentLine => self.move_to_line_start(ctx),
+            LineStartBehavior::PreviousLineWhenAtStart => self.move_to_paragraph_start(ctx),
+        }
     }
 
     pub fn move_to_paragraph_start(&mut self, ctx: &mut ViewContext<Self>) {
@@ -8475,7 +8494,7 @@ impl TypedActionView for EditorView {
             ClearLines => self.clear_lines(ctx),
             ClearAndCopyLines => self.clear_and_copy_lines(ctx),
             CtrlC => self.handle_ctrl_c(ctx),
-            MoveToLineStart => self.move_to_line_start(ctx),
+            MoveToLineStart => self.handle_move_to_line_start_action(ctx),
             MoveToParagraphStart => self.move_to_paragraph_start(ctx),
             MoveToBufferStart => self.move_to_buffer_start(ctx),
             SelectToLineStart => self.select_to_line_start(ctx),

@@ -182,10 +182,10 @@ use crate::{
         AutosuggestionLocation, AutosuggestionType, BaselinePositionComputationMethod,
         CommandXRayAnchor, CrdtOperation, CursorColors, DisplayPoint, EditOrigin, EditorAction,
         EditorDecoratorElements, EditorOptions, EditorSnapshot, EditorView, Event as EditorEvent,
-        ImageContextOptions, InteractionState, PathTransformerFn, PlainTextEditorViewAction,
-        Point as BufferPoint, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
-        PropagateHorizontalNavigationKeys, ReplicaId, TextColors, TextRun,
-        MAX_IMAGES_PER_CONVERSATION,
+        ImageContextOptions, InteractionState, LineStartBehavior, PathTransformerFn,
+        PlainTextEditorViewAction, Point as BufferPoint, PropagateAndNoOpEscapeKey,
+        PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
+        TextRun, MAX_IMAGES_PER_CONVERSATION,
     },
     features::FeatureFlag,
     input_suggestions::{
@@ -2703,6 +2703,8 @@ impl Input {
                         PropagateHorizontalNavigationKeys::AtBoundary,
                     propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
                     soft_wrap: true,
+                    // TODO: Revisit terminal-style Ctrl-E behavior for multiline prompts.
+                    line_start_behavior: LineStartBehavior::PreviousLineWhenAtStart,
                     supports_vim_mode: true,
                     use_settings_line_height_ratio: true,
                     render_decorator_elements: Some(Box::new(
