@@ -66,12 +66,9 @@ pub fn subshell_bootstrap_success_block_bytes(
         .to_vec();
 
     let rc_file_paths = shell_type.rc_file_paths(os);
-    let mut is_executable = true;
     let commands: Vec<Vec<u8>> = rc_file_paths
         .iter()
         .map(|rc_file_path| {
-            let rc_file_path = rc_file_path.to_str();
-            is_executable &= rc_file_path.is_some();
             replace_template_chars_with_arguments(
                 templated_subshell_bootstrap_success_block_output_bytes
                     .trim_ascii_end()
@@ -85,12 +82,12 @@ pub fn subshell_bootstrap_success_block_bytes(
                         ""
                     }
                     .to_owned(),
-                    rc_file_path.unwrap_or("<Your RC file>").to_owned(),
+                    rc_file_path.to_owned(),
                 ],
             )
         })
         .collect();
-    (commands.concat(), is_executable)
+    (commands.concat(), true)
 }
 
 /// Replaces each instance of '%' in the given `templated_bytes` vector with `String` in

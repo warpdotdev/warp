@@ -332,32 +332,31 @@ impl ShellType {
         }
     }
 
-    /// Returns the potential paths to the RC file relative to the `home` directory.
-    pub fn rc_file_paths(&self, os: TargetOS) -> Vec<PathBuf> {
-        let home_dir = Path::new(match os {
+    /// Returns RC file paths for shell snippets using stable forward-slash separators.
+    pub fn rc_file_paths(&self, os: TargetOS) -> Vec<String> {
+        let home_dir = match os {
             TargetOS::Windows => "$HOME",
             _ => "~",
-        });
+        };
         let relative_paths = match (self, os) {
             (ShellType::PowerShell, TargetOS::Windows) => {
-                vec![Path::new(
-                    ".config/powershell/Microsoft.PowerShell_profile.ps1",
-                )]
+                vec![".config/powershell/Microsoft.PowerShell_profile.ps1"]
             }
             // We need to make sure this works for either editor of PowerShell (PowerShell Core or
             // Windows PowerShell) so just write the file to both.
             (ShellType::PowerShell, _) => vec![
-                Path::new("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
-                Path::new("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                "Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1",
             ],
             (_, TargetOS::Windows) => vec![],
-            (ShellType::Bash, _) => vec![Path::new(".bashrc")],
-            (ShellType::Zsh, _) => vec![Path::new(".zshrc")],
-            (ShellType::Fish, _) => vec![Path::new(".config/fish/config.fish")],
+            (ShellType::Bash, _) => vec![".bashrc"],
+            (ShellType::Zsh, _) => vec![".zshrc"],
+            (ShellType::Fish, _) => vec![".config/fish/config.fish"],
         };
+
         relative_paths
-            .iter()
-            .map(|relative_path| home_dir.join(relative_path))
+            .into_iter()
+            .map(|relative_path| format!("{home_dir}/{relative_path}"))
             .collect()
     }
 

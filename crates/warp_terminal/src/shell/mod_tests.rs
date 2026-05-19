@@ -165,6 +165,22 @@ fn test_from_markdown_language_spec() {
 }
 
 #[test]
+fn test_rc_file_paths_use_forward_slashes_for_shell_snippets() {
+    assert_eq!(
+        ShellType::Bash.rc_file_paths(TargetOS::Linux),
+        vec!["~/.bashrc".to_string()]
+    );
+    assert_eq!(
+        ShellType::Fish.rc_file_paths(TargetOS::Linux),
+        vec!["~/.config/fish/config.fish".to_string()]
+    );
+    assert_eq!(
+        ShellType::PowerShell.rc_file_paths(TargetOS::Windows),
+        vec!["$HOME/.config/powershell/Microsoft.PowerShell_profile.ps1".to_string()]
+    );
+}
+
+#[test]
 fn test_fish_parse_abbrs() {
     let raw_abbrs = "abbr -a -U -- gco 'git checkout'
 abbr -a -g -- gq 'git commit'
