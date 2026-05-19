@@ -282,6 +282,15 @@ impl AgentConfigRunner {
                     table.add_row(vec![prompt_cell]);
                 }
 
+                if let Some(computer_use_enabled) = variant.computer_use_enabled {
+                    let value = if computer_use_enabled {
+                        "Enabled"
+                    } else {
+                        "Disabled"
+                    };
+                    table.add_row(vec![format!("Computer use: {value}")]);
+                }
+
                 // Source
                 table.add_row(vec![format!(
                     "Source: {}/{}",

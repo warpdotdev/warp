@@ -410,6 +410,7 @@ fn non_ambient_entry_uses_display_harness() {
             working_directory: None,
             environment_id: None,
             harness: Some(Harness::Codex),
+            computer_use_enabled: None,
             artifacts: Vec::new(),
         },
         backing: AgentConversationBackingData {

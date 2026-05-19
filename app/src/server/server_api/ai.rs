@@ -837,6 +837,8 @@ pub struct AgentListVariant {
     pub id: String,
     pub description: String,
     pub base_prompt: String,
+    #[serde(default, alias = "computerUseEnabled")]
+    pub computer_use_enabled: Option<bool>,
     pub source: AgentListSource,
     pub environments: Vec<AgentListEnvironment>,
 }

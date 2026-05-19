@@ -2012,6 +2012,32 @@ fn task_with_harness(
 }
 
 #[test]
+fn test_get_entries_preserves_task_computer_use_enabled() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let mut task = create_test_task(&make_uuid(5090), "user-a", Utc::now());
+        task.agent_config_snapshot = Some(AgentConfigSnapshot {
+            computer_use_enabled: Some(true),
+            ..Default::default()
+        });
+        let task_id = task.task_id;
+        model.tasks.insert(task_id, task);
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id == AgentConversationEntryId::AmbientRun(task_id))
+                .expect("task entry should exist");
+
+            assert_eq!(entry.display.computer_use_enabled, Some(true));
+        });
+    });
+}
+
+#[test]
 fn test_harness_filter_matches_only_selected_harness() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);

@@ -181,12 +181,41 @@ fn test_from_conversation_metadata_passes_harness_through() {
             None,
             None,
             harness,
+            None,
         );
         assert_eq!(
             data.harness, harness,
             "harness {harness:?} should pass through"
         );
     }
+}
+
+#[test]
+fn test_from_task_resolves_computer_use_enabled() {
+    App::test((), |mut app| async move {
+        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let base_task = create_test_task("550e8400-e29b-41d4-a716-000000004025");
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&base_task, None, None, ctx);
+            assert_eq!(data.computer_use_enabled, None);
+
+            for computer_use_enabled in [false, true] {
+                let mut task = base_task.clone();
+                task.agent_config_snapshot = Some(AgentConfigSnapshot {
+                    computer_use_enabled: Some(computer_use_enabled),
+                    ..Default::default()
+                });
+                let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+                assert_eq!(
+                    data.computer_use_enabled,
+                    Some(computer_use_enabled),
+                    "computer_use_enabled {computer_use_enabled:?}"
+                );
+            }
+        });
+    });
 }
 
 #[test]

@@ -30,6 +30,9 @@ pub struct AgentConfig {
     /// MCP servers configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<HashMap<String, serde_json::Value>>,
+    /// Whether computer use is enabled for runs spawned from this agent config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_use_enabled: Option<bool>,
 }
 
 pub type CloudAgentConfig = GenericCloudObject<GenericStringObjectId, CloudAgentConfigModel>;
@@ -50,7 +53,7 @@ impl AgentConfig {
             profile_id: None,
             worker_host: None,
             skill_spec: None,
-            computer_use_enabled: None,
+            computer_use_enabled: self.computer_use_enabled,
             harness: None,
             harness_auth_secrets: None,
         }
@@ -125,5 +128,26 @@ impl StringModel for AgentConfig {
 impl JsonModel for AgentConfig {
     fn json_object_type() -> JsonObjectType {
         JsonObjectType::CloudAgentConfig
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentConfig;
+
+    #[test]
+    fn to_ambient_config_preserves_computer_use_enabled() {
+        for computer_use_enabled in [None, Some(false), Some(true)] {
+            let config = AgentConfig {
+                name: "Test agent".to_string(),
+                computer_use_enabled,
+                ..Default::default()
+            };
+
+            assert_eq!(
+                config.to_ambient_config().computer_use_enabled,
+                computer_use_enabled
+            );
+        }
     }
 }

@@ -216,6 +216,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
+    /// Whether computer use was enabled for this conversation/task, when known.
+    computer_use_enabled: Option<bool>,
     /// Error message displayed when the API call to fetch run data failed.
     fetch_error: Option<String>,
 }
@@ -327,6 +329,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            computer_use_enabled: None,
             fetch_error: None,
         }
     }
@@ -363,6 +366,10 @@ impl ConversationDetailsData {
                 .map(|h| h.harness_type)
                 .or(Some(Harness::Oz))
         });
+        let computer_use_enabled = task
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.computer_use_enabled);
 
         ConversationDetailsData {
             mode: PanelMode::Task {
@@ -391,6 +398,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec,
             harness,
+            computer_use_enabled,
             fetch_error: None,
         }
     }
@@ -419,6 +427,7 @@ impl ConversationDetailsData {
         let created_at = Some(entry.display.created_at.with_timezone(&Local));
         let source_prompt = entry.display.initial_query.clone();
         let harness = entry.display.harness;
+        let computer_use_enabled = entry.display.computer_use_enabled;
 
         if let Some(task_id) = entry.identity.ambient_agent_task_id {
             let error_message = task.and_then(|task| {
@@ -463,6 +472,7 @@ impl ConversationDetailsData {
                 copy_link_url,
                 skill_spec,
                 harness,
+                computer_use_enabled,
                 fetch_error: None,
             };
         }
@@ -490,6 +500,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            computer_use_enabled,
             fetch_error: None,
         }
     }
@@ -518,6 +529,7 @@ impl ConversationDetailsData {
             copy_link_url: None,
             skill_spec: None,
             harness: None,
+            computer_use_enabled: None,
             fetch_error,
         }
     }
@@ -540,6 +552,7 @@ impl ConversationDetailsData {
         initial_query: Option<String>,
         copy_link_url: Option<String>,
         harness: Option<Harness>,
+        computer_use_enabled: Option<bool>,
     ) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Conversation {
@@ -560,6 +573,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            computer_use_enabled,
             fetch_error: None,
         }
     }
@@ -1826,6 +1840,19 @@ impl View for ConversationDetailsPanel {
         if let Some(harness_section) = self.render_harness_section(appearance, app) {
             content.add_child(
                 Container::new(harness_section)
+                    .with_margin_bottom(FIELD_SPACING)
+                    .finish(),
+            );
+        }
+
+        if let Some(computer_use_enabled) = self.data.computer_use_enabled {
+            let value = if computer_use_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            };
+            content.add_child(
+                Container::new(self.render_simple_field("Computer use", value, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
