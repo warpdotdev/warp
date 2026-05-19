@@ -822,17 +822,6 @@ where
         Box::new(self.clone())
     }
 }
-impl<T, S> ServerObjectModel for GenericStringModel<T, S>
-where
-    T: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
-    >,
-    S: Serializer<T>,
-{
-    fn object_type(&self) -> ObjectType {
-        <Self as CloudModelType>::object_type(self)
-    }
-}
 
 impl ServerObjectModel for CloudFolderModel {
     fn object_type(&self) -> ObjectType {
