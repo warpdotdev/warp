@@ -2899,6 +2899,7 @@ impl Input {
                     return;
                 }
                 me.handle_inline_history_menu_event(event, ctx);
+                me.set_ai_input_current_buffer_text(me.buffer_text(ctx), ctx);
             });
         }
         let inline_history_model = inline_history_menu_view.as_ref(ctx).model().clone();
@@ -5815,6 +5816,15 @@ impl Input {
 
     pub fn buffer_text(&self, ctx: &AppContext) -> String {
         self.editor.as_ref(ctx).buffer_text(ctx)
+    }
+    fn set_ai_input_current_buffer_text(
+        &self,
+        current_buffer_text: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.ai_input_model.update(ctx, |model, _| {
+            model.set_current_buffer_text(current_buffer_text);
+        });
     }
 
     pub fn buffer_text_number_of_lines(&self, ctx: &AppContext) -> usize {
@@ -9382,8 +9392,10 @@ impl Input {
                 }
 
                 if self.maybe_activate_cloud_handoff_prefix(edit_origin, ctx) {
+                    self.set_ai_input_current_buffer_text(self.buffer_text(ctx), ctx);
                     return;
                 }
+                self.set_ai_input_current_buffer_text(self.buffer_text(ctx), ctx);
 
                 if *edit_origin == EditOrigin::UserTyped
                     && !ctx
@@ -9767,6 +9779,7 @@ impl Input {
                     }
                     ctx.notify();
                 }
+                self.set_ai_input_current_buffer_text(self.buffer_text(ctx), ctx);
 
                 // We only sync on EditorEvent::Edited events because we're only
                 // syncing terminal input editor contents, not the full
@@ -9978,6 +9991,7 @@ impl Input {
                 }
             }
             EditorEvent::BufferReplaced => {
+                self.set_ai_input_current_buffer_text(self.buffer_text(ctx), ctx);
                 let ai_input_model = self.ai_input_model.as_ref(ctx);
                 if FeatureFlag::AgentMode.is_enabled()
                     && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
@@ -13682,6 +13696,7 @@ impl Input {
         }
 
         let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        self.set_ai_input_current_buffer_text(buffer_text.clone(), ctx);
 
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
             // If we're already configured to do autodetection, there's nothing to do here.
@@ -13703,7 +13718,6 @@ impl Input {
         // classification doesn't match the previous locked mode.
         if !buffer_text.is_empty() {
             if let Some(completion_context) = self.completion_session_context(ctx) {
-                let editor = self.editor.clone();
                 let ai_input_model = self.ai_input_model.clone();
 
                 ctx.spawn(
@@ -13722,7 +13736,6 @@ impl Input {
                                 completion_context,
                                 Some(session_id),
                                 ctx,
-                                move |ctx| editor.as_ref(ctx).buffer_text(ctx),
                             );
                         });
                     },

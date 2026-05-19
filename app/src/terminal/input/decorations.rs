@@ -111,7 +111,6 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(parsed_token) = self.last_parsed_tokens.clone() {
-            let editor = self.editor.clone();
             let session_id = completion_context.session.id();
             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
                 ai_input_model.detect_and_set_input_type(
@@ -119,7 +118,6 @@ impl Input {
                     completion_context,
                     Some(session_id),
                     ctx,
-                    move |ctx| editor.as_ref(ctx).buffer_text(ctx),
                 )
             })
         }
@@ -171,6 +169,7 @@ impl Input {
 
         // We don't show input command decorations in AI mode, but we keep slash command prefix highlighting.
         let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        self.set_ai_input_current_buffer_text(buffer_text.clone(), ctx);
         if self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
             || (FeatureFlag::AgentView.is_enabled()
                 && self
@@ -242,7 +241,6 @@ impl Input {
                     // No session context available (e.g., shared session viewer).
                     // Use a dedicated detection context that does not expose top-level commands.
                     let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
-                    let editor = self.editor.clone();
                     let ai_input_model = self.ai_input_model.clone();
                     ctx.spawn(
                         async move {
@@ -255,7 +253,6 @@ impl Input {
                                     EmptyCompletionContext::new(),
                                     None,
                                     ctx,
-                                    move |ctx| editor.as_ref(ctx).buffer_text(ctx),
                                 );
                             });
                         },

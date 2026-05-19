@@ -157,6 +157,7 @@ pub struct BlocklistAIInputModel {
     terminal_view_id: EntityId,
 
     autodetect_abort_handle: Option<AbortHandle>,
+    current_buffer_text: String,
     model: Arc<FairMutex<TerminalModel>>,
 }
 
@@ -345,6 +346,7 @@ impl BlocklistAIInputModel {
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
             autodetect_abort_handle: None,
+            current_buffer_text: String::new(),
             model,
         }
     }
@@ -375,6 +377,11 @@ impl BlocklistAIInputModel {
 
     pub fn last_ai_autodetection_ts(&self) -> Option<Instant> {
         self.last_ai_autodetection_ts
+    }
+
+    /// Updates the model's snapshot of the terminal input buffer.
+    pub fn set_current_buffer_text(&mut self, current_buffer_text: String) {
+        self.current_buffer_text = current_buffer_text;
     }
 
     /// Sets the input config iff the input is in classic mode (i.e. not UDI).
@@ -604,17 +611,14 @@ impl BlocklistAIInputModel {
     /// is always used for alias expansion (callers without a live session should pass an
     /// `EmptyCompletionContext`).
     ///
-    /// `read_current_buffer` is invoked to check input buffer's current text when the async classification completes.
-    pub fn detect_and_set_input_type<C, F>(
+    pub fn detect_and_set_input_type<C>(
         &mut self,
         input: ParsedTokensSnapshot,
         completion_context: C,
         session_id: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
-        read_current_buffer: F,
     ) where
         C: CompletionContext + Clone + Send + 'static,
-        F: FnOnce(&AppContext) -> String + 'static,
     {
         // Abort the last autodetect handle if exists.
         self.abort_in_progress_detection();
@@ -752,10 +756,10 @@ impl BlocklistAIInputModel {
                     new_input_type
                 },
                 move |me, new_input_type, ctx| {
-                    let current_buffer_text = read_current_buffer(ctx);
-                    let is_current_input = current_buffer_text == expected_buffer_text;
+                    let is_current_input = me.current_buffer_text == expected_buffer_text;
                     log::debug!(
-                        "NLD autodetection callback freshness check: is_current_input={is_current_input}, current_buffer_text={current_buffer_text:?}, expected_buffer_text={expected_buffer_text:?}"
+                        "NLD autodetection callback freshness check: is_current_input={is_current_input}, current_buffer_text={:?}, expected_buffer_text={expected_buffer_text:?}",
+                        me.current_buffer_text
                     );
                     if !is_current_input {
                         return;
