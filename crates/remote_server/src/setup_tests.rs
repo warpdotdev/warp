@@ -366,6 +366,352 @@ fn install_script_avoids_pattern_substitution_for_tilde_expansion() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Install script sentinel and error-path tests
+//
+// These run the *production* install script (via `install_script`) in a
+// controlled environment to verify the exact exit codes and stderr patterns
+// that the Rust classification layer (`install_error.rs`) relies on.
+// Each test intercepts execution just before any filesystem side-effects
+// (download / extraction / mv) by injecting stub PATH entries.
+// ---------------------------------------------------------------------------
+
+/// Verify that the install script exits with `NO_HTTP_CLIENT_EXIT_CODE` (3)
+/// and prints the expected sentinel message when neither curl nor wget is
+/// on PATH.  This is the primary signal the Rust layer uses to trigger the
+/// SCP upload fallback.
+///
+/// Implementation: we prepend a directory containing stub executables for
+/// `uname` (returns `Linux x86_64` so the OS/arch check passes) to PATH,
+/// and make sure neither `curl` nor `wget` is reachable.
+#[cfg(unix)]
+#[test]
+fn install_script_no_http_client_exit_code() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bash = if std::path::Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+
+    // Build a temporary directory with stub binaries.
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub_path = stub_dir.path();
+
+    // Stub `uname`: returns values that satisfy the OS/arch check.
+    let uname_stub = stub_path.join("uname");
+    fs::write(
+        &uname_stub,
+        "#!/bin/sh\nif [ \"$1\" = \"-m\" ]; then echo x86_64; else echo Linux; fi\n",
+    )
+    .expect("write uname stub");
+    fs::set_permissions(&uname_stub, fs::Permissions::from_mode(0o755)).expect("chmod uname stub");
+
+    // Stub mkdir as a no-op (install_dir creation before curl check).
+    let mkdir_stub = stub_path.join("mkdir");
+    fs::write(&mkdir_stub, "#!/bin/sh\nexit 0\n").expect("write mkdir stub");
+    fs::set_permissions(&mkdir_stub, fs::Permissions::from_mode(0o755)).expect("chmod mkdir stub");
+
+    // Stub mktemp: create and echo a real tmp dir (the install script needs it).
+    let tmpdir = stub_dir.path().join("fake_mktemp_dir");
+    fs::create_dir_all(&tmpdir).expect("create fake tmpdir");
+    let mktemp_stub = stub_path.join("mktemp");
+    fs::write(
+        &mktemp_stub,
+        format!("#!/bin/sh\necho {}\n", tmpdir.display()),
+    )
+    .expect("write mktemp stub");
+    fs::set_permissions(&mktemp_stub, fs::Permissions::from_mode(0o755))
+        .expect("chmod mktemp stub");
+
+    // Stub rm as no-op (for the EXIT trap cleanup).
+    let rm_stub = stub_path.join("rm");
+    fs::write(&rm_stub, "#!/bin/sh\nexit 0\n").expect("write rm stub");
+    fs::set_permissions(&rm_stub, fs::Permissions::from_mode(0o755)).expect("chmod rm stub");
+
+    // Do NOT create curl or wget stubs — they must be absent from our stub dir.
+    // We also shadow any system curl/wget by putting stub_dir first on PATH.
+    let script = install_script(None);
+
+    // Write the script to a temp file and run it directly with bash.
+    // This avoids any quoting/escaping issues that arise from passing the
+    // multi-line script as a single `-c` argument.
+    let script_file = stub_dir.path().join("install_test.sh");
+    fs::write(&script_file, &script).expect("write script file");
+    fs::set_permissions(&script_file, fs::Permissions::from_mode(0o755))
+        .expect("chmod script file");
+
+    let output = {
+        use command::blocking::Command;
+        Command::new(bash)
+            .arg(script_file.to_str().unwrap())
+            .env("PATH", stub_path.to_str().unwrap())
+            .env("HOME", "/tmp")
+            .output()
+            .expect("spawn bash")
+    };
+
+    assert_eq!(
+        output.status.code(),
+        Some(NO_HTTP_CLIENT_EXIT_CODE),
+        "expected exit code {NO_HTTP_CLIENT_EXIT_CODE} (no-http-client sentinel); \
+         stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("neither curl nor wget"),
+        "expected 'neither curl nor wget' in stderr; got: {stderr}",
+    );
+}
+
+/// Verify the install script exits 2 and prints the expected message when
+/// the remote architecture is not supported (e.g. `mips`).
+#[cfg(unix)]
+#[test]
+fn install_script_unsupported_arch_exit_code() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bash = if std::path::Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub_path = stub_dir.path();
+
+    // Stub `uname -m` → "mips" (unsupported arch);
+    // `uname -s` → "Linux" (supported OS).
+    let uname_stub = stub_path.join("uname");
+    fs::write(
+        &uname_stub,
+        "#!/bin/sh\nif [ \"$1\" = \"-m\" ]; then echo mips; else echo Linux; fi\n",
+    )
+    .expect("write uname stub");
+    fs::set_permissions(&uname_stub, fs::Permissions::from_mode(0o755)).expect("chmod uname stub");
+
+    let script = install_script(None);
+    let script_file = stub_dir.path().join("install_test.sh");
+    fs::write(&script_file, &script).expect("write script file");
+    fs::set_permissions(&script_file, fs::Permissions::from_mode(0o755))
+        .expect("chmod script file");
+
+    let output = {
+        use command::blocking::Command;
+        Command::new(bash)
+            .arg(script_file.to_str().unwrap())
+            .env("PATH", stub_path.to_str().unwrap())
+            .env("HOME", "/tmp")
+            .output()
+            .expect("spawn bash")
+    };
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 for unsupported arch; stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported arch"),
+        "expected 'unsupported arch' in stderr; got: {stderr}",
+    );
+}
+
+/// Verify the install script exits 2 and prints the expected message when
+/// the remote OS is not supported (e.g. FreeBSD).
+#[cfg(unix)]
+#[test]
+fn install_script_unsupported_os_exit_code() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bash = if std::path::Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub_path = stub_dir.path();
+
+    // Stub `uname -s` → "FreeBSD" (unsupported OS).
+    let uname_stub = stub_path.join("uname");
+    fs::write(
+        &uname_stub,
+        "#!/bin/sh\nif [ \"$1\" = \"-m\" ]; then echo x86_64; else echo FreeBSD; fi\n",
+    )
+    .expect("write uname stub");
+    fs::set_permissions(&uname_stub, fs::Permissions::from_mode(0o755)).expect("chmod uname stub");
+
+    let script = install_script(None);
+    let script_file = stub_dir.path().join("install_test.sh");
+    fs::write(&script_file, &script).expect("write script file");
+    fs::set_permissions(&script_file, fs::Permissions::from_mode(0o755))
+        .expect("chmod script file");
+
+    let output = {
+        use command::blocking::Command;
+        Command::new(bash)
+            .arg(script_file.to_str().unwrap())
+            .env("PATH", stub_path.to_str().unwrap())
+            .env("HOME", "/tmp")
+            .output()
+            .expect("spawn bash")
+    };
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 for unsupported OS; stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported OS"),
+        "expected 'unsupported OS' in stderr; got: {stderr}",
+    );
+}
+
+/// Verify the install script exits 1 with "no binary found in tarball" when
+/// the downloaded tarball does not contain a file matching `oz*`.
+///
+/// Strategy: stub curl to succeed (exit 0) and stub `find` to return no
+/// matching binary, simulating a tarball that extracts but contains no `oz*`
+/// executable.
+#[cfg(unix)]
+#[test]
+fn install_script_no_binary_in_tarball() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bash = if std::path::Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub_path = stub_dir.path();
+
+    // Standard uname stub.
+    let uname_stub = stub_path.join("uname");
+    fs::write(
+        &uname_stub,
+        "#!/bin/sh\nif [ \"$1\" = \"-m\" ]; then echo x86_64; else echo Linux; fi\n",
+    )
+    .expect("write uname stub");
+    fs::set_permissions(&uname_stub, fs::Permissions::from_mode(0o755)).expect("chmod uname stub");
+
+    // Stub curl: succeeds and creates an empty file at the -o path.
+    // Use shell built-in I/O redirection (`: > $out`) to avoid needing `touch` in PATH.
+    let curl_stub = stub_path.join("curl");
+    fs::write(
+        &curl_stub,
+        "#!/bin/sh\n\
+         while [ $# -gt 0 ]; do case \"$1\" in -o) shift; out=\"$1\" ;; esac; shift; done\n\
+         : > \"$out\"\n\
+         exit 0\n",
+    )
+    .expect("write curl stub");
+    fs::set_permissions(&curl_stub, fs::Permissions::from_mode(0o755)).expect("chmod curl stub");
+
+    // Stub mktemp: return a real directory so mkdir/tar don't fail.
+    let install_tmp = stub_dir.path().join("install_tmp");
+    fs::create_dir_all(&install_tmp).expect("create install_tmp");
+    let mktemp_stub = stub_path.join("mktemp");
+    fs::write(
+        &mktemp_stub,
+        format!("#!/bin/sh\necho {}\n", install_tmp.display()),
+    )
+    .expect("write mktemp stub");
+    fs::set_permissions(&mktemp_stub, fs::Permissions::from_mode(0o755))
+        .expect("chmod mktemp stub");
+
+    // Stub mkdir, tar, rm, chmod, mv, head as no-ops.
+    // `head` is needed for the `find ... | head -n1` pipeline.
+    for name in ["mkdir", "tar", "rm", "chmod", "mv", "head"] {
+        let p = stub_path.join(name);
+        fs::write(&p, "#!/bin/sh\nexit 0\n").expect("write stub");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+    }
+
+    // Stub `find`: return empty output (no binary found in the extracted dir).
+    let find_stub = stub_path.join("find");
+    fs::write(&find_stub, "#!/bin/sh\nexit 0\n").expect("write find stub");
+    fs::set_permissions(&find_stub, fs::Permissions::from_mode(0o755)).expect("chmod find stub");
+
+    let script = install_script(None);
+    let script_file = stub_dir.path().join("install_test.sh");
+    fs::write(&script_file, &script).expect("write script file");
+    fs::set_permissions(&script_file, fs::Permissions::from_mode(0o755))
+        .expect("chmod script file");
+
+    let output = {
+        use command::blocking::Command;
+        Command::new(bash)
+            .arg(script_file.to_str().unwrap())
+            .env("PATH", stub_path.to_str().unwrap())
+            .env("HOME", "/tmp")
+            .output()
+            .expect("spawn bash")
+    };
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Exit code 1 and the sentinel message.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for no-binary-in-tarball; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("no binary found in tarball"),
+        "expected 'no binary found in tarball' in stderr; got: {stderr}",
+    );
+}
+
+/// Static check: the install script must contain a `set -e` directive so
+/// unexpected failures abort the script instead of silently continuing.
+#[test]
+fn install_script_contains_set_e() {
+    assert!(
+        INSTALL_SCRIPT_TEMPLATE.contains("set -e"),
+        "install_remote_server.sh must contain 'set -e' to abort on unexpected failures",
+    );
+}
+
+/// Static check: the install script must use the `{no_http_client_exit_code}`
+/// placeholder, which is substituted with `NO_HTTP_CLIENT_EXIT_CODE` at
+/// runtime. This ensures the Rust sentinel constant and the script stay in sync.
+#[test]
+fn install_script_uses_no_http_client_exit_code_placeholder() {
+    assert!(
+        INSTALL_SCRIPT_TEMPLATE.contains("{no_http_client_exit_code}"),
+        "install_remote_server.sh must contain the '{{no_http_client_exit_code}}' \
+         placeholder so the Rust NO_HTTP_CLIENT_EXIT_CODE constant is authoritative",
+    );
+}
+
+/// Static check: the substituted script must contain the exact decimal value
+/// of `NO_HTTP_CLIENT_EXIT_CODE` at the `exit` statement so the sentinel is
+/// what the Rust classification layer expects.
+#[test]
+fn install_script_substituted_exit_code_matches_constant() {
+    let script = install_script(None);
+    let expected_exit = format!("exit {NO_HTTP_CLIENT_EXIT_CODE}");
+    assert!(
+        script.contains(&expected_exit),
+        "the substituted install script must contain '{expected_exit}'; \
+         check that NO_HTTP_CLIENT_EXIT_CODE={NO_HTTP_CLIENT_EXIT_CODE} matches \
+         the value used in install_remote_server.sh",
+    );
+}
+
 #[test]
 fn version_hash_is_deterministic() {
     // version_hash uses the compile-time GIT_RELEASE_TAG which is typically

@@ -32,6 +32,7 @@ async-process.workspace = true
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
 tokio-util = { workspace = true, features = ["compat"] }
 
