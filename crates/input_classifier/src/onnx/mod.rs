@@ -11,8 +11,8 @@ use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
-    ClassificationResult, Context, InputClassificationDecision, InputClassifier,
-    InputDecisionSource, InputType,
+    ClassificationResult, Context, InputClassificationDecision, InputClassifier, InputType,
+    NldDecisionSource,
     parser::parse_query_into_tokens,
     util::{
         is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
@@ -34,7 +34,7 @@ pub enum Model {
 
 struct ClassificationWithSource {
     result: ClassificationResult,
-    source: InputDecisionSource,
+    source: NldDecisionSource,
 }
 
 impl Model {
@@ -104,7 +104,7 @@ impl OnnxClassifier {
                 .await?;
             return Ok(ClassificationWithSource {
                 result,
-                source: InputDecisionSource::NldClassifierFallbackHeuristic,
+                source: NldDecisionSource::NldClassifierFallbackHeuristic,
             });
         }
 
@@ -137,7 +137,7 @@ impl OnnxClassifier {
         }) {
             Ok(result) => result.map(|result| ClassificationWithSource {
                 result,
-                source: InputDecisionSource::NldClassifier,
+                source: NldDecisionSource::NldClassifier,
             }),
             Err(_) => {
                 log::error!(
@@ -149,7 +149,7 @@ impl OnnxClassifier {
                     .await?;
                 Ok(ClassificationWithSource {
                     result,
-                    source: InputDecisionSource::NldClassifierFallbackHeuristic,
+                    source: NldDecisionSource::NldClassifierFallbackHeuristic,
                 })
             }
         }
@@ -176,7 +176,7 @@ impl InputClassifier for OnnxClassifier {
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
                 return InputClassificationDecision::new(
                     InputType::AI,
-                    InputDecisionSource::OneOffWhitelist,
+                    NldDecisionSource::OneOffWhitelist,
                 );
             }
 
@@ -185,7 +185,7 @@ impl InputClassifier for OnnxClassifier {
             if is_one_off_shell_command_keyword(&first_word) {
                 return InputClassificationDecision::new(
                     InputType::Shell,
-                    InputDecisionSource::ShellHeuristic,
+                    NldDecisionSource::ShellHeuristic,
                 );
             }
         }
@@ -193,7 +193,7 @@ impl InputClassifier for OnnxClassifier {
         if is_likely_shell_command(&input, total_word_token_count).await {
             return InputClassificationDecision::new(
                 InputType::Shell,
-                InputDecisionSource::ShellHeuristic,
+                NldDecisionSource::ShellHeuristic,
             );
         }
 
@@ -209,7 +209,7 @@ impl InputClassifier for OnnxClassifier {
             .unwrap_or_else(|_| {
                 InputClassificationDecision::new(
                     context.current_input_type,
-                    InputDecisionSource::NldClassifierFallbackCurrentInput,
+                    NldDecisionSource::NldClassifierFallbackCurrentInput,
                 )
             })
     }
@@ -311,7 +311,7 @@ mod tests {
             assert_eq!(decision.input_type, InputType::AI);
             assert_eq!(
                 decision.source,
-                InputDecisionSource::NldClassifierFallbackCurrentInput
+                NldDecisionSource::NldClassifierFallbackCurrentInput
             );
         });
     }

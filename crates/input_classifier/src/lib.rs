@@ -16,7 +16,7 @@ pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InputDecisionSource {
+pub enum NldDecisionSource {
     /// The user explicitly selected Agent/Shell mode via UI or keybinding.
     ManualToggle,
     /// The user used a prefix override.
@@ -47,11 +47,11 @@ pub enum InputDecisionSource {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct InputClassificationDecision {
     pub input_type: InputType,
-    pub source: InputDecisionSource,
+    pub source: NldDecisionSource,
 }
 
 impl InputClassificationDecision {
-    pub fn new(input_type: InputType, source: InputDecisionSource) -> Self {
+    pub fn new(input_type: InputType, source: NldDecisionSource) -> Self {
         Self { input_type, source }
     }
 }

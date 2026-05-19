@@ -5462,7 +5462,7 @@ fn test_input_type_button_explicit_lock() {
                 ai_input.nld_decision_source()
             })
         });
-        assert_eq!(after_click_source, Some(InputDecisionSource::ManualToggle));
+        assert_eq!(after_click_source, Some(NldDecisionSource::ManualToggle));
 
         // Explicitly click Terminal button - should lock to Shell mode
         input.update(&mut app, |input, ctx| {
@@ -5488,7 +5488,7 @@ fn test_input_type_button_explicit_lock() {
                 ai_input.nld_decision_source()
             })
         });
-        assert_eq!(final_source, Some(InputDecisionSource::ManualToggle));
+        assert_eq!(final_source, Some(NldDecisionSource::ManualToggle));
     });
 }
 
@@ -6162,7 +6162,7 @@ fn test_terminal_prefix_sets_shell_prefix_decision_source() {
                 assert!(input_model.is_input_type_locked());
                 assert_eq!(
                     input_model.nld_decision_source(),
-                    Some(InputDecisionSource::ShellPrefix)
+                    Some(NldDecisionSource::ShellPrefix)
                 );
             });
         });
@@ -6185,7 +6185,7 @@ fn test_source_less_locked_config_clears_decision_source() {
                 input_model.set_input_config_with_source(
                     locked_shell_config,
                     true,
-                    Some(InputDecisionSource::ShellPrefix),
+                    Some(NldDecisionSource::ShellPrefix),
                     ctx,
                 );
                 input_model.set_input_config(locked_shell_config, true, ctx);
@@ -6249,7 +6249,7 @@ fn test_image_attachment_preserves_lock_state() {
                 ai_input.nld_decision_source()
             })
         });
-        assert_eq!(locked_source, Some(InputDecisionSource::AttachmentForcedAi));
+        assert_eq!(locked_source, Some(NldDecisionSource::AttachmentForcedAi));
 
         // Test with unlocked Shell mode
         input.update(&mut app, |input, ctx| {
@@ -6289,10 +6289,7 @@ fn test_image_attachment_preserves_lock_state() {
                 ai_input.nld_decision_source()
             })
         });
-        assert_eq!(
-            unlocked_source,
-            Some(InputDecisionSource::AttachmentForcedAi)
-        );
+        assert_eq!(unlocked_source, Some(NldDecisionSource::AttachmentForcedAi));
     });
 }
 
