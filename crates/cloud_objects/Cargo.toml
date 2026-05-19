@@ -1,5 +1,5 @@
 [package]
-name = "warp_server_client"
+name = "cloud_objects"
 version = "0.1.0"
 edition = "2024"
 authors.workspace = true
@@ -7,20 +7,16 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-test-util = ["cloud_objects/test-util"]
+test-util = []
 
 [dependencies]
 anyhow.workspace = true
-bincode.workspace = true
 chrono.workspace = true
-cloud_objects.workspace = true
 cynic.workspace = true
 derivative.workspace = true
 itertools.workspace = true
 lasso.workspace = true
-log.workspace = true
 pathfinder_geometry.workspace = true
-persistence.workspace = true
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
 settings_value.workspace = true
@@ -30,6 +26,3 @@ uuid.workspace = true
 warp_core.workspace = true
 warp_graphql.workspace = true
 warpui_core.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-diesel = { workspace = true, features = ["sqlite", "chrono"] }

@@ -2823,6 +2823,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloud_objects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "cynic",
+ "derivative",
+ "itertools 0.14.0",
+ "lasso",
+ "pathfinder_geometry",
+ "schemars",
+ "serde",
+ "session-sharing-protocol",
+ "settings_value",
+ "thiserror 2.0.17",
+ "uuid",
+ "warp_core",
+ "warp_graphql",
+ "warpui_core",
+]
+
+[[package]]
 name = "cmac"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14319,6 +14341,7 @@ dependencies = [
  "channel_versions",
  "chrono",
  "clap",
+ "cloud_objects",
  "cocoa 0.26.0",
  "comfy-table",
  "command",
@@ -14945,6 +14968,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "chrono",
+ "cloud_objects",
  "cynic",
  "derivative",
  "diesel",

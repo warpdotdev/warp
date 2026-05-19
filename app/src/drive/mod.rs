@@ -15,11 +15,11 @@ pub mod workflows;
 
 use std::{cmp::Ordering, fmt};
 
+pub use cloud_objects::drive::CloudObjectTypeAndId;
 pub use index::DriveIndexVariant;
 pub use panel::{DrivePanel, DrivePanelEvent};
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
-pub use warp_server_client::drive::CloudObjectTypeAndId;
 use warpui::AppContext;
 
 use crate::{
