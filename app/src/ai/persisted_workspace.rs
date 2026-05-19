@@ -34,6 +34,9 @@ use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::codebase_auto_indexing::{
     auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
 };
+use crate::ai::codebase_context_policy::{
+    codebase_auto_indexing_enabled, codebase_indexing_enabled,
+};
 use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
@@ -631,7 +634,9 @@ impl PersistedWorkspace {
             if !manager.is_indexing_enabled() {
                 return;
             }
-            if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
+            let codebase_context_enabled =
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
+            if codebase_indexing_enabled(codebase_context_enabled) {
                 Self::enable_codebase_indexing(manager, ctx);
             } else {
                 manager.reset_codebase_indexing(ctx);
@@ -672,9 +677,10 @@ impl PersistedWorkspace {
         });
 
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            let auto_indexing_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx)
-                && *CodeSettings::as_ref(ctx).auto_indexing_enabled;
+            let auto_indexing_enabled = codebase_auto_indexing_enabled(
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+                *CodeSettings::as_ref(ctx).auto_indexing_enabled,
+            );
 
             if auto_indexing_enabled {
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {

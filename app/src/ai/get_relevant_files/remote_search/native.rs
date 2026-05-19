@@ -17,12 +17,13 @@ use crate::ai::agent::{
     AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult,
 };
 use crate::ai::blocklist::SessionContext;
+use crate::ai::codebase_context_policy::remote_codebase_indexing_enabled;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-use crate::features::FeatureFlag;
 use crate::remote_server::codebase_index_model::{
     RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(super) enum RemoteSearchRequest {
     Pending(futures_util::stream::AbortHandle),
@@ -53,7 +54,9 @@ pub(super) fn send_request(
     action_id: crate::ai::agent::AIAgentActionId,
     ctx: &mut ModelContext<GetRelevantFilesController>,
 ) -> RemoteSearchRequest {
-    if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+    if !remote_codebase_indexing_enabled(
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+    ) {
         return RemoteSearchRequest::Ready(SearchCodebaseResult::Failed {
             reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
             message: "Remote codebase search is not enabled.".to_string(),
@@ -106,13 +109,6 @@ pub(super) fn send_request(
             RemoteSearchRequest::Pending(abort_handle)
         }
         availability @ RemoteCodebaseSearchAvailability::NotIndexed { .. } => {
-            RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
-                model.request_active_repo_index(
-                    &session_context,
-                    requested_codebase_path.as_deref(),
-                    ctx,
-                );
-            });
             RemoteSearchRequest::Ready(remote_availability_failure(availability))
         }
         RemoteCodebaseSearchAvailability::NoConnectedHost
@@ -401,7 +397,7 @@ fn remote_availability_failure(
             SearchCodebaseResult::Failed {
                 reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
                 message: format!(
-                    "The remote codebase at {} is not indexed yet. Indexing has been requested; try again after it finishes.",
+                    "The remote codebase at {} is not indexed yet.",
                     remote_path.path.as_str()
                 ),
             }
