@@ -114,6 +114,7 @@ pub enum AIDocumentAction {
     RevertToDocumentVersion,
     SendUpdatedPlan,
     CopyLink(String),
+    CopyMarkdown,
     CopyPlanId,
     ShowInWarpDrive,
     AttachToActiveSession,
@@ -1161,6 +1162,19 @@ impl TypedActionView for AIDocumentView {
                     );
                 });
             }
+            AIDocumentAction::CopyMarkdown => {
+                let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
+                ctx.clipboard().write(ClipboardContent::plain_text(markdown));
+
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::success("Markdown copied to clipboard".to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
             AIDocumentAction::CopyPlanId => {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(self.document_id.to_string()));
@@ -1340,6 +1354,13 @@ impl BackingView for AIDocumentView {
                     .into_item(),
             );
         }
+
+        menu_items.push(
+            MenuItemFields::new("Copy Markdown")
+                .with_on_select_action(AIDocumentAction::CopyMarkdown)
+                .with_icon(Icon::Copy)
+                .into_item(),
+        );
 
         // Add "Attach to active session" menu item
         menu_items.push(
