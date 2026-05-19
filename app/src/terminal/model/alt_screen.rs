@@ -248,7 +248,7 @@ impl AltScreen {
 
     pub fn selection_to_string(&self, semantic_selection: &SemanticSelection) -> Option<String> {
         let selection_range = self.selection_range(semantic_selection)?;
-        Some(match selection_range {
+        let text = match selection_range {
             ExpandedSelectionRange::Regular { start, end, .. } => {
                 self.grid_handler.bounds_to_string(
                     start,
@@ -273,7 +273,8 @@ impl AltScreen {
                     })
                     .join("\n")
             }
-        })
+        };
+        (!text.is_empty()).then_some(text)
     }
 
     pub fn possible_file_paths_at_point(&self, point: Point) -> impl Iterator<Item = PossiblePath> {

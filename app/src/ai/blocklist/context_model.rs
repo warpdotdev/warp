@@ -599,9 +599,9 @@ impl BlocklistAIContextModel {
         requires_visual_resync: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        // It doesn't make sense to allow empty text as AI context.
-        // Enforcing this assertion here ensures we don't run into weird behaviour with `Some("")` later.
-        debug_assert!(!matches!(text.as_deref(), Some("")));
+        // Empty text is not meaningful as AI context; filter it out so we never
+        // send an empty text content block to the Anthropic API.
+        let text = text.filter(|t| !t.is_empty());
 
         let previous_block_ids = self.pending_context_block_ids.clone();
         // Maintain the invariant that we can't simultaneously use both blocks and selected text

@@ -677,6 +677,9 @@ impl BlocklistAIController {
         }
 
         let (query, user_query_mode) = extract_user_query_mode(query);
+        if query.trim().is_empty() {
+            return;
+        }
 
         // Attribute /orchestrate queries to the slash-command entry surface.
         if matches!(user_query_mode, UserQueryMode::Orchestrate) {

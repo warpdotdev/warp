@@ -984,7 +984,8 @@ impl BlockList {
                     selected_texts.reverse();
                 }
 
-                Some(selected_texts.join("\n"))
+                let text = selected_texts.join("\n");
+                (!text.is_empty()).then_some(text)
             }
             Some(ExpandedSelectionRange::Rect { rows }) => {
                 let mut selected_texts: Vec<String> = vec![];
@@ -1055,7 +1056,8 @@ impl BlockList {
                     selection_start_cursor.next();
                 }
 
-                Some(selected_texts.join("\n"))
+                let text = selected_texts.join("\n");
+                (!text.is_empty()).then_some(text)
             }
             None => {
                 // Check if there are rich content blocks in the selection. This is to cover
@@ -1100,9 +1102,8 @@ impl BlockList {
                     }
                 }
 
-                // TODO: If `selected_texts` is empty, should we return `None` instead of `Some("")`?
-                // As of 02/18/2025, this scenario can be reproduced by single-clicking anywhere on an AI response block.
-                Some(selected_texts.join("\n"))
+                let text = selected_texts.join("\n");
+                (!text.is_empty()).then_some(text)
             }
         }
     }
