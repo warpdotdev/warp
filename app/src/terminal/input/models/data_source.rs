@@ -44,6 +44,10 @@ use super::model_spec_scores::{
     MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
 };
 
+fn localized_text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
     pub id: LLMId,
@@ -62,7 +66,10 @@ impl InlineMenuAction for AcceptModel {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(" to select"),
+            MessageItem::text(localized_text(
+                args.app,
+                "settings.ai.model_selector.message.to_select",
+            )),
             MessageItem::keystroke(if OperatingSystem::get().is_mac() {
                 Keystroke {
                     key: "enter".to_owned(),
@@ -77,7 +84,10 @@ impl InlineMenuAction for AcceptModel {
                     ..Default::default()
                 }
             }),
-            MessageItem::text(" select and save to profile"),
+            MessageItem::text(localized_text(
+                args.app,
+                "settings.ai.model_selector.message.select_and_save_to_profile",
+            )),
         ];
 
         if args.inline_menu_model.tab_configs().len() > 1 {
@@ -86,7 +96,10 @@ impl InlineMenuAction for AcceptModel {
                 shift: true,
                 ..Default::default()
             }));
-            items.push(MessageItem::text(" to cycle tabs"));
+            items.push(MessageItem::text(localized_text(
+                args.app,
+                "terminal.inline_menu.navigation.to_cycle_tabs",
+            )));
         }
 
         items.push(MessageItem::clickable(
@@ -95,7 +108,10 @@ impl InlineMenuAction for AcceptModel {
                     key: "escape".to_owned(),
                     ..Default::default()
                 }),
-                MessageItem::text(" to dismiss"),
+                MessageItem::text(localized_text(
+                    args.app,
+                    "terminal.inline_menu.navigation.to_dismiss",
+                )),
             ],
             |ctx| {
                 ctx.dispatch_typed_action(
@@ -247,6 +263,9 @@ struct ModelSearchItem {
     manage_api_key_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
+    accessibility_prefix: String,
+    selected_accessibility_label: String,
+    disabled_accessibility_label: String,
 }
 
 impl ModelSearchItem {
@@ -277,6 +296,15 @@ impl ModelSearchItem {
             manage_api_key_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
+            accessibility_prefix: localized_text(app, "settings.ai.model_selector.a11y.prefix"),
+            selected_accessibility_label: localized_text(
+                app,
+                "settings.ai.model_selector.a11y.selected",
+            ),
+            disabled_accessibility_label: localized_text(
+                app,
+                "settings.ai.model_selector.a11y.disabled",
+            ),
         }
     }
 
@@ -372,9 +400,9 @@ impl SearchItem for ModelSearchItem {
         }
 
         if self.is_selected {
-            let selected_label = "(selected)";
+            let selected_label = localized_text(app, "settings.ai.model_selector.selected");
             let selected_text = Text::new_inline(
-                selected_label.to_string(),
+                selected_label.clone(),
                 appearance.ui_font_family(),
                 font_size,
             )
@@ -391,9 +419,9 @@ impl SearchItem for ModelSearchItem {
         }
 
         if self.is_disabled() {
-            let disabled_label = "(disabled)";
+            let disabled_label = localized_text(app, "settings.ai.model_selector.disabled");
             let disabled_text = Text::new_inline(
-                disabled_label.to_string(),
+                disabled_label.clone(),
                 appearance.ui_font_family(),
                 font_size,
             )
@@ -416,7 +444,10 @@ impl SearchItem for ModelSearchItem {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
                 Text::new_inline(
-                    format!("{}% off!", discount_percentage.round() as u32),
+                    localized_text(app, "settings.ai.model_selector.discount_chip").replace(
+                        "{discount}",
+                        &(discount_percentage.round() as u32).to_string(),
+                    ),
                     appearance.ui_font_family(),
                     font_size,
                 )
@@ -465,7 +496,10 @@ impl SearchItem for ModelSearchItem {
                     ButtonVariant::Outlined,
                     self.manage_api_key_mouse_state.clone(),
                 )
-                .with_text_label("Manage".to_string())
+                .with_text_label(localized_text(
+                    app,
+                    "settings.ai.model_selector.manage_api_keys",
+                ))
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -533,16 +567,23 @@ impl SearchItem for ModelSearchItem {
                 );
 
             let mut text_fragments = vec![
-                FormattedTextFragment::plain_text(format!(
-                    "{display_name} is not available for free users. "
-                )),
-                FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
+                FormattedTextFragment::plain_text(
+                    localized_text(app, "settings.ai.model_selector.upgrade_required.prefix")
+                        .replace("{name}", &display_name),
+                ),
+                FormattedTextFragment::hyperlink(
+                    localized_text(app, "settings.billing.upgrade.generic"),
+                    upgrade_url,
+                ),
             ];
 
             if byok_available {
-                text_fragments.push(FormattedTextFragment::plain_text(" or ".to_string()));
+                text_fragments.push(FormattedTextFragment::plain_text(localized_text(
+                    app,
+                    "settings.billing.upgrade.or",
+                )));
                 text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    "bring your own key",
+                    localized_text(app, "settings.billing.upgrade.bring_own_key"),
                     WorkspaceAction::ShowSettingsPageWithSearch {
                         search_query: "api".to_string(),
                         section: Some(SettingsSection::WarpAgent),
@@ -617,12 +658,14 @@ impl SearchItem for ModelSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        let mut label = format!("Model: {}", self.display_text);
+        let mut label = format!("{}: {}", self.accessibility_prefix, self.display_text);
         if self.is_selected {
-            label.push_str(" (selected)");
+            label.push(' ');
+            label.push_str(&self.selected_accessibility_label);
         }
         if self.is_disabled() {
-            label.push_str(" (disabled)");
+            label.push(' ');
+            label.push_str(&self.disabled_accessibility_label);
         }
         label
     }

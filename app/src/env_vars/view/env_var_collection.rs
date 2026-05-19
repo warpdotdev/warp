@@ -68,6 +68,10 @@ use crate::{
 
 use super::{command_dialog::EnvVarCommandDialog, menus::Menus};
 
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;
 pub(super) const CORE_MAX_WIDTH: f32 = 800.;
@@ -80,20 +84,11 @@ const SECTION_SPACING: f32 = 16.;
 
 // Variable rows
 pub(super) const ROW_SPACING: f32 = 8.;
-pub const EDUCATION_TEXT: &str = "Add secret or command. Warp never stores external secrets";
 const VARIABLE_FONT_SIZE: f32 = 13.;
 const DESCRIPTION_EDITOR_CUTOFF: f32 = 30.;
 const DESCRIPTION_BOTTOM_MARGIN: f32 = 12.;
 const DIVIDER_BOTTOM_MARGIN: f32 = 4.;
 const PLACEHOLDER_FONT_SIZE: f32 = 14.;
-const VARIABLE_VALUE_PLACEHOLDER_TEXT: &str = "Value";
-const VARIABLE_DESCRIPTION_PLACEHOLDER_TEXT: &str = "Description";
-const VARIABLE_NAME_PLACEHOLDER_TEXT: &str = "Variable";
-
-// Text input fields
-const TITLE_PLACEHOLDER_TEXT: &str = "Add a title";
-const DESCRIPTION_PLACEHOLDER_TEXT: &str = "Add a description";
-
 // Button spacing
 const BUTTON_CONTAINER_HORIZONTAL_MARGIN: f32 = 36.;
 const BUTTON_CONTAINER_BOTTOM_MARGIN: f32 = 10.;
@@ -497,7 +492,8 @@ impl EnvVarCollectionView {
             view.handle_cloud_model_event(event, ctx);
         });
 
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Untitled"));
+        let pane_configuration =
+            ctx.add_model(|ctx| PaneConfiguration::new(text(ctx, "env_vars.title.untitled")));
 
         let active_env_var_collection_data = ctx.add_model(ActiveEnvVarCollectionData::new);
         ctx.subscribe_to_model(
@@ -518,14 +514,14 @@ impl EnvVarCollectionView {
             ctx,
             Some(PLACEHOLDER_FONT_SIZE),
             Some(ui_font_family),
-            Some(TITLE_PLACEHOLDER_TEXT),
+            Some(&text(ctx, "env_vars.placeholder.title")),
             true,
         );
         let description_editor = Self::create_editor_handle(
             ctx,
             Some(PLACEHOLDER_FONT_SIZE),
             Some(ui_font_family),
-            Some(DESCRIPTION_PLACEHOLDER_TEXT),
+            Some(&text(ctx, "env_vars.placeholder.description")),
             false,
         );
         ctx.subscribe_to_view(&title_editor, |me, _, event, ctx| {
@@ -751,9 +747,7 @@ impl EnvVarCollectionView {
                     let window_id = ctx.window_id();
                     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "An error occurred while trying to invoke the env var".to_owned(),
-                            ),
+                            DismissibleToast::error(text(ctx, "env_vars.toast.invoke_failed")),
                             window_id,
                             ctx,
                         );
@@ -884,7 +878,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_NAME_PLACEHOLDER_TEXT),
+            Some(&text(ctx, "env_vars.placeholder.variable")),
             true,
         );
 
@@ -896,7 +890,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_VALUE_PLACEHOLDER_TEXT),
+            Some(&text(ctx, "env_vars.placeholder.value")),
             true,
         );
 
@@ -908,7 +902,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_DESCRIPTION_PLACEHOLDER_TEXT),
+            Some(&text(ctx, "env_vars.placeholder.variable_description")),
             true,
         );
 
@@ -1141,7 +1135,7 @@ impl EnvVarCollectionView {
                     .finish()
                 } else {
                     appearance.ui_builder().tool_tip_on_element(
-                        EDUCATION_TEXT.to_string(),
+                        text(app, "env_vars.secret_tooltip"),
                         self.button_mouse_states.secret_tooltip_state.clone(),
                         icon_button_with_context_menu(
                             Icon::Key,
@@ -1378,12 +1372,12 @@ impl View for EnvVarCollectionView {
 
         let mut flex = Flex::column()
             .with_child(
-                Container::new(self.render_metadata(appearance))
+                Container::new(self.render_metadata(appearance, app))
                     .with_margin_bottom(SECTION_SPACING)
                     .finish(),
             )
             .with_child(
-                Container::new(self.render_variables_section_header(editability, appearance))
+                Container::new(self.render_variables_section_header(editability, appearance, app))
                     .with_margin_bottom(SECTION_SPACING)
                     .finish(),
             )
@@ -1448,7 +1442,7 @@ impl View for EnvVarCollectionView {
 
         if self.dialog_open_states.unsaved_changes_dialog_open {
             stack.add_positioned_child(
-                self.render_unsaved_changes_dialog(appearance),
+                self.render_unsaved_changes_dialog(appearance, app),
                 dialog_position,
             )
         } else if self.dialog_open_states.secrets_dialog_open {

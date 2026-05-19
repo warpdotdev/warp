@@ -26,7 +26,7 @@ use warpui::{BlurContext, FocusContext};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     appearance::Appearance,
-    send_telemetry_from_ctx,
+    localization, send_telemetry_from_ctx,
     server::telemetry::{SaveAsWorkflowModalSource, TelemetryEvent, WarpAIActionType},
     ui_components::blended_colors,
 };
@@ -63,11 +63,6 @@ const SAVE_AS_WORKFLOW_BUTTON_SIZE: f32 = 20.;
 const HOW_DO_I_FIX_PROMPT: &str = "How do I fix this?";
 const SHOW_EXAMPLES_PROMPT: &str = "Show examples.";
 const WHAT_TO_DO_NEXT_PROMPT: &str = "What should I do next?";
-const IN_FLIGHT_REQUEST_TEXT: &str = "Generating answer...";
-const ACCURACY_NOTICE_TEXT: &str = "AI responses can be inaccurate.";
-const MISSING_CONTEXT_NOTICE_TEXT: &str =
-    "Warp AI might forget earlier answers as conversations get long.";
-
 lazy_static::lazy_static! {
     static ref SCROLL_BUFFER_OFFSET_PX: Pixels = (10.).into_pixels();
 }
@@ -418,6 +413,7 @@ impl Transcript {
         appearance: &Appearance,
         code_block_info: &CodeBlockText,
         mouse_state_handles: &CodeBlockMouseStateHandles,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut buttons = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
@@ -437,7 +433,7 @@ impl Transcript {
             .finish();
 
         buttons.add_child(appearance.ui_builder().tool_tip_on_element(
-            "Copy code to clipboard [Cmd + C]".to_string(),
+            localization::text_for_app(app, "ai_assistant.tooltip.copy_code"),
             mouse_state_handles.copy_button_tooltip.clone(),
             copy_button,
             ParentAnchor::TopRight,
@@ -472,7 +468,7 @@ impl Transcript {
 
             buttons.add_child(
                 Container::new(appearance.ui_builder().tool_tip_on_element(
-                    "Insert code into terminal input [Cmd + Enter]".to_string(),
+                    localization::text_for_app(app, "ai_assistant.tooltip.insert_in_terminal"),
                     mouse_state_handles.play_button_tooltip.clone(),
                     insert_button,
                     ParentAnchor::TopRight,
@@ -507,7 +503,7 @@ impl Transcript {
             buttons.add_child(
                 SavePosition::new(
                     Container::new(appearance.ui_builder().tool_tip_on_element(
-                        "Save as workflow [Cmd + S]".to_string(),
+                        localization::text_for_app(app, "ai_assistant.tooltip.save_as_workflow"),
                         mouse_state_handles.save_as_workflow_button_tooltip.clone(),
                         save_as_workflow_button,
                         ParentAnchor::TopRight,
@@ -530,6 +526,7 @@ impl Transcript {
         transcript_part_index: usize,
         part: &AssistantTranscriptPart,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
@@ -569,7 +566,7 @@ impl Transcript {
                     .finish();
 
                 appearance.ui_builder().tool_tip_on_element(
-                    "Copy answer to clipboard".to_string(),
+                    localization::text_for_app(app, "ai_assistant.copy_answer"),
                     tooltip_handle,
                     copy_button,
                     ParentAnchor::TopRight,
@@ -585,6 +582,7 @@ impl Transcript {
             icon,
             bottom_right_element,
             appearance,
+            app,
         )
     }
 
@@ -592,6 +590,7 @@ impl Transcript {
         &self,
         dialogue: &FormattedTranscriptMessage,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background_color = theme.surface_1().into_solid();
@@ -605,7 +604,7 @@ impl Transcript {
         .with_height(16.)
         .with_width(16.)
         .finish();
-        self.render_message(dialogue, background_color, icon, None, appearance)
+        self.render_message(dialogue, background_color, icon, None, appearance, app)
     }
 
     /// Renders a single message (whether that be a user's prompt or assistant's answer).
@@ -616,6 +615,7 @@ impl Transcript {
         icon: Box<dyn Element>,
         bottom_right_element: Option<Box<dyn Element>>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let inline_code_bg_color = appearance.theme().surface_3().into_solid();
@@ -653,6 +653,7 @@ impl Transcript {
                             appearance,
                             code,
                             mouse_state_handles,
+                            app,
                         );
                         let code = code.code.clone();
 
@@ -762,7 +763,11 @@ impl Transcript {
             .finish()
     }
 
-    fn render_prepared_responses(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_prepared_responses(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         Wrap::row()
             .with_run_spacing(10.)
             .with_main_axis_alignment(MainAxisAlignment::Center)
@@ -771,6 +776,7 @@ impl Transcript {
                 self.mouse_state_handles.what_to_do_next_button.clone(),
                 None,
                 Some(8.),
+                localization::text_for_app(app, "ai_assistant.followup_prompt.what_next"),
                 WHAT_TO_DO_NEXT_PROMPT,
             ))
             .with_child(
@@ -779,6 +785,7 @@ impl Transcript {
                     self.mouse_state_handles.show_examples_button.clone(),
                     None,
                     Some(8.),
+                    localization::text_for_app(app, "ai_assistant.followup_prompt.show_examples"),
                     SHOW_EXAMPLES_PROMPT,
                 ))
                 .with_margin_left(10.)
@@ -790,6 +797,7 @@ impl Transcript {
                 self.mouse_state_handles.how_do_i_fix_button.clone(),
                 None,
                 Some(8.),
+                localization::text_for_app(app, "ai_assistant.followup_prompt.how_fix"),
                 HOW_DO_I_FIX_PROMPT,
             ))
             .finish()
@@ -829,18 +837,20 @@ impl View for Transcript {
 
         let mut blocks = Flex::column();
         for (index, part) in transcript.iter().enumerate() {
-            blocks.add_child(self.render_user_prompt(&part.user, appearance));
-            blocks.add_child(self.render_assistant_answer(index, &part.assistant, appearance));
+            blocks.add_child(self.render_user_prompt(&part.user, appearance, app));
+            blocks.add_child(self.render_assistant_answer(index, &part.assistant, appearance, app));
         }
 
         if let RequestStatus::InFlight { request, .. } = request_status {
-            blocks.add_child(self.render_user_prompt(request, appearance));
+            blocks.add_child(self.render_user_prompt(request, appearance, app));
 
             let transcript_part_index = transcript.len();
+            let in_flight_request_text =
+                localization::text_for_app(app, "ai_assistant.generating_answer");
             let in_flight_request_markdown = markdown_segments_from_text(
                 transcript_part_index,
                 TranscriptPartSubType::Answer,
-                IN_FLIGHT_REQUEST_TEXT,
+                &in_flight_request_text,
             );
             blocks.add_child(self.render_assistant_answer(
                 transcript_part_index,
@@ -849,10 +859,11 @@ impl View for Transcript {
                     copy_all_tooltip_and_button_mouse_handles: None,
                     formatted_message: FormattedTranscriptMessage {
                         markdown: in_flight_request_markdown,
-                        raw: IN_FLIGHT_REQUEST_TEXT.to_owned(),
+                        raw: in_flight_request_text,
                     },
                 },
                 appearance,
+                app,
             ));
         }
 
@@ -861,7 +872,7 @@ impl View for Transcript {
             // and the user still has remaining requests.
             if !transcript.last().is_none_or(|p| p.assistant.is_error) && num_remaining_reqs > 0 {
                 blocks.add_child(
-                    Container::new(self.render_prepared_responses(appearance))
+                    Container::new(self.render_prepared_responses(appearance, app))
                         .with_margin_top(15.)
                         .finish(),
                 );
@@ -889,9 +900,10 @@ impl View for Transcript {
                 .current_transcript_summarized();
 
             blocks.add_child(
-                Container::new(
-                    self.render_warning_message(ACCURACY_NOTICE_TEXT.to_string(), appearance),
-                )
+                Container::new(self.render_warning_message(
+                    localization::text_for_app(app, "ai_assistant.accuracy_notice"),
+                    appearance,
+                ))
                 .with_margin_top(DETAILS_BOTTOM_MARGIN)
                 .with_margin_bottom(if current_transcript_summarized {
                     DETAILS_BOTTOM_MARGIN / 2.
@@ -904,7 +916,7 @@ impl View for Transcript {
             if current_transcript_summarized {
                 blocks.add_child(
                     Container::new(self.render_warning_message(
-                        MISSING_CONTEXT_NOTICE_TEXT.to_string(),
+                        localization::text_for_app(app, "ai_assistant.missing_context_notice"),
                         appearance,
                     ))
                     .with_margin_bottom(DETAILS_BOTTOM_MARGIN)

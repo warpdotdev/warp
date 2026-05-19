@@ -23,6 +23,7 @@ use warpui::{
 };
 
 use crate::{
+    localization,
     settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
     terminal::input::{MenuPositioning, MenuPositioningProvider},
     ui_components::icons::Icon,
@@ -532,7 +533,7 @@ impl ActionButton {
                 Some(
                     Container::new(
                         Text::new_inline(
-                            "Beta",
+                            localization::text_for_app(app, "view_components.action_button.beta"),
                             appearance.ui_font_family(),
                             overall_height - padding.top() - padding.bottom(),
                         )

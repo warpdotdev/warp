@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use warpui::{elements::MouseStateHandle, fonts::Weight, Element, EntityId};
+use warpui::{elements::MouseStateHandle, fonts::Weight, AppContext, Element, EntityId};
 
 use crate::{
     appearance::Appearance,
+    localization,
     terminal::{
         model::session::Session,
         view::{open_in_warp::OpenablePath, InlineBannerId, TerminalAction},
@@ -47,10 +48,10 @@ impl OpenInWarpBannerState {
 }
 
 /// Given an openable file, format a file-specific title for the Open in Warp banner.
-fn file_title_text(openable_path: &OpenablePath) -> String {
+fn file_title_text(openable_path: &OpenablePath, app: &AppContext) -> String {
     match openable_path.file_type {
         OpenableFileType::Markdown => {
-            "Did you know that Warp can directly display Markdown files?".to_string()
+            localization::text_for_app(app, "terminal.inline_banner.open_in_warp.markdown_title")
         }
         OpenableFileType::Code | OpenableFileType::Text => {
             cfg_if::cfg_if! {
@@ -61,13 +62,23 @@ fn file_title_text(openable_path: &OpenablePath) -> String {
 
                     match language.as_ref().map(|language| language.display_name()) {
                         Some(display_name) => {
-                            format!("Did you know that Warp can directly edit {display_name} files?")
+                            localization::text_for_app(
+                                app,
+                                "terminal.inline_banner.open_in_warp.code_title_with_language",
+                            )
+                            .replace("{language}", display_name)
                         }
-                        None => "Did you know that Warp can directly edit code?".to_string(),
+                        None => localization::text_for_app(
+                            app,
+                            "terminal.inline_banner.open_in_warp.code_title",
+                        ),
                     }
                 } else {
                     // The `languages` crate is not available on WASM, so use a fallback message.
-                    "Did you know that Warp can directly edit code?".to_string()
+                    localization::text_for_app(
+                        app,
+                        "terminal.inline_banner.open_in_warp.code_title",
+                    )
                 }
             }
         }
@@ -78,14 +89,19 @@ pub fn render_open_in_warp_banner(
     state: &OpenInWarpBannerState,
     view_id: EntityId,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let button_text = match state.target.file_type {
-        OpenableFileType::Markdown => "View in Warp",
-        OpenableFileType::Code | OpenableFileType::Text => "Edit in Warp",
+        OpenableFileType::Markdown => {
+            localization::text_for_app(app, "terminal.inline_banner.open_in_warp.view")
+        }
+        OpenableFileType::Code | OpenableFileType::Text => {
+            localization::text_for_app(app, "terminal.inline_banner.open_in_warp.edit")
+        }
     };
 
     let open_button = InlineBannerTextButton {
-        text: button_text.to_string(),
+        text: button_text,
         text_color: appearance.theme().active_ui_text_color().into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::OpenInWarpBanner(OpenInWarpBannerAction::OpenFile),
@@ -100,7 +116,7 @@ pub fn render_open_in_warp_banner(
     };
 
     let learn_more_button = InlineBannerTextButton {
-        text: "Learn more".to_string(),
+        text: localization::text_for_app(app, "auth.learn_more"),
         text_color: appearance.theme().active_ui_text_color().into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::OpenInWarpBanner(OpenInWarpBannerAction::LearnMore),
@@ -116,7 +132,7 @@ pub fn render_open_in_warp_banner(
         mouse_state_handle: state.close_button_mouse_state.clone(),
     });
 
-    let title = file_title_text(&state.target);
+    let title = file_title_text(&state.target, app);
 
     render_inline_block_list_banner(
         InlineBannerStyle::Recommendation,

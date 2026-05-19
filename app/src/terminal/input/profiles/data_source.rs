@@ -4,6 +4,7 @@ use warpui::{AppContext, Entity, EntityId, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::localization;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
@@ -43,17 +44,22 @@ impl SyncDataSource for ProfileSelectorDataSource {
             .active_profile(Some(self.terminal_view_id), app)
             .id();
         let query_text = query.text.trim().to_lowercase();
+        let manage_profiles_label =
+            localization::text_for_app(app, "settings.ai.profile_selector.manage_profiles");
+        let profile_accessibility_prefix =
+            localization::text_for_app(app, "settings.ai.profile_selector.a11y.prefix");
         let mut results = Vec::new();
         if query_text.is_empty() {
             results.push(QueryResult::from(
-                ProfileSearchItem::new_manage_profiles_item(),
+                ProfileSearchItem::new_manage_profiles_item(manage_profiles_label.clone()),
             ));
         } else if let Some(match_result) =
-            match_indices_case_insensitive("manage profiles", &query_text)
+            match_indices_case_insensitive(&manage_profiles_label.to_lowercase(), &query_text)
+                .or_else(|| match_indices_case_insensitive("manage profiles", &query_text))
         {
             let score = match_result.score;
             results.push(QueryResult::from(
-                ProfileSearchItem::new_manage_profiles_item()
+                ProfileSearchItem::new_manage_profiles_item(manage_profiles_label)
                     .with_match_result(match_result)
                     .with_score(OrderedFloat(score as f64)),
             ));
@@ -76,6 +82,7 @@ impl SyncDataSource for ProfileSelectorDataSource {
                     profile_id,
                     profile_name,
                     profile_id == active_profile_id,
+                    profile_accessibility_prefix.clone(),
                 )));
                 continue;
             }
@@ -89,6 +96,7 @@ impl SyncDataSource for ProfileSelectorDataSource {
                         profile_id,
                         profile_name,
                         profile_id == active_profile_id,
+                        profile_accessibility_prefix.clone(),
                     )
                     .with_match_result(match_result)
                     .with_score(OrderedFloat(score as f64)),

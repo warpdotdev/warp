@@ -18,6 +18,7 @@ use crate::{
         model::view::{Editor, EditorState},
     },
     drive::sharing::ContentEditability,
+    localization,
     notebooks::{active_notebook_data::Mode, styles},
     ui_components::{
         breadcrumb::{render_breadcrumbs, BreadcrumbState},
@@ -28,6 +29,10 @@ use crate::{
 };
 
 use super::{super::active_notebook_data::ActiveNotebookData, NotebookAction, EDIT_BUTTON_MARGIN};
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Component to show details about a notebook:
 /// * Interactive breadcrumbs for its location within Warp Drive
@@ -103,6 +108,7 @@ impl DetailsBar {
                 notebook_data.mode,
                 editability,
                 appearance,
+                app,
             ));
         }
 
@@ -117,6 +123,7 @@ impl DetailsBar {
         mode: Mode,
         editability: ContentEditability,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut edit_button = match mode {
             Mode::View => icon_button(
@@ -135,12 +142,9 @@ impl DetailsBar {
 
         if matches!(editability, ContentEditability::RequiresLogin) {
             let ui_builder = appearance.ui_builder().clone();
-            edit_button = edit_button.with_tooltip(move || {
-                ui_builder
-                    .tool_tip("Sign in to edit".to_string())
-                    .build()
-                    .finish()
-            });
+            let tooltip = text(app, "workflow.tooltip.sign_in_to_edit");
+            edit_button = edit_button
+                .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish());
         }
 
         Container::new(
@@ -174,21 +178,23 @@ impl DetailsBar {
         match editor.state {
             EditorState::None => appearance
                 .ui_builder()
-                .span("Viewing")
+                .span(text(app, "workflow.mode.viewing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),
             EditorState::CurrentUser => appearance
                 .ui_builder()
-                .span("Editing")
+                .span(text(app, "workflow.mode.editing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),
             EditorState::OtherUserActive | EditorState::OtherUserIdle => {
                 let editor = editor_display_name(editor.email.as_deref(), app);
+                let label =
+                    text(app, "notebook.mode.other_user_editing").replace("{user}", &editor);
                 appearance
                     .ui_builder()
-                    .span(format!("{editor} is editing"))
+                    .span(label)
                     .with_style(base_text_styles)
                     .with_highlights(
                         (0..editor.chars().count()).collect(),
@@ -209,7 +215,7 @@ fn editor_display_name(email: Option<&str>, app: &AppContext) -> String {
         Some(email) => UserProfiles::as_ref(app)
             .displayable_identifier_for_email(email)
             .unwrap_or_else(|| email.to_string()),
-        None => "Other user".to_string(),
+        None => text(app, "notebook.editor.other_user"),
     }
 }
 

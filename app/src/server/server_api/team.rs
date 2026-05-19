@@ -222,12 +222,12 @@ impl TeamClient for ServerApi {
                 }
             }
             AddInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             AddInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while adding invite link domain restriction"
-                ))
+                ));
             }
         }
 
@@ -261,12 +261,12 @@ impl TeamClient for ServerApi {
                 }
             }
             DeleteInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             DeleteInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while deleting invite link domain restriction"
-                ))
+                ));
             }
         }
 

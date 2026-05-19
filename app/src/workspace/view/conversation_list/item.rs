@@ -5,6 +5,7 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::conversation_status_ui::STATUS_ELEMENT_PADDING;
 use crate::appearance::Appearance;
 use crate::drive::sharing::dialog::SharingDialog;
+use crate::localization;
 use crate::menu::Menu;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::icon_with_status::render_icon_with_status;
@@ -123,7 +124,7 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
     .finish();
 
     let title_text = Text::new_inline(
-        "New conversation",
+        localization::text_for_app(app, "workspace.conversation.new"),
         appearance.ui_font_family(),
         appearance.ui_font_size() + 2.,
     )

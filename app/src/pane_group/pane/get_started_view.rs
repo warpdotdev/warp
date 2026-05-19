@@ -21,6 +21,7 @@ use crate::{
         create_project_view::{CreateProjectEvent, CreateProjectView},
         project_buttons::{ProjectButtons, ProjectButtonsEvent},
     },
+    localization,
     pane_group::{
         focus_state::PaneFocusHandle, pane::view, BackingView, PaneConfiguration, PaneEvent,
     },
@@ -33,12 +34,16 @@ use crate::{
     TelemetryEvent,
 };
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:new_tab",
-        "Terminal session",
+        text(app, "pane.get_started.binding.terminal_session"),
         GetStartedAction::TerminalSession,
     )
     .with_context_predicate(id!("GetStartedView"))
@@ -66,7 +71,8 @@ pub struct GetStartedView {
 
 impl GetStartedView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Get started"));
+        let pane_configuration =
+            ctx.add_model(|ctx| PaneConfiguration::new(text(ctx, "pane.get_started.title")));
         let project_buttons = ctx.add_typed_action_view(ProjectButtons::new);
         ctx.subscribe_to_view(&project_buttons, Self::handle_project_buttons_event);
 
@@ -229,7 +235,7 @@ impl GetStartedView {
                 .finish(),
                 appearance
                     .ui_builder()
-                    .paragraph("Welcome to Warp")
+                    .paragraph(text(app, "pane.get_started.welcome"))
                     .with_style(UiComponentStyles {
                         font_size: Some(20.),
                         ..Default::default()
@@ -239,7 +245,7 @@ impl GetStartedView {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph("The Agentic Development Environment")
+                        .paragraph(text(app, "pane.get_started.subtitle"))
                         .with_style(UiComponentStyles {
                             font_size: Some(14.),
                             font_family_id: Some(appearance.monospace_font_family()),
@@ -279,10 +285,13 @@ impl GetStartedView {
                     .with_text_and_icon_label(TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
                         format!(
-                            " New session in {}  {}",
-                            dirs::home_dir()
-                                .map(|dir| dir.display().to_string())
-                                .unwrap_or("~".to_string()),
+                            " {}  {}",
+                            text(app, "pane.get_started.new_session_in").replace(
+                                "{path}",
+                                &dirs::home_dir()
+                                    .map(|dir| dir.display().to_string())
+                                    .unwrap_or("~".to_string())
+                            ),
                             keybinding_name_to_display_string("workspace:new_tab", app)
                                 .unwrap_or_default()
                         ),
@@ -365,9 +374,9 @@ impl BackingView for GetStartedView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Get started")
+        view::HeaderContent::simple(text(app, "pane.get_started.title"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

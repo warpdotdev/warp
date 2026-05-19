@@ -687,6 +687,7 @@ impl<V: EditorView> EditorWrapper<V> {
                         block.overlay_decoration(),
                         true, // is diff line
                         appearance,
+                        app,
                     );
 
                     elements.push(GutterElement {
@@ -870,6 +871,7 @@ impl<V: EditorView> EditorWrapper<V> {
                 overlay,
                 is_diff_line,
                 appearance,
+                app,
             );
 
             let diff_hunk = if is_removal && self.diff_hunks_are_expanded() {
@@ -952,6 +954,7 @@ impl<V: EditorView> EditorWrapper<V> {
         on_click_action: Option<CodeEditorViewAction>,
         appearance: &Appearance,
         gutter_button: &dyn GutterButton,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let vertical_padding = if FeatureFlag::InlineCodeReview.is_enabled() {
             2.
@@ -989,12 +992,8 @@ impl<V: EditorView> EditorWrapper<V> {
 
             let mut stack = Stack::new().with_child(container.finish());
             if state.is_hovered() {
-                if let Some(text) = gutter_button.tooltip_text() {
-                    let tooltip = appearance
-                        .ui_builder()
-                        .tool_tip(text.into())
-                        .build()
-                        .finish();
+                if let Some(text) = gutter_button.tooltip_text(app) {
+                    let tooltip = appearance.ui_builder().tool_tip(text).build().finish();
                     stack.add_positioned_overlay_child(
                         tooltip,
                         OffsetPositioning::offset_from_parent(
@@ -1031,6 +1030,7 @@ impl<V: EditorView> EditorWrapper<V> {
         gutter_element_height: f32,
         diff_line_range: &Range<LineCount>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let on_click_action = Some(CodeEditorViewAction::AddDiffHunkContext {
             line_range: diff_line_range.to_owned(),
@@ -1042,6 +1042,7 @@ impl<V: EditorView> EditorWrapper<V> {
             on_click_action,
             appearance,
             add_as_context_button,
+            app,
         )
     }
 
@@ -1052,6 +1053,7 @@ impl<V: EditorView> EditorWrapper<V> {
         gutter_element_height: f32,
         diff_line_range: &Range<LineCount>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let on_click_action = Some(CodeEditorViewAction::RevertDiffHunk {
             line_range: diff_line_range.to_owned(),
@@ -1063,6 +1065,7 @@ impl<V: EditorView> EditorWrapper<V> {
             on_click_action,
             appearance,
             revert_hunk_button,
+            app,
         )
     }
 
@@ -1074,6 +1077,7 @@ impl<V: EditorView> EditorWrapper<V> {
         attached_comment: Option<SavedComment>,
         appearance: &Appearance,
         comment_button: &CommentButton,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let (on_click_action, comment_button, mouse_state) = if self
             .comment_box
@@ -1114,6 +1118,7 @@ impl<V: EditorView> EditorWrapper<V> {
             on_click_action,
             appearance,
             &comment_button,
+            app,
         )
     }
 
@@ -1132,6 +1137,7 @@ impl<V: EditorView> EditorWrapper<V> {
         overlay: Option<Fill>,
         highlight_text: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let base_content = match current_line {
             Some(line) => {
@@ -1184,6 +1190,7 @@ impl<V: EditorView> EditorWrapper<V> {
                     attached_comment,
                     appearance,
                     comment_button,
+                    app,
                 ));
             }
 
@@ -1198,6 +1205,7 @@ impl<V: EditorView> EditorWrapper<V> {
                         line_height,
                         line.line_range(),
                         appearance,
+                        app,
                     ));
                 }
 
@@ -1211,6 +1219,7 @@ impl<V: EditorView> EditorWrapper<V> {
                         line_height,
                         line.line_range(),
                         appearance,
+                        app,
                     ));
                 }
             }

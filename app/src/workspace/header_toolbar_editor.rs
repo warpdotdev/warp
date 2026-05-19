@@ -7,6 +7,7 @@ use crate::chip_configurator::{
     ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
     ChipEditorSectionsConfig, ConfigurableItem, ControlItemRenderer,
 };
+use crate::localization;
 use crate::report_if_error;
 use crate::settings::AISettings;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
@@ -17,7 +18,8 @@ use crate::Appearance;
 
 use settings::Setting as _;
 
-const MODAL_TITLE: &str = "Edit toolbar";
+const MODAL_TITLE_KEY: &str = "workspace.header_toolbar.editor.title";
+const AVAILABLE_ITEMS_KEY: &str = "workspace.header_toolbar.editor.available_items";
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -90,17 +92,17 @@ fn open_toolbar_items<V: View>(
     chip_configurator.left_chips = current_left
         .into_iter()
         .filter(|kind| kind.is_supported(ctx))
-        .map(|kind| build_configurable_item(&kind))
+        .map(|kind| build_configurable_item(&kind, ctx))
         .collect();
     chip_configurator.right_chips = current_right
         .into_iter()
         .filter(|kind| kind.is_supported(ctx))
-        .map(|kind| build_configurable_item(&kind))
+        .map(|kind| build_configurable_item(&kind, ctx))
         .collect();
     chip_configurator.unused_chips = HeaderToolbarItemKind::all_items()
         .into_iter()
         .filter(|kind| !used_set.contains(kind) && kind.is_supported(ctx))
-        .map(|kind| build_configurable_item(&kind))
+        .map(|kind| build_configurable_item(&kind, ctx))
         .collect();
 }
 
@@ -255,10 +257,11 @@ impl View for HeaderToolbarInlineEditor {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let available_section_label = text(app, AVAILABLE_ITEMS_KEY);
         render_chip_editor_sections(
             &self.chip_configurator,
             ChipEditorSectionsConfig {
-                available_section_label: "Available items",
+                available_section_label: &available_section_label,
                 is_at_defaults: is_toolbar_editor_at_defaults(&self.chip_configurator),
                 reset_action: HeaderToolbarInlineEditorAction::ResetDefault,
                 activate_action: HeaderToolbarInlineEditorAction::Activate,
@@ -349,11 +352,13 @@ impl View for HeaderToolbarEditorModal {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let title = text(app, MODAL_TITLE_KEY);
+        let available_section_label = text(app, AVAILABLE_ITEMS_KEY);
         render_chip_editor_modal(
             &self.chip_configurator,
             ChipEditorModalConfig {
-                title: MODAL_TITLE,
-                available_section_label: "Available items",
+                title: &title,
+                available_section_label: &available_section_label,
                 is_at_defaults: self.is_at_defaults(),
                 is_dirty: self.is_dirty,
                 cancel_action: HeaderToolbarEditorAction::Cancel,
@@ -368,16 +373,20 @@ impl View for HeaderToolbarEditorModal {
     }
 }
 
-fn build_configurable_item(kind: &HeaderToolbarItemKind) -> ConfigurableItem {
+fn build_configurable_item(kind: &HeaderToolbarItemKind, app: &AppContext) -> ConfigurableItem {
     let id = serde_json::to_string(kind).expect("HeaderToolbarItemKind is serializable");
     let renderer =
-        ControlItemRenderer::new_with_label_and_icon(kind.display_label().to_string(), kind.icon())
+        ControlItemRenderer::new_with_label_and_icon(kind.display_label(app), kind.icon())
             .with_identifier(id);
     let renderer = match kind {
         HeaderToolbarItemKind::TabsPanel => renderer.non_removable(),
         _ => renderer,
     };
     ConfigurableItem::Control(renderer)
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 fn header_toolbar_item_kind(item: &ConfigurableItem) -> Option<HeaderToolbarItemKind> {

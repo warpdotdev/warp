@@ -61,7 +61,7 @@ impl SettingsWidget for AboutPageWidget {
         &self,
         _view: &AboutPageView,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
@@ -118,7 +118,10 @@ impl SettingsWidget for AboutPageWidget {
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(crate::localization::text_for_app(
+                            app,
+                            "settings.about.copyright",
+                        ))
                         .build()
                         .with_margin_top(16.)
                         .finish(),

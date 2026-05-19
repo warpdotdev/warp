@@ -1,5 +1,6 @@
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
+use crate::localization;
 
 use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
 use crate::terminal::shared_session::role_change_modal::TEXT_FONT_SIZE;
@@ -44,7 +45,7 @@ struct RadioButtonGroupState {
 }
 
 struct ScrollbackOption {
-    label: &'static str,
+    label: String,
     scrollback_type: SharedSessionScrollbackType,
     mouse_state_handle: MouseStateHandle,
     is_disabled: bool,
@@ -101,6 +102,10 @@ impl Body {
 }
 
 impl Body {
+    fn text(app: &AppContext, key: &str) -> String {
+        localization::text_for_app(app, key)
+    }
+
     pub fn open(
         &mut self,
         open_source: SharedSessionActionSource,
@@ -160,27 +165,27 @@ impl Body {
             .saturating_add(agent_conversations_size.as_u64())
             > max_session_size.as_u64();
 
-        let scrollback_from_active_block_message = if model.is_alt_screen_active() {
-            "Share from current screen"
+        let scrollback_from_active_block_key = if model.is_alt_screen_active() {
+            "shared_session.share_modal.option.current_screen"
         } else if model
             .block_list()
             .active_block()
             .is_active_and_long_running()
         {
-            "Share from current block"
+            "shared_session.share_modal.option.current_block"
         } else {
-            "Share without scrollback"
+            "shared_session.share_modal.option.without_scrollback"
         };
 
         let mut options = vec![
             ScrollbackOption {
-                label: scrollback_from_active_block_message,
+                label: Self::text(ctx, scrollback_from_active_block_key),
                 scrollback_type: SharedSessionScrollbackType::None,
                 mouse_state_handle: Default::default(),
                 is_disabled: is_scrollback_from_active_block_disabled,
             },
             ScrollbackOption {
-                label: "Share from start of session",
+                label: Self::text(ctx, "shared_session.share_modal.option.start_of_session"),
                 scrollback_type: SharedSessionScrollbackType::All,
                 mouse_state_handle: Default::default(),
                 is_disabled: is_all_scrollback_disabled,
@@ -213,7 +218,7 @@ impl Body {
             options.insert(
                 0,
                 ScrollbackOption {
-                    label: "Share from selected block and onwards",
+                    label: Self::text(ctx, "shared_session.share_modal.option.selected_block"),
                     scrollback_type,
                     mouse_state_handle: Default::default(),
                     is_disabled,
@@ -244,7 +249,7 @@ impl View for Body {
                 ButtonVariant::Accent,
                 self.button_mouse_states.start_sharing_button.clone(),
             )
-            .with_centered_text_label(String::from("Start sharing"))
+            .with_centered_text_label(Self::text(app, "shared_session.share_modal.start_sharing"))
             .with_style(style::button_styles());
 
         // If none of the scrollback options are available, the start sharing
@@ -270,7 +275,7 @@ impl View for Body {
                 ButtonVariant::Outlined,
                 self.button_mouse_states.cancel_button.clone(),
             )
-            .with_centered_text_label(String::from("Cancel"))
+            .with_centered_text_label(Self::text(app, "settings.action.cancel"))
             .with_style(style::button_styles())
             .build()
             .with_cursor(Cursor::PointingHand)
@@ -295,7 +300,7 @@ impl View for Body {
                 self.radio_button_mouse_states
                     .items
                     .iter()
-                    .map(|i| RadioButtonItem::text(i.label).with_disabled(i.is_disabled))
+                    .map(|i| RadioButtonItem::text(i.label.clone()).with_disabled(i.is_disabled))
                     .collect(),
                 self.radio_button_mouse_states.group_state_handle.clone(),
                 default_option,
@@ -339,16 +344,28 @@ impl View for Body {
         } else if disabled_count > 1 {
             // Multiple options disabled - mention both reasons if agent conversations exist
             if self.has_agent_conversations {
-                Some("Some options are disabled due to sharing size limits and the presence of agent conversations in the session")
+                Some(Self::text(
+                    app,
+                    "shared_session.share_modal.disabled.size_and_agents",
+                ))
             } else {
-                Some("Some options are disabled due to sharing size limits")
+                Some(Self::text(
+                    app,
+                    "shared_session.share_modal.disabled.size_limit",
+                ))
             }
         } else {
             // Only one option disabled - use specific message if it's due to agent conversations
             if self.has_agent_conversations {
-                Some("Sharing without scrollback is disabled because this session has agent conversations")
+                Some(Self::text(
+                    app,
+                    "shared_session.share_modal.disabled.agents",
+                ))
             } else {
-                Some("Some options are disabled due to sharing size limits")
+                Some(Self::text(
+                    app,
+                    "shared_session.share_modal.disabled.size_limit",
+                ))
             }
         };
 

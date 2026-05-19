@@ -5,16 +5,15 @@ use warpui::{elements::Element, AppContext, View};
 use warpui::{Entity, SingletonEntity, TypedActionView, ViewContext};
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::ui_components::buttons::close_button;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use warpui::elements::{Container, MouseStateHandle, Text};
 use warpui::ui_components::components::UiComponent;
 
-const EDIT_ANYWAY_CTA_LABEL: &str = "Edit anyway";
-const CANCEL_CTA_LABEL: &str = "Cancel";
-const EDIT_ANYWAY_TEXT: &str =
-    "If you take edit controls, the current editor will be forced into view mode";
-const CURRENTLY_EDITED_LABEL: &str = "This notebook is currently being edited";
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -49,17 +48,21 @@ impl GrabEditAccessModal {
         ctx.emit(GrabEditAccessModalEvent::GrabEditAccess);
     }
 
-    pub fn render_modal(&self, appearance: &Appearance) -> Box<dyn Element> {
+    pub fn render_modal(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let description = Text::new(EDIT_ANYWAY_TEXT, appearance.ui_font_family(), 13.)
-            .with_style(Properties {
-                style: Style::Normal,
-                weight: Weight::Bold,
-            })
-            .with_color(theme.active_ui_text_color().into())
-            .finish();
+        let description = Text::new(
+            text(app, "cloud_object.grab_edit_access.description"),
+            appearance.ui_font_family(),
+            13.,
+        )
+        .with_style(Properties {
+            style: Style::Normal,
+            weight: Weight::Bold,
+        })
+        .with_color(theme.active_ui_text_color().into())
+        .finish();
 
         let close_button = close_button(appearance, self.mouse_state_handles.close_button.clone())
             .build()
@@ -68,7 +71,7 @@ impl GrabEditAccessModal {
             .finish();
 
         Dialog::new(
-            CURRENTLY_EDITED_LABEL.to_string(),
+            text(app, "cloud_object.grab_edit_access.title"),
             None,
             dialog_styles(appearance),
         )
@@ -81,7 +84,7 @@ impl GrabEditAccessModal {
                         ButtonVariant::Basic,
                         self.mouse_state_handles.cancel_button.clone(),
                     )
-                    .with_text_label(CANCEL_CTA_LABEL.to_string())
+                    .with_text_label(text(app, "cloud_object.grab_edit_access.cancel"))
                     .build()
                     .on_click(|ctx, _, _| {
                         ctx.dispatch_typed_action(GrabEditAccessModalAction::Close)
@@ -98,7 +101,7 @@ impl GrabEditAccessModal {
                     ButtonVariant::Warn,
                     self.mouse_state_handles.edit_anyway_button.clone(),
                 )
-                .with_text_label(EDIT_ANYWAY_CTA_LABEL.to_string())
+                .with_text_label(text(app, "cloud_object.grab_edit_access.edit_anyway"))
                 .build()
                 .on_click(|ctx, _, _| {
                     ctx.dispatch_typed_action(GrabEditAccessModalAction::GrabEditAccess)
@@ -148,6 +151,6 @@ impl View for GrabEditAccessModal {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        self.render_modal(appearance)
+        self.render_modal(appearance, app)
     }
 }

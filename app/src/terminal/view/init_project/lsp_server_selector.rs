@@ -3,6 +3,7 @@ use crate::ai::blocklist::block::toggleable_items::{ToggleableItemBuilder, Toggl
 use crate::ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::ui_components::blended_colors;
 use lsp::supported_servers::LSPServerType;
 use std::path::PathBuf;
@@ -130,10 +131,13 @@ pub fn render_lsp_selector_block(
     );
 
     let title_element = Span::new(
-        "Would you like to enable available language support for this codebase? This will give you smarter code navigation and inline error checking.",
+        localization::text_for_app(ctx, "terminal.init_project.lsp.multiple_prompt"),
         UiComponentStyles {
             font_family_id: Some(appearance.ui_font_family()),
-            font_color: Some(blended_colors::text_main(appearance.theme(), header_background)),
+            font_color: Some(blended_colors::text_main(
+                appearance.theme(),
+                header_background,
+            )),
             font_size: Some(appearance.monospace_font_size()),
             ..Default::default()
         },
@@ -163,7 +167,10 @@ pub fn render_lsp_selector_block(
     let skip_button = appearance
         .ui_builder()
         .button(ButtonVariant::Text, skip_mouse_state.clone())
-        .with_text_label("Skip for now".to_string())
+        .with_text_label(localization::text_for_app(
+            ctx,
+            "terminal.init_project.action.skip_for_now",
+        ))
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(InitProjectBlockAction::SkipLanguageServers);
@@ -176,9 +183,9 @@ pub fn render_lsp_selector_block(
     let any_needs_download = selected_items.iter().any(|info| !info.is_installed);
 
     let enable_label = if any_needs_download {
-        "Install and enable"
+        localization::text_for_app(ctx, "terminal.init_project.action.install_and_enable")
     } else {
-        "Enable language support"
+        localization::text_for_app(ctx, "terminal.init_project.action.enable_language_support")
     };
 
     // Create keyboard shortcut for Enter

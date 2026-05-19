@@ -15,9 +15,9 @@ use crate::{
         blocklist::inline_action::{
             inline_action_header::{ExpandedConfig, HeaderConfig, InteractionMode},
             inline_action_icons::green_check_icon,
-            requested_command::VIEWING_COMMAND_DETAIL_MESSAGE,
         },
     },
+    localization,
     terminal::{
         event::BlockCompletedEvent,
         model_events::{ModelEvent, ModelEventDispatcher},
@@ -140,7 +140,10 @@ impl View for CloudModeSetupCommandBlock {
         let appearance = Appearance::as_ref(app);
         let mut config = HeaderConfig::new(
             if self.is_expanded {
-                VIEWING_COMMAND_DETAIL_MESSAGE.to_owned()
+                localization::text_for_app(
+                    app,
+                    "agent.requested_command.status.viewing_command_detail",
+                )
             } else {
                 self.command.clone()
             },

@@ -770,7 +770,9 @@ impl AIDocumentModel {
             return;
         }
 
-        log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
+        log::info!(
+            "Applying persisted SQLite content for document {id} (content differs from conversation restoration)"
+        );
         doc.editor.update(ctx, |editor, editor_ctx| {
             let processed = post_process_notebook(persisted_content);
             editor.reset_with_markdown(&processed, editor_ctx);

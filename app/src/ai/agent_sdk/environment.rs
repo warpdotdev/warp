@@ -13,6 +13,7 @@ use warpui::r#async::FutureExt;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
+use crate::localization;
 
 use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
@@ -39,6 +40,10 @@ use warp_graphql::queries::list_warp_dev_images::{
 use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 
 const WARP_DEV_ENVIRONMENTS_REPO: &str = "https://github.com/warpdotdev/warp-dev-environments";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Parse repo strings in the format "owner/repo" into GithubRepo objects.
 fn parse_repos(repo_strings: Vec<String>) -> anyhow::Result<Vec<GithubRepo>> {
@@ -342,8 +347,6 @@ impl EnvironmentCommandRunner {
     where
         F: FnOnce(String, &mut ModelContext<Self>) + Send + 'static,
     {
-        const CUSTOM_IMAGE_OPTION: &str = "Custom Docker image";
-
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let operation = ListWarpDevImages::build(ListWarpDevImagesVariables {});
         let fetch_images = async move { server_api.send_graphql_request(operation, None).await };
@@ -353,32 +356,34 @@ impl EnvironmentCommandRunner {
                 ListWarpDevImagesResult::ListWarpDevImagesOutput(output) => {
                     if output.images.is_empty() {
                         super::report_fatal_error(
-                            anyhow::anyhow!("No Warp dev images available."),
+                            anyhow::anyhow!(text(ctx, "agent_sdk.environment.error.no_images")),
                             ctx,
                         );
                         return;
                     }
 
+                    println!("{}", text(ctx, "agent_sdk.environment.no_image_provided"));
                     println!(
-                        "No docker image provided, please select a base image.\n"
-                    );
-                    println!(
-                        "All warpdotdev images contain Python and Node, in addition to language-specific tooling. For more info: {}\n",
-                        WARP_DEV_ENVIRONMENTS_REPO
+                        "{}",
+                        text(ctx, "agent_sdk.environment.image_info")
+                            .replace("{url}", WARP_DEV_ENVIRONMENTS_REPO)
                     );
 
                     let mut image_choices: Vec<String> =
                         output.images.into_iter().map(|img| img.image).collect();
-                    image_choices.push(CUSTOM_IMAGE_OPTION.to_string());
+                    let custom_image_option = text(ctx, "agent_sdk.environment.custom_image");
+                    image_choices.push(custom_image_option.clone());
 
-                    let selected_image = match Select::new("Select a base image:", image_choices)
-                        .prompt()
-                    {
+                    let select_prompt = text(ctx, "agent_sdk.environment.select_base_image");
+                    let selected_image = match Select::new(&select_prompt, image_choices).prompt() {
                         Ok(image) => image,
                         Err(err) => {
                             if !Self::handle_inquire_error(err, ctx) {
                                 super::report_fatal_error(
-                                    anyhow::anyhow!("Error selecting image"),
+                                    anyhow::anyhow!(text(
+                                        ctx,
+                                        "agent_sdk.environment.error.selecting_image",
+                                    )),
                                     ctx,
                                 );
                             }
@@ -386,13 +391,17 @@ impl EnvironmentCommandRunner {
                         }
                     };
 
-                    let final_image = if selected_image == CUSTOM_IMAGE_OPTION {
-                        match inquire::Text::new("Enter custom Docker image name:").prompt() {
+                    let final_image = if selected_image == custom_image_option {
+                        let custom_prompt = text(ctx, "agent_sdk.environment.enter_custom_image");
+                        match inquire::Text::new(&custom_prompt).prompt() {
                             Ok(custom) => custom,
                             Err(err) => {
                                 if !Self::handle_inquire_error(err, ctx) {
                                     super::report_fatal_error(
-                                        anyhow::anyhow!("Error entering custom image"),
+                                        anyhow::anyhow!(text(
+                                            ctx,
+                                            "agent_sdk.environment.error.entering_custom_image",
+                                        )),
                                         ctx,
                                     );
                                 }

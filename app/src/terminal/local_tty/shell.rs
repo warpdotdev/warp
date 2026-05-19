@@ -115,7 +115,7 @@ impl ShellStarter {
                 ShellLaunchData::WSL { distro } => {
                     return Some(ShellStarterSourceOrWslName::WSLName {
                         distro_name: distro,
-                    })
+                    });
                 }
                 ShellLaunchData::MSYS2 {
                     executable_path,
@@ -128,7 +128,7 @@ impl ShellStarter {
                             shell_type,
                         }))
                         .into(),
-                    )
+                    );
                 }
                 ShellLaunchData::DockerSandbox {
                     sbx_path,

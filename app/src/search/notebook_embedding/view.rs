@@ -3,11 +3,14 @@ use std::{collections::HashSet, ops::Range};
 use crate::{
     appearance::Appearance,
     cloud_object::Space,
+    localization,
     search::{
         notebook_embedding::notebooks::CloudNotebooksDataSource,
         notebook_embedding::workflows::CloudWorkflowsDataSource,
         result_renderer::{QueryResultRenderer, QueryResultRendererStyles},
-        search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering},
+        search_bar::{
+            SearchBar, SearchBarEvent, SearchBarPlaceholder, SearchBarState, SearchResultOrdering,
+        },
     },
 };
 use itertools::Itertools;
@@ -25,8 +28,6 @@ use warpui::{
 };
 
 use super::searcher::{EmbeddingSearchItemAction, EmbeddingSearchMixer};
-
-const DEFAULT_PLACEHOLDER_TEXT: &str = "Search for a reference";
 
 lazy_static! {
     static ref QUERY_RESULT_RENDERER_STYLES: QueryResultRendererStyles =
@@ -86,7 +87,7 @@ impl EmbeddingSearchMenu {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                DEFAULT_PLACEHOLDER_TEXT,
+                SearchBarPlaceholder::localized("search.notebook_embedding.placeholder"),
                 |result_index, result| {
                     QueryResultRenderer::new(
                         result,
@@ -203,7 +204,7 @@ impl EmbeddingSearchMenu {
                 // There are no results to display, so notify the user of that fact.
                 let text = appearance
                     .ui_builder()
-                    .span("No results found.")
+                    .span(localization::text_for_app(app, "search.no_results"))
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         font_family_id: Some(appearance.ui_font_family()),

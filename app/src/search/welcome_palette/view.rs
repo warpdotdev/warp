@@ -26,6 +26,7 @@ use super::super::palette_styles as styles;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::drive::CloudObjectTypeAndId;
+use crate::localization;
 use crate::palette::PaletteMode;
 use crate::pane_group::pane::welcome_view::WelcomeViewAction;
 use crate::search::action::search_item::MatchedBinding;
@@ -41,7 +42,8 @@ use crate::search::data_source::QueryResult;
 use crate::search::mixer::{dedupe_score, DedupeStrategy};
 use crate::search::result_renderer::QueryResultRenderer;
 use crate::search::search_bar::{
-    SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering, SelectionUpdate,
+    SearchBar, SearchBarEvent, SearchBarPlaceholder, SearchBarState, SearchResultOrdering,
+    SelectionUpdate,
 };
 use crate::search::QueryFilter;
 use crate::send_telemetry_from_ctx;
@@ -268,7 +270,7 @@ impl WelcomePalette {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                "Code, build, or search for anything...",
+                SearchBarPlaceholder::localized("search.welcome_palette.placeholder"),
                 Self::create_query_result_renderer,
                 ctx,
             )
@@ -285,7 +287,8 @@ impl WelcomePalette {
         });
 
         let placeholder_element = QueryResultRenderer::new(
-            MatchedBinding::placeholder("No results found".into()).into(),
+            MatchedBinding::placeholder(localization::text_for_app(ctx, "search.no_results"))
+                .into(),
             "welcome_palette:no_results".into(),
             |_, _, _| {},
             *styles::QUERY_RESULT_RENDERER_STYLES,

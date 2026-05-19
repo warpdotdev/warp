@@ -29,6 +29,10 @@ use crate::{search::item::SearchItem, workflows::CloudWorkflow};
 /// The size of the object type icons, in pixels.
 const ICON_SIZE: f32 = 16.;
 
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 /// Struct designed to be the implementation of CommandSearchItem for workflows.
 #[derive(Clone, Debug)]
 pub struct WorkflowSearchItem {
@@ -108,7 +112,7 @@ impl SearchItem for WorkflowSearchItem {
             let warning_font_size = appearance.ui_font_size() - 4.;
             let warning_text = appearance
                 .ui_builder()
-                .span("Not visible to other users")
+                .span(text(app, "search.notebook_embedding.not_visible"))
                 .with_style(UiComponentStyles {
                     font_size: Some(warning_font_size),
                     margin: Some(Coords::uniform(0.).left(4.)),

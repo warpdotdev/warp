@@ -72,6 +72,7 @@ use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
 use crate::ai::blocklist::block::{DetectedLinksState, RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::localization;
 
 use crate::settings_view::SettingsSection;
 use crate::terminal::block_list_element::BlockListMenuSource;
@@ -94,6 +95,10 @@ use warpui::fonts::Properties;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::components::UiComponent;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Helper function to create gray strikethrough highlight for secrets
 fn create_secret_gray_highlight() -> Highlight {
@@ -794,7 +799,7 @@ where
 /// This function is needed both above (i.e. `block.rs`) and below (i.e. `output.rs`), and as such
 /// cannot reside in `output.rs` because we don't want to make `mod output` public.
 pub fn render_autonomy_checkbox_setting_speedbump_footer(
-    description: &'static str,
+    description: impl Into<String>,
     checked: bool,
     on_toggled_action: AIBlockAction,
     checkbox_handle: MouseStateHandle,
@@ -803,6 +808,7 @@ pub fn render_autonomy_checkbox_setting_speedbump_footer(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let description = description.into();
     Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
@@ -840,7 +846,7 @@ pub fn render_autonomy_checkbox_setting_speedbump_footer(
                     appearance
                         .ui_builder()
                         .link(
-                            "Manage AI Autonomy permissions".into(),
+                            text(app, "agent.output.permissions.manage_autonomy"),
                             None,
                             Some(Box::new(move |ctx| {
                                 ctx.dispatch_typed_action(

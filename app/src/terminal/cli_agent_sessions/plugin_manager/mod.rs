@@ -29,6 +29,7 @@ pub enum PluginModalKind {
 
 /// A single step in the plugin install/update instructions pane.
 pub(crate) struct PluginInstructionStep {
+    pub description_key: &'static str,
     pub description: &'static str,
     pub command: &'static str,
     /// When true, the code block shows a "Run" button that inserts the command into the terminal.
@@ -42,9 +43,12 @@ pub(crate) struct PluginInstructionStep {
 
 /// All content needed to render the plugin instructions pane for a given agent.
 pub(crate) struct PluginInstructions {
+    pub title_key: &'static str,
     pub title: &'static str,
+    pub subtitle_key: &'static str,
     pub subtitle: &'static str,
     pub steps: &'static [PluginInstructionStep],
+    pub post_install_note_keys: &'static [&'static str],
     /// Displayed after the steps in the same style as the subtitle, one per paragraph.
     pub post_install_notes: &'static [&'static str],
 }
@@ -183,9 +187,17 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
         "Warp plugin installed. Please restart the session to activate."
     }
 
+    fn install_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_installed_restart"
+    }
+
     /// Toast message shown after a successful auto-update.
     fn update_success_message(&self) -> &'static str {
         "Warp plugin updated. Please restart the session to activate."
+    }
+
+    fn update_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_updated_restart"
     }
 
     /// Manual installation instructions for the modal UI.

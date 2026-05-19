@@ -188,7 +188,12 @@ fn test_remaining_substitutions() {
 
         assert_eq!(
             result.unwrap().get_args().collect::<Vec<_>>(),
-            ["-c", &format!("echo Warp Test Application && echo --icon /foo/bar/icon.png && echo {desktop_file_path} && echo %")]
+            [
+                "-c",
+                &format!(
+                    "echo Warp Test Application && echo --icon /foo/bar/icon.png && echo {desktop_file_path} && echo %"
+                )
+            ]
         );
         Ok(())
     });
