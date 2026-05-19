@@ -635,6 +635,17 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .terminal_model
+            .lock()
+            .shared_session_status()
+            .is_viewer()
+        {
+            log::error!(
+                "Shared-session viewers should not send direct agent requests; prompts must be routed through session sharing"
+            );
+            return;
+        }
         // Store the participant who initiated this query before sending
         // so that send_query can use it when creating the exchange.
         if let Some(participant_id) = shared_session_participant_id {
@@ -1127,6 +1138,7 @@ impl BlocklistAIController {
             .is_viewer();
         if is_viewer {
             log::error!("Viewers should never attempt to send queries directly");
+            return;
         }
 
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
@@ -2199,6 +2211,17 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
+        if self
+            .terminal_model
+            .lock()
+            .shared_session_status()
+            .is_viewer()
+        {
+            const VIEWER_DIRECT_AGENT_REQUEST_ERROR_STR: &str =
+                "Shared-session viewers cannot send direct agent requests";
+            log::error!("{VIEWER_DIRECT_AGENT_REQUEST_ERROR_STR}");
+            return Err(anyhow::anyhow!(VIEWER_DIRECT_AGENT_REQUEST_ERROR_STR));
+        }
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let (
             conversation_id,
