@@ -7,7 +7,7 @@ description: "Turn rough feedback about the Warp app into a filed GitHub issue o
 
 Turn rough Warp app feedback into a crisp filed issue or duplicate-issue response for `warpdotdev/warp`.
 
-Treat Warp client, Warp app, Warp terminal, and Warp UX feedback as `warpdotdev/warp` unless the user clearly asks for a different destination.
+Treat Warp client, Warp app, Warp terminal, and Warp UX feedback as `warpdotdev/warp` only when the user's latest request explicitly reports a Warp product problem. User repository, GitHub, app, or code context is not enough to infer that a public Warp issue should be filed.
 
 ## Overview
 - Use the `gh` CLI to search for and fetch code from `warpdotdev/warp` when product or implementation context would improve the report.
@@ -15,6 +15,7 @@ Treat Warp client, Warp app, Warp terminal, and Warp UX feedback as `warpdotdev/
 - This skill is strictly for issue filing and duplicate detection. Never modify code, generate patches, propose implementation diffs, or open a pull request as part of this workflow.
 - If you cannot file an issue, say so explicitly in the response instead of attempting another side effect.
 - The helper script applies the `in-app-feedback` label to filed issues for tracking.
+- GitHub issues filed by this skill are public. Treat every title, body, URL, screenshot description, source reference, log excerpt, and repository name as publicly visible.
 
 ## Code access boundaries
 
@@ -46,7 +47,15 @@ Load the bundled reference files only when relevant:
 - When you decline, respond in one or two sentences that (a) say you won't file an issue, (b) name the reason in plain language, and (c) point the user at the right channel: account/billing/support concerns go to the in-app Help menu or `support@warp.dev`, community discussion goes to the Warp Slack community, and security reports go to `security@warp.dev`. Do not apologize performatively and do not offer to retry the same flow.
 - Only if the request is in scope, classify it as `bug`, `regression`, `ux issue`, or `feature request` before drafting.
 
-### 2. Ask only for missing facts that materially improve the draft
+### 2. Protect private and user-project context
+
+- Before asking for details, drafting, duplicate searching, or filing, do a public-filing safety check. Look at the user's latest request, attached context, current working directory, mentioned repositories, file paths, logs, command output, screenshots, and prior conversation summary if available.
+- **Do not auto-file to public GitHub when the report includes private, proprietary, customer, security-sensitive, or user-project context.** This includes private repositories, non-Warp repository names such as `owner/repo`, app/product names from the user's own work, source snippets, file paths, logs, env vars, credentials, tokens, URLs for private services, or screenshots that may expose private data.
+- If sensitive or user-project context is present but the underlying issue is about Warp itself, ask a focused confirmation before filing: "This would create a public issue in `warpdotdev/warp`. Should I file a redacted report that excludes private repo names, app details, code, logs, and screenshots?" If the user does not clearly opt in, do not call the helper script. Provide a redacted draft instead and say no public issue was filed.
+- When public filing is confirmed, minimize and redact aggressively. Replace private repo names with "a private repository", private app/product names with "a private app", exact file paths with generic descriptions, and logs/code with short behavioral summaries. Do not include screenshots unless the user explicitly agrees they are safe for a public issue.
+- When the final body has been checked and is safe to publish publicly, include the hidden marker `<!-- public-github-safe:v1 -->` immediately after `<!-- warp-feedback-skill:v1 -->`. Only include this marker after the safety check above; it is the signal to the helper script that any sensitive context has been redacted or explicitly approved.
+
+### 3. Ask only for missing facts that materially improve the draft
 
 - Before drafting, decide whether the report already contains the minimum actionable information: what the user was doing, what they expected, and what happened (for bugs, regressions, and UX issues) or what they want to be able to do and why (for feature requests). If any of those pieces is missing, run a single focused clarifying round.
 - Use the `ask_user_question` tool for that round. Ask 3-4 high-value multiple-choice questions in a single call, focused on user experience and expectations: what the user was trying to do, what felt confusing or broken, what they expected to happen instead, where in the product they hit the issue, and how much it blocked them.
@@ -56,23 +65,23 @@ Load the bundled reference files only when relevant:
 - For crashes, startup failures, rendering bugs, sync issues, or hard-to-reproduce regressions, ask for logs or crash artifacts only when they are likely to help. Read `references/logs.md` only when needed.
 - If operating system version, Warp version, or operating-system-specific behavior is relevant, read `references/platforms.md` and follow the bundled metadata guidance there yourself when possible. Ask the user only if you still cannot determine the necessary platform details.
 
-### 3. Check whether the feature or capability is already supported
+### 4. Check whether the feature or capability is already supported
 
 - Before concluding that something is missing from Warp (feature requests, "it doesn't do X" complaints, "I wish it could Y" asks, or any UX complaint that could be explained by an existing setting or workflow), you **must** consult the docs first.
 - Call the `search_warp_documentation` tool with the user's own phrasing. If the first query is vague or returns nothing actionable, try one shorter variant that keeps the same user-visible problem.
 - If the search returns a clear match, respond with a concise, direct answer that cites the docs page (title + URL) and explains how the existing functionality addresses the user's ask. Do not file an issue and do not invoke the helper script.
 - If the search returns an ambiguous or partial match, briefly summarize what does exist and ask one clarifying question about whether that satisfies the user's intent before deciding whether to file.
-- If the search turns up nothing relevant, proceed to step 4. Do not invent workarounds, and do not imply a feature is missing when the docs already answer the question.
-- Docs-first checking applies primarily to feature-request-shaped reports. For reproducible bugs and regressions, skip ahead to step 4 unless docs would clarify whether the current behavior is intended.
+- If the search turns up nothing relevant, proceed to step 5. Do not invent workarounds, and do not imply a feature is missing when the docs already answer the question.
+- Docs-first checking applies primarily to feature-request-shaped reports. For reproducible bugs and regressions, skip ahead to step 5 unless docs would clarify whether the current behavior is intended.
 
-### 4. Ground the report in product and code context when helpful
+### 5. Ground the report in product and code context when helpful
 
 - Search the `warpdotdev/warp` repo via the `gh` CLI for matching product language, expected workflows, setting names, or UX intent when that context would make the draft more actionable.
 - Search the `warpdotdev/warp` repo via the `gh` CLI for matching components, settings surfaces, feature flags, and likely code paths when implementation context would help triage.
 - Add source references only when they point to real files, symbols, settings names, or spec text that plausibly relate to the feedback.
 - Never invent a root cause just to make the report sound complete.
 
-### 5. Draft the issue
+### 6. Draft the issue
 
 - Keep the title concrete and user-visible.
 - Rewrite rough notes into a polished issue body with the shared section structure below.
@@ -80,7 +89,7 @@ Load the bundled reference files only when relevant:
 - If the exact reproduction steps are still uncertain, write the best-supported scenario and call out what is still unknown.
 - Make the title specific enough that it can be used as the primary duplicate-detection query.
 
-### 6. Handle image attachments, if present
+### 7. Handle image attachments, if present
 
 - If the user's query includes one or more image attachments visible to you as multimodal context, apply the rules in this step in addition to the normal drafting workflow.
 - Incorporate what you can see in each image into the drafted issue body. At minimum, describe the relevant visual content in prose in the `Problem`, `Actual behavior`, or similar section so the report remains coherent even if the images do not end up attached to the filed issue.
@@ -96,7 +105,7 @@ Load the bundled reference files only when relevant:
 - In your final response, explicitly instruct the user to paste or drag each attached image into the body at the corresponding `_Paste screenshot N here_` line(s) and then submit the issue. Reference the count of attached images so the user knows how many to paste. Do not claim the issue has been filed until the user submits.
 - If the user's query has no image attachments, do not add captions or placeholders, pass `--use gh` as usual, and do not add drag-and-drop instructions to your final response.
 
-### 7. Check for likely duplicates before filing
+### 8. Check for likely duplicates before filing
 
 - Before invoking `scripts/file_feedback_issue.py`, search issues in `warpdotdev/warp` for likely title matches using the drafted title as the primary query.
 - Use a lightweight title-based check only. Prefer precision over recall, and do not run a broad semantic fishing expedition.
@@ -159,7 +168,7 @@ Section rules:
 - Do not pad the issue with source references unless they genuinely improve debugging or triage.
 - Never treat this workflow as permission to implement a fix. This skill may only file an issue, decline to file, or point to an existing issue.
 - Never suggest code changes, patches, or implementation diffs in the issue body, in your response, or as a follow-up action — even informally or "as a starting point." If the user asks for a fix, decline and redirect them to the filed issue.
-- **Refuse to file in three situations:** (1) the report is out of scope per step 1, (2) the minimum actionable information is still missing after the single clarifying round in step 2, or (3) step 3 found a clear docs match for what the user is asking about. In each case, explain the decision in one or two plain sentences and do not call the helper script. Never imply a feature is missing when docs already answer the question, and never file a placeholder issue just to acknowledge the user.
+- **Refuse to file in four situations:** (1) the report is out of scope per step 1, (2) public filing is unsafe or not confirmed per step 2, (3) the minimum actionable information is still missing after the single clarifying round in step 3, or (4) step 4 found a clear docs match for what the user is asking about. In each case, explain the decision in one or two plain sentences and do not call the helper script. Never imply a feature is missing when docs already answer the question, and never file a placeholder issue just to acknowledge the user.
 
 ## Output
 
@@ -197,6 +206,7 @@ Issue body:
 
 ```md
 <!-- warp-feedback-skill:v1 -->
+<!-- public-github-safe:v1 -->
 ## Summary
 ...
 
@@ -233,6 +243,7 @@ After completing the duplicate-check and filing workflow:
 - If the JSON result has `status: "created"` and `browser_unavailable: true`, explicitly tell the user that the browser could not be opened (include the `message` field from the result) and that the issue was filed programmatically with the available text contents. Make clear that image attachments were not uploaded to the issue. Then provide the issue link and a brief summary (3–5 sentences max) of what was filed.
 - If the JSON result has `status: "created"` (without `browser_unavailable`), respond with only the created issue link and a brief summary (3–5 sentences max) of what was filed: the classification, the core problem, and any notable missing details.
 - If the JSON result has `status: "unavailable"`, say that you could not file the issue because the GitHub CLI was not installed or authenticated, and include the returned message.
+- If the JSON result has `status: "blocked_sensitive_context"`, say that no public issue was filed because the draft still appears to contain private or user-project context. Provide a redacted draft or ask for explicit public-filing confirmation, depending on what is missing.
 - If the JSON result has `status: "browser_opened"` (seen when `--use browser` was used for image-bearing feedback), do not claim the issue has been filed. Pass the returned `message` to the user, and explicitly instruct them to paste or drag each attached image into the placeholder line(s) in the issue body and then submit the issue. When the result includes a `body` field (the drafted body was too long to prefill in the URL), surface that body so the user can paste it into the issue form before attaching images.
 - If the JSON result has `status: "failed"`, say that you could not file the issue because the filing flow failed, and include the returned `error` or `gh_error` message. When `--use browser` was used and filing failed (meaning both the browser and the `gh` CLI fallback were unavailable), make it explicit that image attachments were not handed off and no issue was filed.
 - If issue filing is not possible for any other reason, say explicitly that no issue was filed.

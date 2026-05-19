@@ -60,6 +60,37 @@ class BuildNewIssueUrlTests(unittest.TestCase):
         self.assertIn("%3E", url)
 
 
+class SensitiveContextTests(unittest.TestCase):
+    def test_blocks_private_repo_context_without_public_safe_marker(self):
+        signals = ffi.sensitive_context_signals(
+            "Unexpected public filing",
+            "Warp filed details from my private repo while I was working.",
+        )
+        self.assertIn("private repository mention", signals)
+        self.assertIn("user-owned app or repository mention", signals)
+
+    def test_blocks_non_warp_repo_reference_without_echoing_value(self):
+        signals = ffi.sensitive_context_signals(
+            "Unexpected public filing",
+            "The workflow exposed deftai/deftvisage details.",
+        )
+        self.assertEqual(signals, ["non-Warp repository reference"])
+
+    def test_public_safe_marker_allows_redacted_private_context(self):
+        signals = ffi.sensitive_context_signals(
+            "Unexpected public filing",
+            f"{ffi.PUBLIC_SAFE_MARKER}\nWarp interrupted work in a private repository.",
+        )
+        self.assertEqual(signals, [])
+
+    def test_public_safe_marker_still_blocks_unredacted_repo_reference(self):
+        signals = ffi.sensitive_context_signals(
+            "Unexpected public filing",
+            f"{ffi.PUBLIC_SAFE_MARKER}\nWarp exposed deftai/deftvisage details.",
+        )
+        self.assertEqual(signals, ["non-Warp repository reference"])
+
+
 class FallbackToBrowserTests(unittest.TestCase):
     def _run_fallback(
         self,
@@ -298,6 +329,24 @@ class MainTests(unittest.TestCase):
         self.assertEqual(payload["status"], "created")
         self.assertEqual(payload["method"], "gh")
         self.assertTrue(payload["issue_url"].endswith("/issues/999"))
+
+    def test_blocks_sensitive_context_before_gh_create(self):
+        self.body_file.write_text(
+            "The draft includes details from my private repo deftai/deftvisage.",
+            encoding="utf-8",
+        )
+        with mock.patch.object(
+            ffi, "gh_path_if_authenticated", return_value="/usr/bin/gh"
+        ) as gh_mock, mock.patch.object(ffi, "create_issue_with_gh") as create_mock:
+            rc, payload = self._run_main(["--use", "gh"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(payload["status"], "blocked_sensitive_context")
+        self.assertEqual(payload["method"], "safety_check")
+        self.assertIn("private repository mention", payload["signals"])
+        self.assertIn("non-Warp repository reference", payload["signals"])
+        self.assertNotIn("deftai", json.dumps(payload))
+        gh_mock.assert_not_called()
+        create_mock.assert_not_called()
 
     def test_use_gh_reports_unavailable_and_does_not_open_browser(self):
         with mock.patch.object(

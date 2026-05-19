@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import urllib.parse
 import webbrowser
 from pathlib import Path
@@ -16,12 +17,66 @@ import sys
 DEFAULT_REPO = "warpdotdev/warp"
 DEFAULT_HOSTNAME = "github.com"
 FEEDBACK_LABEL = "in-app-feedback"
+PUBLIC_SAFE_MARKER = "<!-- public-github-safe:v1 -->"
 
 # GitHub's new-issue page accepts a prefilled title and body via query
 # parameters, but browsers and intermediate servers commonly cap URLs around
 # 8 KB. Keep a conservative threshold that leaves headroom for the base URL
 # and percent-encoding overhead.
 MAX_PREFILL_URL_LENGTH = 8000
+
+SENSITIVE_CONTEXT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "private repository mention",
+        re.compile(r"\bprivate\s+(?:github\s+)?repo(?:sitory)?\b", re.IGNORECASE),
+    ),
+    (
+        "proprietary or internal project mention",
+        re.compile(
+            r"\b(?:proprietary|internal)\s+(?:app|application|codebase|project|repo|repository)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "user-owned app or repository mention",
+        re.compile(
+            r"\bmy\s+(?:private\s+)?(?:app|application|codebase|project|repo|repository)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "sensitive credential mention",
+        re.compile(r"\b(?:api[_-]?key|credential|password|secret|token)s?\b", re.IGNORECASE),
+    ),
+)
+
+UNREDACTED_CONTEXT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "non-Warp GitHub repository URL",
+        re.compile(
+            r"github\.com/(?!warpdotdev/warp\b)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "non-Warp repository reference",
+        re.compile(
+            r"(?<![\w./:-])(?!(?:warpdotdev/warp)\b)[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "local user file path",
+        re.compile(r"\b(?:/Users|/home)/[A-Za-z0-9_.-]+/", re.IGNORECASE),
+    ),
+    (
+        "credential-looking value",
+        re.compile(
+            r"\b(?:api[_-]?key|credential|password|secret|token)\s*[:=]\s*\S+",
+            re.IGNORECASE,
+        ),
+    ),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +132,48 @@ def normalize_body(body: str) -> str:
     if not normalized_body.strip():
         raise SystemExit("Issue body must not be empty.")
     return normalized_body
+
+
+def sensitive_context_signals(title: str, body: str) -> list[str]:
+    """Return private-context signals that should block public issue filing.
+
+    The feedback skill adds PUBLIC_SAFE_MARKER only after it has checked that
+    the draft is safe for a public GitHub issue. Even then, keep scanning for
+    high-confidence unredacted details such as non-Warp repo names and local
+    user paths.
+    """
+    text = f"{title}\n{body}"
+    patterns = list(UNREDACTED_CONTEXT_PATTERNS)
+    if PUBLIC_SAFE_MARKER not in body:
+        patterns.extend(SENSITIVE_CONTEXT_PATTERNS)
+
+    matches: list[str] = []
+    for label, pattern in patterns:
+        if pattern.search(text):
+            matches.append(label)
+
+    return matches
+
+
+def block_sensitive_context_if_needed(title: str, body: str) -> bool:
+    signals = sensitive_context_signals(title, body)
+    if not signals:
+        return False
+
+    print_result(
+        {
+            "status": "blocked_sensitive_context",
+            "method": "safety_check",
+            "repo": DEFAULT_REPO,
+            "signals": signals,
+            "message": (
+                "Public GitHub issue filing was blocked because the draft appears "
+                "to contain private, sensitive, or user-project context. Redact the "
+                "draft and confirm it is safe for public filing before retrying."
+            ),
+        }
+    )
+    return True
 
 
 def gh_path_if_authenticated() -> str | None:
@@ -297,6 +394,9 @@ def main() -> int:
 
     title = normalize_title(args.title)
     body = normalize_body(read_text(args.body_file, "body"))
+
+    if block_sensitive_context_if_needed(title, body):
+        return 1
 
     if args.use_method == "browser":
         return fallback_to_browser(title, body)
