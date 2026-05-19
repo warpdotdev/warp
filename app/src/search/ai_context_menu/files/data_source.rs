@@ -17,12 +17,8 @@ use itertools::Itertools;
 use repo_metadata::repositories::DetectedRepositories;
 use std::collections::HashMap;
 use std::collections::HashSet;
-#[cfg(feature = "local_fs")]
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(feature = "local_fs")]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity};
 
 const MAX_RESULTS: usize = 200;
@@ -113,33 +109,25 @@ pub fn file_data_source_for_pwd(
 /// repo at snapshot time. Returns an empty map when no repo is active.
 #[cfg(feature = "local_fs")]
 fn snapshot_last_opened(app: &AppContext) -> HashMap<String, instant::Instant> {
-    let git_repo_path = app
+    let repo_root = app
         .windows()
         .state()
         .active_window
-        .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))
-        .and_then(|current_dir| {
-            DetectedRepositories::as_ref(app)
-                .get_root_for_path(&LocalOrRemotePath::Local(
-                    Path::new(current_dir).to_path_buf(),
-                ))
-                .and_then(|r| PathBuf::try_from(r).ok())
-        });
+        .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
+        .and_then(|working_dir| DetectedRepositories::as_ref(app).get_root_for_path(working_dir));
 
-    let Some(repo_path) = git_repo_path else {
+    let Some(repo_root) = repo_root else {
         return HashMap::new();
     };
 
     let opened_files_model = OpenedFilesModel::as_ref(app);
-    let Some(opened_in_repo) = opened_files_model.opened_files_for_repo(&repo_path) else {
+    let Some(opened_in_repo) = opened_files_model.opened_files_for_repo(&repo_root) else {
         return HashMap::new();
     };
 
-    // Convert PathBuf keys to String keys matching FileSearchResult.path
-    // (relative paths from repo root).
     opened_in_repo
         .iter()
-        .map(|(path, ts)| (path.to_string_lossy().to_string(), *ts))
+        .map(|(path, ts)| (path.clone(), *ts))
         .collect()
 }
 

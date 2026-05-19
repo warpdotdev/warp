@@ -11766,6 +11766,31 @@ impl TerminalView {
                                                 );
                                             },
                                         );
+
+                                        // Force the workspace to re-evaluate
+                                        // ActiveSession::working_directory. The
+                                        // AppStateChanged at line 11671 already ran
+                                        // update_active_session once, but for remote
+                                        // sessions pwd_as_local_or_remote() may have
+                                        // returned None at that point because host_id
+                                        // wasn't set yet. Now that remote repo
+                                        // detection succeeded we know host_id is
+                                        // available, so a second pass populates
+                                        // working_directory correctly.
+                                        // Local sessions don't need this because
+                                        // pwd_as_local_or_remote always succeeds for
+                                        // local paths (no host_id dependency).
+                                        ctx.emit(Event::AppStateChanged);
+
+                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                            me.input.update(ctx, |input, ctx| {
+                                                input
+                                                    .check_and_update_ai_context_menu_disabled_state(
+                                                        ctx,
+                                                    );
+                                            });
+                                        }
+
                                         ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                             remote_path: remote_path.clone(),
                                         }));
