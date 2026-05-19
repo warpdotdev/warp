@@ -131,7 +131,7 @@
 
 # Rich input
 /app/src/terminal/view/use_agent_footer/ @Advait-M
-/app/src/terminal/view/use_agent_footer/warpify_footer.rs @Advait-M @MaggieShan
+/app/src/terminal/view/use_agent_footer/warpify_footer.rs @MaggieShan
 /app/src/terminal/input/cli_agent.rs @Advait-M
 
 # UI framework
