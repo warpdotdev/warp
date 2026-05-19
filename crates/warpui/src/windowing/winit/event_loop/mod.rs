@@ -888,10 +888,6 @@ impl EventLoop {
                         mut inner_size_writer,
                     },
             } => {
-                // The following correction is only needed on Windows.
-                if !cfg!(windows) {
-                    return;
-                }
                 let Some(window_state) = self.state.windows.get(&window_id) else {
                     return;
                 };
@@ -902,30 +898,40 @@ impl EventLoop {
                     return;
                 };
 
-                // There is a winit bug such that events which cause a window to switch displays to
-                // one with a different scale factor resize the Warp window to an absurdly small
-                // size, <157, 25> on my system when I repro it. Events include unplugging a
-                // display, changing a display from extended to mirrored, and the like. We work
-                // around that by listening for [`WindowEvent::ScaleFactorChanged`] and changing
-                // the size back up to the minimum dimensions.
-                let size = window.as_ctx().size();
-                let mut size = LogicalSize::new(size.x() as f64, size.y() as f64);
-                let mut request_new_size = false;
-                if size.width < MIN_WINDOW_SIZE.width {
-                    size.width = MIN_WINDOW_SIZE.width;
-                    request_new_size = true;
-                }
-                if size.height < MIN_WINDOW_SIZE.height {
-                    size.height = MIN_WINDOW_SIZE.height;
-                    request_new_size = true;
-                }
-                if request_new_size {
-                    if let Err(err) =
-                        inner_size_writer.request_inner_size(size.to_physical(scale_factor))
-                    {
-                        log::warn!("unable to correct window size: {err:#}");
+                if cfg!(windows) {
+                    // There is a winit bug such that events which cause a window to switch displays to
+                    // one with a different scale factor resize the Warp window to an absurdly small
+                    // size, <157, 25> on my system when I repro it. Events include unplugging a
+                    // display, changing a display from extended to mirrored, and the like. We work
+                    // around that by listening for [`WindowEvent::ScaleFactorChanged`] and changing
+                    // the size back up to the minimum dimensions.
+                    let size = window.as_ctx().size();
+                    let mut size = LogicalSize::new(size.x() as f64, size.y() as f64);
+                    let mut request_new_size = false;
+                    if size.width < MIN_WINDOW_SIZE.width {
+                        size.width = MIN_WINDOW_SIZE.width;
+                        request_new_size = true;
+                    }
+                    if size.height < MIN_WINDOW_SIZE.height {
+                        size.height = MIN_WINDOW_SIZE.height;
+                        request_new_size = true;
+                    }
+                    if request_new_size {
+                        if let Err(err) =
+                            inner_size_writer.request_inner_size(size.to_physical(scale_factor))
+                        {
+                            log::warn!("unable to correct window size: {err:#}");
+                        }
                     }
                 }
+
+                // Wayland can emit this when a window crosses outputs with different scale
+                // factors. Treat it like a resize so we rebuild the cached scene with the new
+                // backing scale factor rather than reusing a scene rasterized for the old output.
+                let window = downcast_window(window.as_ref());
+                window.handle_resize();
+                self.callbacks.for_window(window).window_resized(window);
+                self.callbacks.window_resized();
             }
             Event::WindowEvent { window_id, event } => self.handle_window_event(window_id, event),
             Event::LoopExiting => {
