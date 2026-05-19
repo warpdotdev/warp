@@ -2,7 +2,10 @@ use super::{
     editor_text_colors,
     settings_page::{render_input_list, InputListItem},
 };
-use crate::server::server_api::ServerApiProvider;
+use crate::server::{
+    graphql::get_user_facing_error_message,
+    server_api::{integrations, ServerApiProvider},
+};
 use crate::{
     ai::ambient_agents::{
         github_auth_url::{self, AuthSource, GithubAuthRedirectTarget},
@@ -379,6 +382,7 @@ const FORM_DESCRIPTION_VERTICAL_PADDING: f32 = 6.;
 const CARD_BORDER_WIDTH: f32 = 1.;
 const REPO_CHIP_MAX_WIDTH: f32 = 200.;
 const DROPDOWN_MAX_WIDTH: f32 = 800.;
+const FORM_SIDE_BUTTON_WIDTH: f32 = 160.;
 const DROPDOWN_MAX_HEIGHT: f32 = 300.;
 const REPOS_DROPDOWN_ANCHOR: &str = "repos_dropdown_anchor";
 const HEADER_VERTICAL_LAYOUT_THRESHOLD: f32 = 520.;
@@ -1312,7 +1316,17 @@ impl UpdateEnvironmentForm {
             .get_integrations_client();
 
         ctx.spawn(
-            async move { integrations_client.get_user_github_info().await },
+            async move {
+                match integrations_client.get_user_github_info().await {
+                    Err(error) if integrations::is_github_auth_refresh_required_error(&error) => {
+                        integrations_client
+                            .refresh_github_auth()
+                            .await
+                            .map(UserGithubInfoResult::GithubAuthRequiredOutput)
+                    }
+                    result => result,
+                }
+            },
             move |me, result, ctx| {
                 me.github_dropdown_state.is_loading = false;
                 let mut should_open_auth = open_auth_after_fetch;
@@ -1363,6 +1377,12 @@ impl UpdateEnvironmentForm {
                                 .to_string(),
                         );
                         me.update_repos_input_placeholder(ctx);
+                    }
+                    Ok(UserGithubInfoResult::UserFacingError(error)) => {
+                        me.github_dropdown_state.load_error_message = Some(format!(
+                            "Failed to load GitHub repos: {}",
+                            get_user_facing_error_message(error)
+                        ));
                     }
                     Err(e) => {
                         debug!("Failed to load GitHub repos: {e}");
@@ -2116,7 +2136,7 @@ impl UpdateEnvironmentForm {
                         )
                         .with_child(
                             Text::new(
-                                "Auth with GitHub",
+                                "GitHub Auth",
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2132,6 +2152,7 @@ impl UpdateEnvironmentForm {
                 .with_background(bg)
                 .finish(),
             )
+            .with_width(FORM_SIDE_BUTTON_WIDTH)
             .with_height(FORM_INPUT_HEIGHT)
             .finish()
         })
@@ -3153,6 +3174,7 @@ impl UpdateEnvironmentForm {
                 .finish();
 
                 let button = ConstrainedBox::new(button_content)
+                    .with_width(FORM_SIDE_BUTTON_WIDTH)
                     .with_height(FORM_INPUT_HEIGHT)
                     .finish();
 

@@ -1,4 +1,4 @@
-use crate::{request_context::RequestContext, schema};
+use crate::{error::UserFacingError, request_context::RequestContext, schema};
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct UserGithubInfoVariables {
@@ -27,11 +27,12 @@ pub struct RepoResult {
     pub is_public: bool,
 }
 
-#[derive(cynic::InlineFragments, Debug, Clone)]
+#[derive(cynic::InlineFragments, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum UserGithubInfoResult {
     GithubConnectedOutput(GithubConnectedOutput),
     GithubAuthRequiredOutput(GithubAuthRequiredOutput),
+    UserFacingError(UserFacingError),
     #[cynic(fallback)]
     Unknown,
 }
