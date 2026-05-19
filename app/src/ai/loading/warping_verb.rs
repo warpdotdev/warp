@@ -161,12 +161,17 @@ impl WarpingVerbSelector {
                 return cached.display.clone();
             }
         }
+
+        // Settings file edits and synced values can bypass
+        // AISettings::set_custom_warping_verbs, so normalize again at the
+        // renderer boundary before picking a display value.
+        let verbs = normalize_warping_verbs(verbs.to_vec());
         if verbs.is_empty() {
             self.cached.replace(None);
             return DEFAULT_WARPING_VERB.to_owned();
         }
         let previous_raw = self.cached.borrow().as_ref().map(|c| c.raw.clone());
-        let picked = pick_verb(verbs, previous_raw.as_deref());
+        let picked = pick_verb(&verbs, previous_raw.as_deref());
         let display = format_for_display(&picked);
         self.cached.replace(Some(CachedVerb {
             session_key: session_key.to_owned(),

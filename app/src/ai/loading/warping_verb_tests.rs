@@ -199,3 +199,26 @@ fn selector_uses_updated_verbs_for_new_session() {
             .as_str()
     ));
 }
+
+#[test]
+fn selector_normalizes_raw_setting_values_before_display() {
+    let selector = WarpingVerbSelector::new();
+    let raw = format!("  {}  ", "a".repeat(MAX_WARPING_VERB_CHARS + 10));
+
+    let display = selector.resolve_from_verbs("stream-1", &[raw]);
+    let raw_display = display.trim_end_matches("...");
+
+    assert_eq!(raw_display.chars().count(), MAX_WARPING_VERB_CHARS);
+    assert!(raw_display.starts_with('A'));
+}
+
+#[test]
+fn selector_drops_blank_raw_setting_values_before_display() {
+    let selector = WarpingVerbSelector::new();
+    let verbs = vec!["   ".to_owned(), "...".to_owned()];
+
+    assert_eq!(
+        selector.resolve_from_verbs("stream-1", &verbs),
+        DEFAULT_WARPING_VERB
+    );
+}
