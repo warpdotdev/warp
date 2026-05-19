@@ -740,32 +740,36 @@ impl FileTreeView {
         // When a file is focused, scroll to show it in the file tree
         match event {
             ActiveFileEvent::ActiveFileChanged { location } => {
-                let file_std = match location {
-                    crate::code::buffer_location::LocalOrRemotePath::Local(path) => {
-                        match StandardizedPath::try_from_local(path) {
-                            Ok(std_path) => std_path,
-                            Err(_) => return,
-                        }
-                    }
-                    crate::code::buffer_location::LocalOrRemotePath::Remote(remote) => {
-                        remote.path.clone()
-                    }
-                };
-                // Prefer the currently-selected item's root if the file lives under it;
-                // otherwise fall back to the deepest matching root directory.
-                let repository_root = self
-                    .selected_item
-                    .as_ref()
-                    .filter(|id| file_std.starts_with(&id.root))
-                    .map(|id| id.root.clone())
-                    .or_else(|| self.find_deepest_root_for_file(&file_std));
-
-                let Some(repository_root) = repository_root else {
-                    return;
-                };
-                self.scroll_to_file(&repository_root, &file_std, ctx);
+                self.reveal_location(location, ctx);
             }
         }
+    }
+
+    fn standardized_path_for_location(location: &LocalOrRemotePath) -> Option<StandardizedPath> {
+        match location {
+            LocalOrRemotePath::Local(path) => StandardizedPath::try_from_local(path).ok(),
+            LocalOrRemotePath::Remote(remote) => Some(remote.path.clone()),
+        }
+    }
+
+    pub fn reveal_location(&mut self, location: &LocalOrRemotePath, ctx: &mut ViewContext<Self>) {
+        let Some(file_std) = Self::standardized_path_for_location(location) else {
+            return;
+        };
+
+        // Prefer the currently-selected item's root if the file lives under it;
+        // otherwise fall back to the deepest matching root directory.
+        let repository_root = self
+            .selected_item
+            .as_ref()
+            .filter(|id| file_std.starts_with(&id.root))
+            .map(|id| id.root.clone())
+            .or_else(|| self.find_deepest_root_for_file(&file_std));
+
+        let Some(repository_root) = repository_root else {
+            return;
+        };
+        self.scroll_to_file(&repository_root, &file_std, ctx);
     }
 
     /// Finds the deepest root directory that contains the given file path.

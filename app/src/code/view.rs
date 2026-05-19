@@ -163,6 +163,9 @@ pub enum CodeViewAction {
     ToggleMaximized,
     #[cfg(feature = "local_fs")]
     CopyFilePath,
+    /// Reveal the active code tab's file in the Project Explorer.
+    #[cfg(feature = "local_fs")]
+    RevealInProjectExplorer,
     /// Open the active code tab's file in the platform's file manager
     /// (Finder on macOS, Explorer on Windows). No-op when the active tab has
     /// no resolvable local path.
@@ -656,6 +659,11 @@ impl CodeView {
                     .map(|p| p.to_path_buf())
             })
         })
+    }
+
+    fn active_tab_location(&self) -> Option<LocalOrRemotePath> {
+        self.tab_at(self.active_tab_index)
+            .and_then(|tab| tab.location.clone())
     }
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
@@ -2024,7 +2032,7 @@ impl CodeView {
         ];
 
         #[cfg(feature = "local_fs")]
-        if let Some(path) = self.local_path(ctx) {
+        {
             let reveal_label = if cfg!(target_os = "macos") {
                 "Reveal in Finder"
             } else if cfg!(target_os = "windows") {
@@ -2032,22 +2040,38 @@ impl CodeView {
             } else {
                 "Reveal in file manager"
             };
-            items.extend([
-                MenuItem::Separator,
-                MenuItemFields::new("Copy file path")
-                    .with_on_select_action(CodeViewAction::CopyFilePath)
-                    .into_item(),
-                MenuItemFields::new(reveal_label)
-                    .with_on_select_action(CodeViewAction::RevealInFinder)
-                    .into_item(),
-            ]);
 
-            if is_markdown_file(&path) {
-                items.push(
-                    MenuItemFields::new("View Markdown preview")
-                        .with_on_select_action(CodeViewAction::RenderMarkdown)
+            let mut file_items = Vec::new();
+            if self.active_tab_location().is_some() {
+                file_items.push(
+                    MenuItemFields::new("Reveal in Project Explorer")
+                        .with_on_select_action(CodeViewAction::RevealInProjectExplorer)
                         .into_item(),
                 );
+            }
+
+            if let Some(path) = self.local_path(ctx) {
+                file_items.extend([
+                    MenuItemFields::new("Copy file path")
+                        .with_on_select_action(CodeViewAction::CopyFilePath)
+                        .into_item(),
+                    MenuItemFields::new(reveal_label)
+                        .with_on_select_action(CodeViewAction::RevealInFinder)
+                        .into_item(),
+                ]);
+
+                if is_markdown_file(&path) {
+                    file_items.push(
+                        MenuItemFields::new("View Markdown preview")
+                            .with_on_select_action(CodeViewAction::RenderMarkdown)
+                            .into_item(),
+                    );
+                }
+            }
+
+            if !file_items.is_empty() {
+                items.push(MenuItem::Separator);
+                items.extend(file_items);
             }
         }
 
@@ -2198,6 +2222,18 @@ impl TypedActionView for CodeView {
                 if let Some(path) = self.local_path(ctx) {
                     ctx.clipboard()
                         .write(ClipboardContent::plain_text(path.display().to_string()));
+                }
+            }
+            #[cfg(feature = "local_fs")]
+            CodeViewAction::RevealInProjectExplorer => {
+                if let Some(location) = self.active_tab_location() {
+                    ctx.dispatch_typed_action(&WorkspaceAction::RevealFileInProjectExplorer {
+                        location,
+                    });
+                } else {
+                    log::warn!(
+                        "Reveal in Project Explorer requested, but the active code tab has no file location"
+                    );
                 }
             }
             #[cfg(feature = "local_fs")]

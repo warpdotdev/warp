@@ -22982,6 +22982,15 @@ impl TypedActionView for Workspace {
                     self.toggle_left_panel_view(&LeftPanelAction::ProjectExplorer, is_showing, ctx);
                 }
             }
+            #[cfg(feature = "local_fs")]
+            RevealFileInProjectExplorer { location } => {
+                if *CodeSettings::as_ref(ctx).show_project_explorer {
+                    self.open_left_panel_view(&LeftPanelAction::ProjectExplorer, ctx);
+                    self.left_panel_view.update(ctx, |left_panel, ctx| {
+                        left_panel.reveal_file_in_project_explorer(location, ctx);
+                    });
+                }
+            }
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                     let is_showing =
