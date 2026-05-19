@@ -146,8 +146,8 @@ use crate::{
             telemetry_banner::should_collect_ai_ugc_telemetry,
             BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
             BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-            BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputDecisionSource,
-            InputType, BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
+            BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
+            NldDecisionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
             DRIVE_OBJECT_ATTACHMENT_REGEX,
         },
         llms::{LLMPreferences, LLMPreferencesEvent},
@@ -476,9 +476,7 @@ fn get_agent_mode_new_conversation_hint_text() -> &'static str {
     let index = HINT_INDEX.fetch_add(1, Ordering::Relaxed) % AGENT_MODE_HINT_OPTIONS.len();
     AGENT_MODE_HINT_OPTIONS[index]
 }
-fn submitted_nld_decision_source(
-    input_model: &BlocklistAIInputModel,
-) -> Option<InputDecisionSource> {
+fn submitted_nld_decision_source(input_model: &BlocklistAIInputModel) -> Option<NldDecisionSource> {
     let decision_source = input_model.nld_decision_source();
     if !input_model.is_input_type_locked() {
         return decision_source;
@@ -486,22 +484,22 @@ fn submitted_nld_decision_source(
 
     match decision_source {
         Some(
-            source @ (InputDecisionSource::ManualToggle
-            | InputDecisionSource::ShellPrefix
-            | InputDecisionSource::AttachmentForcedAi
-            | InputDecisionSource::SettingDisabled),
+            source @ (NldDecisionSource::ManualToggle
+            | NldDecisionSource::ShellPrefix
+            | NldDecisionSource::AttachmentForcedAi
+            | NldDecisionSource::SettingDisabled),
         ) => Some(source),
         Some(
-            InputDecisionSource::Denylist
-            | InputDecisionSource::HistoryMatch
-            | InputDecisionSource::OneOffWhitelist
-            | InputDecisionSource::AgentFollowUp
-            | InputDecisionSource::ShellHeuristic
-            | InputDecisionSource::NldClassifier
-            | InputDecisionSource::NldClassifierFallbackHeuristic
-            | InputDecisionSource::NldClassifierFallbackCurrentInput,
+            NldDecisionSource::Denylist
+            | NldDecisionSource::HistoryMatch
+            | NldDecisionSource::OneOffWhitelist
+            | NldDecisionSource::AgentFollowUp
+            | NldDecisionSource::ShellHeuristic
+            | NldDecisionSource::NldClassifier
+            | NldDecisionSource::NldClassifierFallbackHeuristic
+            | NldDecisionSource::NldClassifierFallbackCurrentInput,
         )
-        | None => Some(InputDecisionSource::ManualToggle),
+        | None => Some(NldDecisionSource::ManualToggle),
     }
 }
 
@@ -3835,7 +3833,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(InputDecisionSource::ManualToggle),
+                Some(NldDecisionSource::ManualToggle),
                 ctx,
             );
         });
@@ -3921,7 +3919,7 @@ impl Input {
                 }
                 .unlocked_if_autodetection_enabled(true, ctx),
                 is_input_buffer_empty,
-                Some(InputDecisionSource::ManualToggle),
+                Some(NldDecisionSource::ManualToggle),
                 ctx,
             );
         });
@@ -3989,7 +3987,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(InputDecisionSource::ManualToggle),
+                Some(NldDecisionSource::ManualToggle),
                 ctx,
             );
         });
@@ -6033,7 +6031,7 @@ impl Input {
         self.focus_input_box(ctx);
         self.ensure_agent_mode_for_ai_features_with_source(
             true,
-            InputDecisionSource::AttachmentForcedAi,
+            NldDecisionSource::AttachmentForcedAi,
             ctx,
         );
 
@@ -6186,7 +6184,7 @@ impl Input {
                         model.set_input_config_with_source(
                             new_config,
                             is_input_buffer_empty,
-                            Some(InputDecisionSource::ManualToggle),
+                            Some(NldDecisionSource::ManualToggle),
                             ctx,
                         );
                         false
@@ -6239,13 +6237,13 @@ impl Input {
 
     /// Switches to AI mode but preserves current lock state.
     fn enter_ai_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.enter_ai_mode_with_source(InputDecisionSource::ManualToggle, ctx);
+        self.enter_ai_mode_with_source(NldDecisionSource::ManualToggle, ctx);
     }
 
     /// Switches to AI mode but preserves current lock state.
     fn enter_ai_mode_with_source(
         &mut self,
-        decision_source: InputDecisionSource,
+        decision_source: NldDecisionSource,
         ctx: &mut ViewContext<Self>,
     ) {
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
@@ -6270,7 +6268,7 @@ impl Input {
     ) {
         self.ensure_agent_mode_for_ai_features_with_source(
             should_override_shell_lock,
-            InputDecisionSource::ManualToggle,
+            NldDecisionSource::ManualToggle,
             ctx,
         );
     }
@@ -6278,7 +6276,7 @@ impl Input {
     fn ensure_agent_mode_for_ai_features_with_source(
         &mut self,
         should_override_shell_lock: bool,
-        decision_source: InputDecisionSource,
+        decision_source: NldDecisionSource,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_input_model = self.ai_input_model.as_ref(ctx);
@@ -6540,7 +6538,7 @@ impl Input {
                                     is_locked: true,
                                 },
                                 is_input_buffer_empty,
-                                Some(InputDecisionSource::SettingDisabled),
+                                Some(NldDecisionSource::SettingDisabled),
                                 ctx,
                             );
                         });
@@ -9721,7 +9719,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(InputDecisionSource::ManualToggle),
+                                    Some(NldDecisionSource::ManualToggle),
                                     ctx,
                                 );
                             });
@@ -9829,7 +9827,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(InputDecisionSource::ShellPrefix),
+                                    Some(NldDecisionSource::ShellPrefix),
                                     ctx,
                                 );
                             });
@@ -13840,9 +13838,9 @@ impl Input {
                     is_locked: true,
                 };
                 let decision_source = if has_locking_attachment {
-                    InputDecisionSource::AttachmentForcedAi
+                    NldDecisionSource::AttachmentForcedAi
                 } else {
-                    InputDecisionSource::ManualToggle
+                    NldDecisionSource::ManualToggle
                 };
                 ai_input_model.set_input_config_with_source(
                     new_config,
@@ -13873,7 +13871,7 @@ impl Input {
             ai_input_model.set_input_config_with_source(
                 new_config,
                 is_input_buffer_empty,
-                Some(InputDecisionSource::ManualToggle),
+                Some(NldDecisionSource::ManualToggle),
                 ctx,
             );
         });
@@ -13928,7 +13926,7 @@ impl Input {
             ai_input_model.set_input_config_with_source(
                 new_config,
                 true,
-                Some(InputDecisionSource::ShellPrefix),
+                Some(NldDecisionSource::ShellPrefix),
                 ctx,
             );
         });
@@ -14158,7 +14156,7 @@ impl Input {
                     false,
                     new_config
                         .is_locked
-                        .then_some(InputDecisionSource::SettingDisabled),
+                        .then_some(NldDecisionSource::SettingDisabled),
                     ctx,
                 );
             });

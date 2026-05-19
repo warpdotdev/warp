@@ -34,7 +34,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::AIBlockResponseRating;
 use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
-use crate::ai::blocklist::{InputDecisionSource, InputType};
+use crate::ai::blocklist::{InputType, NldDecisionSource};
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
 use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
@@ -2564,7 +2564,7 @@ pub enum TelemetryEvent {
     InputBufferSubmitted {
         input_type: input_classifier::InputType,
         is_locked: bool,
-        nld_decision_source: Option<InputDecisionSource>,
+        nld_decision_source: Option<NldDecisionSource>,
         was_lock_set_with_empty_buffer: bool,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
