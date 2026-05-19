@@ -2579,6 +2579,15 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         flags.extend(features::RELEASE_FLAGS);
     }
 
+    // IME marked text is the only piece of CJK / dead-key Latin / emoji-candidate input
+    // rendering on macOS — without this flag, `setMarkedText:` calls are short-circuited in
+    // the terminal view and no preedit is ever drawn, breaking text input for any user with
+    // an IME enabled. Stable / Preview macOS already enable it via RELEASE_FLAGS, but the
+    // OSS distribution doesn't pass `feature = "release_bundle"`, so the flag stays off and
+    // CJK users effectively can't type. Enable it unconditionally on macOS to match.
+    #[cfg(target_os = "macos")]
+    flags.insert(FeatureFlag::ImeMarkedText);
+
     flags.extend([
         #[cfg(feature = "autoupdate")]
         FeatureFlag::Autoupdate,
