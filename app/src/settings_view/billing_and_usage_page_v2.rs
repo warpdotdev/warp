@@ -11,6 +11,8 @@ use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
 use warp_graphql::billing::AddonCreditsOption;
 use warpui::prelude::ChildView;
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
+    ViewContext, ViewHandle,
     elements::{
         Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
@@ -22,21 +24,20 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
 };
 
 use settings::Setting;
 
 use crate::{
+    WorkspaceAction,
     ai::{
-        request_usage_model::{
-            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
-        },
         AIRequestUsageModel,
+        request_usage_model::{
+            AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+        },
     },
     auth::{
-        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
+        AuthManager, AuthStateProvider, auth_state::AuthState, auth_view_modal::AuthViewVariant,
     },
     modal::{Modal, ModalEvent, ModalViewState},
     pricing::PricingInfoModel,
@@ -50,18 +51,18 @@ use crate::{
         tab_selector::{self, SettingsTab},
     },
     view_components::{
-        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
         ToastFlavor,
+        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
     },
     workspaces::{
         update_manager::TeamUpdateManager,
         user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
         workspace::{CustomerType, Workspace, WorkspaceUid},
     },
-    WorkspaceAction,
 };
 
 use super::{
+    SettingsSection,
     billing_and_usage::{
         billing_cycle_usage_section::BillingCycleUsageSectionView,
         overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
@@ -69,8 +70,7 @@ use super::{
         usage_history_model::UsageHistoryModel,
     },
     billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
-    SettingsSection,
+    settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon},
 };
 
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
@@ -82,10 +82,7 @@ const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 const MANAGED_AUTO_RELOAD_TOOLTIP: &str = "Managed by your admin";
 const MANAGED_AUTO_RELOAD_DESCRIPTION: &str = "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase 1,000 credits for $20 and add them to your balance.";
 
-const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
-    "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
@@ -169,6 +166,7 @@ enum AddonCreditsRestriction {
         url: String,
     },
     ContactAccountExecutive,
+    ContactTeamAdmin,
 }
 
 struct AddonCreditsPurchaseState {
@@ -1076,7 +1074,11 @@ impl BillingAndUsagePageV2View {
         let can_upgrade = workspace.billing_metadata.can_upgrade_to_build_plan();
 
         if !team_can_purchase {
-            if can_upgrade {
+            if !has_admin_permissions {
+                return AddonCreditsPanelState::IneligiblePlan(
+                    AddonCreditsRestriction::ContactTeamAdmin,
+                );
+            } else if can_upgrade {
                 let is_legacy = UserWorkspaces::as_ref(app)
                     .current_team()
                     .is_some_and(|t| t.billing_metadata.is_on_legacy_paid_plan());
@@ -1105,10 +1107,6 @@ impl BillingAndUsagePageV2View {
             .settings
             .addon_credits_settings
             .auto_reload_enabled;
-
-        if !has_admin_permissions && auto_reload_enabled {
-            return AddonCreditsPanelState::AutoreloadNonAdmin;
-        }
 
         let team_count = UserWorkspaces::as_ref(app)
             .current_team()
@@ -1149,9 +1147,7 @@ impl BillingAndUsagePageV2View {
             "When any member on your team’s credit balance reaches 100 credits remaining, \
             automatically purchase {auto_reload_credit_amount}."
         );
-        let warning_text = if delinquent {
-            Some(AUTO_RELOAD_DELINQUENT_WARNING_STRING)
-        } else if workspace
+        let warning_text = if workspace
             .billing_metadata
             .has_failed_addon_credit_auto_reload_status()
         {
@@ -1174,6 +1170,10 @@ impl BillingAndUsagePageV2View {
         } else {
             None
         };
+
+        if !has_admin_permissions && auto_reload_enabled {
+            return AddonCreditsPanelState::AutoreloadNonAdmin;
+        }
 
         AddonCreditsPanelState::Purchase(AddonCreditsPurchaseState {
             description_text,
@@ -1225,6 +1225,15 @@ impl BillingAndUsagePageV2View {
             AddonCreditsRestriction::ContactAccountExecutive => appearance
                 .ui_builder()
                 .paragraph("Contact your Account Executive for more add-on credits.")
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.sub_text_color(bg).into()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+            AddonCreditsRestriction::ContactTeamAdmin => appearance
+                .ui_builder()
+                .paragraph("Contact a team admin to purchase add-on credits.")
                 .with_style(UiComponentStyles {
                     font_color: Some(theme.sub_text_color(bg).into()),
                     ..Default::default()
@@ -2020,7 +2029,9 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     let credits = auto_reload_denomination_credits
                         .map(|c| c.separate_with_commas())
                         .unwrap_or_else(|| "your selected".to_string());
-                    format!("Auto-reload enabled. We'll refill with {credits} credits when your balance runs low.")
+                    format!(
+                        "Auto-reload enabled. We'll refill with {credits} credits when your balance runs low."
+                    )
                 } else {
                     "Auto-reload disabled.".to_string()
                 });
