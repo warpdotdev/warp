@@ -1232,6 +1232,21 @@ impl CurrentPrompt {
             .for_each(|(_, state)| state.clear_cache());
     }
 
+    /// Clear git-backed chip values when the terminal navigates out of a git repository.
+    pub fn clear_git_chip_values(&mut self) {
+        for chip_kind in [
+            ContextChipKind::ShellGitBranch,
+            ContextChipKind::GitDiffStats,
+            ContextChipKind::GithubPullRequest,
+        ] {
+            if let Some(state) = self.states.get_mut(&chip_kind) {
+                state.clear_abort_handlers();
+                state.clear_cache();
+            }
+        }
+        let _ = self.update_tx.try_send(());
+    }
+
     /// Waits for any in-progress asynchronous generators to finish.
     #[cfg(test)]
     pub fn await_generators(

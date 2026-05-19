@@ -4850,6 +4850,13 @@ impl TerminalView {
     #[cfg(feature = "local_fs")]
     fn clear_git_repo_status(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_git_repo_status_subscription(ctx);
+        self.current_prompt.update(ctx, |prompt_type, ctx| {
+            if let PromptType::Dynamic { prompt } = prompt_type {
+                prompt.update(ctx, |current_prompt, _| {
+                    current_prompt.clear_git_chip_values();
+                });
+            }
+        });
         self.input.update(ctx, |input, ctx| {
             input.update_repo_path(None, ctx);
         });

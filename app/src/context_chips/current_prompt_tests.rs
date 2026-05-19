@@ -1291,6 +1291,70 @@ fn test_git_status_change_updates_chip_value() {
     });
 }
 
+#[test]
+fn test_clearing_git_chip_values_on_repo_exit() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [
+                    ContextChipKind::ShellGitBranch,
+                    ContextChipKind::GitDiffStats,
+                ],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |current_prompt, ctx| {
+            current_prompt.update_states_with_new_context(ctx);
+            current_prompt.update_chip_value(
+                &ContextChipKind::ShellGitBranch,
+                Some(crate::context_chips::ChipValue::Text(
+                    "feature-branch".to_string(),
+                )),
+            );
+            current_prompt.update_chip_value(
+                &ContextChipKind::GitDiffStats,
+                Some(crate::context_chips::ChipValue::GitDiffStats(
+                    crate::context_chips::display_chip::GitLineChanges {
+                        files_changed: 3,
+                        lines_added: 10,
+                        lines_removed: 2,
+                    },
+                )),
+            );
+
+            current_prompt.clear_git_chip_values();
+        });
+
+        app.read(|ctx| {
+            let prompt = current_prompt.as_ref(ctx);
+            assert_eq!(
+                prompt.latest_chip_value(&ContextChipKind::ShellGitBranch),
+                None
+            );
+            assert_eq!(
+                prompt.latest_chip_value(&ContextChipKind::GitDiffStats),
+                None
+            );
+        });
+    });
+}
+
 /// A [`CommandExecutor`] implementation that records which commands were run, but does not
 /// execute them.
 #[derive(Debug, Default)]
