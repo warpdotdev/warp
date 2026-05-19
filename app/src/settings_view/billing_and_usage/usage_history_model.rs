@@ -4,7 +4,7 @@ use warp_core::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
-use crate::server::server_api::{ServerApiProvider, auth::AuthClient};
+use crate::server::server_api::{auth::AuthClient, ServerApiProvider};
 use warp_graphql::scalars::Time;
 
 const PAGE_SIZE: i32 = 20;
