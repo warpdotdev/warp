@@ -106,6 +106,29 @@ fn try_from_winit_keycode(keycode: &KeyCode) -> Result<crate::platform::keyboard
     }
 }
 
+/// Maps a Windows Virtual Key code to a modifier KeyCode. Used as a fallback when
+/// `physical_key` is `Unidentified` (e.g. RDP Unicode input mode where the Windows App
+/// client on iPad sends Unicode events without scancodes).
+#[cfg(windows)]
+fn try_from_windows_vk(vk: u16) -> Result<crate::platform::keyboard::KeyCode, ()> {
+    use crate::platform::keyboard::KeyCode;
+    match vk as u32 {
+        0xA0 => Ok(KeyCode::ShiftLeft),
+        0xA1 => Ok(KeyCode::ShiftRight),
+        0xA2 => Ok(KeyCode::ControlLeft),
+        0xA3 => Ok(KeyCode::ControlRight),
+        0xA4 => Ok(KeyCode::AltLeft),
+        0xA5 => Ok(KeyCode::AltRight),
+        0x5B => Ok(KeyCode::SuperLeft),
+        0x5C => Ok(KeyCode::SuperRight),
+        // Generic (non-sided) VK codes — map to left variant as safe fallback
+        0x10 => Ok(KeyCode::ShiftLeft),
+        0x11 => Ok(KeyCode::ControlLeft),
+        0x12 => Ok(KeyCode::AltLeft),
+        _ => Err(()),
+    }
+}
+
 /// Data needed to detect double/triple-click.
 struct MouseButtonPressState {
     pressed_at: Instant,
@@ -1283,6 +1306,19 @@ impl EventLoop {
                         _ => {}
                     }
                 }
+                // Fallback for RDP Unicode mode: physical_key is Unidentified, so use
+                // the Windows VK code directly to track left/right Alt state.
+                #[cfg(windows)]
+                if let keyboard::PhysicalKey::Unidentified(keyboard::NativeKeyCode::Windows(vk)) =
+                    &event.physical_key
+                {
+                    let is_pressed = event.state == ElementState::Pressed;
+                    match *vk as u32 {
+                        0xA4 => window_state.left_alt_pressed = is_pressed,
+                        0xA5 => window_state.right_alt_pressed = is_pressed,
+                        _ => {}
+                    }
+                }
 
                 // If the event is a modifier key, just by itself, we handle it specially, issuing
                 // the appropriate Warp-side event (ModifierKeyChanged).
@@ -1290,6 +1326,19 @@ impl EventLoop {
                     (&event.text, &event.physical_key)
                 {
                     if let Ok(mapped_keycode) = try_from_winit_keycode(keycode) {
+                        return Some(ConvertedEvent::ModifierKeyChanged {
+                            key_code: mapped_keycode,
+                            state: event.state,
+                        });
+                    }
+                }
+                // Fallback for RDP Unicode mode: emit ModifierKeyChanged using Windows VK
+                // codes when physical_key is Unidentified and text is None (pure modifier key).
+                #[cfg(windows)]
+                if let (None, keyboard::PhysicalKey::Unidentified(keyboard::NativeKeyCode::Windows(vk))) =
+                    (&event.text, &event.physical_key)
+                {
+                    if let Ok(mapped_keycode) = try_from_windows_vk(*vk) {
                         return Some(ConvertedEvent::ModifierKeyChanged {
                             key_code: mapped_keycode,
                             state: event.state,
@@ -2057,6 +2106,41 @@ enum ConvertedEvent {
         /// Touch position when drag started (window-relative).
         start_touch: PhysicalPosition<f64>,
     },
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod rdp_vk_tests {
+    use super::try_from_windows_vk;
+    use crate::platform::keyboard::KeyCode;
+
+    #[test]
+    fn sided_modifier_vk_codes() {
+        assert_eq!(try_from_windows_vk(0xA0), Ok(KeyCode::ShiftLeft));
+        assert_eq!(try_from_windows_vk(0xA1), Ok(KeyCode::ShiftRight));
+        assert_eq!(try_from_windows_vk(0xA2), Ok(KeyCode::ControlLeft));
+        assert_eq!(try_from_windows_vk(0xA3), Ok(KeyCode::ControlRight));
+        assert_eq!(try_from_windows_vk(0xA4), Ok(KeyCode::AltLeft));
+        assert_eq!(try_from_windows_vk(0xA5), Ok(KeyCode::AltRight));
+        assert_eq!(try_from_windows_vk(0x5B), Ok(KeyCode::SuperLeft));
+        assert_eq!(try_from_windows_vk(0x5C), Ok(KeyCode::SuperRight));
+    }
+
+    #[test]
+    fn generic_modifier_vk_codes_map_to_left_variant() {
+        assert_eq!(try_from_windows_vk(0x10), Ok(KeyCode::ShiftLeft));
+        assert_eq!(try_from_windows_vk(0x11), Ok(KeyCode::ControlLeft));
+        assert_eq!(try_from_windows_vk(0x12), Ok(KeyCode::AltLeft));
+    }
+
+    #[test]
+    fn non_modifier_vk_codes_return_err() {
+        // VK_C (character key), VK_RETURN, VK_ESCAPE
+        assert_eq!(try_from_windows_vk(0x43), Err(()));
+        assert_eq!(try_from_windows_vk(0x0D), Err(()));
+        assert_eq!(try_from_windows_vk(0x1B), Err(()));
+        assert_eq!(try_from_windows_vk(0x00), Err(()));
+    }
 }
 
 /// Convert the platform-independent trait object Window into a concrete, platform-specific Window.
