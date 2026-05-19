@@ -1070,14 +1070,17 @@ impl DisplayChip {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let font_color = if self.is_in_agent_view {
+        let is_cli_agent_active = self.is_cli_agent_session_active(app);
+
+        let font_color = if is_cli_agent_active {
+            internal_colors::neutral_6(appearance.theme())
+        } else if self.is_in_agent_view {
             agent_view_chip_color(appearance)
         } else {
             appearance.theme().ansi_fg_green()
         };
 
-        let is_interactive =
-            !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
+        let is_interactive = !self.is_shared_session_viewer && !is_cli_agent_active;
         let is_in_agent_view = self.is_in_agent_view;
         let chip_text = self.text.clone();
         let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
@@ -1115,7 +1118,7 @@ impl DisplayChip {
 
         let mut stack = Stack::new().with_child(hover);
 
-        if menu_open {
+        if menu_open && !is_cli_agent_active {
             let positioning = self.menu_positioning_provider.menu_position(app);
             let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
             let offset = match positioning {
@@ -1358,18 +1361,21 @@ impl DisplayChip {
         } else {
             // Non-interactive chip (either show_menu is false or in active ambient agent)
             let font_color = if self.is_in_agent_view {
-                // Use disabled text color when in active ambient agent
-                if is_in_active_ambient_agent {
+                if is_cli_agent_active {
+                    internal_colors::neutral_6(theme)
+                } else if is_in_active_ambient_agent {
                     theme
                         .disabled_text_color(blended_colors::neutral_1(theme).into())
                         .into_solid()
                 } else {
-                    // In agent view but the chip is non-interactive for reasons other than an active
-                    // ambient agent session. Keep the normal agent-view subtext styling (not disabled).
                     agent_view_chip_color(appearance)
                 }
             } else {
-                theme.ansi_fg_cyan()
+                if is_cli_agent_active {
+                    internal_colors::neutral_6(theme)
+                } else {
+                    theme.ansi_fg_cyan()
+                }
             };
 
             let chip_text = self.text.clone();
@@ -1403,7 +1409,7 @@ impl DisplayChip {
 
         stack.add_child(button);
 
-        if menu_open {
+        if menu_open && !is_cli_agent_active {
             let positioning = self.menu_positioning_provider.menu_position(app);
             let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
 
@@ -1492,31 +1498,40 @@ impl DisplayChip {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let is_cli_agent_active = self.is_cli_agent_session_active(app);
 
         let chip_text = self.text.clone();
         let is_in_agent_view = self.is_in_agent_view;
         let hoverable = Hoverable::new(self.mouse_state.clone(), move |state| {
-            let color = if is_in_agent_view {
+            let color = if is_cli_agent_active {
+                internal_colors::neutral_6(appearance.theme())
+            } else if is_in_agent_view {
                 agent_view_chip_color(appearance)
             } else {
                 appearance.theme().ansi_fg_green()
             };
-            let hovered = state.is_hovered() && !popup_open;
+            let hovered = state.is_hovered() && !popup_open && !is_cli_agent_active;
             let mut config = UdiChipConfig::new_with_icon(Icon::NodeJS, color, chip_text.clone())
                 .with_hovered(hovered);
             if is_in_agent_view {
                 config = config.for_agent_view();
             }
             render_udi_chip(config, appearance)
-        })
-        .on_click(|ctx, _app, _pos| {
-            ctx.dispatch_typed_action(DisplayChipAction::ToggleMenu);
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish();
+        });
+
+        let hoverable = if is_cli_agent_active {
+            hoverable.finish()
+        } else {
+            hoverable
+                .on_click(|ctx, _app, _pos| {
+                    ctx.dispatch_typed_action(DisplayChipAction::ToggleMenu);
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish()
+        };
 
         let mut stack = Stack::new().with_child(hoverable);
-        if popup_open {
+        if popup_open && !is_cli_agent_active {
             let positioning = self.menu_positioning_provider.menu_position(app);
             let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
             let offset = match positioning {
