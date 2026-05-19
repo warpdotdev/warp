@@ -60,4 +60,13 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.show_global_search",
         description: "Whether global file search is shown in the tools panel.",
     },
+    diff_layout: DiffLayoutSetting {
+        type: crate::code::diff_layout::DiffLayout,
+        default: crate::code::diff_layout::DiffLayout::Inline,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "code.editor.diff_layout",
+        description: "Layout for Code Review diff views: 'inline' or 'side_by_side'.",
+    },
 ]);
