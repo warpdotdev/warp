@@ -22,6 +22,7 @@ use crate::{
 };
 
 pub mod dialog;
+mod qr_code;
 mod style;
 
 // Re-export types from warp_server_client.

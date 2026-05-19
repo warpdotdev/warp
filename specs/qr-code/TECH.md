@@ -1,0 +1,130 @@
+# Shared session QR code — Tech Spec
+Product spec: `specs/qr-code/PRODUCT.md`
+## Context
+`PRODUCT.md` defines the user-visible behavior for adding a QR-code affordance to the live-session sharing dialog. The implementation should extend the existing session sharing dialog rather than adding another sharing surface.
+The relevant current code paths are:
+- `app/src/drive/sharing/mod.rs:34` defines `ShareableObject::Session`, carrying a terminal view handle, `SessionId`, and `started_at`.
+- `app/src/drive/sharing/mod.rs:45` implements `ShareableObject::link`; the session branch returns `join_link(session_id)`, which should be the sole source of truth for QR payloads.
+- `app/src/terminal/shared_session/mod.rs:285` implements `join_link`, including staging/native-intent and preview-channel behavior.
+- `app/src/terminal/view/shared_session/view_impl.rs:591` sets the pane header shareable object to `ShareableObject::Session` when a share starts and opens the sharing dialog unless the flow explicitly skips it.
+- `app/src/terminal/view/shared_session/view_impl.rs:408` refreshes the same shareable object from active shared-session state when roles or session state change.
+- `app/src/drive/sharing/dialog/mod.rs:69` defines the generic `SharingDialog` state and `UiStateHandles`.
+- `app/src/drive/sharing/dialog/mod.rs:149` defines `SharingDialogAction`; it currently has `CopyLink` and permission actions but no QR actions.
+- `app/src/drive/sharing/dialog/mod.rs:332` resets the dialog target through `set_target`.
+- `app/src/drive/sharing/dialog/mod.rs:368` exposes `has_shared_session_target`, which already distinguishes session targets from other shareable object types.
+- `app/src/drive/sharing/dialog/mod.rs:428` treats sessions as editable so the sharing dialog opens for session targets.
+- `app/src/drive/sharing/dialog/mod.rs:905` copies the target URL and sends `CopiedSharedSessionLink` telemetry for session targets.
+- `app/src/drive/sharing/dialog/mod.rs:2372` renders the footer link and `Copy link` button in `render_object_link`.
+- `app/src/drive/sharing/dialog/mod.rs:2505` composes the full dialog in `render`.
+- `app/src/drive/sharing/style.rs:15` contains sharing-dialog layout constants and color helpers.
+- `crates/warpui_core/src/platform/file_picker.rs:127` defines `SaveFilePickerConfiguration`, and `crates/warpui_core/src/core/view/context.rs:311` exposes `open_save_file_picker` for save-file flows.
+- `crates/warpui_core/src/clipboard.rs:29` defines `ClipboardContent` with image data support through `ImageData`.
+The codebase already has `Icon::Download` and `Icon::Copy` mapped in `crates/warp_core/src/ui/icons.rs (436-439)`, but the Figma QR icon (`qr-code-02`) is not currently exposed in the app icon enum.
+## Proposed changes
+### 1. Add QR mode to `SharingDialog`
+Add a dialog mode enum in `app/src/drive/sharing/dialog/mod.rs`, for example:
+- `SharingDialogMode::Access`
+- `SharingDialogMode::QrCode`
+Store it on `SharingDialog`, defaulting to `Access`. Reset it to `Access` in `set_target` so a recycled dialog does not show QR content for a different target.
+Extend `UiStateHandles` with mouse states for:
+- the footer QR button;
+- the QR dialog back button;
+- the QR dialog copy-image button;
+- the QR dialog download button.
+Extend `SharingDialogAction` with:
+- `ShowQrCode`
+- `BackToAccessDialog`
+- `CopyQrCode`
+- `DownloadQrCode`
+Keep `SharingDialogAction::Close` behavior unchanged: it should still close the overlay and reset editable state.
+### 2. Render the QR entry point only for session targets
+Extract a small helper such as `target_link(&self, app: &AppContext) -> Option<String>` so `render_object_link`, copy, and QR actions all use the same URL lookup.
+Modify `render_object_link` so that when `self.target` is `Some(ShareableObject::Session { .. })`, the footer row includes an icon-only QR button between the link field and the existing `Copy link` button. For non-session targets, keep the current link + copy button layout.
+The QR button should:
+- use the same button/style system as the existing footer controls;
+- dispatch `SharingDialogAction::ShowQrCode`;
+- be disabled or omitted when `target_link` returns `None`;
+- use an accessible name/tooltip equivalent to `Show QR code`.
+Add a bundled QR icon if needed:
+- Add the SVG asset under the existing bundled SVG asset location.
+- Add a variant such as `Icon::QrCode`.
+- Map it to the bundled path near the other share/link icons.
+### 3. Render the QR-code view inside `SharingDialog`
+In `View for SharingDialog`, branch on `self.mode`:
+- `Access` renders the existing dialog contents.
+- `QrCode` renders a compact QR view for session targets.
+Keep the same outer `Dismiss` behavior and border/background styling so the QR view remains part of the pane-header sharing overlay. Use the Figma dimensions as targets rather than introducing a new modal system:
+- width around 400px;
+- header height around 48px;
+- body centered around a 192px QR card;
+- two 32px icon buttons beneath the QR card.
+The QR view should render:
+- a header row with back button, `Share session QR code`, `ESC`, and close button;
+- a QR code card;
+- copy-image and download-image icon buttons.
+If `self.target` is no longer a session target or `target_link` is missing, render a compact error body with the same header and a message equivalent to `Unable to create QR code for this session link.`
+### 4. Generate QR data with a small pure helper
+Add a small QR helper module, for example `app/src/drive/sharing/qr_code.rs`, with pure functions:
+- `qr_matrix_for_url(url: &str) -> Result<QrMatrix, QrCodeError>`
+- `qr_png_for_url(url: &str, pixel_size: u32) -> Result<Vec<u8>, QrCodeError>`
+Add a workspace dependency on a QR encoder crate such as `qrcode` in the root `Cargo.toml` and `app/Cargo.toml`. Prefer a dependency that can produce a boolean module matrix without pulling in a large image stack; use the existing workspace `image` crate for PNG encoding because it is already present.
+Use the same QR helper for on-screen rendering and PNG generation so scanning behavior cannot drift between the two paths.
+For on-screen rendering, prefer drawing the QR matrix directly with Warp UI rectangles rather than feeding a generated PNG back through the image cache. This keeps the view deterministic, avoids temporary files, and makes sizing straightforward. The helper should expose module count and module values; the view computes cell size and quiet-zone padding inside the 160px visual target.
+For PNG export, generate a black-on-white PNG with a quiet zone. Use a larger export size than the on-screen display, such as 512px or 1024px, so downloaded images remain scannable when printed or projected.
+### 5. Copy QR image to clipboard
+Implement `SharingDialogAction::CopyQrCode` by:
+- resolving `target_link`;
+- generating PNG bytes with `qr_png_for_url`;
+- writing `ClipboardContent` with `images: Some(vec![ImageData { data, mime_type: "image/png".to_string(), filename: Some(default_qr_filename(...)) }])`;
+- showing a success toast such as `QR code copied`.
+Do not fall back to copying the session URL if image clipboard write fails. The product distinction between `Copy link` and QR image copy should remain clear.
+If the current platform cannot write image clipboard content despite `ClipboardContent` supporting images, show a failure toast and leave the dialog open.
+### 6. Download QR image
+Implement `SharingDialogAction::DownloadQrCode` by:
+- generating the same PNG bytes;
+- opening `ctx.open_save_file_picker` with `SaveFilePickerConfiguration::new().with_default_filename(default_qr_filename(...))`;
+- writing the bytes to the selected path on the background executor or through an existing async file-write helper;
+- showing a success toast when the file is written;
+- showing a failure toast on write or generation errors;
+- doing nothing when the picker returns `None`.
+Default filename suggestion: `warp-session-qr-code-<session-id>.png` for session targets. If the session id is unavailable in a future target shape, fall back to `warp-session-qr-code.png`.
+The download action can be compiled only for local filesystem builds if needed. If save-file picker or filesystem writes are unavailable for a target platform, disable or hide the download button there rather than showing a broken control.
+### 7. Preserve existing sharing behavior
+Do not change:
+- `ShareableObject::Session.link`;
+- `join_link`;
+- `SharingDialogAction::CopyLink`;
+- ACL update actions;
+- session invite flow;
+- pane-header sharing dialog toggling.
+The QR flow should be additive. Existing tests for session permissions and link-copy behavior should keep passing without expected-output changes except where snapshots explicitly include the new QR button.
+### 8. Telemetry
+Keep existing link-copy telemetry unchanged. Add telemetry only if the product/event taxonomy already has an appropriate place for it:
+- `OpenedSharedSessionQrCode`
+- `CopiedSharedSessionQrCode`
+- `DownloadedSharedSessionQrCode`
+If new telemetry is added, include the same action source where available or derive it from the sharing dialog context. Avoid error-level logs for QR generation or export failures; use user-visible toasts and at most warn-level diagnostic logging.
+## Testing and validation
+Map validation to `PRODUCT.md` behavior:
+- Behavior 1-3: unit or view tests verify that `render_object_link` includes the QR button only for `ShareableObject::Session`, and non-session targets still render the existing footer.
+- Behavior 4-7: view/action tests verify `ShowQrCode`, `BackToAccessDialog`, `Close`, and Escape transition between access mode, QR mode, and closed overlay as expected.
+- Behavior 8, 10, 13, 24: pure QR helper tests verify that the generated matrix/PNG encodes the exact URL passed in and does not add extra query parameters or payload data.
+- Behavior 9: screenshot or integration verification compares the QR view against the Figma layout in dark theme, including header, centered QR card, and copy/download buttons.
+- Behavior 11-12: tests update the target/session link while QR mode is active and verify the rendered/exported QR payload follows the current `ShareableObject::link` result; missing links render the error state.
+- Behavior 14-16: clipboard tests verify `CopyQrCode` writes `image/png` image data and does not write plain text as a fallback for the QR action.
+- Behavior 17-19: save-file tests cover default filename, cancel behavior, successful write, and write failure.
+- Behavior 20: existing `CopyLink` tests or new targeted tests verify plain link copying and toast behavior remain unchanged.
+- Behavior 21-22: manual accessibility pass verifies tab order and labels for the QR button, QR image, back button, close button, copy-image button, and download button.
+- Behavior 23: unit tests construct two session targets with different ids and verify each QR helper call uses that target's own link.
+Suggested targeted commands after implementation:
+- `cargo nextest run --no-fail-fast --workspace drive::sharing::dialog`
+- `cargo nextest run --no-fail-fast --workspace drive::sharing::qr_code`
+- `cargo check`
+If the implementation changes Rust files, follow the repository convention of adding tests in a sibling `_tests.rs` file and importing it with a `#[cfg(test)]` directive from the implementation module.
+## Parallelization
+Do not split this implementation across parallel agents. The work is concentrated in the sharing dialog, icon plumbing, QR generation helper, and adjacent tests; parallel edits would likely collide in the same files and add coordination overhead.
+## Risks and mitigations
+- QR scan reliability: mitigate by keeping black-on-white rendering, including a quiet zone, and validating with an actual phone camera during manual QA.
+- Platform clipboard differences: mitigate by testing clipboard behavior on at least macOS and Linux and showing a failure toast instead of silently copying a different payload.
+- Platform save-file differences: mitigate by using the existing `open_save_file_picker` abstraction and hiding/disabling download where local filesystem support is unavailable.
+- Link drift: mitigate by deriving all QR payloads from `ShareableObject::link` at action/render time rather than storing a separate URL string.
