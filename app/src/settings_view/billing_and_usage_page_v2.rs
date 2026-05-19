@@ -1625,22 +1625,18 @@ impl BillingAndUsagePageV2View {
                 },
             );
 
-            right_group.add_child(
+            right_group.add_children([
                 Text::new_inline("Auto-reload", appearance.ui_font_family(), 14.)
                     .with_color(fg.into())
                     .with_style(Properties::default().weight(Weight::Semibold))
                     .finish(),
-            );
-            right_group.add_child(
                 Container::new(auto_reload_info_icon)
                     .with_margin_left(4.)
                     .finish(),
-            );
-            right_group.add_child(
                 Container::new(auto_reload_switch_element)
                     .with_margin_left(8.)
                     .finish(),
-            );
+            ]);
         }
         right_group.add_child(
             Container::new(purchase_button)
