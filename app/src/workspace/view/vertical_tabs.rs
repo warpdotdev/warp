@@ -1062,9 +1062,12 @@ impl VerticalTabsPanelState {
                         )
                         .into_iter()
                         .any(|pane_id| {
-                            let title_override = (!uses_outer_group_container(display_granularity))
-                                .then(|| pane_group.custom_title(app))
-                                .flatten();
+                            let title_override = tab_title_override_for_row(
+                                pane_group,
+                                &visible_pane_ids,
+                                display_granularity,
+                                app,
+                            );
                             let ms = MouseStateHandle::default();
                             PaneProps::new(
                                 pane_group,
@@ -1599,9 +1602,12 @@ fn render_groups(
                         .then_some((tab_index, None))
                     }
                     VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => {
-                        let title_override = (!uses_outer_group_container)
-                            .then(|| pane_group.custom_title(app))
-                            .flatten();
+                        let title_override = tab_title_override_for_row(
+                            pane_group,
+                            &visible_pane_ids,
+                            display_granularity,
+                            app,
+                        );
                         let matching_ids: Vec<PaneId> = pane_ids_for_display_granularity(
                             &visible_pane_ids,
                             pane_group.focused_pane_id(app),
@@ -1863,9 +1869,8 @@ fn render_tab_group_internal(
     let is_being_renamed = is_active && workspace.current_workspace_state.is_tab_being_renamed();
     let rename_editor = workspace.tab_rename_editor.clone();
     let has_custom_title = pane_group.custom_title(app).is_some();
-    let displayed_tab_title_override = (!uses_outer_group_container)
-        .then(|| pane_group.custom_title(app))
-        .flatten();
+    let displayed_tab_title_override =
+        tab_title_override_for_row(pane_group, &visible_pane_ids, display_granularity, app);
     let is_menu_open_for_tab = workspace
         .show_tab_right_click_menu
         .is_some_and(|(idx, _)| idx == tab_index);
@@ -2954,6 +2959,56 @@ fn pane_matches_query(props: &PaneProps<'_>, query_lower: &str, app: &AppContext
 
 fn uses_outer_group_container(display_granularity: VerticalTabsDisplayGranularity) -> bool {
     matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+}
+
+/// Returns the tab-level custom title (set via `/rename-tab`) that should be
+/// surfaced on a pane row when rendering the vertical-tabs sidebar.
+///
+/// A user-set tab title is the source of truth and must take precedence over
+/// any AI-generated conversation title that the agent writes after each
+/// prompt. Without this override the row falls through to the
+/// agent/conversation title and the user-set name appears to be "clobbered"
+/// after the next AI prompt (#9102).
+///
+/// We only surface the override when the tab contains a single visible pane.
+/// For multi-pane groups in `Panes` granularity the group header already
+/// displays the custom title, and propagating it onto every individual row
+/// would visually overwrite each pane's own title, which is the wrong UX.
+///
+/// Pane-level renames via `set_custom_vertical_tabs_title` continue to take
+/// precedence at the row level — see [`PaneProps::displayed_title`].
+fn tab_title_override_for_row(
+    pane_group: &PaneGroup,
+    visible_pane_ids: &[PaneId],
+    display_granularity: VerticalTabsDisplayGranularity,
+    app: &AppContext,
+) -> Option<String> {
+    select_tab_title_override_for_row(
+        pane_group.custom_title(app),
+        visible_pane_ids.len(),
+        display_granularity,
+    )
+}
+
+/// Pure-decision counterpart of [`tab_title_override_for_row`] used for unit
+/// tests. Given the tab's custom title (if any), the number of visible panes,
+/// and the resolved display granularity, returns the title that should be
+/// shown on each row of the vertical-tabs sidebar.
+fn select_tab_title_override_for_row(
+    custom_title: Option<String>,
+    visible_pane_count: usize,
+    display_granularity: VerticalTabsDisplayGranularity,
+) -> Option<String> {
+    let custom_title = custom_title?;
+    // When the outer group container is suppressed, the row is the only place
+    // the user-set title can appear, so always surface it.
+    if !uses_outer_group_container(display_granularity) {
+        return Some(custom_title);
+    }
+    // In `Panes` mode the group header carries the custom title for
+    // multi-pane groups; only mirror it onto the row in the single-pane
+    // case — the common shape, and the one reported in #9102.
+    (visible_pane_count == 1).then_some(custom_title)
 }
 
 fn search_fragments_contain_query(fragments: &[String], query_lower: &str) -> bool {

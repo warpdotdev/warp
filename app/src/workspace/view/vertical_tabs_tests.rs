@@ -17,7 +17,8 @@ use super::{
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
-    select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
+    select_summary_pane_kind_icons, select_tab_title_override_for_row,
+    should_keep_detail_sidecar_visible_for_mouse_position,
     sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
@@ -1139,4 +1140,64 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+// Regression tests for #9102: when a user invokes `/rename-tab`, the row in
+// the vertical-tabs sidebar must continue to show that custom title even
+// after subsequent AI prompts generate a new conversation title.
+#[test]
+fn rename_tab_title_overrides_row_in_panes_mode_single_pane() {
+    // Single-pane tab in `Panes` granularity (the regression case in #9102):
+    // the user-set title must reach the row so it wins over AI auto-naming.
+    let override_title = select_tab_title_override_for_row(
+        Some("MY SESSION".to_string()),
+        1,
+        VerticalTabsDisplayGranularity::Panes,
+    );
+    assert_eq!(override_title, Some("MY SESSION".to_string()));
+}
+
+#[test]
+fn rename_tab_title_does_not_clobber_per_pane_titles_in_multi_pane_group() {
+    // Multi-pane tab in `Panes` mode: the group header already shows the
+    // custom title; we must NOT mirror it onto every row, which would erase
+    // each pane's own title.
+    let override_title = select_tab_title_override_for_row(
+        Some("MY SESSION".to_string()),
+        3,
+        VerticalTabsDisplayGranularity::Panes,
+    );
+    assert_eq!(override_title, None);
+}
+
+#[test]
+fn rename_tab_title_overrides_row_in_tabs_granularity() {
+    // `Tabs` granularity has no outer group container, so the row is the
+    // only place the custom title can appear — always surface it.
+    let override_title_single = select_tab_title_override_for_row(
+        Some("MY SESSION".to_string()),
+        1,
+        VerticalTabsDisplayGranularity::Tabs,
+    );
+    assert_eq!(override_title_single, Some("MY SESSION".to_string()));
+
+    let override_title_multi = select_tab_title_override_for_row(
+        Some("MY SESSION".to_string()),
+        4,
+        VerticalTabsDisplayGranularity::Tabs,
+    );
+    assert_eq!(override_title_multi, Some("MY SESSION".to_string()));
+}
+
+#[test]
+fn tab_title_override_for_row_is_none_when_no_custom_title_is_set() {
+    // Without `/rename-tab` there is no override, so the row falls back to
+    // its native title (which includes AI conversation titles).
+    let override_title =
+        select_tab_title_override_for_row(None, 1, VerticalTabsDisplayGranularity::Panes);
+    assert_eq!(override_title, None);
+
+    let override_title_tabs =
+        select_tab_title_override_for_row(None, 1, VerticalTabsDisplayGranularity::Tabs);
+    assert_eq!(override_title_tabs, None);
 }
