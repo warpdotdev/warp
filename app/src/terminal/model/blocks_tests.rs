@@ -128,6 +128,13 @@ pub fn command_finished_and_precmd(block_list: &mut BlockList) {
     block_list.command_finished(Default::default());
     block_list.precmd(Default::default());
 }
+fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        events.push(event);
+    }
+    events
+}
 
 /// Advances the block list to the ScriptExecution stage.
 fn advance_to_script_execution(block_list: &mut BlockList) {
@@ -336,6 +343,7 @@ pub fn test_script_execution_block() {
 
     // We have the `WarpInput` block and the current script execution block.
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     // Ensure that script execution block has a height of 0 if nothing was added to it.
     assert!(block_list
         .active_block()
@@ -352,12 +360,14 @@ pub fn test_script_execution_block() {
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     assert!(block_list
         .active_block()
         .is_empty(&AgentViewState::Inactive));
 
     // Add characters to script execution block.
     block_list.input('c');
+    block_list.update_active_block_height();
 
     assert_eq!(block_list.blocks.len(), 2);
     assert!(!block_list
@@ -392,6 +402,49 @@ pub fn test_script_execution_block() {
         block_completed_events[3].block_type,
         BlockType::BootstrapVisible(_)
     ));
+}
+#[test]
+pub fn visible_bootstrap_block_event_fires_when_script_execution_becomes_visible() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let channel_event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    let mut block_list = TestBlockListBuilder::new()
+        .with_channel_event_proxy(channel_event_proxy)
+        .build();
+    advance_to_script_execution(&mut block_list);
+
+    assert!(block_list.active_block().started());
+    assert!(block_list
+        .active_block()
+        .is_empty(&AgentViewState::Inactive));
+
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.input('c');
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 1);
+
+    block_list.input('d');
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 0);
 }
 
 // Add a few restored blocks and ensure they show up appropriately.
@@ -578,7 +631,6 @@ pub fn test_basic_bootstrapping() {
         .build();
 
     // Simulate entering the bootstrap script for WarpInput mode.
-    block_list.start_active_block();
     input_string(&mut block_list, "i am the warp input");
     block_list.linefeed();
     block_list.preexec(Default::default());
@@ -649,11 +701,11 @@ pub fn test_session_restoration_separator() {
                 .as_f64()
     );
 
-    // With the active block not started during initialize,
-    // the gap is inserted before the active block in clear_visible_screen.
-    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5
+    // With the active block still hidden during initialize, the gap is inserted before the active
+    // block in clear_visible_screen.
+    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5.
     assert_eq!(block_list.block_heights.summary().total_count, 5);
-    // Gap is at index 3 (before the active block at index 4)
+    // Gap is at index 3 (before the active block at index 4).
     assert_eq!(block_list.active_gap.as_ref().unwrap().index, 3);
     assert_approx_eq!(
         Lines,

@@ -1269,7 +1269,7 @@ impl ConversationDetailsPanel {
 
         let oz_root_url = ChannelState::oz_root_url();
         let encoded_skill_name = urlencoding::encode(&skill_name);
-        let skill_url = format!("{oz_root_url}/agents/{encoded_skill_name}");
+        let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
 
         let oz_link = appearance
             .ui_builder()

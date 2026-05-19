@@ -36,10 +36,10 @@ use super::entry::{
     AgentConversationEntryId, AgentConversationNavigationSubject, AgentConversationProvenance,
 };
 use super::{
-    AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
-    AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata, ConversationUpdateKind,
-    EnvironmentFilter, HarnessFilter, OwnerFilter, StatusFilter, TaskFetchState,
-    MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
+    record_earliest_rtc_task_refresh_timestamp, AgentConversationsModel,
+    AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
+    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
+    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::workspace::WorkspaceAction;
@@ -580,7 +580,40 @@ fn create_test_model() -> AgentConversationsModel {
         active_data_consumers_per_window: HashMap::new(),
         has_finished_initial_load: false,
         task_fetch_state: Default::default(),
+        rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
     }
+}
+
+#[test]
+fn rtc_task_refresh_pending_timestamp_records_first_timestamp() {
+    let timestamp = Utc::now();
+    let mut pending_timestamp = None;
+
+    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, timestamp);
+
+    assert_eq!(pending_timestamp, Some(timestamp));
+}
+
+#[test]
+fn rtc_task_refresh_pending_timestamp_keeps_earliest_timestamp() {
+    let earliest_timestamp = Utc::now();
+    let later_timestamp = earliest_timestamp + Duration::seconds(3);
+    let mut pending_timestamp = Some(earliest_timestamp);
+
+    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, later_timestamp);
+
+    assert_eq!(pending_timestamp, Some(earliest_timestamp));
+}
+
+#[test]
+fn rtc_task_refresh_pending_timestamp_replaces_later_timestamp() {
+    let earliest_timestamp = Utc::now();
+    let later_timestamp = earliest_timestamp + Duration::seconds(3);
+    let mut pending_timestamp = Some(later_timestamp);
+
+    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, earliest_timestamp);
+
+    assert_eq!(pending_timestamp, Some(earliest_timestamp));
 }
 
 fn create_test_conversation_metadata(

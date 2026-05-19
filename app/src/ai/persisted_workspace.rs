@@ -11,6 +11,10 @@ use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEven
 use serde::{Deserialize, Serialize};
 
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+#[cfg(feature = "local_fs")]
+use crate::ai::codebase_auto_indexing::{
+    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+};
 use crate::ai::AIRequestUsageModel;
 use crate::persistence::ModelEvent;
 use crate::report_if_error;
@@ -28,6 +32,8 @@ use chrono::Utc;
 use itertools::Itertools;
 use lsp::supported_servers::LSPServerType;
 use warp_core::features::FeatureFlag;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -240,7 +246,7 @@ impl PersistedWorkspace {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
-                    CodebaseIndexManagerEvent::NewIndexCreated => {
+                    CodebaseIndexManagerEvent::NewIndexCreated { .. } => {
                         send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
@@ -651,19 +657,14 @@ impl PersistedWorkspace {
         );
 
         #[cfg(feature = "local_fs")]
-        for dir in all_working_directories(ctx) {
-            // Auto-index working directory ONLY if the user has "Read files" set to "Always allow" OR this directory is in the allowlist.
-            let auto_indexing_enabled = *CodeSettings::as_ref(ctx).auto_indexing_enabled;
-
-            if auto_indexing_enabled {
-                if let Some(root) = DetectedRepositories::as_ref(ctx)
-                    .get_root_for_path(&warp_util::local_or_remote_path::LocalOrRemotePath::Local(
-                        dir.clone(),
-                    ))
-                    .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
-                {
-                    manager.index_directory(root, ctx);
-                }
+        if should_auto_index_codebase(CodebaseAutoIndexingSurface::Local, ctx) {
+            let roots = all_working_directories(ctx).into_iter().filter_map(|dir| {
+                DetectedRepositories::as_ref(ctx)
+                    .get_root_for_path(&LocalOrRemotePath::Local(dir))
+                    .and_then(|root| root.to_local_path().map(Path::to_path_buf))
+            });
+            for root in auto_index_candidate_roots(roots, |_| true) {
+                manager.index_directory(root, ctx);
             }
         }
     }
@@ -816,13 +817,21 @@ impl PersistedWorkspace {
             for terminal_view in terminal_views.into_iter().flatten() {
                 let terminal_view_ref = terminal_view.as_ref(ctx);
                 if terminal_view_ref.view_id() == terminal_view_id {
-                    if let Some(pwd) = terminal_view_ref.pwd() {
-                        let directory_path = Path::new(&pwd);
+                    if terminal_view_ref.active_session_is_local(ctx) != Some(true) {
+                        log::info!(
+                            "Skipping local codebase incremental sync for non-local agent conversation"
+                        );
+                        return;
+                    }
+
+                    let pwd = terminal_view_ref.pwd();
+                    if let Some(pwd) = pwd {
+                        let directory_path = PathBuf::from(pwd);
 
                         // Trigger an incremental sync through the CodebaseIndexManager
                         CodebaseIndexManager::handle(ctx).update(ctx, |codebase_manager, ctx| {
                             if let Err(e) = codebase_manager
-                                .trigger_incremental_sync_for_path(directory_path, ctx)
+                                .trigger_incremental_sync_for_path(&directory_path, ctx)
                             {
                                 log::warn!("Failed to trigger incremental sync {e}");
                             }

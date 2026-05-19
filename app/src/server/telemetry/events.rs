@@ -1237,6 +1237,20 @@ pub enum CLISubagentControlState {
     AgentTaggedIn,
     AgentTaggedOut,
 }
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCodebaseIndexStatusTelemetrySource {
+    Snapshot,
+    PushUpdate,
+    MutationResponse,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCodebaseAutoIndexTrigger {
+    NavigatedToGitRepo,
+    CodebaseContextEnablementChanged,
+}
 
 #[derive(Clone, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
@@ -2834,6 +2848,9 @@ pub enum TelemetryEvent {
         exit_code: Option<i32>,
         /// Whether the SSH subprocess was killed by a signal.
         signal_killed: Option<bool>,
+        /// Last lines from the proxy's stderr, if available.
+        /// Provides server-side context for why the proxy exited.
+        proxy_stderr: Option<String>,
     },
     /// Emitted when an established remote server connection drops.
     RemoteServerDisconnection {
@@ -2890,6 +2907,26 @@ pub enum TelemetryEvent {
         remote_arch: Option<String>,
         exit_code: Option<i32>,
         signal_killed: Option<bool>,
+    },
+    /// Emitted when the remote codebase index status changes.
+    RemoteCodebaseIndexStatusChanged {
+        state: remote_server::codebase_index_proto::RemoteCodebaseIndexState,
+        previous_state: Option<remote_server::codebase_index_proto::RemoteCodebaseIndexState>,
+        has_root_hash: bool,
+        has_failure_message: bool,
+        progress_completed: Option<u64>,
+        progress_total: Option<u64>,
+        mutation_kind: Option<remote_server::manager::RemoteCodebaseIndexUpdateOperation>,
+        source: RemoteCodebaseIndexStatusTelemetrySource,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
+    },
+    /// Emitted when auto-indexing requests one or more remote codebases.
+    RemoteCodebaseAutoIndexRequested {
+        trigger: RemoteCodebaseAutoIndexTrigger,
+        requested_count: usize,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
     },
 }
 
@@ -4213,6 +4250,7 @@ impl TelemetryEvent {
                 remote_arch,
                 exit_code,
                 signal_killed,
+                proxy_stderr,
             } => Some(json!({
                 "phase": phase,
                 "error": error,
@@ -4220,6 +4258,7 @@ impl TelemetryEvent {
                 "remote_arch": remote_arch,
                 "exit_code": exit_code,
                 "signal_killed": signal_killed,
+                "proxy_stderr": proxy_stderr,
             })),
             TelemetryEvent::RemoteServerDisconnection {
                 remote_os,
@@ -4265,6 +4304,40 @@ impl TelemetryEvent {
                 remote_os,
                 remote_arch,
             } => Some(json!({
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteCodebaseIndexStatusChanged {
+                state,
+                previous_state,
+                has_root_hash,
+                has_failure_message,
+                progress_completed,
+                progress_total,
+                mutation_kind,
+                source,
+                remote_os,
+                remote_arch,
+            } => Some(json!({
+                "state": state,
+                "previous_state": previous_state,
+                "has_root_hash": has_root_hash,
+                "has_failure_message": has_failure_message,
+                "progress_completed": progress_completed,
+                "progress_total": progress_total,
+                "mutation_kind": mutation_kind,
+                "source": source,
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteCodebaseAutoIndexRequested {
+                trigger,
+                requested_count,
+                remote_os,
+                remote_arch,
+            } => Some(json!({
+                "trigger": trigger,
+                "requested_count": requested_count,
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
             })),
@@ -5137,7 +5210,9 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoteServerSetupDuration { .. }
             | TelemetryEvent::RemoteServerHostUnsupported { .. }
             | TelemetryEvent::RemoteServerReconnection { .. }
-            | TelemetryEvent::RemoteServerReconnectExhausted { .. } => false,
+            | TelemetryEvent::RemoteServerReconnectExhausted { .. }
+            | TelemetryEvent::RemoteCodebaseIndexStatusChanged { .. }
+            | TelemetryEvent::RemoteCodebaseAutoIndexRequested { .. } => false,
             #[cfg(feature = "local_fs")]
             TelemetryEvent::CodePaneOpened { .. }
             | TelemetryEvent::CodePanelsFileOpened { .. }
@@ -5708,7 +5783,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::RemoteServerSetupDuration
             | Self::RemoteServerHostUnsupported
             | Self::RemoteServerReconnection
-            | Self::RemoteServerReconnectExhausted => {
+            | Self::RemoteServerReconnectExhausted
+            | Self::RemoteCodebaseIndexStatusChanged
+            | Self::RemoteCodebaseAutoIndexRequested => {
                 EnablementState::Flag(FeatureFlag::SshRemoteServer)
             }
         }
@@ -6120,6 +6197,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerHostUnsupported => "RemoteServer.HostUnsupported",
             Self::RemoteServerReconnection => "RemoteServer.Reconnection",
             Self::RemoteServerReconnectExhausted => "RemoteServer.ReconnectExhausted",
+            Self::RemoteCodebaseIndexStatusChanged => "RemoteCodebaseIndex.StatusChanged",
+            Self::RemoteCodebaseAutoIndexRequested => "RemoteCodebaseIndex.AutoIndexRequested",
             #[cfg(windows)]
             Self::WSLRegistryError => "WSL Distribution Registry Error",
             #[cfg(windows)]
@@ -7177,6 +7256,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerReconnectExhausted => {
                 "All reconnection attempts were exhausted after a spontaneous disconnect"
+            }
+            Self::RemoteCodebaseIndexStatusChanged => "The remote codebase index status changed",
+            Self::RemoteCodebaseAutoIndexRequested => {
+                "Remote codebase auto-indexing requested one or more repositories"
             }
         }
     }

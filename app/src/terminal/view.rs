@@ -4390,6 +4390,7 @@ impl TerminalView {
                                 remote_arch,
                                 exit_code: None,
                                 signal_killed: None,
+                                proxy_stderr: None,
                             },
                             ctx
                         );
@@ -4399,6 +4400,7 @@ impl TerminalView {
                         phase,
                         error,
                         exit_status,
+                        proxy_stderr,
                         is_cancelled,
                     } => {
                         me.model.lock().event_proxy.send_terminal_event(
@@ -4427,6 +4429,7 @@ impl TerminalView {
                                     remote_arch,
                                     exit_code: exit_status.as_ref().and_then(|s| s.code),
                                     signal_killed: exit_status.as_ref().map(|s| s.signal_killed),
+                                    proxy_stderr: proxy_stderr.clone(),
                                 },
                                 ctx
                             );
@@ -4659,6 +4662,7 @@ impl TerminalView {
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+                    | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
                     | RemoteServerManagerEvent::BufferUpdated { .. }
                     | RemoteServerManagerEvent::BufferConflictDetected { .. }
                     | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
