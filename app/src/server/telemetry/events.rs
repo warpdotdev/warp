@@ -2552,6 +2552,7 @@ pub enum TelemetryEvent {
         is_locked: bool,
         nld_decision_source: Option<NldDecisionSource>,
         was_lock_set_with_empty_buffer: bool,
+        block_id: BlockId,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
     CreateProjectPromptSubmitted {
@@ -4414,11 +4415,13 @@ impl TelemetryEvent {
                 is_locked,
                 nld_decision_source,
                 was_lock_set_with_empty_buffer,
+                block_id,
             } => Some(json!({
                 "input_type": input_type,
                 "is_locked": is_locked,
                 "nld_decision_source": nld_decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
+                "block_id": block_id,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
                 is_custom_prompt,
