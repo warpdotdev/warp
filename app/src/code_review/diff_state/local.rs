@@ -2666,6 +2666,16 @@ struct LocalDiffStateModelRepositorySubscriber {
 }
 
 #[cfg(feature = "local_fs")]
+impl LocalDiffStateModelRepositorySubscriber {
+    fn should_defer_update_while_index_locked(
+        update: &RepositoryUpdate,
+        index_lock_exists: bool,
+    ) -> bool {
+        index_lock_exists && !update.is_empty()
+    }
+}
+
+#[cfg(feature = "local_fs")]
 impl RepositorySubscriber for LocalDiffStateModelRepositorySubscriber {
     fn on_scan(
         &mut self,
@@ -2687,12 +2697,15 @@ impl RepositorySubscriber for LocalDiffStateModelRepositorySubscriber {
         let update = update.clone();
         let index_lock_path = repository.git_dir().join("index.lock");
         Box::pin(async move {
-            // If commit state changed while the git index is locked (e.g. during
-            // a pull or merge), signal the locked state instead of forwarding stale
-            // data. The lock release atomically renames index.lock → index, which
-            // triggers a fresh commit_updated event that takes the normal path.
-            let msg = if update.commit_updated && async_fs::metadata(&index_lock_path).await.is_ok()
-            {
+            let index_lock_exists = async_fs::metadata(&index_lock_path).await.is_ok();
+            // If repository state changes while the git index is locked (e.g.
+            // during a pull or merge), signal the locked state instead of
+            // forwarding stale data. This covers commit ref updates, remote
+            // tracking ref updates from the fetch phase, and worktree file
+            // updates that may be observed before checkout finishes. The lock
+            // release event then takes the normal path and triggers a fresh
+            // full reload.
+            let msg = if Self::should_defer_update_while_index_locked(&update, index_lock_exists) {
                 DiffStateRepositoryUpdate::InvalidationWithLockedIndex
             } else {
                 DiffStateRepositoryUpdate::Invalidation(update)
