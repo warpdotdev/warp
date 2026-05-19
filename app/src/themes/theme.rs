@@ -66,6 +66,8 @@ pub enum ThemeKind {
     SolarizedDark,
     #[schemars(description = "Willow Dream")]
     WillowDream,
+    #[schemars(description = "Olive Grove")]
+    OliveGrove,
     #[schemars(description = "Light")]
     Light,
     #[schemars(description = "Dark City")]
@@ -129,6 +131,7 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::RedRock => "Red Rock",
             ThemeKind::CyberWave => "Cyber Wave",
             ThemeKind::WillowDream => "Willow Dream",
+            ThemeKind::OliveGrove => "Olive Grove",
             ThemeKind::FancyDracula => "Fancy Dracula",
             ThemeKind::Phenomenon => "Phenomenon",
             ThemeKind::SolarFlare => "Solar Flare",
@@ -317,6 +320,7 @@ impl WarpThemeConfig {
             (ThemeKind::RedRock, red_rock()),
             (ThemeKind::CyberWave, cyber_wave()),
             (ThemeKind::WillowDream, willow_dream()),
+            (ThemeKind::OliveGrove, olive_grove()),
             (ThemeKind::FancyDracula, fancy_dracula()),
             (ThemeKind::Phenomenon, phenomenon()),
             (ThemeKind::SolarFlare, solar_flare()),

@@ -67,3 +67,13 @@ fn in_memory_theme_generation_test() {
         )
     );
 }
+
+#[test]
+fn olive_grove_is_bundled_theme() {
+    let config = WarpThemeConfig::new();
+    let kind = ThemeKind::OliveGrove;
+    let theme = config.theme(&kind);
+
+    assert_eq!(kind.to_string(), "Olive Grove");
+    assert_eq!(theme.name(), Some("Olive Grove".to_string()));
+}
