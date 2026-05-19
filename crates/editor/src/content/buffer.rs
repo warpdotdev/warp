@@ -5443,6 +5443,15 @@ impl StyledBufferBlock {
             Self::Text(text_block) => text_block.content_length,
         }
     }
+
+    /// Returns the approximate byte length of the content in this block.
+    /// Used to decide whether lightweight layout should be used for large buffers.
+    pub fn content_byte_len(&self) -> usize {
+        match &self {
+            Self::Item(_) => 1,
+            Self::Text(text_block) => text_block.block.iter().map(|r| r.run.len()).sum(),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
