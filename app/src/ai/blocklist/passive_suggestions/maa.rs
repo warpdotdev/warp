@@ -143,6 +143,28 @@ impl PassiveSuggestionsModel {
             .as_ref()
             .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
     }
+    fn should_suppress_passive_suggestions(
+        &self,
+        conversation_id: Option<AIConversationId>,
+        ctx: &ModelContext<Self>,
+    ) -> bool {
+        let is_shared_session_viewer = self
+            .terminal_model
+            .lock()
+            .shared_session_status()
+            .is_viewer();
+        let is_viewing_shared_conversation = conversation_id.is_some_and(|conversation_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| conversation.is_viewing_shared_session())
+        });
+
+        should_suppress_passive_suggestions_for_session(
+            self.is_ambient_agent_session(ctx),
+            is_shared_session_viewer,
+            is_viewing_shared_conversation,
+        )
+    }
 
     /// Sends a MAA request to generate passive suggestions.
     ///
@@ -158,6 +180,9 @@ impl PassiveSuggestionsModel {
         supported_tools: Vec<warp_multi_agent_api::ToolType>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.should_suppress_passive_suggestions(followup_conversation_id, ctx) {
+            return;
+        }
         // Capture before the call — `Some` means there's a real conversation
         // the user can continue in; `None` means ephemeral.
         let continuable_conversation_id = followup_conversation_id;
@@ -399,8 +424,8 @@ impl PassiveSuggestionsModel {
             return;
         }
 
-        // Suppress passive suggestions in cloud mode sessions.
-        if self.is_ambient_agent_session(ctx) {
+        // Suppress passive suggestions in sessions where this client does not own agent execution.
+        if self.should_suppress_passive_suggestions(Some(conversation_id), ctx) {
             return;
         }
 
@@ -448,8 +473,8 @@ impl PassiveSuggestionsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.abort_pending_requests(ctx);
-        // Suppress passive suggestions in cloud mode sessions.
-        if self.is_ambient_agent_session(ctx) {
+        // Suppress passive suggestions in sessions where this client does not own agent execution.
+        if self.should_suppress_passive_suggestions(None, ctx) {
             return;
         }
 
@@ -830,6 +855,13 @@ fn is_prompt_suggestions_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) ->
     AISettings::as_ref(ctx).is_prompt_suggestions_enabled(ctx)
         && UserWorkspaces::as_ref(ctx).is_prompt_suggestions_toggleable()
 }
+fn should_suppress_passive_suggestions_for_session(
+    is_ambient_agent_session: bool,
+    is_shared_session_viewer: bool,
+    is_viewing_shared_conversation: bool,
+) -> bool {
+    is_ambient_agent_session || is_shared_session_viewer || is_viewing_shared_conversation
+}
 
 #[cfg(feature = "local_fs")]
 fn detect_relevant_file_paths_for_block(
@@ -903,5 +935,32 @@ async fn read_files(
             log::warn!("Failed to retrieve file content for suggest prompt relevant files: {err}");
             vec![]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_suppress_passive_suggestions_for_session;
+
+    #[test]
+    fn suppresses_passive_suggestions_when_client_does_not_own_execution() {
+        for (is_ambient_agent_session, is_shared_session_viewer, is_viewing_shared_conversation) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert!(should_suppress_passive_suggestions_for_session(
+                is_ambient_agent_session,
+                is_shared_session_viewer,
+                is_viewing_shared_conversation,
+            ));
+        }
+    }
+
+    #[test]
+    fn allows_passive_suggestions_for_local_non_shared_conversations() {
+        assert!(!should_suppress_passive_suggestions_for_session(
+            false, false, false,
+        ));
     }
 }
