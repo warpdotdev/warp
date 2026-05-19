@@ -14872,6 +14872,7 @@ dependencies = [
  "log-panics",
  "sentry",
  "sentry-log",
+ "tempfile",
  "warp_core",
  "warp_web_event_bus",
  "wasm-bindgen",
