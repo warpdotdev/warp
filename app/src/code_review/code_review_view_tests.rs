@@ -321,6 +321,7 @@ fn create_loaded_state_with_editors(
                 },
                 editor_state: Some(CodeReviewEditorState::new_loaded(editor)),
                 is_expanded: true,
+                deferred_content_at_head: None,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
                 chevron_button,

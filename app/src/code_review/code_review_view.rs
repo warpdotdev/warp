@@ -412,6 +412,12 @@ pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
     pub is_expanded: bool,
+    /// Stores the `content_at_head` for files whose editor construction was
+    /// deferred because they started collapsed. When the user expands such a
+    /// file, `ensure_editor_for_file` consumes this to build the editor lazily,
+    /// avoiding the ~50-100 MB per-file allocation for files that may never be
+    /// viewed.
+    pub deferred_content_at_head: Option<String>,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
     chevron_button: ViewHandle<ActionButton>,
@@ -2580,26 +2586,32 @@ impl CodeReviewView {
 
         let mut file_states = vec![];
         for file in files {
-            let editor_state = {
-                // `LocalCodeEditorView::new_with_global_buffer` natively
-                // supports both `LocalOrRemotePath::Local` and `Remote`
-                // (it sets language by extension and skips local-only
-                // wiring like LSP for remote files), so we always go
-                // through the global-buffer path when we have a repo.
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if self.repo_path().is_some() {
-                        self.create_code_review_model_with_global_buffer(file, ctx)
-                    } else {
+            let is_expanded = self.should_auto_expand_file(&file.file_diff);
+
+            // Defer editor construction for collapsed files to avoid
+            // allocating ~50-100 MB of styled buffer data per file that
+            // may never be viewed. The content_at_head is stored on the
+            // FileState and consumed lazily by ensure_editor_for_file
+            // when the user expands the file.
+            let (editor_state, deferred_content_at_head) = if is_expanded {
+                let state = {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        if self.repo_path().is_some() {
+                            self.create_code_review_model_with_global_buffer(file, ctx)
+                        } else {
+                            self.create_code_review_model(file, ctx)
+                        }
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
                         self.create_code_review_model(file, ctx)
                     }
-                }
-                #[cfg(target_family = "wasm")]
-                {
-                    self.create_code_review_model(file, ctx)
-                }
+                };
+                (state, None)
+            } else {
+                (None, file.content_at_head.clone())
             };
-            let is_expanded = self.should_auto_expand_file(&file.file_diff);
 
             let file_path = file.file_diff.file_path.clone();
             let file_line = file_line_for_open(&file.file_diff);
@@ -2686,6 +2698,7 @@ impl CodeReviewView {
                 file_diff: file.file_diff.clone(),
                 editor_state,
                 is_expanded,
+                deferred_content_at_head,
                 chevron_button,
                 open_in_tab_button,
                 discard_button,
@@ -2727,6 +2740,60 @@ impl CodeReviewView {
             .as_ref()
             .map(|repo| repo.should_auto_expand_file(file))
             .unwrap_or(false)
+    }
+
+    /// Lazily constructs the editor for a file whose construction was deferred
+    /// because it was initially collapsed. Consumes `deferred_content_at_head`
+    /// and populates `editor_state`. No-ops if the editor already exists.
+    fn ensure_editor_for_file(&mut self, path: &str, ctx: &mut ViewContext<Self>) {
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        let Some(file_state) = state.file_states.get_mut(path) else {
+            return;
+        };
+
+        // Already has an editor — nothing to do.
+        if file_state.editor_state.is_some() {
+            return;
+        }
+
+        // Take the deferred content so we can build a FileDiffAndContent for
+        // the existing editor construction helpers.
+        let content_at_head = file_state.deferred_content_at_head.take();
+        let file = FileDiffAndContent {
+            file_diff: file_state.file_diff.clone(),
+            content_at_head,
+        };
+
+        let editor_state = {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                if self.repo_path().is_some() {
+                    self.create_code_review_model_with_global_buffer(&file, ctx)
+                } else {
+                    self.create_code_review_model(&file, ctx)
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                self.create_code_review_model(&file, ctx)
+            }
+        };
+
+        // Re-borrow mutably after the editor construction calls above.
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        if let Some(file_state) = state.file_states.get_mut(path) {
+            file_state.editor_state = editor_state;
+        }
     }
 
     fn get_existing_diffset_comment(&self, app: &AppContext) -> Option<AttachedReviewComment> {
@@ -7109,6 +7176,11 @@ impl TypedActionView for CodeReviewView {
                     }
                 };
 
+                // Lazily construct the editor if this file was deferred.
+                if now_expanded {
+                    self.ensure_editor_for_file(path, ctx);
+                }
+
                 // Update the chevron button icon based on expanded state
                 chevron_button.update(ctx, |button, ctx| {
                     let icon = if now_expanded {
@@ -7156,7 +7228,7 @@ impl TypedActionView for CodeReviewView {
             CodeReviewAction::FileSelected(file_index) => {
                 // Early-return when repo/state/file is missing to avoid calling
                 // invalidate_height_for_index or scroll_to with an invalid index.
-                let was_expanded = {
+                let (was_expanded, file_path) = {
                     let Some(repo) = self.active_repo.as_mut() else {
                         return;
                     };
@@ -7168,8 +7240,13 @@ impl TypedActionView for CodeReviewView {
                     };
                     let was_expanded = file.is_expanded;
                     file.is_expanded = true;
-                    was_expanded
+                    (was_expanded, file.file_diff.file_path.clone())
                 };
+
+                // Lazily construct the editor if this file was deferred.
+                if !was_expanded {
+                    self.ensure_editor_for_file(&file_path, ctx);
+                }
 
                 self.viewported_list_state
                     .invalidate_height_for_index(*file_index);
