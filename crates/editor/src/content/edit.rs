@@ -48,6 +48,14 @@ use super::{
     text::{BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache},
 };
 
+/// Maximum total content size (in bytes) for full platform text layout in a single
+/// `layout_delta` call. When the total content of an `EditDelta` exceeds this threshold,
+/// text blocks are laid out with lightweight estimated-height frames that skip expensive
+/// glyph shaping, caret computation, and platform text layout (CoreText on macOS). This
+/// prevents the multi-GiB memory spikes observed in Sentry (APP-4323) when very large
+/// files are loaded or fully re-laid out.
+const MAX_LAYOUT_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
+
 #[cfg(test)]
 #[path = "edit_tests.rs"]
 mod tests;
@@ -68,7 +76,7 @@ pub(crate) fn layout_mermaid_block_for_test(
         app,
         None,
     );
-    task.run(layout, BlockLocation::Middle, false)
+    task.run(layout, BlockLocation::Middle, false, false)
 }
 
 /// Resolve an image source path to an AssetSource.
@@ -513,6 +521,16 @@ impl EditDelta {
     ) -> LaidOutRenderDelta {
         let hidden_ranges = hidden_ranges.unwrap_or_default();
 
+        // Check total content size to decide whether to use lightweight layout.
+        // When the total exceeds MAX_LAYOUT_BYTES, we skip expensive platform text
+        // layout (CoreText on macOS) to avoid multi-GiB memory spikes (APP-4323).
+        let total_content_bytes: usize = self
+            .new_lines
+            .iter()
+            .map(|block| block.content_byte_len())
+            .sum();
+        let use_lightweight_layout = total_content_bytes > MAX_LAYOUT_BYTES;
+
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
@@ -536,7 +554,7 @@ impl EditDelta {
                     );
                     let is_hidden = hidden_ranges.contains(&current_offset);
                     current_offset += content_length;
-                    Some((task, is_hidden))
+                    Some((task, is_hidden, use_lightweight_layout))
                 }
             })
             .collect();
@@ -548,7 +566,7 @@ impl EditDelta {
         let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
             .into_par_iter()
             .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
+            .filter_map(|(idx, (task, is_hidden, lightweight))| {
                 let location = if idx == 0 {
                     BlockLocation::Start
                 } else if idx >= last_task {
@@ -557,7 +575,7 @@ impl EditDelta {
                     BlockLocation::Middle
                 };
 
-                match task.run(layout, location, is_hidden) {
+                match task.run(layout, location, is_hidden, lightweight) {
                     Ok(result) => Some(result),
                     Err(e) => {
                         log::error!(
@@ -643,7 +661,7 @@ pub fn layout_temporary_blocks(
                 BlockLocation::Middle
             };
 
-            match task.run(layout, location, false) {
+            match task.run(layout, location, false, false) {
                 Ok(result) => Some((line_count, result.0)),
                 Err(e) => {
                     log::error!("Failed to lay out temporary blocks: {e:?}");
@@ -867,6 +885,7 @@ impl LayoutTask {
         layout: &TextLayout,
         location: BlockLocation,
         is_hidden: bool,
+        use_lightweight_layout: bool,
     ) -> Result<(BlockItem, bool)> {
         match self {
             Self::Embed(item) => Ok((BlockItem::Embedded(item.into()), true)),
@@ -888,13 +907,24 @@ impl LayoutTask {
                     true, // Images are always followed by a trailing newline in the buffer
                 ))
             }
-            Self::Text(text_block) => layout_text_block(text_block, layout, location, is_hidden),
+            Self::Text(text_block) => {
+                if use_lightweight_layout {
+                    layout_text_block_lightweight(text_block, layout, location, is_hidden)
+                } else {
+                    layout_text_block(text_block, layout, location, is_hidden)
+                }
+            }
             Self::MermaidCodeFallback {
                 text_block,
                 pending_mermaid_asset,
             } => {
+                let layout_fn = if use_lightweight_layout {
+                    layout_text_block_lightweight
+                } else {
+                    layout_text_block
+                };
                 let (block_item, has_trailing_newline) =
-                    layout_text_block(text_block, layout, location, is_hidden)?;
+                    layout_fn(text_block, layout, location, is_hidden)?;
                 let block_item = match block_item {
                     BlockItem::RunnableCodeBlock {
                         paragraph_block,
@@ -957,6 +987,173 @@ fn calculate_hidden_block_line_count(
 ) -> usize {
     let line_count = estimate_paragraph_count(text_block);
     gutter_expansion_button_types(&location, line_count).len()
+}
+
+/// Lay out a text block using lightweight estimated-height frames. This avoids the expensive
+/// platform text layout (CoreText on macOS, cosmic-text on other platforms) by creating
+/// empty `TextFrame`s with correct font metrics. The resulting `Paragraph` objects have:
+/// - Correct `content_length` (so SumTree offsets remain accurate)
+/// - Approximate height (based on line count × line_height)
+/// - No glyphs or caret positions (text won't render until a subsequent re-layout)
+///
+/// This is used when the total content in an `EditDelta` exceeds `MAX_LAYOUT_BYTES` to
+/// prevent multi-GiB memory spikes from laying out hundreds of thousands of lines.
+fn layout_text_block_lightweight(
+    text_block: StyledTextBlock,
+    layout: &TextLayout,
+    location: BlockLocation,
+    is_hidden: bool,
+) -> Result<(BlockItem, bool)> {
+    use std::sync::Arc;
+    use warpui::text_layout::TextFrame;
+
+    if is_hidden {
+        let content_length = text_block.content_length;
+        let line_count = calculate_hidden_block_line_count(&text_block, location);
+        return Ok((
+            BlockItem::Hidden(HiddenBlockConfig::new(
+                line_count.into(),
+                content_length,
+                location,
+            )),
+            false,
+        ));
+    }
+
+    // Short-circuit for table blocks — they are generally small.
+    if matches!(text_block.style, BufferBlockStyle::Table { .. })
+        && FeatureFlag::MarkdownTables.is_enabled()
+    {
+        let spacing = layout
+            .rich_text_styles()
+            .block_spacings
+            .from_block_style(&text_block.style);
+        return layout_table_block(text_block, layout, spacing).map(|block| (block, false));
+    }
+
+    let rich_text_styles = layout.rich_text_styles();
+    let spacing = rich_text_styles
+        .block_spacings
+        .from_block_style(&text_block.style);
+    let paragraph_styles = layout.paragraph_styles(&text_block.style);
+
+    // Count logical lines by scanning for newlines in the runs.
+    let mut line_content_lengths = Vec::with_capacity(estimate_paragraph_count(&text_block));
+    let mut current_line_chars = CharOffset::zero();
+
+    for run in &text_block.block {
+        let has_newline = run.run.ends_with('\n');
+        let char_count = run.run.chars().count();
+        current_line_chars += char_count;
+
+        if has_newline {
+            line_content_lengths.push(current_line_chars);
+            current_line_chars = CharOffset::zero();
+        }
+    }
+
+    // If the last run didn't end with a newline, there's a final incomplete line.
+    let has_trailing_newline = if current_line_chars > CharOffset::zero() {
+        // Mimic the +1 adjustment from the normal layout path.
+        line_content_lengths.push(current_line_chars + 1);
+        false
+    } else {
+        true
+    };
+
+    // Create one lightweight Paragraph per logical line.
+    let mut paragraphs = Vec::with_capacity(line_content_lengths.len().max(1));
+    for line_chars in &line_content_lengths {
+        let frame = Arc::new(TextFrame::empty(
+            paragraph_styles.font_size,
+            paragraph_styles.line_height_ratio,
+        ));
+        paragraphs.push(Paragraph::new(
+            frame,
+            OffsetMap::direct(line_chars.as_usize()),
+            *line_chars,
+            vec![],
+            spacing,
+            rich_text_styles.minimum_paragraph_height,
+        ));
+    }
+
+    // If no paragraphs were created (empty block), create a single placeholder.
+    if paragraphs.is_empty() {
+        let frame = Arc::new(TextFrame::empty(
+            paragraph_styles.font_size,
+            paragraph_styles.line_height_ratio,
+        ));
+        paragraphs.push(Paragraph::new(
+            frame,
+            OffsetMap::direct(text_block.content_length.as_usize()),
+            text_block.content_length,
+            vec![],
+            spacing,
+            rich_text_styles.minimum_paragraph_height,
+        ));
+    }
+
+    let block_item = match text_block.style.clone() {
+        BufferBlockStyle::CodeBlock { code_block_type } => Vec1::try_from_vec(paragraphs)
+            .ok()
+            .map(|p| {
+                let paragraph_block = ParagraphBlock::new(p);
+                BlockItem::RunnableCodeBlock {
+                    paragraph_block,
+                    code_block_type,
+                    pending_mermaid_asset: None,
+                }
+            })
+            .ok_or_else(|| anyhow!("Code block should have at least one paragraph")),
+        BufferBlockStyle::TaskList {
+            indent_level,
+            complete,
+        } => paragraphs
+            .pop()
+            .map(|paragraph| BlockItem::TaskList {
+                indent_level,
+                complete,
+                paragraph,
+                mouse_state: Default::default(),
+            })
+            .ok_or_else(|| anyhow!("Task list item should have one paragraph")),
+        BufferBlockStyle::UnorderedList { indent_level } => paragraphs
+            .pop()
+            .map(|paragraph| BlockItem::UnorderedList {
+                indent_level,
+                paragraph,
+            })
+            .ok_or_else(|| anyhow!("Unordered list item should have one paragraph")),
+        BufferBlockStyle::OrderedList {
+            indent_level,
+            number,
+        } => paragraphs
+            .pop()
+            .map(|paragraph| BlockItem::OrderedList {
+                indent_level,
+                number,
+                paragraph,
+            })
+            .ok_or_else(|| anyhow!("Ordered list item should have one paragraph")),
+        BufferBlockStyle::Header { header_size } => paragraphs
+            .pop()
+            .map(|paragraph| BlockItem::Header {
+                header_size,
+                paragraph,
+            })
+            .ok_or_else(|| anyhow!("Header item should have one paragraph")),
+        BufferBlockStyle::PlainText => paragraphs
+            .pop()
+            .map(BlockItem::Paragraph)
+            .ok_or_else(|| anyhow!("Plain text item should have one paragraph")),
+        BufferBlockStyle::Table { .. } => paragraphs
+            .pop()
+            .map(BlockItem::Paragraph)
+            .ok_or_else(|| anyhow!("Table fallback should have at least one paragraph")),
+    };
+
+    block_item.map(|item| (item, has_trailing_newline))
 }
 
 /// Lay out a single text block. This returns both the laid-out block item and a boolean for

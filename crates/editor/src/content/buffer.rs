@@ -533,6 +533,11 @@ impl BufferSnapshot {
         Self { content, byte_len }
     }
 
+    /// Total byte length of the snapshot's content.
+    pub fn byte_len(&self) -> ByteOffset {
+        self.byte_len
+    }
+
     /// Returns a `Bytes` iterator positioned at the start of the content,
     /// suitable for reuse across multiple seeks during tree-sitter parsing.
     pub fn bytes(&self) -> Bytes<'_> {
@@ -5441,6 +5446,15 @@ impl StyledBufferBlock {
         match &self {
             Self::Item(_) => CharOffset::from(1),
             Self::Text(text_block) => text_block.content_length,
+        }
+    }
+
+    /// Returns the approximate byte length of the content in this block.
+    /// Used to decide whether lightweight layout should be used for large buffers.
+    pub fn content_byte_len(&self) -> usize {
+        match &self {
+            Self::Item(_) => 1,
+            Self::Text(text_block) => text_block.block.iter().map(|r| r.run.len()).sum(),
         }
     }
 }
