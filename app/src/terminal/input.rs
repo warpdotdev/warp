@@ -12718,12 +12718,14 @@ impl Input {
             let is_locked = input_model.is_input_type_locked();
             let nld_decision_source = submitted_nld_decision_source(input_model);
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
+            let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
                     nld_decision_source,
                     was_lock_set_with_empty_buffer,
+                    block_id,
                 },
                 ctx
             );
@@ -12837,12 +12839,14 @@ impl Input {
             let is_locked = input_model.is_input_type_locked();
             let nld_decision_source = submitted_nld_decision_source(input_model);
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
+            let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
                     nld_decision_source,
                     was_lock_set_with_empty_buffer,
+                    block_id,
                 },
                 ctx
             );
