@@ -534,10 +534,7 @@ impl MCPServersEditPageView {
         ctx: &mut ViewContext<Self>,
         templatable_mcp_server: &TemplatableMCPServer,
     ) -> Result<(), String> {
-        let contains_secrets =
-            !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty();
-
-        if contains_secrets {
+        if Self::templatable_mcp_server_contains_secrets(templatable_mcp_server) {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
@@ -552,42 +549,44 @@ impl MCPServersEditPageView {
         Ok(())
     }
 
+    fn templatable_mcp_server_contains_secrets(
+        templatable_mcp_server: &TemplatableMCPServer,
+    ) -> bool {
+        !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty()
+    }
+
     fn parse_templatable_json(
         &self,
         ctx: &mut ViewContext<Self>,
         json: &str,
-    ) -> Vec<ParsedTemplatableMCPServerResult> {
+    ) -> Result<Vec<ParsedTemplatableMCPServerResult>, String> {
         let parsed_templatable_mcp_servers =
             match ParsedTemplatableMCPServerResult::from_user_json(json) {
                 Ok(parsed_servers) => parsed_servers,
                 Err(error) => {
+                    let error = error.to_string();
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(error.to_string()),
+                            DismissibleToast::error(error.clone()),
                             window_id,
                             ctx,
                         );
                     });
-                    return vec![];
+                    return Err(error);
                 }
             };
 
         for parsed_templatable_mcp_server_result in parsed_templatable_mcp_servers.iter() {
-            if self
-                .detect_secrets_in_templatable_mcp_server(
-                    ctx,
-                    &parsed_templatable_mcp_server_result.templatable_mcp_server,
-                )
-                .is_err()
-            {
-                return vec![];
-            }
+            self.detect_secrets_in_templatable_mcp_server(
+                ctx,
+                &parsed_templatable_mcp_server_result.templatable_mcp_server,
+            )?;
         }
 
         // TODO(Pei): Stop and start servers
 
-        parsed_templatable_mcp_servers
+        Ok(parsed_templatable_mcp_servers)
     }
 
     fn build_templatable_mcp_server_result_from_json(
@@ -595,7 +594,7 @@ impl MCPServersEditPageView {
         ctx: &mut ViewContext<Self>,
         json: &str,
     ) -> Result<ParsedTemplatableMCPServerResult, String> {
-        let parsed_templatable_mcp_servers = self.parse_templatable_json(ctx, json);
+        let parsed_templatable_mcp_servers = self.parse_templatable_json(ctx, json)?;
 
         if parsed_templatable_mcp_servers.is_empty() {
             let window_id = ctx.window_id();
@@ -878,21 +877,9 @@ impl TypedActionView for MCPServersEditPageView {
                     // This is a new MCP server, we should treat it like a legacy MCP server
                     let json = self.json_editor.as_ref(ctx).text(ctx).into_string();
 
-                    let parsed_servers =
-                        match ParsedTemplatableMCPServerResult::from_user_json(&json) {
-                            Ok(parsed_templatable_mcp_servers) => parsed_templatable_mcp_servers,
-                            Err(error) => {
-                                let window_id = ctx.window_id();
-                                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                    toast_stack.add_ephemeral_toast(
-                                        DismissibleToast::error(error.to_string()),
-                                        window_id,
-                                        ctx,
-                                    );
-                                });
-                                return;
-                            }
-                        };
+                    let Ok(parsed_servers) = self.parse_templatable_json(ctx, &json) else {
+                        return;
+                    };
 
                     if parsed_servers.is_empty() {
                         let window_id = ctx.window_id();
@@ -952,3 +939,7 @@ impl TypedActionView for MCPServersEditPageView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "edit_page_tests.rs"]
+mod tests;
