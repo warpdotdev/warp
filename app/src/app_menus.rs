@@ -251,6 +251,8 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
     file_menu_options.extend([
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::OpenRepository, ctx),
+        #[cfg(target_os = "macos")]
+        updateable_custom_item_without_checkmark(CustomAction::RevealInFinder, ctx),
         MenuItem::Custom(CustomMenuItem::new_with_submenu(
             "Open Recent",
             |_| (),

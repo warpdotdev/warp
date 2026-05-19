@@ -132,6 +132,8 @@ pub enum CustomAction {
     NewPersonalAIPrompt,
     NewTeamAIPrompt,
     OpenRepository,
+    #[cfg(target_os = "macos")]
+    RevealInFinder,
     NewTerminalTab,
     NewAgentTab,
     GoToLine,
@@ -418,6 +420,8 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
                 Keystroke::parse("alt-shift-O").ok()
             }
         }
+        #[cfg(target_os = "macos")]
+        CustomAction::RevealInFinder => Keystroke::parse("cmd-alt-r").ok(),
         CustomAction::GoToLine => Keystroke::parse("ctrl-g").ok(),
         CustomAction::ToggleGlobalSearch => {
             if OperatingSystem::get().is_mac() {

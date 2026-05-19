@@ -25,6 +25,12 @@ fn settings_popup_toggle_does_not_save_workspace_state() {
     assert!(!WorkspaceAction::ToggleVerticalTabsSettingsPopup.should_save_app_state_on_action());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn reveal_in_finder_does_not_save_workspace_state() {
+    assert!(!WorkspaceAction::RevealInFinder.should_save_app_state_on_action());
+}
+
 #[test]
 fn display_granularity_change_does_not_save_workspace_state() {
     assert!(!WorkspaceAction::SetVerticalTabsDisplayGranularity(

@@ -1301,6 +1301,16 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace"))
         .with_custom_action(CustomAction::OpenRepository)
         .with_group(bindings::BindingGroup::Folders.as_str()),
+        #[cfg(target_os = "macos")]
+        EditableBinding::new(
+            "workspace:reveal_in_finder",
+            BindingDescription::new("Reveal in Finder")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Reveal in Finder"),
+            WorkspaceAction::RevealInFinder,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_custom_action(CustomAction::RevealInFinder)
+        .with_group(bindings::BindingGroup::Folders.as_str()),
         EditableBinding::new(
             "workspace:open_ai_fact_collection",
             BindingDescription::new("Open AI Rules")
