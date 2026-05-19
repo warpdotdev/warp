@@ -10,7 +10,7 @@ use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::{blend::Blend, OPAQUE};
 use warpui::elements::{
     ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, DropShadow, OffsetPositioning,
     ParentAnchor, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
@@ -125,6 +125,9 @@ pub struct Menu<A: Action + Clone = ()> {
     /// Optional overrides for the depth-0 menu content padding.
     content_top_padding_override: Option<f32>,
     content_bottom_padding_override: Option<f32>,
+    /// When true, force the menu background's alpha to fully opaque while
+    /// preserving the current theme-derived surface color.
+    force_opaque_background: bool,
     /// If false, selecting a menu item updates selection and emits menu events
     /// without dispatching the item's typed action directly from the menu.
     dispatch_item_actions: bool,
@@ -2144,6 +2147,7 @@ impl<A: Action + Clone> Menu<A> {
             pinned_header_builder: None,
             content_top_padding_override: None,
             content_bottom_padding_override: None,
+            force_opaque_background: false,
             dispatch_item_actions: true,
         }
     }
@@ -2183,6 +2187,14 @@ impl<A: Action + Clone> Menu<A> {
     pub fn with_drop_shadow(mut self) -> Self {
         self.with_drop_shadow = true;
         self
+    }
+    pub fn with_force_opaque_background(mut self) -> Self {
+        self.force_opaque_background = true;
+        self
+    }
+
+    pub fn set_force_opaque_background(&mut self, force_opaque_background: bool) {
+        self.force_opaque_background = force_opaque_background;
     }
 
     /// Prevent menu item clicks and Enter from dispatching their typed actions
@@ -2616,13 +2628,19 @@ impl<A: Action + Clone> SubMenu<A> {
         pinned_header_builder: Option<&PinnedHeaderBuilder>,
         content_top_padding_override: Option<f32>,
         content_bottom_padding_override: Option<f32>,
+        force_opaque_background: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let selected_row_index = self.selected_row_index;
         let selected_item_index = self.selected_item_index;
-
-        let background_color = appearance.theme().surface_2();
+        let background_color = if force_opaque_background {
+            let mut color = appearance.theme().surface_2().into_solid();
+            color.a = OPAQUE;
+            Fill::Solid(color)
+        } else {
+            appearance.theme().surface_2()
+        };
         let submenus = self.render_submenus(
             submenu_width,
             background_color,
@@ -2794,6 +2812,7 @@ impl<A: Action + Clone> View for Menu<A> {
             self.pinned_header_builder.as_deref(),
             self.content_top_padding_override,
             self.content_bottom_padding_override,
+            self.force_opaque_background,
             app,
         )
     }

@@ -165,8 +165,9 @@ impl CreateApiKeyModal {
         let agent_dropdown =
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            dropdown.set_top_bar_width(INPUT_WIDTH, ctx);
             dropdown.set_menu_width(INPUT_WIDTH, ctx);
+            dropdown.set_force_opaque_menu_background(true, ctx);
         });
 
         let api_key_type_control = ctx.add_typed_action_view(move |ctx| {
@@ -241,8 +242,9 @@ impl CreateApiKeyModal {
             .collect();
         expiration_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
-            dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            dropdown.set_top_bar_width(INPUT_WIDTH, ctx);
             dropdown.set_menu_width(INPUT_WIDTH, ctx);
+            dropdown.set_force_opaque_menu_background(true, ctx);
             dropdown.set_selected_by_action(
                 CreateApiKeyModalAction::SetExpiration(default_expiration),
                 ctx,

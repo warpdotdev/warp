@@ -69,6 +69,7 @@ pub struct Dropdown<A: Action + Clone> {
     disabled: bool,
     top_bar_mouse_state: MouseStateHandle,
     top_bar_max_width: f32,
+    top_bar_width: Option<f32>,
     element_anchor: PositionedElementAnchor,
     child_anchor: ChildAnchor,
     main_axis_size: MainAxisSize,
@@ -238,6 +239,7 @@ where
             dropdown,
             top_bar_mouse_state: Default::default(),
             top_bar_max_width: TOP_MENU_BAR_MAX_WIDTH,
+            top_bar_width: None,
             selected_item: None,
             menu_header_text_override: None,
             self_handle: ctx.handle(),
@@ -450,11 +452,28 @@ where
 
     pub fn set_top_bar_max_width(&mut self, max_width: f32) {
         self.top_bar_max_width = max_width;
+        self.top_bar_width = None;
+    }
+
+    pub fn set_top_bar_width(&mut self, width: f32, ctx: &mut ViewContext<Self>) {
+        self.top_bar_width = Some(width);
+        self.top_bar_max_width = width;
+        ctx.notify();
     }
 
     pub fn set_menu_width(&mut self, width: f32, ctx: &mut ViewContext<Self>) {
         self.dropdown.update(ctx, |menu, ctx| {
             menu.set_width(width);
+            ctx.notify();
+        })
+    }
+    pub fn set_force_opaque_menu_background(
+        &mut self,
+        force_opaque_background: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.dropdown.update(ctx, |menu, ctx| {
+            menu.set_force_opaque_background(force_opaque_background);
             ctx.notify();
         })
     }
@@ -565,14 +584,16 @@ where
             ctx.dispatch_typed_action(DropdownAction::<A>::ToggleExpanded);
         });
 
+        let mut top_bar_box =
+            ConstrainedBox::new(top_bar_element.finish()).with_height(self.top_bar_height);
+        top_bar_box = if let Some(width) = self.top_bar_width {
+            top_bar_box.with_width(width)
+        } else {
+            top_bar_box.with_max_width(self.top_bar_max_width)
+        };
+
         SavePosition::new(
-            Container::new(
-                ConstrainedBox::new(top_bar_element.finish())
-                    .with_max_width(self.top_bar_max_width)
-                    .with_height(self.top_bar_height)
-                    .finish(),
-            )
-            .finish(),
+            Container::new(top_bar_box.finish()).finish(),
             &self.top_bar_label(),
         )
         .finish()
