@@ -91,3 +91,94 @@ fn does_not_replace_spaced_variants() {
     let out = render_template(template, &context);
     assert_eq!(out, "A {{ name }} B {{name }} C {{ name}} D ok");
 }
+
+#[test]
+fn handles_empty_template() {
+    let template = "";
+    let context = create_map(&[("unused", "value")]);
+
+    let args = get_arguments(template);
+    assert_eq!(args, Vec::<String>::new());
+
+    let out = render_template(template, &context);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn renders_adjacent_placeholders_without_separators() {
+    let template = "{{first}}{{second}}{{third}}";
+    let context = create_map(&[("first", "A"), ("second", "B"), ("third", "C")]);
+
+    let args = get_arguments(template);
+    assert_eq!(
+        args.into_iter().collect::<HashSet<String>>(),
+        HashSet::from([
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string()
+        ])
+    );
+
+    let out = render_template(template, &context);
+    assert_eq!(out, "ABC");
+}
+
+#[test]
+fn renders_placeholders_at_start_and_end() {
+    let template = "{{start}} middle {{end}}";
+    let context = create_map(&[("start", "BEGIN"), ("end", "FINISH")]);
+
+    let args = get_arguments(template);
+    assert_eq!(
+        args.into_iter().collect::<HashSet<String>>(),
+        HashSet::from(["start".to_string(), "end".to_string()])
+    );
+
+    let out = render_template(template, &context);
+    assert_eq!(out, "BEGIN middle FINISH");
+}
+
+#[test]
+fn accepts_numeric_suffixes_and_long_names_but_not_numeric_prefixes() {
+    let template = "{{a1}} {{1a}} {{long_name-with-1234567890_suffix}}";
+    let context = create_map(&[
+        ("a1", "short"),
+        ("1a", "invalid"),
+        ("long_name-with-1234567890_suffix", "long"),
+    ]);
+
+    let args = get_arguments(template);
+    assert_eq!(
+        args.into_iter().collect::<HashSet<String>>(),
+        HashSet::from([
+            "a1".to_string(),
+            "long_name-with-1234567890_suffix".to_string()
+        ])
+    );
+
+    let out = render_template(template, &context);
+    assert_eq!(out, "short {{1a}} long");
+}
+
+#[test]
+fn renders_special_values_without_reparsing_or_escaping() {
+    let template = "prefix {{braces}} {{multiline}} {{empty}} suffix";
+    let context = create_map(&[
+        ("braces", "{{not_reparsed}} & <tag>"),
+        ("multiline", "line1\nline2"),
+        ("empty", ""),
+    ]);
+
+    let args = get_arguments(template);
+    assert_eq!(
+        args.into_iter().collect::<HashSet<String>>(),
+        HashSet::from([
+            "braces".to_string(),
+            "multiline".to_string(),
+            "empty".to_string()
+        ])
+    );
+
+    let out = render_template(template, &context);
+    assert_eq!(out, "prefix {{not_reparsed}} & <tag> line1\nline2  suffix");
+}
