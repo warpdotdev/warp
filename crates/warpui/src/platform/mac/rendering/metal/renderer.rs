@@ -8,7 +8,6 @@ use warpui_core::{
 use super::frame_capture::capture_frame;
 use crate::platform::mac::rendering::renderer::Device;
 use crate::platform::mac::window::WindowState;
-use cocoa::base::id;
 use metal::{
     Function, MTLBlendFactor, MTLBlendOperation, MTLIndexType, MTLPrimitiveType,
     MTLResourceOptions, RenderPipelineDescriptor,
@@ -67,16 +66,24 @@ impl<'a> RenderPass<'a> {
         mut self,
         drawable_size: pathfinder_geometry::vector::Vector2F,
         should_capture: bool,
+        presents_with_transaction: bool,
     ) -> Option<CapturedFrame> {
         self.encoder.end_encoding();
-
         self.encoding_finished = true;
 
-        self.buffer.commit();
+        // If we're able to do asynchronous presentation, do so - it allows us to avoid
+        // blocking on the GPU for the duration of the frame.
+        if !should_capture && !presents_with_transaction {
+            self.buffer.present_drawable(self.drawable);
+            self.buffer.commit();
+            return None;
+        }
 
+        // Otherwise, commit the buffer and wait for it to complete before continuing.
+        self.buffer.commit();
         self.buffer.wait_until_completed();
 
-        let captured = if should_capture {
+        let capture = if should_capture {
             let texture = self.drawable.texture();
             capture_frame(texture, drawable_size)
         } else {
@@ -84,7 +91,7 @@ impl<'a> RenderPass<'a> {
         };
 
         self.drawable.present();
-        captured
+        capture
     }
 
     /// Creates a descriptor for a pass that renders into the provided drawable.
@@ -239,6 +246,7 @@ impl Renderer {
         scene: &Scene,
         ctx: &MetalDrawContext,
         should_capture: bool,
+        presents_with_transaction: bool,
     ) -> Option<CapturedFrame> {
         self.resources
             .glyph_cache
@@ -248,7 +256,11 @@ impl Renderer {
 
         Frame::new(scene, render_pass.encoder, &mut self.resources, ctx).draw();
 
-        render_pass.finish_with_capture(ctx.drawable_size, should_capture)
+        render_pass.finish_with_capture(
+            ctx.drawable_size,
+            should_capture,
+            presents_with_transaction,
+        )
     }
 }
 
@@ -959,11 +971,12 @@ impl super::super::Renderer for Renderer {
             return;
         };
 
-        let drawable = unsafe {
+        let (drawable, presents_with_transaction) = unsafe {
             let native_view = window.native_view();
-            let layer: id = msg_send![native_view, layer];
+            let layer: &metal::MetalLayerRef = msg_send![native_view, layer];
+            let presents_with_transaction = layer.presents_with_transaction();
             let drawable: &metal::MetalDrawableRef = msg_send![layer, nextDrawable];
-            drawable
+            (drawable, presents_with_transaction)
         };
 
         let ctx = &MetalDrawContext {
@@ -986,7 +999,7 @@ impl super::super::Renderer for Renderer {
 
         let capture_callback = window.capture_callback.borrow_mut().take();
         let should_capture = capture_callback.is_some();
-        let captured = Self::render(self, scene, ctx, should_capture);
+        let captured = Self::render(self, scene, ctx, should_capture, presents_with_transaction);
         if let (Some(frame), Some(callback)) = (captured, capture_callback) {
             callback(frame);
         }
