@@ -873,7 +873,6 @@ impl TerminalView {
             // Show GitHub auth required screen
             render_cloud_mode_github_auth_required_screen(
                 auth_url,
-                ambient_agent_model.github_auth_error_message(),
                 appearance,
                 &ui_state.auth_button_mouse_state,
                 app,
