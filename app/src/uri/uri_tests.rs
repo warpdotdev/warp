@@ -629,6 +629,39 @@ fn test_parse_tab_path_bare_tilde() {
     assert_eq!(parse_tab_path(&url), Some(home));
 }
 
+#[test]
+fn test_parse_tab_path_trims_shell_quotes() {
+    assert_eq!(
+        parse_tab_path_value(r#""/tmp/warp project""#),
+        Some(PathBuf::from("/tmp/warp project"))
+    );
+}
+
+#[test]
+fn test_parse_tab_path_file_url() {
+    let expected = if cfg!(windows) {
+        PathBuf::from(r"C:\Projects\my-app")
+    } else {
+        PathBuf::from("/tmp/warp-project")
+    };
+    let file_url = if cfg!(windows) {
+        "file:///C:/Projects/my-app"
+    } else {
+        "file:///tmp/warp-project"
+    };
+
+    assert_eq!(parse_tab_path_value(file_url), Some(expected));
+}
+
+#[test]
+#[cfg(windows)]
+fn test_parse_tab_path_trims_quoted_windows_path() {
+    assert_eq!(
+        parse_tab_path_value(r#""C:\Projects\my-app""#),
+        Some(PathBuf::from(r"C:\Projects\my-app"))
+    );
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.

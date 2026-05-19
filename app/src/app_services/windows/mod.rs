@@ -43,18 +43,22 @@ pub fn pass_startup_args_to_existing_instance(
         if args.urls.is_empty() {
             // If there are no URLs on the command line, send one to open a new
             // window using the same current working directory as this process.
-            let mut open_new_url = format!("{}://action/new_window", ChannelState::url_scheme());
+            let mut open_new_url = Url::parse(&format!(
+                "{}://action/new_window",
+                ChannelState::url_scheme()
+            ))?;
             if let Ok(current_dir) = std::env::current_dir() {
                 match current_dir.into_os_string().into_string() {
-                    Ok(current_dir) => open_new_url.push_str(&format!("?path={}", current_dir)),
+                    Ok(current_dir) => {
+                        open_new_url.query_pairs_mut().append_pair("path", &current_dir);
+                    }
                     Err(os_string) => {
                         log::error!("Failed to convert OsString {os_string:?} to ");
                     }
                 }
             }
 
-            let url = Url::parse(&open_new_url)?;
-            forward_uri_to_sole_running_instance(vec![url]).await?
+            forward_uri_to_sole_running_instance(vec![open_new_url]).await?
         } else {
             forward_uri_to_sole_running_instance(args.urls.clone()).await?
         }

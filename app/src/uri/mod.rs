@@ -799,7 +799,24 @@ fn find_matching_tab_config(target: &str, configs: Vec<TabConfig>) -> Option<Tab
 /// user's home directory.
 fn parse_tab_path(url: &Url) -> Option<PathBuf> {
     let raw = url.query_pairs().find(|(k, _)| k == "path")?.1;
-    Some(PathBuf::from(shellexpand::tilde(&raw).into_owned()))
+    parse_tab_path_value(&raw)
+}
+
+fn parse_tab_path_value(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    let path = trimmed
+        .strip_prefix('"')
+        .and_then(|path| path.strip_suffix('"'))
+        .unwrap_or(trimmed);
+
+    if let Ok(file_url) = Url::parse(path)
+        && file_url.scheme() == "file"
+        && let Ok(file_path) = file_url.to_file_path()
+    {
+        return Some(file_path);
+    }
+
+    Some(PathBuf::from(shellexpand::tilde(path).into_owned()))
 }
 
 #[derive(Debug)]
