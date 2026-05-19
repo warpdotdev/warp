@@ -1094,6 +1094,19 @@ fn test_restore_closed_pane_restores_hidden_child_when_parent_is_already_fullscr
 }
 
 #[test]
+fn test_undo_close_cleanup_defers_when_pane_group_is_updating() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let pane_group_for_cleanup = pane_group.clone();
+
+        pane_group.update(&mut app, |_, ctx| {
+            UndoCloseStack::clean_up_pane_group_for_test(&pane_group_for_cleanup, ctx);
+        });
+    });
+}
+
+#[test]
 fn test_replace_pane_restores_hidden_child_when_replacement_is_already_fullscreen() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 

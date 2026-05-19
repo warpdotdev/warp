@@ -137,15 +137,43 @@ impl ClosedItem {
     }
 
     fn clean_up_pane_group(pane_group: &ViewHandle<PaneGroup>, ctx: &mut AppContext) {
+        Self::clean_up_pane_group_impl(pane_group, ctx, true);
+    }
+
+    fn clean_up_pane_group_impl(
+        pane_group: &ViewHandle<PaneGroup>,
+        ctx: &mut AppContext,
+        allow_defer: bool,
+    ) {
         let window_id = pane_group.window_id(ctx);
 
         if !ctx.is_window_open(window_id) {
             return;
         }
 
-        pane_group.update(ctx, |pane_group, ctx| {
-            pane_group.clean_up_panes(ctx);
-        });
+        if ctx
+            .view_with_id::<PaneGroup>(window_id, pane_group.id())
+            .is_some()
+        {
+            pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.clean_up_panes(ctx);
+            });
+        } else if allow_defer {
+            let pane_group = pane_group.clone();
+            ctx.defer(move |ctx| {
+                Self::clean_up_pane_group_impl(&pane_group, ctx, false);
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+impl UndoCloseStack {
+    pub(crate) fn clean_up_pane_group_for_test(
+        pane_group: &ViewHandle<PaneGroup>,
+        ctx: &mut AppContext,
+    ) {
+        ClosedItem::clean_up_pane_group(pane_group, ctx);
     }
 }
 

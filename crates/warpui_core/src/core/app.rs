@@ -1091,6 +1091,13 @@ impl AppContext {
         self.first_frame_callback = Some(Box::new(callback));
     }
 
+    /// Runs a callback after the current update finishes and pending effects are flushed.
+    pub fn defer<F: 'static + FnOnce(&mut AppContext)>(&mut self, callback: F) {
+        self.pending_effects.push_back(Effect::Deferred {
+            callback: Box::new(callback),
+        });
+    }
+
     ///  Callback that is called whenever a frame is successfully drawn.
     pub fn on_frame_drawn<F: 'static + Fn(&mut AppContext, WindowId)>(&mut self, callback: F) {
         self.frame_drawn_callback = Some(Box::new(callback));
@@ -3156,6 +3163,9 @@ impl AppContext {
                         arg,
                     } => {
                         self.dispatch_global_action_internal(name, location, arg.as_ref());
+                    }
+                    Effect::Deferred { callback } => {
+                        callback(self);
                     }
                 }
 
