@@ -23,18 +23,18 @@ use crate::{
     ai::agent::CurrentHead,
     code::editor::view::CodeEditorRenderOptions,
     code::editor::{CommentEditor, CommentEditorEvent, EditorCommentsModel, EditorReviewComment},
-    code_review::{comments::ReviewCommentBatch, DiffSetScope},
+    code_review::{DiffSetScope, comments::ReviewCommentBatch},
 };
 use crate::{
     ai::agent::{AIAgentAttachment, DiffBase},
     code::{
         editor::{
-            view::{CodeEditorEvent, CodeEditorView},
             GutterHoverTarget,
+            view::{CodeEditorEvent, CodeEditorView},
         },
         editor_management::CodeEditorStatus,
         local_code_editor::{
-            render_unsaved_circle_with_tooltip, LocalCodeEditorEvent, LocalCodeEditorView,
+            LocalCodeEditorEvent, LocalCodeEditorView, render_unsaved_circle_with_tooltip,
         },
         view::PendingSaveIntent,
     },
@@ -60,7 +60,7 @@ use crate::code_review::telemetry_event::DiffSetContextScope;
 
 use crate::{
     code::editor::line::EditorLineLocation,
-    ui_components::dialog::{dialog_styles, Dialog},
+    ui_components::dialog::{Dialog, dialog_styles},
 };
 use crate::{
     code::global_buffer_model::GlobalBufferModel, code_review::comments::ReviewCommentBatchEvent,
@@ -68,19 +68,19 @@ use crate::{
 use crate::{
     menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields},
     pane_group::{
-        focus_state::{PaneFocusHandle, PaneGroupFocusEvent},
         PaneId,
+        focus_state::{PaneFocusHandle, PaneGroupFocusEvent},
     },
     quit_warning::UnsavedStateSummary,
     terminal::input::MenuPositioning,
     terminal::view::{CliAgentRouting, InitProjectModel, TerminalAction, TerminalView},
-    util::bindings::{custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction},
+    util::bindings::{CustomAction, custom_tag_to_keystroke, keybinding_name_to_display_string},
     view_components::{
+        DismissibleToast,
         action_button::{
             ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, DangerPrimaryTheme,
             KeystrokeSource, NakedTheme, PaneHeaderTheme, SecondaryTheme,
         },
-        DismissibleToast,
     },
     workspace::{ToastStack, Workspace, WorkspaceAction},
 };
@@ -95,9 +95,9 @@ use crate::terminal::cli_agent::{
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::git::BranchEntry;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
-#[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 use crate::view_components::find::{Event as FindViewEvent, Find, FindEvent, FindWithinBlockState};
 use ai::project_context::model::ProjectContextModel;
 #[cfg(feature = "local_fs")]
@@ -107,8 +107,8 @@ use string_offset::CharOffset;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use rand::{distributions::Alphanumeric, Rng};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
+use rand::{Rng, distributions::Alphanumeric};
 use warp_core::{
     channel::{Channel, ChannelState},
     features::FeatureFlag,
@@ -116,18 +116,20 @@ use warp_core::{
     ui::theme::color::internal_colors,
 };
 use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
     clipboard::ClipboardContent,
     elements::{
-        new_scrollable::{
-            NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
-        },
-        resizable_state_handle, Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
+        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+        CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, DispatchEventResult,
         DragBarSide, Element, Empty, EventHandler, Flex, List, ListState, MainAxisAlignment,
         MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
         Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
         Resizable, ResizableStateHandle, ScrollOffset, ScrollStateHandle, ScrollbarWidth, Stack,
-        Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        Text,
+        new_scrollable::{
+            NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
+        },
+        resizable_state_handle,
     },
     keymap::Keystroke,
     ui_components::{
@@ -135,22 +137,23 @@ use warpui::{
         components::{Coords, UiComponentStyles},
     },
     units::Pixels,
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+};
+use warpui::{
+    ModelHandle, WeakViewHandle,
+    fonts::{Properties, Weight},
 };
 use warpui::{
     elements::{Clipped, MainAxisSize, Shrinkable},
-    text_layout::{default_compute_baseline_position, ClipConfig},
+    text_layout::{ClipConfig, default_compute_baseline_position},
 };
 use warpui::{
     elements::{Hoverable, SavePosition},
     platform::Cursor,
     ui_components::components::UiComponent,
 };
-use warpui::{
-    fonts::{Properties, Weight},
-    ModelHandle, WeakViewHandle,
-};
 
+#[cfg(feature = "local_fs")]
+use crate::TelemetryEvent;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
 use crate::settings::AISettings;
 use crate::settings_view::SettingsSection;
@@ -160,14 +163,12 @@ use crate::ui_components::{
     icons::Icon,
 };
 use crate::view_components::action_button::TooltipAlignment;
-#[cfg(feature = "local_fs")]
-use crate::TelemetryEvent;
 use crate::{
     appearance::Appearance,
     code::editor::{add_color, remove_color},
     code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTarget},
     editor::InteractionState,
-    pane_group::pane::{view, BackingView, PaneEvent},
+    pane_group::pane::{BackingView, PaneEvent, view},
     send_telemetry_from_ctx,
     themes::theme::WarpTheme,
 };
@@ -175,19 +176,19 @@ use crate::{
 use vec1::Vec1;
 
 use super::{
+    GlobalCodeReviewEvent, GlobalCodeReviewModel,
     code_review_header::CodeReviewHeader,
     comment_list_view::{CommentListDebugState, CommentListEvent, CommentListView},
-    comments::{attach_pending_imported_comments, AttachedReviewComment, CommentOrigin},
+    comments::{AttachedReviewComment, CommentOrigin, attach_pending_imported_comments},
     diff_size_limits::DiffSize,
     git_dialog::{GitDialog, GitDialogEvent, GitDialogKind},
-    GlobalCodeReviewEvent, GlobalCodeReviewModel,
 };
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::ShowCommentEditorProvider;
 #[cfg(not(target_family = "wasm"))]
 use crate::code::ShowFindReferencesCard;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::comments::CommentId;
-use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_file_search_row};
 use crate::workspace::view::right_panel::{ReviewDestination, ReviewSubmissionResult};
 use warp_editor::model::CoreEditorModel;
 #[cfg(not(target_family = "wasm"))]
@@ -412,6 +413,10 @@ pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
     pub is_expanded: bool,
+    /// Stored content at HEAD for deferred editor creation. Only set for files
+    /// that are collapsed at initial build time and could have an editor (non-binary,
+    /// content available). Cleared after the editor is lazily created to free memory.
+    content_at_head: Option<String>,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
     chevron_button: ViewHandle<ActionButton>,
@@ -2430,6 +2435,10 @@ impl CodeReviewView {
                         .unwrap_or(true);
                     if should_apply {
                         current.file_diff = diff.file_diff.clone();
+                        // Keep stored content fresh for lazy editor creation.
+                        if current.editor_state.is_none() {
+                            current.content_at_head = diff.content_at_head.clone();
+                        }
                     }
                     self.viewported_list_state
                         .invalidate_height_for_index(index);
@@ -2580,26 +2589,32 @@ impl CodeReviewView {
 
         let mut file_states = vec![];
         for file in files {
-            let editor_state = {
-                // `LocalCodeEditorView::new_with_global_buffer` natively
-                // supports both `LocalOrRemotePath::Local` and `Remote`
-                // (it sets language by extension and skips local-only
-                // wiring like LSP for remote files), so we always go
-                // through the global-buffer path when we have a repo.
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if self.repo_path().is_some() {
-                        self.create_code_review_model_with_global_buffer(file, ctx)
-                    } else {
+            let is_expanded = self.should_auto_expand_file(&file.file_diff);
+
+            // Defer editor/global-buffer construction for collapsed files to
+            // avoid materializing large StyledBufferBlock/StyledBufferRun
+            // vectors that would never be rendered. The editor is created
+            // lazily when the user expands the file (see ensure_editor_for_file).
+            let (editor_state, stored_content) = if is_expanded {
+                let editor_state = {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        if self.repo_path().is_some() {
+                            self.create_code_review_model_with_global_buffer(file, ctx)
+                        } else {
+                            self.create_code_review_model(file, ctx)
+                        }
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
                         self.create_code_review_model(file, ctx)
                     }
-                }
-                #[cfg(target_family = "wasm")]
-                {
-                    self.create_code_review_model(file, ctx)
-                }
+                };
+                (editor_state, None)
+            } else {
+                // Store content_at_head for later lazy editor creation.
+                (None, file.content_at_head.clone())
             };
-            let is_expanded = self.should_auto_expand_file(&file.file_diff);
 
             let file_path = file.file_diff.file_path.clone();
             let file_line = file_line_for_open(&file.file_diff);
@@ -2686,6 +2701,7 @@ impl CodeReviewView {
                 file_diff: file.file_diff.clone(),
                 editor_state,
                 is_expanded,
+                content_at_head: stored_content,
                 chevron_button,
                 open_in_tab_button,
                 discard_button,
@@ -2727,6 +2743,67 @@ impl CodeReviewView {
             .as_ref()
             .map(|repo| repo.should_auto_expand_file(file))
             .unwrap_or(false)
+    }
+
+    /// Lazily creates the editor state for a file that was deferred during initial build.
+    /// Called when the user expands a collapsed file that doesn't have an editor yet.
+    /// The stored `content_at_head` is consumed and freed after editor creation.
+    fn ensure_editor_for_file(&mut self, file_path: &str, ctx: &mut ViewContext<Self>) {
+        // 1. Extract data needed for editor creation (mutable borrow scope).
+        let (file_diff, content_at_head) = {
+            let Some(repo) = self.active_repo.as_mut() else {
+                return;
+            };
+            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                return;
+            };
+            let Some(file_state) = state.file_states.get_mut(file_path) else {
+                return;
+            };
+            // Already has an editor — nothing to do.
+            if file_state.editor_state.is_some() {
+                return;
+            }
+            (
+                file_state.file_diff.clone(),
+                file_state.content_at_head.take(),
+            )
+        };
+        // Mutable borrow released.
+
+        // 2. Build a temporary FileDiffAndContent and create the editor.
+        let temp_file = FileDiffAndContent {
+            file_diff,
+            content_at_head,
+        };
+        let editor_state = {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                if self.repo_path().is_some() {
+                    self.create_code_review_model_with_global_buffer(&temp_file, ctx)
+                } else {
+                    self.create_code_review_model(&temp_file, ctx)
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                self.create_code_review_model(&temp_file, ctx)
+            }
+        };
+
+        // 3. Store the newly created editor state.
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        if let Some(file_state) = state.file_states.get_mut(file_path) {
+            file_state.editor_state = editor_state;
+            // content_at_head was already taken in step 1.
+        }
+
+        self.update_editor_comment_markers(ctx);
     }
 
     fn get_existing_diffset_comment(&self, app: &AppContext) -> Option<AttachedReviewComment> {
@@ -7109,6 +7186,11 @@ impl TypedActionView for CodeReviewView {
                     }
                 };
 
+                // Lazily create the editor if expanding a file that was deferred.
+                if now_expanded {
+                    self.ensure_editor_for_file(path, ctx);
+                }
+
                 // Update the chevron button icon based on expanded state
                 chevron_button.update(ctx, |button, ctx| {
                     let icon = if now_expanded {
@@ -7156,7 +7238,7 @@ impl TypedActionView for CodeReviewView {
             CodeReviewAction::FileSelected(file_index) => {
                 // Early-return when repo/state/file is missing to avoid calling
                 // invalidate_height_for_index or scroll_to with an invalid index.
-                let was_expanded = {
+                let (was_expanded, file_path) = {
                     let Some(repo) = self.active_repo.as_mut() else {
                         return;
                     };
@@ -7168,8 +7250,13 @@ impl TypedActionView for CodeReviewView {
                     };
                     let was_expanded = file.is_expanded;
                     file.is_expanded = true;
-                    was_expanded
+                    (was_expanded, file.file_diff.file_path.clone())
                 };
+
+                // Lazily create the editor if expanding a file that was deferred.
+                if !was_expanded {
+                    self.ensure_editor_for_file(&file_path, ctx);
+                }
 
                 self.viewported_list_state
                     .invalidate_height_for_index(*file_index);
