@@ -20,6 +20,7 @@ mod tests {
 
     use crate::entry::{DirectoryEntry, Entry, FileMetadata};
     use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
+    use crate::local_model::FileTreeMutation;
     use crate::local_model::{
         GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
         RepositoryMetadataEvent,
@@ -33,6 +34,7 @@ mod tests {
             Self {
                 repositories: HashMap::new(),
                 lazy_loaded_paths: Default::default(),
+                failed_walk_paths: Default::default(),
                 #[cfg(feature = "local_fs")]
                 watcher: Default::default(),
                 emit_incremental_updates: false,
@@ -740,10 +742,12 @@ mod tests {
             };
 
             // Compute mutations on the "background thread" then apply on the "main thread".
-            let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
-                &update,
-                &gitignores,
-            ));
+            let (mutations, _newly_failed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &std::collections::HashSet::new(),
+                ));
             LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, false, false);
 
             // Verify that only the README.md was added (log file and target dir should be ignored)
@@ -1181,6 +1185,170 @@ Thumbs.db
             collect_all_paths(&empty_root, &mut empty_paths);
             assert_eq!(empty_paths.len(), 1); // Should still only contain the root
         }
+    }
+
+    // ── Failed-walk cache tests ────────────────────────────────────────────────
+
+    /// A path that previously hit ExceededMaxFileLimit should be short-circuited
+    /// on a second call to compute_file_tree_mutations: no walk mutation is
+    /// returned for it.
+    #[test]
+    fn test_failed_walk_path_is_cached() {
+        VirtualFS::test("failed_walk_cache_hit", |dirs, mut vfs| {
+            // Create a real directory so the path.exists() check passes.
+            vfs.mkdir("huge_dir/subdir");
+
+            let huge_dir = dirs.tests().join("huge_dir");
+            let subdir = huge_dir.join("subdir");
+
+            let failed_path = StandardizedPath::try_from_local(&huge_dir).unwrap();
+            let child_path = StandardizedPath::try_from_local(&subdir).unwrap();
+
+            // Seed the cache with huge_dir as a known-failed path.
+            let mut failed_walk_paths = std::collections::HashSet::new();
+            failed_walk_paths.insert(failed_path.clone());
+
+            // Ask for a mutation for subdir (which is under huge_dir).
+            let update = RepoUpdate {
+                added: vec![subdir.clone()],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+
+            let (mutations, newly_failed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &[],
+                    &failed_walk_paths,
+                ));
+
+            // The cache hit should prevent any build_tree call, so no
+            // AddDirectorySubtree or AddEmptyDirectory mutation is produced.
+            let has_dir_mutation = mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    FileTreeMutation::AddDirectorySubtree { .. }
+                        | FileTreeMutation::AddEmptyDirectory { .. }
+                )
+            });
+            assert!(
+                !has_dir_mutation,
+                "Expected no directory mutation for a cached failed path, got: {:?}",
+                mutations
+            );
+            // No new failures should be reported either (we short-circuited).
+            assert!(newly_failed.is_empty());
+        });
+    }
+
+    /// A path that is NOT a descendant of a failed walk path must still be
+    /// processed normally — the cache must not block unrelated paths.
+    #[test]
+    fn test_failed_walk_path_does_not_block_unrelated_paths() {
+        VirtualFS::test("failed_walk_cache_miss", |dirs, mut vfs| {
+            vfs.mkdir("failed_dir").mkdir("other_dir");
+
+            let failed_dir = dirs.tests().join("failed_dir");
+            let other_dir = dirs.tests().join("other_dir");
+
+            let failed_path = StandardizedPath::try_from_local(&failed_dir).unwrap();
+
+            let mut failed_walk_paths = std::collections::HashSet::new();
+            failed_walk_paths.insert(failed_path.clone());
+
+            let update = RepoUpdate {
+                added: vec![other_dir.clone()],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+
+            let (mutations, _newly_failed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &[],
+                    &failed_walk_paths,
+                ));
+
+            // other_dir is not under failed_dir; the walk should have run and
+            // produced at least one directory mutation.
+            let has_dir_mutation = mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    FileTreeMutation::AddDirectorySubtree { .. }
+                        | FileTreeMutation::AddEmptyDirectory { .. }
+                )
+            });
+            assert!(
+                has_dir_mutation,
+                "Expected a directory mutation for an unrelated path, got: {:?}",
+                mutations
+            );
+        });
+    }
+
+    // ── WatchFilter system-dir exclusion tests (Windows only) ─────────────────
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_watch_filter_excludes_appdata_local_temp_windows() {
+        use crate::local_model::is_system_dir_excluded;
+        use std::path::Path;
+
+        let temp_path = Path::new(r"C:\Users\TestUser\AppData\Local\Temp\foo.tmp");
+        assert!(
+            is_system_dir_excluded(temp_path),
+            "AppData\\Local\\Temp should be excluded"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_watch_filter_case_insensitive_windows() {
+        use crate::local_model::is_system_dir_excluded;
+        use std::path::Path;
+
+        // Lowercase variant — NTFS is case-insensitive so this is valid.
+        let temp_path = Path::new(r"C:\Users\TestUser\appdata\LOCAL\temp\foo.tmp");
+        assert!(
+            is_system_dir_excluded(temp_path),
+            "Case-insensitive AppData\\Local\\Temp should be excluded"
+        );
+
+        // AppData\LocalLow
+        let local_low_path = Path::new(r"C:\Users\TestUser\AppData\LocalLow\somecache\data");
+        assert!(
+            is_system_dir_excluded(local_low_path),
+            "AppData\\LocalLow should be excluded"
+        );
+
+        // AppData\Local\Microsoft\Windows
+        let win_path =
+            Path::new(r"C:\Users\TestUser\AppData\Local\Microsoft\Windows\Caches\file.dat");
+        assert!(
+            is_system_dir_excluded(win_path),
+            "AppData\\Local\\Microsoft\\Windows should be excluded"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_watch_filter_does_not_match_substring_false_positives() {
+        use crate::local_model::is_system_dir_excluded;
+        use std::path::Path;
+
+        // "Tempest" is NOT "Temp" — component-wise matching must not substring-match.
+        let tempest_path = Path::new(r"C:\Users\TestUser\AppData\Local\Tempest\foo.txt");
+        assert!(
+            !is_system_dir_excluded(tempest_path),
+            "AppData\\Local\\Tempest must NOT be excluded (false positive guard)"
+        );
+
+        // A normal project directory should also not be excluded.
+        let project_path = Path::new(r"C:\Users\TestUser\Projects\my-app\src\main.rs");
+        assert!(
+            !is_system_dir_excluded(project_path),
+            "A normal project path must not be excluded"
+        );
     }
 
     /// Helper function to collect all paths in a file tree
