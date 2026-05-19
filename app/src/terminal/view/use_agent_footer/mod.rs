@@ -611,6 +611,11 @@ impl TerminalView {
         }
 
         self.redetermine_terminal_focus(ctx);
+        // Closing the rich input restores the alt-screen viewport's full
+        // height when an alt-screen TUI is streaming (e.g. Claude Code).
+        // Force a synchronous size refresh so the PTY winsize and alt-screen
+        // grid converge before the next paint (see issue #9365).
+        self.refresh_size_if_alt_screen_active(ctx);
         ctx.notify();
     }
 
@@ -1048,6 +1053,11 @@ impl TerminalView {
         // Input mode switch, buffer clear, draft restoration, and hint text
         // are handled reactively by Input's subscription to InputSessionChanged.
         self.redetermine_terminal_focus(ctx);
+        // Opening the rich input shrinks the rendered alt-screen viewport
+        // when an alt-screen TUI is streaming (e.g. Claude Code). Force a
+        // synchronous size refresh so the PTY winsize and the alt-screen
+        // grid converge before the next paint (see issue #9365).
+        self.refresh_size_if_alt_screen_active(ctx);
         ctx.notify();
     }
 }

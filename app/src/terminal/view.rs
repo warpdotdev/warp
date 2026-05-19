@@ -7574,6 +7574,11 @@ impl TerminalView {
             input.set_input_mode_agent(true, ctx);
             input.clear_buffer_and_reset_undo_stack(ctx);
         });
+        // Tagging the agent in while an alt-screen TUI is streaming makes the
+        // input prompt visible, which shrinks the rendered alt-screen viewport.
+        // Force a synchronous size refresh so the PTY winsize and the alt-screen
+        // grid converge before the next paint (see issue #9365).
+        self.refresh_size_if_alt_screen_active(ctx);
         ctx.notify();
     }
 
@@ -7605,6 +7610,9 @@ impl TerminalView {
         });
         self.redetermine_terminal_focus(ctx);
 
+        // Tagging the agent out hides the input prompt, restoring the
+        // alt-screen viewport's full height. See `tag_agent_in` and #9365.
+        self.refresh_size_if_alt_screen_active(ctx);
         ctx.notify();
     }
 
@@ -15461,11 +15469,33 @@ impl TerminalView {
         Appearance::as_ref(ctx)
     }
 
-    fn refresh_size(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(in crate::terminal) fn refresh_size(&mut self, ctx: &mut ViewContext<Self>) {
         self.resize_internal(
             SizeUpdateBuilder::for_refresh(*self.size_info).build(self, ctx),
             ctx,
         )
+    }
+
+    /// When the input prompt's visibility flips while an alt-screen TUI is
+    /// active, the rendered output area changes size and the embedded
+    /// `TerminalSizeElement` will naturally fire a resize through
+    /// `resize_tx`. However, that resize happens asynchronously after the
+    /// next layout pass, leaving a window in which the alt-screen grid still
+    /// holds rows from the previous (larger) layout. Heavy-streaming alt-
+    /// screen apps such as Claude Code can paint into those stale rows
+    /// before they process SIGWINCH, producing the visual symptom of the
+    /// input prompt rendering "mid-output" with lines clipped above it
+    /// (see issue #9365).
+    ///
+    /// This helper issues a synchronous refresh of the model size so the PTY
+    /// winsize and alt-screen grid converge before the next paint.
+    pub(in crate::terminal) fn refresh_size_if_alt_screen_active(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.model.lock().is_alt_screen_active() {
+            self.refresh_size(ctx);
+        }
     }
 
     fn resize_internal(&mut self, size_update: SizeUpdate, ctx: &mut ViewContext<Self>) {

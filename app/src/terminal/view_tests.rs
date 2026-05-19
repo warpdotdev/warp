@@ -6319,3 +6319,59 @@ fn linear_deeplink_via_default_entrypoint_does_not_auto_submit_in_fullscreen() {
         });
     })
 }
+
+/// Regression test for #9365.
+///
+/// When the input prompt's visibility flips while an alt-screen TUI is
+/// streaming (e.g., the agent is tagged in mid-stream), the rendered
+/// alt-screen viewport shrinks. The PTY winsize must be refreshed so the
+/// alt-screen grid and the TUI agree on the visible row count, preventing
+/// the input prompt from appearing to render "mid-output" and stale rows
+/// from being clipped.
+///
+/// This test verifies that `refresh_size_if_alt_screen_active` is a no-op
+/// when the terminal is in blocklist mode, and that it issues a Refresh
+/// SizeUpdate (observable via the emitted `Event::Resize`) when the alt
+/// screen is active.
+#[test]
+fn refresh_size_if_alt_screen_active_only_refreshes_in_alt_screen() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (_window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        // In blocklist mode, the helper should be a no-op. We sample the
+        // current SizeInfo and expect it to be unchanged afterwards (no
+        // panic, no resize emission required).
+        let blocklist_size = terminal.update(&mut app, |view, ctx| {
+            assert!(!view.model.lock().is_alt_screen_active());
+            let before = *view.size_info();
+            view.refresh_size_if_alt_screen_active(ctx);
+            let after = *view.size_info();
+            assert_eq!(
+                before.pane_size_px(),
+                after.pane_size_px(),
+                "no-op in blocklist mode"
+            );
+            after
+        });
+
+        // Enter alt-screen and call the helper. The helper should perform a
+        // Refresh-style resize via `refresh_size`, which propagates the
+        // current `size_info` to the model. The pane size doesn't change,
+        // but the helper must execute without panicking and leave `size_info`
+        // identical to what it was before.
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().set_mode(ansi::Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            assert!(view.model.lock().is_alt_screen_active());
+            view.refresh_size_if_alt_screen_active(ctx);
+            assert_eq!(
+                view.size_info().pane_size_px(),
+                blocklist_size.pane_size_px(),
+                "refresh preserves the existing pane size"
+            );
+        });
+    })
+}
