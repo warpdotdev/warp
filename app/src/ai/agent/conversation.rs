@@ -324,6 +324,10 @@ impl AIConversation {
         tasks: Vec<api::Task>,
         conversation_data: Option<AgentConversationData>,
     ) -> Result<Self, RestoreConversationError> {
+        let root_task_is_optimistic = conversation_data
+            .as_ref()
+            .and_then(|data| data.root_task_is_optimistic)
+            .unwrap_or_default();
         let api_tasks_by_id: HashMap<String, api::Task> =
             tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
 
@@ -369,7 +373,11 @@ impl AIConversation {
                     );
                 }
             } else if root_task.is_none() {
-                root_task = Some(Task::new_restored_root(task, exchanges.into_iter()));
+                root_task = Some(if root_task_is_optimistic {
+                    Task::new_restored_optimistic_root(task.id.clone(), exchanges.into_iter())
+                } else {
+                    Task::new_restored_root(task, exchanges.into_iter())
+                });
             }
         }
 
@@ -3042,11 +3050,13 @@ impl AIConversation {
             }
         };
 
+        let root_task_is_optimistic = self.get_root_task().map(Task::is_optimistic_root_task);
+
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
             updated_tasks: self
                 .all_tasks()
-                .filter_map(|task| task.source().cloned())
+                .filter_map(|task| task.source_for_persistence())
                 .collect(),
             conversation_data: AgentConversationData {
                 server_conversation_token: self
@@ -3065,6 +3075,7 @@ impl AIConversation {
                 orchestration_harness_type: self.orchestration_harness_type.clone(),
                 parent_conversation_id: self.parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: self.is_remote_child,
+                root_task_is_optimistic,
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
