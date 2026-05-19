@@ -51,16 +51,34 @@ fn skips_lightbox_update_for_non_screenshot_artifact() {
 }
 
 #[test]
-fn returns_failure_placeholder_for_screenshot_load_errors() {
+fn surfaces_error_variant_for_screenshot_load_errors() {
+    // GH9729 §696: a screenshot artifact-fetch failure must surface as
+    // the dedicated `LightboxImageSource::Error` variant carrying a
+    // sanitized categorical message — not the legacy `Loading`
+    // workaround with "Failed to load" stuffed into `description`. The
+    // raw network error must never appear in the user-visible message.
     let image = screenshot_lightbox_image_from_download_result(
-        Err(anyhow!("network error")),
+        Err(anyhow!("network error: connection reset by peer")),
         "artifact-123",
         0,
     )
-    .expect("expected failure placeholder");
+    .expect("expected error variant for screenshot load failure");
 
-    assert!(matches!(image.source, LightboxImageSource::Loading));
-    assert_eq!(image.description.as_deref(), Some("Failed to load"));
+    match image.source {
+        LightboxImageSource::Error { message } => {
+            assert_eq!(message, "could not load screenshot");
+            assert!(
+                !message.contains("network"),
+                "sanitized message must not leak the underlying error",
+            );
+            assert!(
+                !message.contains("connection reset"),
+                "sanitized message must not leak OS error text",
+            );
+        }
+        other => panic!("expected Error variant, got {other:?}"),
+    }
+    assert!(image.description.is_none());
 }
 
 #[test]

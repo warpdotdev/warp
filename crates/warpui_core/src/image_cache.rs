@@ -18,7 +18,7 @@ use crate::{
 use image::{
     codecs::{gif::GifDecoder, webp::WebPDecoder},
     imageops::FilterType,
-    AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat,
+    AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageDecoder, ImageFormat,
 };
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
@@ -276,16 +276,236 @@ impl CustomImageHeader {
     }
 }
 
+/// Maximum width or height in pixels accepted by the static-raster decode
+/// path. 8192 sits well above 4K (3840x2160) and covers the 99th-percentile
+/// project asset, screenshot, and changelog still. See specs/GH9729/tech.md
+/// §217 / §234.
+const MAX_DECODE_DIMENSION: u32 = 8_192;
+
+/// Total pixel cap (`MAX_DECODE_DIMENSION * MAX_DECODE_DIMENSION`). Belt-and-
+/// suspenders post-decode check against decoders that honor per-axis limits
+/// but still materialize a near-cap RGBA buffer. See specs/GH9729/tech.md §234.
+const MAX_DECODE_PIXELS: u64 = 67_108_864;
+
+/// Allocation cap forwarded to `image::Limits::max_alloc`. Sized at
+/// `MAX_DECODE_PIXELS * 4` (RGBA bytes) so the dimension cap and the alloc
+/// cap are internally consistent and the alloc cap is the binding constraint.
+/// See specs/GH9729/tech.md §221.
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+
+/// Maximum number of frames accepted from an animated decoder before bailing.
+/// `image` 0.25.x animated decoders do not enforce frame counts via
+/// `image::Limits`; this cap is applied during frame iteration. See
+/// specs/GH9729/tech.md §259.
+const MAX_ANIMATED_FRAMES: usize = 256;
+
+/// Total pixel budget summed across all frames of an animated image. With the
+/// per-frame allocation reaching ~4 bytes per pixel (RGBA), this caps peak
+/// frame-collection memory at ~256 MB regardless of decoder honesty. See
+/// specs/GH9729/tech.md §259.
+const MAX_ANIMATED_TOTAL_PIXELS: u64 = 67_108_864;
+
+/// Maximum width or height in CSS pixels declared by an SVG's intrinsic size
+/// before the renderer is asked to materialize it. Caps the
+/// "tiny-byte-payload claims 200000x200000" attack on `resvg`. See
+/// specs/GH9729/tech.md §321.
+const MAX_SVG_RENDER_DIMENSION: u32 = 8_192;
+
+/// Coarse content-sniff predicate that returns `true` when `data` begins with
+/// a UTF-8 prefix consistent with XML or SVG: an optional UTF-8 BOM, optional
+/// ASCII whitespace bounded to the first 1 KB, then one of the supported
+/// prelude tokens (`<?xml`, `<svg`, `<!--`, `<!DOCTYPE`).
+///
+/// Two callers:
+///   1. The asset-cache `LocalFile` read picks `MAX_SVG_BYTES` (4 MB) over
+///      `MAX_PREVIEW_FILE_BYTES` (64 MB) when the on-disk content peek looks
+///      like SVG, so a `.png` carrying SVG XML is still tightened to 4 MB.
+///      (Implemented in GH9729 item 5a.)
+///   2. `ImageType::try_from_bytes` gates `usvg::Tree::from_data` on the same
+///      predicate so a binary blob renamed to `.svg` is rejected before
+///      `usvg` does the work.
+///
+/// The predicate is intentionally a coarse sniff, not a full XML lexer; the
+/// actual XML/SVG validation is `usvg`'s job. XML is case-sensitive and the
+/// standard form of these tokens is fixed-case, so case-insensitive matching
+/// is not attempted. See specs/GH9729/tech.md §321.
+pub(crate) fn looks_like_svg_xml(data: &[u8]) -> bool {
+    // Strip optional UTF-8 BOM.
+    let bytes = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
+    // Skip leading ASCII whitespace, bounded to the first 1 KB to keep the
+    // scan O(1) and to refuse pathological "1 GB of whitespace" inputs.
+    let scan_end = bytes.len().min(1024);
+    let after_ws = bytes[..scan_end]
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .map(|i| &bytes[i..])
+        .unwrap_or(&[]);
+    after_ws.starts_with(b"<?xml")
+        || after_ws.starts_with(b"<svg")
+        || after_ws.starts_with(b"<!--")
+        || after_ws.starts_with(b"<!DOCTYPE")
+}
+
+/// Build the `image::Limits` envelope used by the static-raster decode path
+/// (PNG, JPEG, WebP-static). See specs/GH9729/tech.md §234.
+fn decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_DIMENSION);
+    limits.max_image_height = Some(MAX_DECODE_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    limits
+}
+
+/// Inner animated-decode entry point that takes its decoder limits, frame
+/// count cap, and total-pixel cap as parameters. Lets unit tests exercise
+/// the rejection paths against modest fixtures with small caps without
+/// having to synthesize pathological animated WebPs at runtime. Production
+/// callers go through `decode_animated_with_limits` which threads the
+/// GH9729 production constants.
+fn decode_animated_with_limits_inner(
+    data: &[u8],
+    format: image::ImageFormat,
+    limits: image::Limits,
+    max_frames: usize,
+    max_total_pixels: u64,
+) -> anyhow::Result<Vec<image::Frame>> {
+    let mut frames = Vec::new();
+    let mut total_pixels: u64 = 0;
+
+    let frame_iter = match format {
+        image::ImageFormat::Gif => {
+            let mut dec = GifDecoder::new(std::io::Cursor::new(data))?;
+            dec.set_limits(limits)?;
+            dec.into_frames()
+        }
+        image::ImageFormat::WebP => {
+            let mut dec = WebPDecoder::new(std::io::Cursor::new(data))?;
+            dec.set_limits(limits)?;
+            dec.into_frames()
+        }
+        _ => {
+            anyhow::bail!("decode_animated_with_limits called with non-animated format")
+        }
+    };
+
+    for (i, frame) in frame_iter.enumerate() {
+        if i >= max_frames {
+            anyhow::bail!("animated image has too many frames");
+        }
+        let frame = frame?;
+        let buf = frame.buffer();
+        let pixels = (buf.width() as u64).saturating_mul(buf.height() as u64);
+        total_pixels = total_pixels.saturating_add(pixels);
+        if total_pixels > max_total_pixels {
+            anyhow::bail!("animated image exceeds total pixel budget");
+        }
+        frames.push(frame);
+    }
+
+    if frames.is_empty() {
+        anyhow::bail!("animated image has no frames");
+    }
+    Ok(frames)
+}
+
+/// Decode an animated image (GIF, animated WebP) under the GH9729 size
+/// envelope. Iterates frames and bails as soon as `MAX_ANIMATED_FRAMES`
+/// or `MAX_ANIMATED_TOTAL_PIXELS` is breached, before the pathological
+/// frame is collected into the output `Vec`.
+///
+/// `image` 0.25.x animated decoders are weaker than the static path
+/// (`GifDecoder` ignores `max_alloc` per frame; `WebPDecoder` does not
+/// override `set_limits` at all), so this explicit budget — applied during
+/// iteration — is what actually bounds the animated decode envelope.
+/// See specs/GH9729/tech.md §259.
+fn decode_animated_with_limits(
+    data: &[u8],
+    format: image::ImageFormat,
+) -> anyhow::Result<Vec<image::Frame>> {
+    decode_animated_with_limits_inner(
+        data,
+        format,
+        decode_limits(),
+        MAX_ANIMATED_FRAMES,
+        MAX_ANIMATED_TOTAL_PIXELS,
+    )
+}
+
+/// Inner static-decode entry point that takes its limits and pixel cap as
+/// parameters. Lets unit tests exercise the decode path with small fixtures
+/// against small caps without having to materialize 8192-pixel-wide PNGs.
+/// Production callers go through `decode_static_with_limits` which threads
+/// the GH9729 production constants.
+fn decode_static_with_limits_inner(
+    data: &[u8],
+    format: image::ImageFormat,
+    limits: image::Limits,
+    max_pixels: u64,
+) -> anyhow::Result<image::RgbaImage> {
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+    reader.limits(limits);
+    // GH9729 §700: read EXIF orientation from the decoder *before*
+    // consuming it into a `DynamicImage`. The `image` crate's
+    // per-format decoders (JPEG with the EXIF APP1 segment, PNG with
+    // the eXIf chunk, WebP with the EXIF chunk) report the tag here;
+    // formats whose decoder doesn't override the trait method get
+    // `Orientation::NoTransforms` (the trait default), making
+    // `apply_orientation` a no-op for them.
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    let pixels = (img.width() as u64).saturating_mul(img.height() as u64);
+    if pixels > max_pixels {
+        anyhow::bail!("image is too large to preview");
+    }
+    // Apply orientation *after* the pixel-cap check — `apply_orientation`
+    // can transpose width/height (Rotate90/Rotate270) but cannot change
+    // the total pixel count, so cap correctness is preserved.
+    img.apply_orientation(orientation);
+    Ok(img.into_rgba8())
+}
+
+/// Decode a static-raster image (PNG, JPEG, WebP-static) under the
+/// GH9729 size envelope. Returns the decoded `RgbaImage` or an error if the
+/// input would breach `decode_limits()` or the post-decode pixel cap.
+///
+/// The post-decode `pixels > MAX_DECODE_PIXELS` check is a defensive guard
+/// against decoders that honor per-axis `max_image_width`/`max_image_height`
+/// but still materialize a near-cap RGBA buffer.
+fn decode_static_with_limits(
+    data: &[u8],
+    format: image::ImageFormat,
+) -> anyhow::Result<image::RgbaImage> {
+    decode_static_with_limits_inner(data, format, decode_limits(), MAX_DECODE_PIXELS)
+}
+
 impl Asset for ImageType {
     fn try_from_bytes(data: &[u8]) -> anyhow::Result<ImageType> {
-        // SVGs are not handled by the guess_format helper function, so we have to manually check
-        // if it's an SVG ourselves.
-        if data.first() == Some(&b'<') {
+        // SVGs are not handled by the guess_format helper, so we sniff the
+        // prefix ourselves. `looks_like_svg_xml` is a coarse content gate
+        // shared with the asset-cache byte-cap selection (see specs/GH9729
+        // tech.md §321) and rejects the "binary blob renamed to .svg" case
+        // before `usvg` is asked to parse.
+        if looks_like_svg_xml(data) {
             let options = usvg::Options {
                 fontdb: SVG_FONT_DB.clone(),
                 ..Default::default()
             };
-            let svg = Rc::new(usvg::Tree::from_data(data, &options)?);
+            let tree = usvg::Tree::from_data(data, &options)?;
+            // GH9729 §321 intrinsic-dimension cap: a tiny-byte payload can
+            // declare width/height in the millions and OOM the renderer.
+            // Reject before any rasterization is attempted.
+            let size = tree.size();
+            let w = size.width() as u32;
+            let h = size.height() as u32;
+            if w > MAX_SVG_RENDER_DIMENSION || h > MAX_SVG_RENDER_DIMENSION {
+                anyhow::bail!("svg dimensions exceed render budget");
+            }
+            let pixels = (w as u64).saturating_mul(h as u64);
+            if pixels > MAX_DECODE_PIXELS {
+                anyhow::bail!("svg dimensions exceed render budget");
+            }
+            let svg = Rc::new(tree);
             return Ok(ImageType::Svg { svg });
         }
 
@@ -327,23 +547,15 @@ impl Asset for ImageType {
 
         match image::guess_format(data) {
             Ok(ImageFormat::Jpeg) => {
-                let img = image::ImageReader::with_format(
-                    std::io::Cursor::new(data),
-                    image::ImageFormat::Jpeg,
-                )
-                .decode()?
-                .into_rgba8();
+                // GH9729 §234: enforce dimension/alloc/pixel envelope.
+                let img = decode_static_with_limits(data, image::ImageFormat::Jpeg)?;
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
             }
             Ok(ImageFormat::Png) => {
-                let img = image::ImageReader::with_format(
-                    std::io::Cursor::new(data),
-                    image::ImageFormat::Png,
-                )
-                .decode()?
-                .into_rgba8();
+                // GH9729 §234: enforce dimension/alloc/pixel envelope.
+                let img = decode_static_with_limits(data, image::ImageFormat::Png)?;
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
@@ -351,25 +563,36 @@ impl Asset for ImageType {
             Ok(ImageFormat::WebP) => {
                 let decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
                 if decoder.has_animation() {
-                    let frames = decoder.into_frames().collect_frames()?;
+                    // GH9729 §259: bound frame count and total pixels.
+                    drop(decoder);
+                    let frames = decode_animated_with_limits(data, image::ImageFormat::WebP)?;
                     Ok(ImageType::AnimatedBitmap {
                         image: Arc::new(AnimatedImage::from(frames)),
                     })
                 } else {
-                    let img = DynamicImage::from_decoder(decoder)?.into_rgba8();
+                    // GH9729 §234: route the static branch through the
+                    // limits-aware helper. The decoder is dropped here and
+                    // re-opened by `ImageReader::with_format` inside the
+                    // helper; the cost is one extra header parse.
+                    drop(decoder);
+                    let img = decode_static_with_limits(data, image::ImageFormat::WebP)?;
                     Ok(ImageType::StaticBitmap {
                         image: Arc::new(StaticImage { img }),
                     })
                 }
             }
             Ok(ImageFormat::Gif) => {
-                let decoder = GifDecoder::new(std::io::Cursor::new(data))?;
-                let frames = decoder.into_frames().collect_frames()?;
+                // GH9729 §259: bound frame count and total pixels.
+                let frames = decode_animated_with_limits(data, image::ImageFormat::Gif)?;
                 Ok(ImageType::AnimatedBitmap {
                     image: Arc::new(AnimatedImage::from(frames)),
                 })
             }
-            _ => Ok(ImageType::Unrecognized),
+            // GH9729 §695: every unrecognized format is now an error rather
+            // than a sentinel `Ok(Unrecognized)` value. Callers (asset cache,
+            // kitty, terminal model) already match `Err` and route it
+            // through their existing failure paths.
+            _ => Err(anyhow!("could not detect image format")),
         }
     }
 
@@ -383,7 +606,6 @@ impl Asset for ImageType {
                 .map(|frame| frame.image.rgba_bytes().len())
                 .reduce(|acc, bytes| acc + bytes)
                 .unwrap_or(0),
-            ImageType::Unrecognized => 0,
         }
     }
 }
@@ -464,13 +686,16 @@ impl FitType {
     }
 }
 
+/// A successfully decoded image. Per GH9729 §695, an unrecognized format
+/// is surfaced as `Err` from `try_from_bytes` instead of an `Unrecognized`
+/// variant — every value of this type represents bytes we know how to
+/// render.
 #[derive(Clone)]
 pub enum ImageType {
     Svg { svg: Rc<usvg::Tree> },
     StaticBitmap { image: Arc<StaticImage> },
     AnimatedBitmap { image: Arc<AnimatedImage> },
-    // TODO: other types
-    Unrecognized,
+    // TODO: other types (HEIC/HEIF/AVIF/BMP/TIFF/ICO — see tech.md §702).
 }
 
 impl ImageType {
@@ -485,7 +710,6 @@ impl ImageType {
             ImageType::AnimatedBitmap { image } => {
                 image.frames.first().map(|frame| frame.image.size())
             }
-            ImageType::Unrecognized => None,
         }
     }
 
@@ -494,7 +718,6 @@ impl ImageType {
             ImageType::Svg { .. } => "ImageType::Svg",
             ImageType::StaticBitmap { .. } => "ImageType::StaticBitmap",
             ImageType::AnimatedBitmap { .. } => "ImageType::AnimatedBitmap",
-            ImageType::Unrecognized => "ImageType::Unrecognized",
         }
     }
 }
@@ -687,7 +910,6 @@ impl ImageType {
         animated_image_behavior: AnimatedImageBehavior,
     ) -> Result<Image> {
         match self {
-            ImageType::Unrecognized => Err(anyhow!("Unrecognized image format.")),
             ImageType::StaticBitmap { image } => {
                 if resize {
                     let img = resize_image(&image.img, bounds, fit_type);

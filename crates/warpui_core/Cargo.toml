@@ -45,6 +45,9 @@ infer = "0.19.0"
 instant.workspace = true
 itertools.workspace = true
 lazy_static = "1.4.0"
+# GH9729: O_NONBLOCK constant for the asset-cache LocalFile open path
+# (gated on cfg(unix); see specs/GH9729/tech.md §400).
+libc.workspace = true
 log = "0.4"
 schemars = { version = "1", optional = true }
 settings_value = { workspace = true, optional = true, features = ["derive"] }

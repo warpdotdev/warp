@@ -6,6 +6,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+instant.workspace = true
+log.workspace = true
 pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 warpui.workspace = true

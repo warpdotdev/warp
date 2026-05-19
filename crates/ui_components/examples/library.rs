@@ -563,7 +563,15 @@ impl RootView {
                     ctx.dispatch_typed_action(Action::CloseLightbox);
                 }),
                 current_image_native_size,
+                animation_start_time: None,
+                zoom_factor: 1.0,
+                pan_offset: pathfinder_geometry::vector::Vector2F::zero(),
+                metadata_line: None,
+                thumbnail_rail: None,
                 options: lightbox::Options {
+                    on_zoom: None,
+                    on_pan: None,
+                    on_double_tap_zoom: None,
                     dismiss_keystroke: Some(warpui::keymap::Keystroke {
                         key: "escape".to_string(),
                         ..Default::default()
@@ -596,7 +604,15 @@ impl RootView {
                     ctx.dispatch_typed_action(Action::CloseLightbox);
                 }),
                 current_image_native_size,
+                animation_start_time: None,
+                zoom_factor: 1.0,
+                pan_offset: pathfinder_geometry::vector::Vector2F::zero(),
+                metadata_line: None,
+                thumbnail_rail: None,
                 options: lightbox::Options {
+                    on_zoom: None,
+                    on_pan: None,
+                    on_double_tap_zoom: None,
                     dismiss_keystroke: Some(warpui::keymap::Keystroke {
                         key: "escape".to_string(),
                         ..Default::default()
@@ -737,6 +753,8 @@ fn native_size_for_image(image: &LightboxImage, app: &AppContext) -> Option<Vect
             }
         }
         LightboxImageSource::Loading => None,
+        // Error entries have no native size.
+        LightboxImageSource::Error { .. } => None,
     }
 }
 

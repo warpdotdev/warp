@@ -3154,3 +3154,257 @@ fn test_tab_mru_order() {
         });
     });
 }
+
+// GH9729: image-preview arm tests (specs/GH9729/tech.md §613:621-626).
+// These exercise `build_image_preview_entry` directly rather than the full
+// `Workspace::open_file_with_target` arm; per the spec, "a small extracted
+// helper module to avoid pulling the whole view crate into a test." The
+// arm itself is a one-liner that wraps the helper's output in a single-element
+// Vec and calls `Workspace::open_lightbox` (a direct helper call rather than
+// `dispatch_typed_action`, because the arm runs from a child-view subscription
+// callback where the workspace is not in the action dispatcher's responder
+// chain — see the rationale comment on `open_lightbox`).
+
+// GH9729 (post-tier2): thumbnail-rail sibling-discovery tests.
+// Exercises `build_sibling_image_entries` and `center_window` directly
+// (same extracted-helper rationale as the `build_image_preview_entry`
+// tests below). The full `FileTarget::ImagePreview` arm still routes
+// through `build_image_preview_entry` for the per-entry stat/cap, so
+// these tests cover only the *additional* sibling-discovery behaviour
+// layered on top: filtering, sorting, indexing, and the centered-
+// window cap.
+
+#[test]
+fn center_window_returns_everything_when_under_cap() {
+    let items = vec!['a', 'b', 'c', 'd'];
+    let (out, idx) = super::center_window(&items, 2, 10);
+    assert_eq!(out, items);
+    assert_eq!(idx, 2);
+}
+
+#[test]
+fn center_window_centers_on_target_when_over_cap() {
+    // 10 items, cap = 4, target = 5 → window = [3, 4, 5, 6] (half=2 below).
+    let items: Vec<usize> = (0..10).collect();
+    let (out, idx) = super::center_window(&items, 5, 4);
+    assert_eq!(out, vec![3, 4, 5, 6]);
+    // target was 5, window starts at 3, so local index = 5 - 3 = 2.
+    assert_eq!(idx, 2);
+}
+
+#[test]
+fn center_window_clamps_to_left_edge() {
+    // Target at the start: window can't shift left, so it just takes
+    // the first `cap` items and the local index stays 0.
+    let items: Vec<usize> = (0..10).collect();
+    let (out, idx) = super::center_window(&items, 0, 4);
+    assert_eq!(out, vec![0, 1, 2, 3]);
+    assert_eq!(idx, 0);
+}
+
+#[test]
+fn center_window_clamps_to_right_edge() {
+    // Target at the end: window shifts left to fill, so local index
+    // matches the position within the trailing slice.
+    let items: Vec<usize> = (0..10).collect();
+    let (out, idx) = super::center_window(&items, 9, 4);
+    assert_eq!(out, vec![6, 7, 8, 9]);
+    assert_eq!(idx, 3);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn sibling_discovery_lists_supported_neighbours_in_alpha_order() {
+    use std::io::Write as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    // Mix of supported + unsupported + non-image extensions; the
+    // unsupported entries should be filtered out by
+    // `is_supported_image_file`.
+    for name in &["B.PNG", "a.jpg", "readme.md", "c.gif", "weird.bin"] {
+        std::fs::File::create(dir.path().join(name))
+            .unwrap()
+            .write_all(&[0u8; 16])
+            .unwrap();
+    }
+
+    let clicked = dir.path().join("a.jpg");
+    let (images, idx) = super::build_sibling_image_entries(
+        &clicked,
+        /* max_bytes */ 4096,
+        /* max_message_len */ 256,
+        /* cap */ 100,
+    );
+
+    // Case-insensitive lexicographic order on filename: a.jpg, B.PNG, c.gif.
+    let names: Vec<_> = images.iter().filter_map(|i| i.description.clone()).collect();
+    assert_eq!(names, vec!["a.jpg", "B.PNG", "c.gif"]);
+    assert_eq!(idx, 0, "clicked file should be index 0 in the sorted list");
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn sibling_discovery_caps_to_centered_window() {
+    use std::io::Write as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    // 20 supported images; cap 5 → centered window of 5 around the
+    // clicked entry. Clicking the 10th alphabetically should produce
+    // entries 8..=12 (5 total, centered on 10).
+    let mut names: Vec<String> = (0..20).map(|i| format!("img_{i:02}.png")).collect();
+    names.sort(); // alphabetical: img_00.png .. img_19.png
+    for name in &names {
+        std::fs::File::create(dir.path().join(name))
+            .unwrap()
+            .write_all(&[0u8; 16])
+            .unwrap();
+    }
+
+    let clicked = dir.path().join("img_10.png");
+    let (images, idx) = super::build_sibling_image_entries(
+        &clicked,
+        /* max_bytes */ 4096,
+        /* max_message_len */ 256,
+        /* cap */ 5,
+    );
+
+    assert_eq!(images.len(), 5);
+    // half = 2, so window starts at 10 - 2 = 8; entries are
+    // img_08 .. img_12; clicked file is at local index 2.
+    let got_names: Vec<_> = images.iter().filter_map(|i| i.description.clone()).collect();
+    assert_eq!(
+        got_names,
+        vec![
+            "img_08.png",
+            "img_09.png",
+            "img_10.png",
+            "img_11.png",
+            "img_12.png",
+        ]
+    );
+    assert_eq!(idx, 2);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn sibling_discovery_falls_back_to_single_when_only_one_supported_image() {
+    use std::io::Write as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    // Only one supported image alongside an unsupported file.
+    std::fs::File::create(dir.path().join("solo.png"))
+        .unwrap()
+        .write_all(&[0u8; 16])
+        .unwrap();
+    std::fs::File::create(dir.path().join("notes.txt"))
+        .unwrap()
+        .write_all(&[0u8; 16])
+        .unwrap();
+
+    let clicked = dir.path().join("solo.png");
+    let (images, idx) =
+        super::build_sibling_image_entries(&clicked, 4096, 256, /* cap */ 100);
+
+    assert_eq!(images.len(), 1);
+    assert_eq!(idx, 0);
+    assert_eq!(images[0].description.as_deref(), Some("solo.png"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn image_preview_arm_builds_resolved_when_under_size_cap() {
+    use std::io::Write as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("photo.png");
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(&[0u8; 1024])
+        .unwrap();
+
+    let entry = super::build_image_preview_entry(
+        &path, /* max_bytes */ 4096, /* max_message_len */ 256,
+    );
+
+    match entry.source {
+        ui_components::lightbox::LightboxImageSource::Resolved {
+            asset_source: warpui::assets::asset_cache::AssetSource::LocalFile { path: actual },
+        } => {
+            assert_eq!(actual, path.to_string_lossy());
+        }
+        other => panic!("expected Resolved with LocalFile, got {other:?}"),
+    }
+    assert_eq!(entry.description.as_deref(), Some("photo.png"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn image_preview_arm_builds_error_when_over_size_cap() {
+    use std::io::Write as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("huge.png");
+    // Write 200 bytes against a 100-byte cap; matches the spec's intent (file
+    // size > cap) without materializing the production 64 MB envelope.
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(&[0u8; 200])
+        .unwrap();
+
+    let entry = super::build_image_preview_entry(
+        &path, /* max_bytes */ 100, /* max_message_len */ 256,
+    );
+
+    match entry.source {
+        ui_components::lightbox::LightboxImageSource::Error { message } => {
+            assert_eq!(message, "image is too large to preview");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    assert_eq!(entry.description.as_deref(), Some("huge.png"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn image_preview_arm_builds_error_when_metadata_fails() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // Path under a real temp dir but the file is never created.
+    let path = dir.path().join("does_not_exist.png");
+
+    let entry = super::build_image_preview_entry(
+        &path, /* max_bytes */ 4096, /* max_message_len */ 256,
+    );
+
+    match entry.source {
+        ui_components::lightbox::LightboxImageSource::Error { message } => {
+            // Sanitized constant; the underlying io::ErrorKind::NotFound is
+            // logged via log::warn! and never interpolated here.
+            assert_eq!(message, "could not read image");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    assert_eq!(entry.description.as_deref(), Some("does_not_exist.png"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn image_preview_arm_builds_error_for_non_regular_file() {
+    // The temp directory itself is a regular *directory*, not a regular
+    // file, so `metadata().is_file()` returns false. This exercises the
+    // `is_file()` rejection without needing platform-specific FIFO support
+    // in the test runner (FIFO coverage is enumerated separately under
+    // tech.md §613:633 for the asset-cache layer).
+    let dir = tempfile::TempDir::new().unwrap();
+    let entry = super::build_image_preview_entry(
+        dir.path(),
+        /* max_bytes */ 4096,
+        /* max_message_len */ 256,
+    );
+
+    match entry.source {
+        ui_components::lightbox::LightboxImageSource::Error { message } => {
+            assert_eq!(message, "not a regular file");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
