@@ -4,6 +4,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
         CrossAxisAlignment, DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink,
@@ -12,7 +13,6 @@ use warpui::{
     },
     fonts::{Properties, Weight},
     platform::Cursor,
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::{
@@ -21,9 +21,10 @@ use crate::{
     menu::{self, Menu, MenuItem, MenuItemFields},
     settings_view::{
         admin_actions::AdminActions,
-        billing_and_usage::billing_cycle_usage_rows::{
-            filter_legacy_buckets, render_rows, render_team_totals_block, RowMouseStates,
-            SourceFilter,
+        billing_and_usage::{
+            billing_cycle_usage_common::{BillingUsageMouseStates, filter_legacy_buckets},
+            billing_cycle_usage_rows::{SourceFilter, render_rows},
+            billing_cycle_usage_team_totals::render_team_totals_block,
         },
         billing_and_usage_page_v2::{
             AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
@@ -51,7 +52,7 @@ pub struct BillingCycleUsageSectionView {
     period_menu: ViewHandle<Menu<BillingCycleUsageAction>>,
     period_menu_open: bool,
     source_filter: SourceFilter,
-    row_mouse_states: RowMouseStates,
+    row_mouse_states: BillingUsageMouseStates,
 }
 
 #[derive(Clone, Debug)]
@@ -110,7 +111,7 @@ impl BillingCycleUsageSectionView {
             period_menu,
             period_menu_open: false,
             source_filter: SourceFilter::default(),
-            row_mouse_states: RowMouseStates::default(),
+            row_mouse_states: BillingUsageMouseStates::default(),
         }
     }
 
@@ -207,7 +208,7 @@ impl BillingCycleUsageSectionView {
         let items: Vec<MenuItem<BillingCycleUsageAction>> = aligned_summaries(data)
             .into_iter()
             .map(|summary| {
-                let label = format_period_label(summary);
+                let label = format_period_range(summary.period_start, summary.period_end);
                 MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
                     BillingCycleUsageAction::SelectPeriod(Some(summary.period_end)),
                 ))
@@ -238,8 +239,10 @@ impl View for BillingCycleUsageSectionView {
 
         column.add_child(self.render_header(&workspace, &visibility, appearance, app));
 
-        // Filter legacy (Voice / SuggestedCodeDiffs) entries once before
-        // both the team-totals block and the per-row renderer consume them.
+        // Drop Voice / SuggestedCodeDiffs entries once before the team-
+        // totals block and the per-row renderer consume them. See
+        // `filter_legacy_buckets` for why these buckets don't belong in
+        // the base/add-on credit accounting this section visualizes.
         let entries = filter_legacy_buckets(
             self.current_summary(&workspace)
                 .map(|summary| summary.entries.as_slice())
@@ -351,9 +354,7 @@ impl BillingCycleUsageSectionView {
         Container::new(column.finish()).finish()
     }
 
-    /// Secondary "Resets May 27, 11:24 PM EDT" label rendered below the
-    /// header. Hidden when a past cycle is selected since its reset is
-    /// already in the past.
+    /// "Resets May 27, 11:24 PM EDT"
     fn render_resets_label(
         &self,
         appearance: &Appearance,
@@ -378,6 +379,7 @@ impl BillingCycleUsageSectionView {
         )
     }
 
+    // "May 13 - Jun 13, 2026"
     fn render_period_range_static(
         &self,
         workspace: &Workspace,
@@ -386,7 +388,7 @@ impl BillingCycleUsageSectionView {
         let theme = appearance.theme();
         let label = self
             .current_summary(workspace)
-            .map(format_period_label)
+            .map(|s| format_period_range(s.period_start, s.period_end))
             .or_else(|| {
                 workspace.billing_cycle_usage.as_ref().map(|data| {
                     format_period_range(data.current_period_start, data.current_period_end)
@@ -411,7 +413,7 @@ impl BillingCycleUsageSectionView {
         let bg = theme.background();
         let label = self
             .current_summary(workspace)
-            .map(format_period_label)
+            .map(|s| format_period_range(s.period_start, s.period_end))
             .unwrap_or_default();
 
         let mouse_state = self.period_selector_mouse_state.clone();
@@ -688,10 +690,6 @@ fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> 
                 .with_offset(vec2f(0., 4.)),
         )
         .finish()
-}
-
-fn format_period_label(summary: &BillingCycleUsageSummary) -> String {
-    format_period_range(summary.period_start, summary.period_end)
 }
 
 fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {

@@ -1,72 +1,42 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use thousands::Separable;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Radius, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
     AppContext, Element, EventContext, SingletonEntity,
+    elements::{
+        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+        Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable,
+        Stack, Text,
+    },
+    platform::Cursor,
 };
 
 use crate::{
     auth::AuthStateProvider,
-    settings_view::billing_and_usage_page_v2::{
-        AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
-        BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
+    settings_view::billing_and_usage::billing_cycle_usage_common::{
+        BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
+        aggregate_segments, cost_type_color, format_cost_cents, format_credits,
+        render_breakdown_tooltip, render_section_subheader,
     },
     ui_components::{blended_colors, icons::Icon},
     workspaces::workspace::{
-        AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-        AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibilityGranularity, Workspace,
-        WorkspaceMember,
+        AiCreditsUsageAndCostSubjectType, AiCreditsUsageSource, BillingCycleUsageEntry,
+        UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
     },
 };
 
-// for a bunch of this (min fill ratio, cost type order, ... )
-// you will find analogous ts code in warp-server
 const BAR_HEIGHT: f32 = 8.;
 const MIN_FILL_RATIO: f32 = 0.05;
-const ROW_BORDER_RADIUS: f32 = 8.;
-const ROW_BORDER_WIDTH: f32 = 1.;
 /// Size of the leading icons in the row credit cluster (coin + credit-card).
 const ROW_ICON_SIZE: f32 = 12.;
 /// Inner radius so the bar's curve sits flush against the card's inner border.
 const BAR_CORNER_RADIUS: f32 = ROW_BORDER_RADIUS - ROW_BORDER_WIDTH;
 const ROW_PADDING: f32 = 12.;
-const TOOLTIP_GAP: f32 = 6.;
-/// Padding inside each team-totals card. Larger than ROW_PADDING since the
-/// card has more vertical breathing room (title + big number + bar).
-const CARD_PADDING: f32 = 16.;
-/// Horizontal gap between team-totals cards.
-const CARD_GAP: f32 = 12.;
-/// Pill-shaped bar at the bottom of each team-totals card.
-const CARD_BAR_HEIGHT: f32 = 8.;
-const CARD_BAR_RADIUS: f32 = CARD_BAR_HEIGHT / 2.;
 
-const CARD_OVERALL_KEY: &str = "__card_overall__";
-const CARD_LOCAL_KEY: &str = "__card_local__";
-const CARD_CLOUD_KEY: &str = "__card_cloud__";
+const SELF_OWN_KEY: &str = "__self_own__";
 const OTHER_MEMBERS_KEY: &str = "__other_members__";
-const COST_TYPE_ORDER: &[AiCreditsUsageAndCostType] = &[
-    AiCreditsUsageAndCostType::BaseLimit,
-    AiCreditsUsageAndCostType::BonusGrant,
-    AiCreditsUsageAndCostType::Payg,
-    AiCreditsUsageAndCostType::AmbientBonusGrant,
-];
-const BUCKET_ORDER: &[AiCreditsUsageBucket] = &[
-    AiCreditsUsageBucket::Ai,
-    AiCreditsUsageBucket::Compute,
-    AiCreditsUsageBucket::Platform,
-];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourceFilter {
@@ -94,43 +64,6 @@ impl SourceFilter {
     }
 }
 
-pub struct RowMouseStates {
-    pub filter_all: MouseStateHandle,
-    pub filter_local: MouseStateHandle,
-    pub filter_cloud: MouseStateHandle,
-    tooltip_by_subject: RefCell<HashMap<String, MouseStateHandle>>,
-}
-
-const SELF_OWN_KEY: &str = "__self_own__";
-
-impl Default for RowMouseStates {
-    fn default() -> Self {
-        Self {
-            filter_all: MouseStateHandle::default(),
-            filter_local: MouseStateHandle::default(),
-            filter_cloud: MouseStateHandle::default(),
-            tooltip_by_subject: RefCell::new(HashMap::new()),
-        }
-    }
-}
-
-impl RowMouseStates {
-    fn tooltip_mouse_state(&self, key: &str) -> MouseStateHandle {
-        let mut map = self.tooltip_by_subject.borrow_mut();
-        map.entry(key.to_string()).or_default().clone()
-    }
-}
-
-/// One colored slice of the stacked bar. `cost_type` drives color; `usage_bucket`
-/// drives the tooltip breakdown.
-#[derive(Clone, Debug)]
-pub struct BarSegment {
-    pub cost_type: AiCreditsUsageAndCostType,
-    pub usage_bucket: AiCreditsUsageBucket,
-    pub credits: i64,
-    pub cost_cents: i64,
-}
-
 /// Aggregated usage for one subject (or the synthetic team aggregate).
 #[derive(Debug)]
 pub struct MemberUsageRow {
@@ -142,7 +75,7 @@ pub struct MemberUsageRow {
     /// Per-user base credit limit, rendered as `used / limit`. None for service
     /// accounts, team-aggregate rows, and unlimited members.
     pub base_limit: Option<i64>,
-    /// Sorted by [`COST_TYPE_ORDER`] then [`BUCKET_ORDER`]; zero-credit entries dropped.
+    /// Sorted by cost-type then bucket order; zero-credit entries dropped.
     pub segments: Vec<BarSegment>,
 }
 
@@ -152,96 +85,6 @@ fn member_base_limit(member: &WorkspaceMember) -> Option<i64> {
     } else {
         Some(member.usage_info.request_limit as i64)
     }
-}
-
-/// Swatch color for one cost-type bucket, mirroring the legend palette.
-fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
-    match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => BASE_CREDITS_DOT_COLOR,
-        AiCreditsUsageAndCostType::BonusGrant => BONUS_CREDITS_DOT_COLOR,
-        AiCreditsUsageAndCostType::Payg => PAYG_CREDITS_DOT_COLOR,
-        AiCreditsUsageAndCostType::AmbientBonusGrant => AMBIENT_CREDITS_DOT_COLOR,
-        AiCreditsUsageAndCostType::Aggregate => AGGREGATE_CREDITS_DOT_COLOR,
-        AiCreditsUsageAndCostType::Other(_) => BASE_CREDITS_DOT_COLOR,
-    }
-}
-
-fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
-    match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => "Base",
-        AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
-        AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
-        AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
-        AiCreditsUsageAndCostType::Aggregate => "All sources",
-        AiCreditsUsageAndCostType::Other(_) => "Other",
-    }
-}
-
-fn bucket_label(bucket: &AiCreditsUsageBucket) -> &'static str {
-    match bucket {
-        AiCreditsUsageBucket::Ai => "AI",
-        AiCreditsUsageBucket::Compute => "Compute",
-        AiCreditsUsageBucket::Platform => "Platform",
-        AiCreditsUsageBucket::SuggestedCodeDiffs => "Suggested code diffs",
-        AiCreditsUsageBucket::Voice => "Voice",
-        AiCreditsUsageBucket::Aggregate => "Total",
-        AiCreditsUsageBucket::Other(_) => "Other",
-    }
-}
-
-fn cost_type_rank(cost_type: &AiCreditsUsageAndCostType) -> usize {
-    COST_TYPE_ORDER
-        .iter()
-        .position(|c| c == cost_type)
-        .unwrap_or(COST_TYPE_ORDER.len())
-}
-
-fn bucket_rank(bucket: &AiCreditsUsageBucket) -> usize {
-    BUCKET_ORDER
-        .iter()
-        .position(|b| b == bucket)
-        .unwrap_or(BUCKET_ORDER.len())
-}
-
-fn segment_sort_key(segment: &BarSegment) -> (usize, usize) {
-    (
-        cost_type_rank(&segment.cost_type),
-        bucket_rank(&segment.usage_bucket),
-    )
-}
-
-/// Group `entries` by `(cost_type, usage_bucket)` into [`BarSegment`]s; returns
-/// sorted segments plus row totals. Linear Vec lookup since cynic enums don't
-/// impl Hash and per-row entry counts are small.
-fn aggregate_segments<'a>(
-    entries: impl IntoIterator<Item = &'a BillingCycleUsageEntry>,
-) -> (Vec<BarSegment>, i64, i64) {
-    let mut segments: Vec<BarSegment> = Vec::new();
-
-    for entry in entries {
-        if let Some(existing) = segments
-            .iter_mut()
-            .find(|s| s.cost_type == entry.cost_type && s.usage_bucket == entry.usage_bucket)
-        {
-            existing.credits += entry.credits_used as i64;
-            existing.cost_cents += entry.cost_cents as i64;
-        } else {
-            segments.push(BarSegment {
-                cost_type: entry.cost_type.clone(),
-                usage_bucket: entry.usage_bucket.clone(),
-                credits: entry.credits_used as i64,
-                cost_cents: entry.cost_cents as i64,
-            });
-        }
-    }
-
-    segments.retain(|s| s.credits > 0);
-    segments.sort_by_key(segment_sort_key);
-
-    let total_credits = segments.iter().map(|s| s.credits).sum();
-    let total_cost_cents = segments.iter().map(|s| s.cost_cents).sum();
-
-    (segments, total_credits, total_cost_cents)
 }
 
 /// Single row for `OwnOnly` viewers — the viewer's own aggregated usage.
@@ -293,75 +136,6 @@ fn build_other_members_usage_row(entries: &[BillingCycleUsageEntry]) -> MemberUs
         base_limit: None,
         segments,
     }
-}
-
-/// Summary backing a single team-totals card (Overall / Local / Cloud).
-/// Mirrors the admin panel's `AgentSpendingLimitItem` shape so we can swap in
-/// per-source spend limits later without restructuring the renderer.
-#[derive(Debug)]
-pub struct TeamTotalCardSummary {
-    pub title: &'static str,
-    pub card_key: &'static str,
-    pub segments: Vec<BarSegment>,
-    pub total_credits: i64,
-    pub total_cost_cents: i64,
-    /// Monthly spend limit driving the bar fill and threshold border colors.
-    /// `None` for the rendering scaffold — bars fill 100% and the border stays
-    /// at the default outline. Plumbed through once the per-source limits land
-    /// on the client `Workspace`.
-    pub limit_cents: Option<i64>,
-}
-
-/// Builds the three team-totals card summaries (Overall + Local + Cloud).
-/// Cards always reflect every renderable entry for their slice and ignore the
-/// source filter toggle, which only scopes the per-member rows below.
-pub fn build_team_total_card_summaries(
-    entries: &[BillingCycleUsageEntry],
-) -> Vec<TeamTotalCardSummary> {
-    let (overall_segments, overall_credits, overall_cost) = aggregate_segments(entries.iter());
-    let mut summaries = vec![TeamTotalCardSummary {
-        title: "Overall usage",
-        card_key: CARD_OVERALL_KEY,
-        segments: overall_segments,
-        total_credits: overall_credits,
-        total_cost_cents: overall_cost,
-        limit_cents: None,
-    }];
-
-    let has_per_source_data = !entries.is_empty()
-        && entries
-            .iter()
-            .all(|e| e.usage_source != AiCreditsUsageSource::Aggregate);
-    if has_per_source_data {
-        let (local_segments, local_credits, local_cost) = aggregate_segments(
-            entries
-                .iter()
-                .filter(|e| e.usage_source == AiCreditsUsageSource::Local),
-        );
-        let (cloud_segments, cloud_credits, cloud_cost) = aggregate_segments(
-            entries
-                .iter()
-                .filter(|e| e.usage_source == AiCreditsUsageSource::Cloud),
-        );
-        summaries.push(TeamTotalCardSummary {
-            title: "Local agent usage",
-            card_key: CARD_LOCAL_KEY,
-            segments: local_segments,
-            total_credits: local_credits,
-            total_cost_cents: local_cost,
-            limit_cents: None,
-        });
-        summaries.push(TeamTotalCardSummary {
-            title: "Cloud agent usage",
-            card_key: CARD_CLOUD_KEY,
-            segments: cloud_segments,
-            total_credits: cloud_credits,
-            total_cost_cents: cloud_cost,
-            limit_cents: None,
-        });
-    }
-
-    summaries
 }
 
 /// Per-member rows for `PerUserTotals` viewers. Iterates the workspace member
@@ -473,23 +247,6 @@ pub fn has_cloud_usage(entries: &[BillingCycleUsageEntry]) -> bool {
         .any(|e| e.usage_source == AiCreditsUsageSource::Cloud)
 }
 
-fn format_credits(credits: i64) -> String {
-    credits.separate_with_commas()
-}
-
-fn format_cost_cents(cents: i64) -> String {
-    let dollars = cents / 100;
-    let remainder = (cents.abs() % 100) as u8;
-    if dollars < 0 {
-        format!(
-            "-${}.{remainder:02}",
-            dollars.unsigned_abs().separate_with_commas()
-        )
-    } else {
-        format!("${}.{remainder:02}", dollars.separate_with_commas())
-    }
-}
-
 fn render_stacked_bar(
     segments: &[BarSegment],
     total_credits: i64,
@@ -573,162 +330,6 @@ fn render_usage_tooltip_content(row: &MemberUsageRow, appearance: &Appearance) -
         row.total_cost_cents,
         appearance,
     )
-}
-
-/// Same per-cost-type breakdown card, but parameterized by raw segments and
-/// totals so it can back team-totals card hovers as well as per-member row
-/// hovers.
-fn render_breakdown_tooltip(
-    segments: &[BarSegment],
-    total_credits: i64,
-    total_cost_cents: i64,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let font_family = appearance.ui_font_family();
-    let bg = theme.background().into_solid();
-    let main = blended_colors::text_main(theme, bg);
-    let sub = blended_colors::text_sub(theme, bg);
-
-    let mut column = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(6.);
-
-    for line in segments {
-        let label = if matches!(line.usage_bucket, AiCreditsUsageBucket::Aggregate) {
-            cost_type_label(&line.cost_type).to_string()
-        } else {
-            format!(
-                "{} ({})",
-                cost_type_label(&line.cost_type),
-                bucket_label(&line.usage_bucket)
-            )
-        };
-
-        column.add_child(render_tooltip_row(
-            Some(cost_type_color(&line.cost_type)),
-            label,
-            line.credits,
-            line.cost_cents,
-            sub,
-            main,
-            font_family,
-            /* bold */ false,
-        ));
-    }
-
-    // Divider before the total row.
-    column.add_child(
-        Container::new(Empty::new().finish())
-            .with_padding_top(1.)
-            .with_background_color(theme.outline().into_solid())
-            .finish(),
-    );
-
-    column.add_child(render_tooltip_row(
-        /* no swatch on the total row */ None,
-        "Total usage".to_string(),
-        total_credits,
-        total_cost_cents,
-        main,
-        main,
-        font_family,
-        /* bold */ true,
-    ));
-
-    ConstrainedBox::new(
-        Container::new(column.finish())
-            .with_background_color(bg)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-            .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
-            .with_uniform_padding(10.)
-            .with_drop_shadow(
-                DropShadow::new_with_standard_offset_and_spread(ColorU::new(0, 0, 0, 48))
-                    .with_offset(vec2f(0., 4.)),
-            )
-            .finish(),
-    )
-    .with_min_width(240.)
-    .with_max_width(360.)
-    .finish()
-}
-
-/// Single tooltip row: `[swatch + label] [spacer] [credits / cost]` with
-/// fixed-width right-aligned number columns.
-#[allow(clippy::too_many_arguments)]
-fn render_tooltip_row(
-    swatch_color: Option<ColorU>,
-    label: String,
-    credits: i64,
-    cost_cents: i64,
-    label_color: ColorU,
-    value_color: ColorU,
-    font_family: warpui::fonts::FamilyId,
-    bold: bool,
-) -> Box<dyn Element> {
-    let style = if bold {
-        Properties::default().weight(Weight::Semibold)
-    } else {
-        Properties::default()
-    };
-
-    let label_text = Text::new_inline(label, font_family, 12.)
-        .with_color(label_color)
-        .with_style(style)
-        .finish();
-
-    let mut left = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-    if let Some(color) = swatch_color {
-        left.add_child(
-            ConstrainedBox::new(
-                Container::new(Empty::new().finish())
-                    .with_background_color(color)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.)))
-                    .finish(),
-            )
-            .with_width(10.)
-            .with_height(10.)
-            .finish(),
-        );
-        left.add_child(Container::new(label_text).with_margin_left(8.).finish());
-    } else {
-        left.add_child(label_text);
-    }
-
-    let credits_text = Text::new_inline(format_credits(credits), font_family, 12.)
-        .with_color(value_color)
-        .with_style(style)
-        .finish();
-    let cost_text = Text::new_inline(format_cost_cents(cost_cents), font_family, 12.)
-        .with_color(value_color)
-        .with_style(style)
-        .finish();
-    let divider = Text::new_inline("/".to_string(), font_family, 12.)
-        .with_color(label_color)
-        .with_style(style)
-        .finish();
-
-    let credits_col = ConstrainedBox::new(Align::new(credits_text).right().finish())
-        .with_width(60.)
-        .finish();
-    let cost_col = ConstrainedBox::new(Align::new(cost_text).right().finish())
-        .with_width(64.)
-        .finish();
-
-    let right = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(credits_col)
-        .with_child(Container::new(divider).with_horizontal_margin(6.).finish())
-        .with_child(cost_col)
-        .finish();
-
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_child(Shrinkable::new(1., left.finish()).finish())
-        .with_child(right)
-        .finish()
 }
 
 /// Builds one row card (stacked bar + name/totals).
@@ -891,294 +492,12 @@ fn render_member_row(
     .finish()
 }
 
-/// Pill-shaped stacked progress bar for team-totals cards. Mirrors the admin
-/// panel's `StackedProgressBar`: fills to `total_cost_cents / limit_cents`
-/// when a limit is set (capped at 100%), otherwise fills 100% when there is
-/// any usage. Empty slots render as a muted track.
-fn render_card_pill_bar(
-    segments: &[BarSegment],
-    total_credits: i64,
-    total_cost_cents: i64,
-    limit_cents: Option<i64>,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let track_bg = theme.surface_overlay_1();
-    let corner = Radius::Pixels(CARD_BAR_RADIUS);
-
-    if total_credits == 0 || segments.is_empty() {
-        return ConstrainedBox::new(
-            Container::new(Empty::new().finish())
-                .with_background(track_bg)
-                .with_corner_radius(CornerRadius::with_all(corner))
-                .finish(),
-        )
-        .with_height(CARD_BAR_HEIGHT)
-        .finish();
-    }
-
-    let fill_ratio = match limit_cents {
-        Some(limit) if limit > 0 => (total_cost_cents as f32 / limit as f32).clamp(0.0, 1.0),
-        _ => 1.0,
-    };
-    let unfill_ratio = 1.0 - fill_ratio;
-    let has_unfill = unfill_ratio > 0.0;
-    let last_segment_idx = segments.len() - 1;
-
-    let mut filled = Flex::row();
-    for (idx, seg) in segments.iter().enumerate() {
-        let weight = seg.credits as f32 / total_credits as f32;
-        if weight <= 0.0 {
-            continue;
-        }
-        let is_first = idx == 0;
-        let is_last_visible = idx == last_segment_idx && !has_unfill;
-        let segment_corner = match (is_first, is_last_visible) {
-            (true, true) => CornerRadius::with_all(corner),
-            (true, false) => CornerRadius::with_left(corner),
-            (false, true) => CornerRadius::with_right(corner),
-            (false, false) => CornerRadius::default(),
-        };
-        filled.add_child(
-            Expanded::new(
-                weight,
-                Container::new(Empty::new().finish())
-                    .with_background_color(cost_type_color(&seg.cost_type))
-                    .with_corner_radius(segment_corner)
-                    .finish(),
-            )
-            .finish(),
-        );
-    }
-
-    let mut bar = Flex::row();
-    bar.add_child(Expanded::new(fill_ratio, filled.finish()).finish());
-    if has_unfill {
-        bar.add_child(
-            Expanded::new(
-                unfill_ratio,
-                Container::new(Empty::new().finish())
-                    .with_background(track_bg)
-                    .with_corner_radius(CornerRadius::with_right(corner))
-                    .finish(),
-            )
-            .finish(),
-        );
-    }
-
-    ConstrainedBox::new(bar.finish())
-        .with_height(CARD_BAR_HEIGHT)
-        .finish()
-}
-
-/// Card body for one team-totals slice. Layout (top to bottom):
-///   [title]
-///   [$X.XX]                    [Limit: $Y.YY]   (limit optional)
-///   [(N credits)]
-///   [pill stacked bar]
-fn build_team_total_card(
-    summary: &TeamTotalCardSummary,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let card_bg = theme.background().into_solid();
-    let main = blended_colors::text_main(theme, card_bg);
-    let sub = blended_colors::text_sub(theme, card_bg);
-
-    let title_text = Text::new_inline(summary.title.to_string(), appearance.ui_font_family(), 13.)
-        .with_color(sub)
-        .with_style(Properties::default().weight(Weight::Medium))
-        .finish();
-
-    let cost_text = Text::new_inline(
-        format_cost_cents(summary.total_cost_cents),
-        appearance.ui_font_family(),
-        24.,
-    )
-    .with_color(main)
-    .with_style(Properties::default().weight(Weight::Semibold))
-    .finish();
-
-    let credits_text = Text::new_inline(
-        format!("({} credits)", format_credits(summary.total_credits)),
-        appearance.ui_font_family(),
-        13.,
-    )
-    .with_color(sub)
-    .finish();
-
-    let totals_col = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(cost_text)
-        .with_child(Container::new(credits_text).with_margin_top(2.).finish())
-        .finish();
-
-    let totals_row: Box<dyn Element> = match summary.limit_cents {
-        Some(limit) => {
-            let limit_text = Text::new_inline(
-                format!("Limit: {}", format_cost_cents(limit)),
-                appearance.ui_font_family(),
-                12.,
-            )
-            .with_color(sub)
-            .finish();
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(Shrinkable::new(1., totals_col).finish())
-                .with_child(Container::new(limit_text).with_margin_left(16.).finish())
-                .finish()
-        }
-        None => totals_col,
-    };
-
-    let bar = render_card_pill_bar(
-        &summary.segments,
-        summary.total_credits,
-        summary.total_cost_cents,
-        summary.limit_cents,
-        appearance,
-    );
-
-    let body = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(12.)
-        .with_child(
-            Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_spacing(6.)
-                .with_child(title_text)
-                .with_child(totals_row)
-                .finish(),
-        )
-        .with_child(bar)
-        .finish();
-
-    Container::new(body)
-        .with_background_color(card_bg)
-        .with_border(Border::all(ROW_BORDER_WIDTH).with_border_color(theme.outline().into_solid()))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)))
-        .with_uniform_padding(CARD_PADDING)
-        .finish()
-}
-
-/// Card wrapped in a Hoverable that opens the breakdown tooltip when the card
-/// has any segments.
-fn render_team_total_card(
-    summary: &TeamTotalCardSummary,
-    tooltip_mouse_state: MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    if summary.segments.is_empty() {
-        return build_team_total_card(summary, appearance);
-    }
-
-    Hoverable::new(tooltip_mouse_state, move |state| {
-        let mut stack = Stack::new();
-        stack.add_child(build_team_total_card(summary, appearance));
-
-        if state.is_hovered() {
-            stack.add_positioned_overlay_child(
-                render_breakdown_tooltip(
-                    &summary.segments,
-                    summary.total_credits,
-                    summary.total_cost_cents,
-                    appearance,
-                ),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., -TOOLTIP_GAP),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::TopMiddle,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-
-        stack.finish()
-    })
-    .finish()
-}
-
-/// Section subheader (e.g. "Team totals", "Member usage"). One step below
-/// the v2 page's bold section title.
-fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn Element> {
-    Text::new_inline(label.to_string(), appearance.ui_font_family(), 14.)
-        .with_color(appearance.theme().active_ui_text_color().into())
-        .with_style(Properties::default().weight(Weight::Medium))
-        .finish()
-}
-
-/// Horizontal row of team-totals cards (Overall + Local + Cloud).
-fn render_team_totals_section(
-    entries: &[BillingCycleUsageEntry],
-    mouse_states: &RowMouseStates,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let summaries = build_team_total_card_summaries(entries);
-    let mut row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_spacing(CARD_GAP);
-    for summary in &summaries {
-        let tooltip_state = mouse_states.tooltip_mouse_state(summary.card_key);
-        row.add_child(
-            Expanded::new(
-                1.,
-                render_team_total_card(summary, tooltip_state, appearance),
-            )
-            .finish(),
-        );
-    }
-    row.finish()
-}
-
-/// Team-totals block (subheader + cards) for visibilities that surface team-
-/// level usage. Skipped for `OwnOnly`; callers should gate on visibility
-/// before invoking. `PerUserTotals` gets a "Team totals" subheader above
-/// the cards to match the admin panel; `TeamAggregate` shows just the cards.
-pub fn render_team_totals_block(
-    entries: &[BillingCycleUsageEntry],
-    visibility: &crate::workspaces::workspace::UsageVisibility,
-    mouse_states: &RowMouseStates,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    if visibility.granularity == UsageVisibilityGranularity::PerUserTotals {
-        column.add_child(
-            Container::new(render_section_subheader("Team totals", appearance))
-                .with_margin_bottom(8.)
-                .finish(),
-        );
-    }
-    column.add_child(render_team_totals_section(
-        entries,
-        mouse_states,
-        appearance,
-    ));
-    column.finish()
-}
-
-/// Drops legacy buckets we no longer charge for (Voice / SuggestedCodeDiffs).
-/// Centralized here so the section view can filter once before fanning the
-/// entries out to the team-totals block and the per-row renderer below.
-pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingCycleUsageEntry> {
-    entries
-        .iter()
-        .filter(|e| {
-            e.usage_bucket != AiCreditsUsageBucket::Voice
-                && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
-        })
-        .cloned()
-        .collect()
-}
-
 pub type FilterChangeFn = std::sync::Arc<dyn Fn(SourceFilter, &mut EventContext) + 'static>;
 
 /// All / Local / Cloud pill toggle.
 fn render_source_filter_toggle(
     current: SourceFilter,
-    mouse_states: &RowMouseStates,
+    mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     on_change: FilterChangeFn,
 ) -> Box<dyn Element> {
@@ -1265,16 +584,16 @@ fn build_viewer_own_usage_row(
 }
 
 /// Top-level row dispatcher. Caller is expected to have already filtered
-/// legacy buckets via [`filter_legacy_buckets`] and rendered the team-totals
+/// legacy buckets via `filter_legacy_buckets` and rendered the team-totals
 /// block (if any) above. `on_filter_change` is only consumed by the
 /// `PerUserTotals` branch.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
-    visibility: &crate::workspaces::workspace::UsageVisibility,
+    visibility: &UsageVisibility,
     source_filter: SourceFilter,
-    mouse_states: &RowMouseStates,
+    mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     app: &AppContext,
     on_filter_change: FilterChangeFn,
@@ -1296,6 +615,14 @@ pub fn render_rows(
             ));
         }
         UsageVisibilityGranularity::TeamAggregate => {
+            // Subheader only — TeamAggregate hardcodes SourceFilter::All so no
+            // toggle is shown on the right.
+            column.add_child(
+                Container::new(render_section_subheader("Member usage", appearance))
+                    .with_margin_bottom(8.)
+                    .finish(),
+            );
+
             let mut rows = vec![build_viewer_own_usage_row(
                 workspace,
                 entries,

@@ -1,12 +1,12 @@
 use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{Align, Clipped},
     ui_components::components::{Coords, UiComponentStyles},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::{
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
     Appearance,
+    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
 };
 use warpui::{
     elements::{
