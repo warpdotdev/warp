@@ -308,7 +308,6 @@ struct TeamsWidgetMouseHandles {
     grow_team_warning_cta_button: MouseStateHandle,
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
-    outgrow_contact_sales_link: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -364,8 +363,6 @@ enum GrowTeamWarning {
 enum GrowTeamWarningCta {
     /// Self-serve upgrade is available; route to `/upgrade`.
     Upgrade,
-    /// Team is on the highest self-serve plan; needs sales for more capacity.
-    ContactSales,
     /// Self-serve admin can resolve billing via the Stripe portal.
     UpdateBilling,
     /// Non-self-serve admin (e.g. enterprise) should reach out to support.
@@ -1857,13 +1854,10 @@ impl TeamsWidget {
                 }
             }
             GrowTeamWarning::SeatCapReached | GrowTeamWarning::SeatCapExceeded => {
-                // Build Business / legacy Business are the top of the self-serve
-                // ladder; the only path to more seats is an enterprise / sales
-                // conversation.
-                if billing_metadata.is_on_build_business_plan()
-                    || billing_metadata.is_on_legacy_business_plan()
-                {
-                    return GrowTeamWarningCta::ContactSales;
+                // Business teams route through the upgrade flow for the
+                // Enterprise upsell when they need more seats.
+                if billing_metadata.customer_type == CustomerType::Business {
+                    return GrowTeamWarningCta::Upgrade;
                 }
                 if billing_metadata.is_enterprise_plan() {
                     return GrowTeamWarningCta::None;
@@ -1961,7 +1955,6 @@ impl TeamsWidget {
         } else {
             match cta {
                 GrowTeamWarningCta::Upgrade => "Upgrade to grow your team.",
-                GrowTeamWarningCta::ContactSales => "Contact sales to grow your team.",
                 GrowTeamWarningCta::UpdateBilling => {
                     "Update your payment information to restore access."
                 }
@@ -2003,9 +1996,6 @@ impl TeamsWidget {
                 "Upgrade",
                 TeamsPageAction::GenerateUpgradeLink { team_uid: team.uid },
             )),
-            GrowTeamWarningCta::ContactSales => {
-                Some(("Contact sales", TeamsPageAction::ContactSales))
-            }
             GrowTeamWarningCta::UpdateBilling => Some((
                 "Update billing",
                 TeamsPageAction::GenerateStripeBillingPortalLink { team_uid: team.uid },
@@ -2064,6 +2054,19 @@ impl TeamsWidget {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .with_border(Border::all(1.).with_border_fill(border_fill))
             .finish()
+    }
+
+    fn outgrow_upgrade_line_copy(
+        billing_metadata: &BillingMetadata,
+    ) -> (&'static str, &'static str) {
+        if billing_metadata.customer_type == CustomerType::Business {
+            (
+                "Upgrade to Enterprise",
+                " for an unlimited team member limit.",
+            )
+        } else {
+            ("Upgrade to Business", " for a higher team member limit.")
+        }
     }
 
     fn render_team_member_cost_info(
@@ -2860,8 +2863,28 @@ impl TeamsWidget {
         } else {
             format!("{count} team members")
         };
+
+        // No capacity tooltip when the plan is unlimited (or workspace size
+        // policy is missing). Just render the count text on its own.
+        let policy = team.billing_metadata.tier.workspace_size_policy;
+        let finite_cap = match policy {
+            Some(p) if !p.is_unlimited => Some(p.limit),
+            _ => None,
+        };
         let theme = appearance.theme();
-        let count_color = theme.active_ui_text_color();
+        let count_color = match finite_cap {
+            Some(cap) => {
+                let count = i64::try_from(count).unwrap_or(i64::MAX);
+                if count >= cap {
+                    theme.ui_error_color()
+                } else if count >= cap.saturating_sub(2) {
+                    theme.ansi_fg_yellow()
+                } else {
+                    theme.active_ui_text_color().into_solid()
+                }
+            }
+            None => theme.active_ui_text_color().into_solid(),
+        };
         // Info icon uses the muted gray that matches other secondary UI hints.
         let muted_color = theme.active_ui_text_color().with_opacity(60);
 
@@ -2876,14 +2899,6 @@ impl TeamsWidget {
             })
             .build()
             .finish();
-
-        // No capacity tooltip when the plan is unlimited (or workspace size
-        // policy is missing). Just render the count text on its own.
-        let policy = team.billing_metadata.tier.workspace_size_policy;
-        let finite_cap = match policy {
-            Some(p) if !p.is_unlimited => Some(p.limit),
-            _ => None,
-        };
         let Some(cap) = finite_cap else {
             return count_text;
         };
@@ -2936,29 +2951,26 @@ impl TeamsWidget {
             pricing_info,
         );
         match cta {
-            GrowTeamWarningCta::Upgrade => {
-                Some(self.render_outgrow_upgrade_line(team.uid, appearance))
-            }
-            GrowTeamWarningCta::ContactSales => {
-                Some(self.render_outgrow_contact_sales_line(appearance))
-            }
+            GrowTeamWarningCta::Upgrade => Some(self.render_outgrow_upgrade_line(team, appearance)),
             GrowTeamWarningCta::UpdateBilling
             | GrowTeamWarningCta::ContactSupport
             | GrowTeamWarningCta::None => None,
         }
     }
 
-    /// "Want to grow your team? <Upgrade>" — routes through self-serve upgrade.
+    /// "Need more seats? <Upgrade to ...> ..." — routes through self-serve upgrade.
     fn render_outgrow_upgrade_line(
         &self,
-        team_uid: ServerId,
+        team: &Team,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let prefix = self.render_sub_text("Want to grow your team? ".to_string(), appearance, None);
+        let team_uid = team.uid;
+        let (link_text, suffix) = Self::outgrow_upgrade_line_copy(&team.billing_metadata);
+        let prefix = self.render_sub_text("Need more seats? ".to_string(), appearance, None);
         let link = appearance
             .ui_builder()
             .link(
-                "Upgrade".to_string(),
+                link_text.to_string(),
                 None,
                 Some(Box::new(move |ctx| {
                     ctx.dispatch_typed_action(TeamsPageAction::GenerateUpgradeLink { team_uid });
@@ -2968,37 +2980,14 @@ impl TeamsWidget {
             .soft_wrap(false)
             .build()
             .finish();
+        let suffix = self.render_sub_text(suffix.to_string(), appearance, None);
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_child(prefix)
             .with_child(link)
-            .finish()
-    }
-
-    /// "Want to grow your team? <Contact sales>" — opens the contact sales page.
-    fn render_outgrow_contact_sales_line(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let prefix = self.render_sub_text("Want to grow your team? ".to_string(), appearance, None);
-        let link = appearance
-            .ui_builder()
-            .link(
-                "Contact sales".into(),
-                None,
-                Some(Box::new(move |ctx| {
-                    ctx.dispatch_typed_action(TeamsPageAction::ContactSales);
-                })),
-                self.mouse_state_handles.outgrow_contact_sales_link.clone(),
-            )
-            .soft_wrap(false)
-            .build()
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(prefix)
-            .with_child(link)
+            .with_child(suffix)
             .finish()
     }
 
