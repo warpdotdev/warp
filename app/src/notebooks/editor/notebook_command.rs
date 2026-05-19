@@ -21,6 +21,7 @@ use warp_editor::{
             BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
             CODE_BLOCK_SHELL_DISPLAY_LANG,
         },
+        version::BufferVersion,
     },
     editor::RunnableCommandModel,
 };
@@ -108,9 +109,12 @@ struct CachedHighlightKey {
     style: CodeBlockType,
 }
 
-struct CachedHighlightColors {
+pub(super) struct CachedHighlightColors {
     key: CachedHighlightKey,
     colors: Vec<(Range<ByteOffset>, AnsiColorIdentifier)>,
+    /// The buffer version at which these colors were last applied. Used to skip
+    /// redundant full-buffer rebuilds when the content hasn't changed.
+    pub(super) applied_at_buffer_version: Option<BufferVersion>,
 }
 
 impl CachedHighlightColors {
@@ -165,7 +169,7 @@ pub struct NotebookCommand {
     #[cfg_attr(test, allow(dead_code))]
     debounce_highlighting_tx: Sender<()>,
     syntax_highlighting_handle: Option<SpawnedFutureHandle>,
-    cached_highlight_delta: Option<CachedHighlightColors>,
+    pub(super) cached_highlight_delta: Option<CachedHighlightColors>,
 
     syntax_config: Option<(SyntaxSet, Theme)>,
 
@@ -313,6 +317,11 @@ impl NotebookCommand {
         self.syntax_highlighting_handle.clone()
     }
 
+    /// Maximum code block size (in bytes) for which we run syntax highlighting.
+    /// Blocks larger than this are left uncolored to prevent pathological memory
+    /// usage when a user pastes or generates very large code blocks.
+    const MAX_HIGHLIGHT_BLOCK_SIZE: usize = 100_000;
+
     pub fn highlight_syntax(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(handle) = self.syntax_highlighting_handle.take() {
             handle.abort_handle().abort();
@@ -327,6 +336,12 @@ impl NotebookCommand {
         let Some(buffer_text) = self.command(ctx) else {
             return;
         };
+
+        // Skip highlighting for very large code blocks to prevent excessive
+        // memory allocation in the SumTree rebuild path.
+        if buffer_text.len() > Self::MAX_HIGHLIGHT_BLOCK_SIZE {
+            return;
+        }
 
         match code_block_type {
             CodeBlockType::Shell => {
@@ -395,16 +410,28 @@ impl NotebookCommand {
         );
     }
 
-    pub fn try_apply_cached_highlighting(&self, ctx: &mut ModelContext<Self>) -> bool {
+    pub fn try_apply_cached_highlighting(&mut self, ctx: &mut ModelContext<Self>) -> bool {
         let code_block_type = self.code_block_type(ctx);
         let Some(buffer_text) = self.command(ctx) else {
             return false;
         };
         match &self.cached_highlight_delta {
-            // If the command block content matches our cache, simply update with the cache.
+            // If the command block content matches our cache, check if we even
+            // need to re-apply. When the buffer version hasn't changed since
+            // we last wrote these colors, the markers are still in place.
             Some(cache) if cache.matches_key(&buffer_text, code_block_type) => {
+                let current_version = self.content.as_ref(ctx).buffer_version();
+                if cache.applied_at_buffer_version == Some(current_version) {
+                    return true;
+                }
+                let colors = cache.colors.clone();
                 if let Some(block_start) = self.start_offset(ctx) {
-                    self.apply_highlighting_to_buffer(&cache.colors, block_start, ctx)
+                    self.apply_highlighting_to_buffer(&colors, block_start, ctx);
+                }
+                // Record the new buffer version after applying.
+                if let Some(cache) = &mut self.cached_highlight_delta {
+                    cache.applied_at_buffer_version =
+                        Some(self.content.as_ref(ctx).buffer_version());
                 }
                 true
             }
@@ -445,7 +472,12 @@ impl NotebookCommand {
         }
 
         self.apply_highlighting_to_buffer(&colors, block_start, ctx);
-        self.cached_highlight_delta = Some(CachedHighlightColors { key, colors });
+        let applied_at_buffer_version = Some(self.content.as_ref(ctx).buffer_version());
+        self.cached_highlight_delta = Some(CachedHighlightColors {
+            key,
+            colors,
+            applied_at_buffer_version,
+        });
     }
 
     fn apply_highlighting_to_buffer(
