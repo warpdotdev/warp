@@ -47,7 +47,9 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
 use crate::ai::blocklist::agent_view::{
     agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
 };
-use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
+use crate::ai::blocklist::orchestration_topology::{
+    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
+};
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
     PillBarPillKind, PillSwitchOutcome,
@@ -605,16 +607,24 @@ impl OrchestrationPillBar {
         let mut specs = Vec::with_capacity(1 + children.len());
 
         // Orchestrator pill first; never pinned (it's the home view).
+        // The pill's status badge reflects the orchestration tree as a whole
+        // (see `aggregated_orchestrator_status`) so the user sees `InProgress`
+        // while any descendant is still running, even though the orchestrator's
+        // own `ConversationStatus` flips to `Success` as soon as its own turn
+        // finishes.
         specs.push(PillSpec {
             conversation_id: orchestrator_id,
             label: orchestrator_label(orchestrator),
             avatar_color: theme.ansi_fg_cyan(),
             avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
-            status: None,
+            status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
-            // Unused: orchestrator pills don't render a status overlay.
+            // `is_remote_child` is a child-placeholder flag and never applies
+            // to the orchestrator itself. A cloud-to-cloud orchestrator can
+            // still be running remotely, but surfacing that via the cloud
+            // overlay would need separate plumbing.
             is_remote_child: false,
         });
 
@@ -1317,41 +1327,41 @@ fn render_hover_card(
     .with_clip(ClipConfig::ellipsis())
     .soft_wrap(false)
     .finish();
-    // The orchestrator's `ConversationStatus` reflects its own last
-    // exchange's outcome (often `Cancelled` after the user cancels to
-    // delegate to subagents, or `Success` once the orchestrator's own
-    // streaming finishes), which doesn't usefully describe the state of
-    // the orchestration as a whole. Until we plumb an aggregated
-    // child-status accessor we hide the badge for the orchestrator pill
-    // — child pills still show the (per-child accurate) badge.
+    // The orchestrator's raw `ConversationStatus` only reflects its own
+    // last exchange and flips to `Success` as soon as the orchestrator's
+    // turn finishes — even when children are still running. For the
+    // orchestrator pill's hover card we instead show the aggregated
+    // status across the whole orchestration tree so the badge matches
+    // what the user expects to see (e.g. `InProgress` while any child is
+    // running). Child pills continue to show their own per-child status.
     // Cap the badge at a fixed width so it can't shove the name out of
     // the card. Slightly larger than the longest expected status label
     // ("In progress") plus its icon and padding.
     const STATUS_BADGE_MAX_WIDTH: f32 = 96.;
-    let status_badge: Option<Box<dyn Element>> = (!is_orchestrator).then(|| {
-        ConstrainedBox::new(render_status_badge(
-            conversation.status(),
-            theme,
-            appearance,
-        ))
+    // Hold an aggregated status by value on the orchestrator path so the
+    // non-orchestrator path can keep passing the child's status by
+    // reference (no clone).
+    let aggregated_status;
+    let badge_status: &ConversationStatus = if is_orchestrator {
+        aggregated_status = aggregated_orchestrator_status(history, conversation_id);
+        &aggregated_status
+    } else {
+        conversation.status()
+    };
+    let status_badge = ConstrainedBox::new(render_status_badge(badge_status, theme, appearance))
         .with_max_width(STATUS_BADGE_MAX_WIDTH)
-        .finish()
-    });
+        .finish();
     // Compute the name's max width by subtracting all of the surrounding
     // chrome from the card width: card horizontal padding (12+12), the
     // 16px avatar, the 8px avatar→name gap, an 8px name→badge gap, and
-    // the reserved badge slot when one is shown. Without this fixed
-    // budget, `MainAxisAlignment::SpaceBetween` would happily push the
-    // badge off the right edge of the card whenever the name is long
-    // enough to fill the available space (this happened on the
-    // orchestrator pill, whose title falls back to the conversation's
-    // multi-word title rather than a short agent name).
-    let name_max_width = if status_badge.is_some() {
-        HOVER_CARD_WIDTH - 24. - 16. - 8. - 8. - STATUS_BADGE_MAX_WIDTH
-    } else {
-        HOVER_CARD_WIDTH - 24. - 16. - 8.
-    };
-    let mut header_row = Flex::row()
+    // the reserved badge slot. Without this fixed budget,
+    // `MainAxisAlignment::SpaceBetween` would happily push the badge off
+    // the right edge of the card whenever the name is long enough to fill
+    // the available space (this used to happen on the orchestrator pill,
+    // whose title falls back to the conversation's multi-word title rather
+    // than a short agent name).
+    let name_max_width = HOVER_CARD_WIDTH - 24. - 16. - 8. - 8. - STATUS_BADGE_MAX_WIDTH;
+    let header = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -1367,11 +1377,9 @@ fn render_hover_card(
                         .finish(),
                 )
                 .finish(),
-        );
-    if let Some(status_badge) = status_badge {
-        header_row = header_row.with_child(status_badge);
-    }
-    let header = header_row.finish();
+        )
+        .with_child(status_badge)
+        .finish();
 
     // Working directory line: pulled from the root task's first exchange
     // when available, falling back to the most recent exchange. Hidden
@@ -1806,7 +1814,10 @@ fn render_pill(
         let show_pin_glyph = supports_pinning && outer_pill_hovered;
         let leading: Box<dyn Element> = match kind {
             PillKind::Orchestrator => match status.as_ref() {
-                // Defensive: orchestrator pills don't currently carry a status.
+                // Orchestrator pills always carry an aggregated status (see
+                // `aggregated_orchestrator_status` in `pill_specs`); the
+                // `None` arm is kept as a defensive fallback in case a
+                // future caller constructs a `PillSpec` without one.
                 Some(status) => render_avatar_with_status_overlay(
                     avatar_color,
                     avatar_glyph,
