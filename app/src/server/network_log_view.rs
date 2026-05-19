@@ -12,7 +12,8 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
 use warpui::{
-    elements::{ChildView, MouseStateHandle},
+    clipboard::ClipboardContent,
+    elements::{ChildView, Flex, MouseStateHandle},
     text_layout::ClipConfig,
     ui_components::components::UiComponent,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -54,6 +55,7 @@ pub enum NetworkLogViewAction {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkLogViewCustomAction {
     Refresh,
+    CopyAll,
 }
 
 /// A pane view backed by a read-only [`CodeEditorView`] displaying a snapshot
@@ -63,6 +65,8 @@ pub struct NetworkLogView {
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
     refresh_button_mouse_state: MouseStateHandle,
+    copy_button_mouse_state: MouseStateHandle,
+    latest_plain_text: String,
 }
 
 impl NetworkLogView {
@@ -74,7 +78,7 @@ impl NetworkLogView {
         // subscribe to the model: new items that arrive after the pane is
         // opened are not reflected until the pane is explicitly reopened
         // (see `reload_snapshot`).
-        let snapshot = NetworkLogModel::as_ref(ctx).snapshot_text();
+        let snapshot = NetworkLogModel::as_ref(ctx).snapshot();
 
         let editor = ctx.add_typed_action_view(|ctx| {
             let mut view = CodeEditorView::new(
@@ -83,7 +87,7 @@ impl NetworkLogView {
                 CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight),
                 ctx,
             );
-            Self::apply_snapshot_to_editor(&mut view, &snapshot, ctx);
+            Self::apply_snapshot_to_editor(&mut view, &snapshot.display_text, ctx);
             // Read-only pane: disallow editing but keep selection/copy/find
             // available.
             view.set_interaction_state(InteractionState::Selectable, ctx);
@@ -95,6 +99,8 @@ impl NetworkLogView {
             pane_configuration,
             focus_handle: None,
             refresh_button_mouse_state: MouseStateHandle::default(),
+            copy_button_mouse_state: MouseStateHandle::default(),
+            latest_plain_text: snapshot.plain_text,
         }
     }
 
@@ -111,11 +117,13 @@ impl NetworkLogView {
     /// open-network-log-pane action while the pane is already open, or when
     /// the user clicks the refresh icon in the pane header, so they can see
     /// items captured since the pane was opened.
-    pub fn reload_snapshot(&self, ctx: &mut ViewContext<Self>) {
-        let snapshot = NetworkLogModel::as_ref(ctx).snapshot_text();
+    pub fn reload_snapshot(&mut self, ctx: &mut ViewContext<Self>) {
+        let snapshot = NetworkLogModel::as_ref(ctx).snapshot();
+        self.latest_plain_text = snapshot.plain_text;
         self.editor.update(ctx, |view, ctx| {
-            Self::apply_snapshot_to_editor(view, &snapshot, ctx);
+            Self::apply_snapshot_to_editor(view, &snapshot.display_text, ctx);
         });
+        ctx.notify();
     }
 
     /// Resets the editor buffer with the given snapshot text and queues a
@@ -137,6 +145,10 @@ impl NetworkLogView {
             }),
             version,
         ));
+    }
+
+    fn snapshot_is_empty(&self) -> bool {
+        self.latest_plain_text.is_empty()
     }
 
     /// Renders the refresh icon button for the pane header. Clicking the
@@ -167,6 +179,31 @@ impl NetworkLogView {
                 NetworkLogViewCustomAction,
             >>(PaneHeaderAction::CustomAction(
                 NetworkLogViewCustomAction::Refresh,
+            ));
+        })
+        .finish()
+    }
+
+    fn render_copy_button(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let ui_builder = appearance.ui_builder().clone();
+
+        icon_button_with_color(
+            appearance,
+            icons::Icon::Copy,
+            false,
+            self.copy_button_mouse_state.clone(),
+            blended_colors::text_sub(theme, theme.background()).into(),
+        )
+        .with_tooltip(move || ui_builder.tool_tip("Copy all".to_string()).build().finish())
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action::<PaneHeaderAction<
+                NetworkLogViewAction,
+                NetworkLogViewCustomAction,
+            >>(PaneHeaderAction::CustomAction(
+                NetworkLogViewCustomAction::CopyAll,
             ));
         })
         .finish()
@@ -215,6 +252,10 @@ impl BackingView for NetworkLogView {
     ) {
         match custom_action {
             NetworkLogViewCustomAction::Refresh => self.reload_snapshot(ctx),
+            NetworkLogViewCustomAction::CopyAll => {
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(self.latest_plain_text.clone()));
+            }
         }
     }
 
@@ -239,7 +280,15 @@ impl BackingView for NetworkLogView {
             title_max_width: None,
             left_of_title: None,
             right_of_title: None,
-            left_of_overflow: Some(self.render_refresh_button(app)),
+            left_of_overflow: Some(if self.snapshot_is_empty() {
+                self.render_refresh_button(app)
+            } else {
+                Flex::row()
+                    .with_spacing(4.0)
+                    .with_child(self.render_copy_button(app))
+                    .with_child(self.render_refresh_button(app))
+                    .finish()
+            }),
             // Keep the close button always visible so hovering the header
             // doesn't cause the refresh button to shift horizontally as the
             // close button appears.
