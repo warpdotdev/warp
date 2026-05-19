@@ -2121,6 +2121,7 @@ impl RootView {
                 if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
                     apply_onboarding_settings(&selected_settings, ctx);
                 }
+                AgentOnboardingView::evict_onboarding_images(ctx);
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 self.start_pending_tutorial(ctx);
@@ -2253,6 +2254,7 @@ impl RootView {
                         .update(ctx, |model, ctx| model.set_user_onboarded(ctx));
                 }
 
+                AgentOnboardingView::evict_onboarding_images(ctx);
                 let workspace = target.to_workspace(ctx);
                 let tutorial = OnboardingTutorial::from(selected_settings.clone());
                 self.pending_tutorial = Some(tutorial);
@@ -2278,6 +2280,7 @@ impl RootView {
                         .update(ctx, |model, ctx| model.set_user_onboarded(ctx));
                 }
 
+                AgentOnboardingView::evict_onboarding_images(ctx);
                 let workspace = target.to_workspace(ctx);
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);

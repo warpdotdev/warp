@@ -11,7 +11,6 @@ use crate::telemetry::OnboardingEvent;
 use ai::LLMId;
 use instant::Instant;
 use std::time::Duration;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::image_cache::ImageType;
@@ -322,10 +321,11 @@ impl AgentOnboardingView {
         // instead of to other views (e.g. the editor).
         ctx.focus_self();
 
-        // Preload customize-slide images so they're ready when the user reaches that slide.
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            Self::preload_onboarding_images(ctx);
-        }
+        // Onboarding images are loaded on-demand when each slide renders.
+        // Bundled assets decode synchronously so there is no visible delay.
+        // We intentionally do NOT eagerly preload all slide images here
+        // because doing so decodes ~54 large PNGs into RGBA at once,
+        // spiking heap usage by ~650 MB (APP-4541).
 
         send_telemetry_from_ctx!(OnboardingEvent::OnboardingStarted, ctx);
         send_telemetry_from_ctx!(
@@ -336,28 +336,28 @@ impl AgentOnboardingView {
         );
     }
 
-    /// Eagerly loads all onboarding slide images into the asset cache
-    /// so they display instantly when the user navigates between slides.
-    fn preload_onboarding_images(ctx: &mut ViewContext<Self>) {
+    /// Evicts all onboarding slide images from both the asset cache (decoded
+    /// RGBA bitmaps) and the rendered-size image cache.
+    ///
+    /// Call this when onboarding is dismissed (completed or skipped) so the
+    /// large decoded bitmaps don't persist in memory after they're no longer
+    /// needed. The images will be re-decoded on demand if the user re-enters
+    /// onboarding.
+    pub fn evict_onboarding_images(ctx: &AppContext) {
         let asset_cache = warpui::assets::asset_cache::AssetCache::as_ref(ctx);
-        // Preload the shared background image used on all right panels.
-        asset_cache.load_asset::<ImageType>(AssetSource::Bundled {
-            path: crate::slides::layout::ONBOARDING_BG_PATH,
-        });
-        for path in IntentionSlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
+        let image_cache = warpui::image_cache::ImageCache::as_ref(ctx);
+
+        let all_paths = std::iter::once(crate::slides::layout::ONBOARDING_BG_PATH)
+            .chain(IntentionSlide::VISUAL_IMAGE_PATHS.iter().copied())
+            .chain(CustomizeUISlide::VISUAL_IMAGE_PATHS.iter().copied())
+            .chain(ThirdPartySlide::VISUAL_IMAGE_PATHS.iter().copied())
+            .chain(ThemePickerSlide::VISUAL_IMAGE_PATHS.iter().copied());
+
+        for path in all_paths {
+            let source = AssetSource::Bundled { path };
+            asset_cache.evict_asset::<ImageType>(&source);
+            image_cache.evict_image(&source);
         }
-        for path in CustomizeUISlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in ThirdPartySlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in ThemePickerSlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        // Agent slide reuses customize_vertical_tabs / customize_horizontal_tabs
-        // which are already in CustomizeUISlide::VISUAL_IMAGE_PATHS.
     }
 
     fn handle_onboarding_completed(&mut self, ctx: &mut ViewContext<Self>) {

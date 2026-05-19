@@ -275,12 +275,20 @@ impl AssetCache {
         evicted_image_ids
     }
 
-    /// The main API of the asset cache. Given the location of an asset, returns an indicator of the
-    /// in-memory availability of the asset. If the asset is not already loaded or loading, a background
-    /// task is spawned to perform the retrieval.
+    /// Removes a previously-loaded asset from the cache.
     ///
-    /// Note: this is an idempotent operation. It can be called as many times as needed on a given
-    /// asset and won't duplicate work.
+    /// The next call to [`load_asset`](Self::load_asset) for the same source
+    /// will re-load the asset from scratch. This is intentionally *not* wired
+    /// through `ImageCache::evict_image` — callers that also want the
+    /// rendered-size image cache cleared should do so separately.
+    pub fn evict_asset<T: Asset>(&self, source: &AssetSource) {
+        let key = AssetHandle {
+            source: source.clone(),
+            asset_type: TypeId::of::<T>(),
+        };
+        self.inner.borrow_mut().remove(&key);
+    }
+
     pub fn load_asset<T: Asset>(&self, source: AssetSource) -> AssetState<T> {
         let mut assets = self.inner.borrow_mut();
 
