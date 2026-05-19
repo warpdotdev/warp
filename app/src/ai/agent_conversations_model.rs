@@ -695,12 +695,12 @@ impl AgentConversationsModel {
             self.get_or_async_fetch_task_data_internal(task_id, true, ctx);
         }
 
-        // (b) If management view or conversation list is open, throttled list-fetch.
         let has_list_consumers = self
             .active_data_consumers_per_window
             .values()
             .any(|views| !views.is_empty());
         if has_list_consumers {
+            // (b) If management view or conversation list is open, throttled list-fetch.
             self.handle_rtc_for_list_views(*timestamp, ctx);
         } else {
             // (c) Nothing open: record earliest timestamp for flush on next view open.

@@ -25,6 +25,17 @@ The server sends `AmbientTaskUpdated { TaskId, Timestamp }` over the websocket o
 3. Every RTC event triggers a list-fetch even if no list view is open
 4. No recovery if websocket misses a message (polling fully disabled when RTC is on, `agent_conversations_model.rs:981-983`)
 
+### Out of scope: spawn.rs session polling
+
+`ambient_agents/spawn.rs` has a separate polling loop (`poll_run_until_joinable_session`, `spawn.rs:165-308`) that polls `GET /agent/runs/{task_id}` every 3s (`TASK_STATUS_POLL_INTERVAL`, `spawn.rs:23`) to detect when a session becomes joinable. **Not affected by these changes.**
+
+The tab IS registered in `ActiveAgentViewsModel` on `TaskSpawned` (`model.rs:1261-1262`), so the RTC handler (change 2a) will see `has_open_tab = true` and trigger redundant re-fetches during spawn. This is a minor inefficiency (~4-5 extra single-task requests per spawn) deferred for now — the big win is eliminating list-fetches.
+
+RTC cannot replace spawn.rs because:
+- spawn.rs drives the session state machine (`WaitingForSession` → `AgentRunning`) by emitting `AmbientAgentEvent::SessionStarted` (`spawn.rs:292-295`), which triggers the shared session join (`model.rs:1311-1346`). RTC only refreshes cached task data.
+- spawn.rs handles timeouts, error/terminal states, followup stale-state skipping, and cancellation.
+- spawn.rs extracts `SessionJoinInfo::from_task` (`spawn.rs:278`) each poll; RTC events only carry `task_id` + `timestamp`.
+
 ### Relevant files
 
 - `app/src/server/cloud_objects/listener.rs:113-116` — websocket message type with `task_id`
