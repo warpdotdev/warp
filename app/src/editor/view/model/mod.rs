@@ -39,7 +39,7 @@ use warpui::{
     SingletonEntity,
 };
 
-use crate::{editor::RangeExt, vim_registers::VimRegisters};
+use crate::{editor::RangeExt, localization, vim_registers::VimRegisters};
 
 use vim::{
     find_next_paragraph_end, find_previous_paragraph_start,
@@ -531,9 +531,10 @@ impl EditorModel {
                 };
                 AccessibilityContent::new(delta, format!(", {action}"), WarpA11yRole::UserAction)
             }
-            (true, false) => {
-                AccessibilityContent::new_without_help("Unselected", WarpA11yRole::UserAction)
-            }
+            (true, false) => AccessibilityContent::new_without_help(
+                localization::text_for_app(ctx, "editor.a11y.unselected"),
+                WarpA11yRole::UserAction,
+            ),
         }
     }
 

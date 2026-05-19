@@ -5,6 +5,7 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
 use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
+use crate::localization;
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
 
@@ -143,7 +144,9 @@ fn collect_buttons(
             } => {
                 // Only show plan button if synced to Warp Drive (has notebook_uid)
                 if let Some(notebook_uid) = notebook_uid {
-                    let button_text = title.clone().unwrap_or("Untitled Plan".to_string());
+                    let button_text = title.clone().unwrap_or_else(|| {
+                        localization::text_for_app(ctx, "artifact.plan.untitled")
+                    });
                     let theme = theme.clone();
                     buttons.push(ctx.add_typed_action_view(move |_| {
                         make_plan_button(button_text, *notebook_uid, theme)

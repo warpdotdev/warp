@@ -3,6 +3,7 @@ use std::fmt::Debug;
 
 use crate::{
     appearance::Appearance,
+    localization,
     menu::{Menu, MenuItem},
     pane_group::{
         focus_state::{PaneFocusHandle, PaneGroupFocusEvent},
@@ -152,9 +153,11 @@ impl<P: BackingView> PaneHeader<P> {
 
         let shared_content = SharedPaneContent::new(ctx);
 
-        let toolbelt_feature_popup = ctx.add_view(|_| {
+        let toolbelt_feature_popup_label =
+            localization::text_for_app(ctx, "terminal.pane_header.toolbelt_feature_popup");
+        let toolbelt_feature_popup = ctx.add_view(move |_| {
             FeaturePopup::new_feature(NewFeaturePopupLabel::FromString(
-                "Open files and review code diffs".to_string(),
+                toolbelt_feature_popup_label.clone(),
             ))
         });
         ctx.subscribe_to_view(&toolbelt_feature_popup, move |me, _, event, ctx| {

@@ -17,6 +17,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 use crate::ai::agent::AIAgentExchangeId;
 use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
+use crate::localization;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles::{
     font_size, icon_color, item_background, menu_background_color, primary_text_color, ICON_MARGIN,
@@ -141,7 +142,7 @@ impl SearchItem for RewindSearchItem {
         let changes_element: Box<dyn Element> = if self.is_current {
             // "Current" item shows "No code to be restored"
             Text::new_inline(
-                "No code to be restored".to_string(),
+                localization::text_for_app(app, "terminal.rewind.no_code_to_restore"),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )
@@ -174,7 +175,7 @@ impl SearchItem for RewindSearchItem {
             row.finish()
         } else {
             Text::new_inline(
-                "No code to be restored".to_string(),
+                localization::text_for_app(app, "terminal.rewind.no_code_to_restore"),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )

@@ -14,6 +14,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 
@@ -58,29 +59,29 @@ fn modal_terminal_magenta_overlay_1(appearance: &Appearance) -> ColorU {
 
 struct FeatureItem {
     icon: Icon,
-    title: &'static str,
-    description: &'static str,
-    badge: Option<&'static str>,
+    title_key: &'static str,
+    description_key: &'static str,
+    badge_key: Option<&'static str>,
 }
 
 const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::Cloud,
-        title: "Run any agent harness in the cloud",
-        description: "Use Oz to spin up Claude Code or Codex agents in the cloud; Oz will help you track and steer the agents.",
-        badge: None,
+        title_key: "workspace.orchestration_launch.feature.any_harness.title",
+        description_key: "workspace.orchestration_launch.feature.any_harness.description",
+        badge_key: None,
     },
     FeatureItem {
         icon: Icon::Atom02,
-        title: "Multi-agent orchestration",
-        description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
-        badge: None,
+        title_key: "workspace.orchestration_launch.feature.multi_agent.title",
+        description_key: "workspace.orchestration_launch.feature.multi_agent.description",
+        badge_key: None,
     },
     FeatureItem {
         icon: Icon::Cognition,
-        title: "Agent Memory",
-        description: "Agents will now store and access long-term memories, enabling self-improvement over time.",
-        badge: Some("Research preview"),
+        title_key: "workspace.orchestration_launch.feature.memory.title",
+        description_key: "workspace.orchestration_launch.feature.memory.description",
+        badge_key: Some("workspace.orchestration_launch.feature.memory.badge"),
     },
 ];
 
@@ -183,19 +184,23 @@ impl OrchestrationLaunchModal {
                 .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
         });
 
-        let learn_more_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Learn more", LearnMoreButtonTheme)
-                .with_icon(Icon::LinkExternal)
-                .with_full_width(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(OrchestrationLaunchModalAction::LearnMore)
-                })
+        let learn_more_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "auth.learn_more"),
+                LearnMoreButtonTheme,
+            )
+            .with_icon(Icon::LinkExternal)
+            .with_full_width(true)
+            .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::LearnMore))
         });
 
-        let go_to_warp_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Close", CtaButtonTheme)
-                .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
+        let go_to_warp_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "settings.action.close"),
+                CtaButtonTheme,
+            )
+            .with_full_width(true)
+            .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
         });
 
         Self {
@@ -244,12 +249,16 @@ impl OrchestrationLaunchModal {
         hero_stack.finish()
     }
 
-    fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
+    fn render_badge(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let text_color = modal_terminal_magenta(appearance);
         let background_color = modal_terminal_magenta_overlay_1(appearance);
-        let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-            .with_color(text_color)
-            .finish();
+        let text = Text::new_inline(
+            localization::text_for_app(app, "workspace.orchestration_launch.badge.new"),
+            appearance.ui_font_family(),
+            14.,
+        )
+        .with_color(text_color)
+        .finish();
         ConstrainedBox::new(
             Container::new(
                 Flex::row()
@@ -267,9 +276,9 @@ impl OrchestrationLaunchModal {
         .finish()
     }
 
-    fn render_title(appearance: &Appearance) -> Box<dyn Element> {
+    fn render_title(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Text::new(
-            "Orchestrate any agent, anywhere",
+            localization::text_for_app(app, "workspace.orchestration_launch.title"),
             appearance.ui_font_family(),
             20.,
         )
@@ -278,9 +287,9 @@ impl OrchestrationLaunchModal {
         .finish()
     }
 
-    fn render_description(appearance: &Appearance) -> Box<dyn Element> {
+    fn render_description(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Text::new(
-            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
+            localization::text_for_app(app, "workspace.orchestration_launch.description"),
             appearance.ui_font_family(),
             14.,
         )
@@ -288,7 +297,7 @@ impl OrchestrationLaunchModal {
         .finish()
     }
 
-    fn render_feature_badge(label: &'static str, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_feature_badge(label: String, appearance: &Appearance) -> Box<dyn Element> {
         let font_family = appearance.ui_font_family();
         let color = modal_text_sub(appearance);
         Container::new(
@@ -303,7 +312,12 @@ impl OrchestrationLaunchModal {
         .finish()
     }
 
-    fn render_feature_row(&self, item: &FeatureItem, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_feature_row(
+        &self,
+        item: &FeatureItem,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let icon_el = ConstrainedBox::new(
             item.icon
                 .to_warpui_icon(Fill::Solid(modal_text_sub(appearance)))
@@ -317,12 +331,19 @@ impl OrchestrationLaunchModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.);
         title_row.add_child(
-            Text::new_inline(item.title.to_string(), appearance.ui_font_family(), 14.)
-                .with_color(modal_text_main(appearance))
-                .finish(),
+            Text::new_inline(
+                localization::text_for_app(app, item.title_key),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(modal_text_main(appearance))
+            .finish(),
         );
-        if let Some(badge_label) = item.badge {
-            title_row.add_child(Self::render_feature_badge(badge_label, appearance));
+        if let Some(badge_key) = item.badge_key {
+            title_row.add_child(Self::render_feature_badge(
+                localization::text_for_app(app, badge_key),
+                appearance,
+            ));
         }
 
         let text_col = Flex::column()
@@ -330,9 +351,13 @@ impl OrchestrationLaunchModal {
             .with_spacing(2.)
             .with_child(title_row.finish())
             .with_child(
-                Text::new(item.description, appearance.ui_font_family(), 14.)
-                    .with_color(modal_text_sub(appearance))
-                    .finish(),
+                Text::new(
+                    localization::text_for_app(app, item.description_key),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(modal_text_sub(appearance))
+                .finish(),
             )
             .finish();
 
@@ -344,12 +369,12 @@ impl OrchestrationLaunchModal {
             .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut features_col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(12.);
         for item in FEATURE_ITEMS {
-            features_col.add_child(self.render_feature_row(item, appearance));
+            features_col.add_child(self.render_feature_row(item, appearance, app));
         }
 
         let footer = Flex::row()
@@ -370,9 +395,9 @@ impl OrchestrationLaunchModal {
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Start)
                         .with_spacing(8.)
-                        .with_child(Self::render_badge(appearance))
-                        .with_child(Self::render_title(appearance))
-                        .with_child(Self::render_description(appearance))
+                        .with_child(Self::render_badge(appearance, app))
+                        .with_child(Self::render_title(appearance, app))
+                        .with_child(Self::render_description(appearance, app))
                         .finish(),
                 )
                 .with_child(
@@ -413,7 +438,7 @@ impl View for OrchestrationLaunchModal {
                     .with_main_axis_size(MainAxisSize::Min)
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_child(self.render_hero())
-                    .with_child(self.render_body(appearance))
+                    .with_child(self.render_body(appearance, app))
                     .finish(),
             )
             .with_background(modal_background(appearance))

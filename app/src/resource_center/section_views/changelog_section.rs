@@ -13,9 +13,11 @@ use warpui::{
     ViewContext,
 };
 
+use crate::localization;
 use crate::{
     appearance::Appearance,
     changelog_model::{ChangelogHeader, ChangelogModel, ChangelogState, Event as ChangelogEvent},
+    settings::LanguageSettings,
     themes::theme::Fill,
     ui_components::icons,
 };
@@ -29,8 +31,8 @@ struct ChangelogMouseStateHandles {
     view_changelogs_mouse_state: MouseStateHandle,
 }
 
-const CHANGELOG_FETCH_ERROR_MSG: &str = "Unable to fetch the latest changelog.";
-const CHANGELOG_LOADING_MSG: &str = "Loading...";
+const CHANGELOG_FETCH_ERROR_KEY: &str = "resource_center.changelog.fetch_error";
+const CHANGELOG_LOADING_KEY: &str = "resource_center.changelog.loading";
 
 pub struct ChangelogSectionView {
     changelog_model_handle: ModelHandle<ChangelogModel>,
@@ -87,6 +89,18 @@ impl ChangelogSectionView {
             me.handle_changelog_event(event, ctx);
         });
 
+        let language_settings = LanguageSettings::handle(ctx);
+        ctx.observe(&language_settings, |me, _, ctx| {
+            me.changelog_fetch_error = create_formatted_text_from_string(
+                localization::text_for_app(ctx, CHANGELOG_FETCH_ERROR_KEY),
+            );
+            me.changelog_loading = create_formatted_text_from_string(localization::text_for_app(
+                ctx,
+                CHANGELOG_LOADING_KEY,
+            ));
+            ctx.notify();
+        });
+
         Self {
             changelog_model_handle,
             changelog_button_mouse_states: Default::default(),
@@ -95,10 +109,14 @@ impl ChangelogSectionView {
             new_features_highlighted_link: Default::default(),
             improvements_highlighted_link: Default::default(),
             bug_fixes_highlighted_link: Default::default(),
-            changelog_fetch_error: create_formatted_text_from_string(
-                CHANGELOG_FETCH_ERROR_MSG.to_string(),
-            ),
-            changelog_loading: create_formatted_text_from_string(CHANGELOG_LOADING_MSG.to_string()),
+            changelog_fetch_error: create_formatted_text_from_string(localization::text_for_app(
+                ctx,
+                CHANGELOG_FETCH_ERROR_KEY,
+            )),
+            changelog_loading: create_formatted_text_from_string(localization::text_for_app(
+                ctx,
+                CHANGELOG_LOADING_KEY,
+            )),
         }
     }
 
@@ -360,12 +378,12 @@ impl SectionView for ChangelogSectionView {
         None
     }
 
-    fn section_link(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn section_link(&self, appearance: &Appearance, ctx: &AppContext) -> Option<Box<dyn Element>> {
         Some(
             appearance
                 .ui_builder()
                 .link(
-                    "Read all changelogs".into(),
+                    localization::text_for_app(ctx, "resource_center.changelog.read_all"),
                     Some("https://docs.warp.dev/changelog".into()),
                     None,
                     self.changelog_button_mouse_states

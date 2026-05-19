@@ -28,6 +28,7 @@ use crate::code::view::CodeViewAction;
 use crate::code_review::comments::{AttachedReviewComment, PendingImportedReviewComment};
 use crate::code_review::diff_state::DiffMode;
 use crate::env_vars::EnvVarCollectionType;
+use crate::localization;
 use crate::notebooks::file::FileNotebookView;
 use crate::pane_group::focus_state::PaneGroupFocusEvent;
 use crate::pane_group::pane::get_started_pane::GetStartedPane;
@@ -3000,14 +3001,19 @@ impl PaneGroup {
             ctx.notify();
         });
 
-        let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
+        let user_default_shell_changed_banner = ctx.add_typed_action_view(|ctx| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
-                        "Warp doesn't currently support your default shell, falling back to zsh.  ",
+                    FormattedTextFragment::plain_text(localization::text_for_app(
+                        ctx,
+                        "pane_group.banner.unsupported_shell.fallback",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        localization::text_for_app(ctx, "auth.learn_more"),
+                        WARP_SHELL_COMPATIBILITY_DOCS,
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
+                localization::text_for_app(ctx, "agent.block.action.dont_show_again"),
             )
         });
 

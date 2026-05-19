@@ -141,7 +141,7 @@ fn try_receive_message_internal(socket_fd: impl AsRawFd) -> Result<TryReceiveMes
     let (payload_size, cmsgs) = match receive_message_header(&socket_fd)? {
         ReceiveMessageHeaderResult::WouldBlock => return Ok(TryReceiveMessageResult::WouldBlock),
         ReceiveMessageHeaderResult::SocketClosed => {
-            return Ok(TryReceiveMessageResult::SocketClosed)
+            return Ok(TryReceiveMessageResult::SocketClosed);
         }
         ReceiveMessageHeaderResult::Success {
             payload_size,

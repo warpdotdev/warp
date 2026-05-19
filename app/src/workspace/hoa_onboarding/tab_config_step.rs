@@ -5,10 +5,12 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
+use warpui::AppContext;
 use warpui::Element;
 use warpui::EventContext;
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::tab_configs::session_config::SessionType;
 use crate::tab_configs::session_config_rendering;
 use crate::view_components::callout_bubble::{
@@ -16,6 +18,10 @@ use crate::view_components::callout_bubble::{
 };
 
 const SECTION_GAP: f32 = 16.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub struct TabConfigFormState<'a> {
     pub session_types: &'a [SessionType],
@@ -47,6 +53,7 @@ pub fn render_tab_config_form<F1, F2, F3, F4>(
     state: TabConfigFormState<'_>,
     handlers: TabConfigFormHandlers<F1, F2, F3, F4>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F1: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -56,7 +63,7 @@ where
 {
     let callout_bg = callout_background_fill(appearance).into_solid();
     let title = Text::new(
-        "Create your first tab config",
+        text(app, "workspace.hoa_onboarding.tab_config.title"),
         appearance.ui_font_family(),
         16.,
     )
@@ -65,7 +72,7 @@ where
     .finish();
 
     let description = Text::new(
-        "Set up a reusable starting point for your tabs. Pick a repo, choose a session type, and optionally attach a worktree. Use it whenever you want to open a tab with this setup.",
+        text(app, "workspace.hoa_onboarding.tab_config.description"),
         appearance.ui_font_family(),
         14.,
     )
@@ -79,6 +86,7 @@ where
         handlers.on_select_session_type,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let directory_section = session_config_rendering::render_directory_picker_with_background(
@@ -87,27 +95,34 @@ where
         handlers.on_open_directory_picker,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let worktree_section = session_config_rendering::render_worktree_checkbox_with_background(
-        state.enable_worktree,
-        state.is_git_repo,
-        state.worktree_checkbox_mouse_state,
-        state.worktree_tooltip_mouse_state,
+        session_config_rendering::WorktreeCheckboxState {
+            enabled: state.enable_worktree,
+            is_git_repo: state.is_git_repo,
+            checkbox_mouse_state: state.worktree_checkbox_mouse_state,
+            tooltip_mouse_state: state.worktree_tooltip_mouse_state,
+        },
         handlers.on_toggle_worktree,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let autogenerate_section =
         session_config_rendering::render_autogenerate_worktree_branch_name_checkbox_with_background(
-            state.autogenerate_worktree_branch_name,
-            state.enable_worktree,
-            state.autogenerate_checkbox_mouse_state,
-            state.autogenerate_tooltip_mouse_state,
+            session_config_rendering::AutogenerateWorktreeCheckboxState {
+                checked: state.autogenerate_worktree_branch_name,
+                enable_worktree: state.enable_worktree,
+                checkbox_mouse_state: state.autogenerate_checkbox_mouse_state,
+                tooltip_mouse_state: state.autogenerate_tooltip_mouse_state,
+            },
             handlers.on_toggle_autogenerate,
             Some(callout_bg),
             appearance,
+            app,
         );
 
     Flex::column()

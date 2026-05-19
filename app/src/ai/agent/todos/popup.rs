@@ -22,6 +22,7 @@ use warpui::{
 use crate::ai::agent::icons::{in_progress_icon, pending_icon, succeeded_icon};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::localization;
 use crate::ui_components::blended_colors;
 
 pub struct AgentTodosPopupView {
@@ -31,6 +32,10 @@ pub struct AgentTodosPopupView {
 }
 
 const IN_PROGRESS_POSITION_ID: &str = "AgentTodosPopup-in-progress";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum AgentTodosPopupAction {
@@ -136,7 +141,7 @@ impl AgentTodosPopupView {
 
         let mut header_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         let mut header = Text::new(
-            "Tasks".to_string(),
+            text(app, "agent.todos.title"),
             appearance.header_font_family(),
             styles.detail_font_size + 2.,
         )

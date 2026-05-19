@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use warp_util::path::LineAndColumnArg;
 use warpui::{
     elements::{DraggableState, Empty, MouseStateHandle},
+    keymap::BindingDescription,
     AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -19,7 +20,17 @@ use ai::diff_validation::DiffDelta;
 
 // Keybinding constants - exported so AI document view can reuse
 pub const SAVE_FILE_BINDING_NAME: &str = "code_view:save";
-pub const SAVE_FILE_BINDING_DESCRIPTION: &str = "Save file";
+pub const SAVE_FILE_BINDING_DESCRIPTION_KEY: &str = "code.binding.save_file";
+pub const SAVE_FILE_BINDING_DESCRIPTION_FALLBACK: &str = "Save file";
+
+pub fn save_file_binding_description() -> BindingDescription {
+    BindingDescription::new(SAVE_FILE_BINDING_DESCRIPTION_FALLBACK).with_dynamic_override(|app| {
+        Some(crate::localization::text_for_app(
+            app,
+            SAVE_FILE_BINDING_DESCRIPTION_KEY,
+        ))
+    })
+}
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub fn is_supported_code_file(_path: impl AsRef<Path>) -> bool {

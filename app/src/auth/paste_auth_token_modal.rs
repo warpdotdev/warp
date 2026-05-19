@@ -13,6 +13,7 @@ use crate::auth::login_failure_notification::LoginFailureReason;
 use crate::editor::{
     EditorView, InteractionState, SingleLineEditorOptions, TextColors, TextOptions,
 };
+use crate::localization;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
@@ -120,7 +121,10 @@ impl PasteAuthTokenModalView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Enter auth token", ctx);
+            editor.set_placeholder_text(
+                localization::text_for_app(ctx, "auth.token.enter_placeholder"),
+                ctx,
+            );
             editor
         });
 
@@ -238,7 +242,7 @@ impl View for PasteAuthTokenModalView {
         let ui_builder = appearance.ui_builder();
 
         let title = FormattedTextElement::from_str(
-            "Paste your auth token below",
+            localization::text_for_app(app, "auth.token.modal.title"),
             appearance.ui_font_family(),
             16.,
         )
@@ -265,7 +269,7 @@ impl View for PasteAuthTokenModalView {
 
         let subtitle_color = internal_colors::text_sub(theme, dialog_surface_solid);
         let subtitle = FormattedTextElement::from_str(
-            "Paste your auth token from the browser to get complete login.",
+            localization::text_for_app(app, "auth.token.modal.subtitle"),
             appearance.ui_font_family(),
             14.,
         )
@@ -306,7 +310,7 @@ impl View for PasteAuthTokenModalView {
 
         if let Some(reason) = &self.last_failure_reason {
             let error_text = FormattedTextElement::new(
-                reason.to_formatted_text(),
+                reason.to_formatted_text(app),
                 14.,
                 appearance.ui_font_family(),
                 appearance.monospace_font_family(),

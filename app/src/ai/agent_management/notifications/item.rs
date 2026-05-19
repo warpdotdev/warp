@@ -32,16 +32,6 @@ pub enum NotificationFilter {
     Errors,
 }
 
-impl NotificationFilter {
-    pub(crate) fn label(&self) -> &'static str {
-        match self {
-            NotificationFilter::All => "All tabs",
-            NotificationFilter::Unread => "Unread",
-            NotificationFilter::Errors => "Errors",
-        }
-    }
-}
-
 /// Identifies the agent that produced a notification, including whether the run was
 /// ambient (cloud) or local. The `is_ambient` flag drives the cloud-lobe rendering in
 /// [`render_agent_avatar`].

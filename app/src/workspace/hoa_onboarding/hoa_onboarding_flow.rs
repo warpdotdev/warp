@@ -23,6 +23,7 @@ use pathfinder_color::ColorU;
 use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::settings::AISettings;
 use crate::tab_configs::session_config::{is_git_repo, SessionConfigSelection, SessionType};
 use crate::tab_configs::session_config_rendering;
@@ -42,6 +43,10 @@ use super::tab_config_step;
 use super::welcome_banner;
 
 const CALLOUT_WIDTH: f32 = 480.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 struct HoaPrimaryButtonTheme;
 
@@ -209,38 +214,51 @@ impl HoaOnboardingFlow {
                 .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::Dismiss))
         });
 
-        let cta_button = ctx.add_view(|_ctx| {
-            ActionButton::new("See what's new", HoaWelcomeModalButtonTheme)
-                .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromWelcome))
+        let cta_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                text(ctx, "workspace.hoa_onboarding.action.see_whats_new"),
+                HoaWelcomeModalButtonTheme,
+            )
+            .with_full_width(true)
+            .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromWelcome))
         });
 
         let enter = Keystroke::parse("enter").unwrap_or_default();
 
         let next_vtabs_button = ctx.add_view(|ctx| {
-            ActionButton::new("Next", HoaPrimaryButtonTheme)
-                .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromVerticalTabs)
-                })
+            ActionButton::new(
+                text(ctx, "workspace.hoa_onboarding.action.next"),
+                HoaPrimaryButtonTheme,
+            )
+            .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
+            .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromVerticalTabs))
         });
 
         let dismiss_vtabs_button = ctx.add_view(|ctx| {
-            ActionButton::new("Dismiss", HoaPrimaryButtonTheme)
-                .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
-                .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::Dismiss))
+            ActionButton::new(
+                text(ctx, "workspace.hoa_onboarding.action.dismiss"),
+                HoaPrimaryButtonTheme,
+            )
+            .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
+            .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::Dismiss))
         });
 
         let next_inbox_button = ctx.add_view(|ctx| {
-            ActionButton::new("Next", HoaPrimaryButtonTheme)
-                .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
-                .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromInbox))
+            ActionButton::new(
+                text(ctx, "workspace.hoa_onboarding.action.next"),
+                HoaPrimaryButtonTheme,
+            )
+            .with_keybinding(KeystrokeSource::Fixed(enter.clone()), ctx)
+            .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::AdvanceFromInbox))
         });
 
         let finish_button = ctx.add_view(|ctx| {
-            ActionButton::new("Finish", HoaPrimaryButtonTheme)
-                .with_keybinding(KeystrokeSource::Fixed(enter), ctx)
-                .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::Finish))
+            ActionButton::new(
+                text(ctx, "workspace.hoa_onboarding.action.finish"),
+                HoaPrimaryButtonTheme,
+            )
+            .with_keybinding(KeystrokeSource::Fixed(enter), ctx)
+            .on_click(|ctx| ctx.dispatch_typed_action(HoaOnboardingAction::Finish))
         });
 
         Self {
@@ -376,8 +394,8 @@ impl HoaOnboardingFlow {
 
     fn render_callout_content(
         &self,
-        title: &'static str,
-        description: &'static str,
+        title: String,
+        description: String,
         extra_child: Option<Box<dyn Element>>,
         button: &ViewHandle<ActionButton>,
         appearance: &Appearance,
@@ -427,7 +445,10 @@ impl HoaOnboardingFlow {
             .finish();
 
         let checkbox_label = Text::new_inline(
-            "Switch back to horizontal tabs".to_string(),
+            text(
+                app,
+                "workspace.hoa_onboarding.vertical_tabs.switch_horizontal",
+            ),
             appearance.ui_font_family(),
             12.,
         )
@@ -448,17 +469,17 @@ impl HoaOnboardingFlow {
         };
 
         self.render_callout_content(
-            "Introducing vertical tabs - the new default",
-            "Vertical tabs show all open agent and terminal panes, grouped by tab. Customize what information you want to see to support your workflow.",
+            text(app, "workspace.hoa_onboarding.vertical_tabs.title"),
+            text(app, "workspace.hoa_onboarding.vertical_tabs.description"),
             Some(checkbox_row),
             button,
             appearance,
         )
     }
 
-    fn render_inbox_callout(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_inbox_callout(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let title = Text::new(
-            "Meet your new agent inbox",
+            text(app, "workspace.hoa_onboarding.agent_inbox.title"),
             appearance.ui_font_family(),
             16.,
         )
@@ -468,7 +489,7 @@ impl HoaOnboardingFlow {
 
         // Build the description with an inline "Learn more" hyperlink.
         let learn_more_fragment = FormattedTextFragment {
-            text: "Learn more".into(),
+            text: text(app, "workspace.hoa_onboarding.agent_inbox.learn_more"),
             styles: FormattedTextStyles {
                 underline: true,
                 hyperlink: Some(Hyperlink::Url(
@@ -479,9 +500,10 @@ impl HoaOnboardingFlow {
         };
 
         let formatted = FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "Warp pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
-            ),
+            FormattedTextFragment::plain_text(text(
+                app,
+                "workspace.hoa_onboarding.agent_inbox.description",
+            )),
             learn_more_fragment,
         ])]);
 
@@ -515,7 +537,11 @@ impl HoaOnboardingFlow {
         Flex::column().with_child(body).with_child(footer).finish()
     }
 
-    fn render_tab_config_step(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_tab_config_step(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let form = tab_config_step::render_tab_config_form(
             tab_config_step::TabConfigFormState {
                 session_types: &self.session_types,
@@ -548,6 +574,7 @@ impl HoaOnboardingFlow {
                 },
             },
             appearance,
+            app,
         );
 
         let footer = self.render_callout_footer(&self.finish_button, appearance);
@@ -612,7 +639,7 @@ impl View for HoaOnboardingFlow {
                 )
             }
             HoaOnboardingStep::AgentInboxCallout => {
-                let content = self.render_inbox_callout(appearance);
+                let content = self.render_inbox_callout(appearance, app);
                 render_callout_bubble(
                     content,
                     &CalloutBubbleConfig {
@@ -624,7 +651,7 @@ impl View for HoaOnboardingFlow {
                 )
             }
             HoaOnboardingStep::TabConfig => {
-                let tab_content = self.render_tab_config_step(appearance);
+                let tab_content = self.render_tab_config_step(appearance, app);
                 let use_vertical = *TabSettings::as_ref(app).use_vertical_tabs;
                 let (arrow_direction, arrow_position) = if use_vertical {
                     (

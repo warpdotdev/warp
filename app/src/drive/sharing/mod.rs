@@ -12,6 +12,7 @@ use warpui::{
 use crate::{
     ai::{agent::conversation::AIConversationId, blocklist::BlocklistAIHistoryModel},
     cloud_object::model::persistence::CloudModel,
+    localization,
     server::{ids::ServerId, server_api::object::GuestIdentifier},
     terminal::{shared_session::join_link, TerminalView},
     ui_components::{
@@ -110,7 +111,10 @@ impl SubjectExt for Subject {
             Subject::User(kind) => kind.name(app),
             Subject::PendingUser { email } => email.clone().map(Cow::from),
             Subject::Team(kind) => kind.display_name(app).map(Cow::from),
-            Subject::AnyoneWithLink(_) => Some(Cow::from("Anyone with the link")),
+            Subject::AnyoneWithLink(_) => Some(Cow::from(localization::text_for_app(
+                app,
+                "drive.sharing.anyone_with_link",
+            ))),
         }
     }
 

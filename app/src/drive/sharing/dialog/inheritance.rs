@@ -11,6 +11,7 @@ use super::style;
 use crate::{
     cloud_object::{model::persistence::CloudModel, ServerObjectContainer},
     drive::CloudObjectTypeAndId,
+    localization,
     server::{ids::SyncId, telemetry::SharingDialogSource},
     workspace::WorkspaceAction,
 };
@@ -50,9 +51,12 @@ impl InheritanceState {
 
         match folder_name {
             Some(folder_name) => {
-                let prefix = style::detail_text("Inherited from ", appearance)
-                    .build()
-                    .finish();
+                let prefix = style::detail_text(
+                    localization::text_for_app(app, "drive.sharing.inherited_from"),
+                    appearance,
+                )
+                .build()
+                .finish();
                 let source_folder = self.source_folder;
                 let folder_link = appearance
                     .ui_builder()
@@ -76,14 +80,23 @@ impl InheritanceState {
                         .with_children([prefix, folder_link])
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .finish(),
-                    tooltip_text: "Edit inherited permissions on the parent folder",
+                    tooltip_text: localization::text_for_app(
+                        app,
+                        "drive.sharing.tooltip.edit_inherited_permissions",
+                    ),
                 }
             }
             None => InheritanceDetails {
-                source_label: style::detail_text("Inherited permission", appearance)
-                    .build()
-                    .finish(),
-                tooltip_text: "Cannot edit inherited permissions",
+                source_label: style::detail_text(
+                    localization::text_for_app(app, "drive.sharing.inherited_permission"),
+                    appearance,
+                )
+                .build()
+                .finish(),
+                tooltip_text: localization::text_for_app(
+                    app,
+                    "drive.sharing.tooltip.cannot_edit_inherited_permissions",
+                ),
             },
         }
     }
@@ -95,5 +108,5 @@ pub struct InheritanceDetails {
     /// permissions directly.
     pub source_label: Box<dyn Element>,
     /// A tooltip to show on disabled permission-editing controls.
-    pub tooltip_text: &'static str,
+    pub tooltip_text: String,
 }

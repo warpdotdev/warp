@@ -63,8 +63,8 @@ pub fn init<S: Slide>(app: &mut AppContext) {
 
 /// Configuration for an optional checkbox displayed in the modal's control panel.
 pub struct CheckboxConfig {
-    pub label: &'static str,
-    pub description: &'static str,
+    pub label: String,
+    pub description: String,
 }
 
 pub trait Slide:
@@ -72,29 +72,29 @@ pub trait Slide:
 where
     Self: Sized,
 {
-    fn modal_title(&self) -> String;
-    fn modal_subtext_paragraphs(&self) -> Vec<FormattedTextLine>;
+    fn modal_title(&self, app: &AppContext) -> String;
+    fn modal_subtext_paragraphs(&self, app: &AppContext) -> Vec<FormattedTextLine>;
     fn first() -> Self;
     fn next(&self) -> Option<Self>;
     fn prev(&self) -> Option<Self>;
-    fn display_text(&self) -> Option<&'static str>;
-    fn short_label(&self) -> &'static str;
-    fn title(&self) -> &'static str;
+    fn display_text(&self, app: &AppContext) -> Option<String>;
+    fn short_label(&self, app: &AppContext) -> String;
+    fn title(&self, app: &AppContext) -> String;
     fn title_icon(&self) -> Option<Icon>;
-    fn content(&self) -> &'static str;
+    fn content(&self, app: &AppContext) -> String;
     fn image(&self) -> AssetSource;
     fn all() -> Vec<Self>;
-    fn cta_button(&self) -> CTAButton<Self>;
+    fn cta_button(&self, app: &AppContext) -> CTAButton<Self>;
 
     /// Returns an optional secondary CTA button for the modal.
     /// When Some, a secondary button is rendered alongside the primary CTA.
-    fn secondary_cta_button(&self) -> Option<CTAButton<Self>> {
+    fn secondary_cta_button(&self, _app: &AppContext) -> Option<CTAButton<Self>> {
         None
     }
 
     /// Returns an optional checkbox configuration for the modal.
     /// When Some, a checkbox is rendered at the bottom of the control panel.
-    fn checkbox_config(&self) -> Option<CheckboxConfig> {
+    fn checkbox_config(&self, _app: &AppContext) -> Option<CheckboxConfig> {
         None
     }
 
@@ -159,7 +159,7 @@ impl<S: Slide> LaunchModal<S> {
 
     fn update_buttons_based_on_slide(&mut self, ctx: &mut ViewContext<Self>) {
         self.next_button
-            .update(ctx, |next_button, ctx| match self.slide.cta_button() {
+            .update(ctx, |next_button, ctx| match self.slide.cta_button(ctx) {
                 CTAButton {
                     label,
                     action: CTAButtonAction::NextSlide(next),
@@ -181,7 +181,7 @@ impl<S: Slide> LaunchModal<S> {
             });
 
         // Update secondary button if present.
-        if let Some(secondary_cta) = self.slide.secondary_cta_button() {
+        if let Some(secondary_cta) = self.slide.secondary_cta_button(ctx) {
             self.secondary_button
                 .update(ctx, |secondary_button, ctx| match secondary_cta {
                     CTAButton {
@@ -216,7 +216,7 @@ impl<S: Slide> LaunchModal<S> {
         if !self.slide.should_show_checkbox(app) {
             return None;
         }
-        let checkbox_config = self.slide.checkbox_config()?;
+        let checkbox_config = self.slide.checkbox_config(app)?;
         let appearance = Appearance::handle(app).as_ref(app);
         let theme = appearance.theme();
 
@@ -277,7 +277,7 @@ impl<S: Slide> LaunchModal<S> {
         // Only show slide controls if there are multiple slides or if slides have display text
         let slides_with_display_text: Vec<_> = S::all()
             .into_iter()
-            .filter_map(|slide| slide.display_text().map(|text| (slide, text)))
+            .filter_map(|slide| slide.display_text(app).map(|text| (slide, text)))
             .collect();
 
         if slides_with_display_text.len() <= 1 {
@@ -353,8 +353,9 @@ impl<S: Slide> LaunchModal<S> {
                         .with_main_axis_size(MainAxisSize::Max)
                         .with_child(
                             Container::new({
+                                let title = self.slide.title(app);
                                 let text = FormattedTextElement::from_str(
-                                    self.slide.title(),
+                                    title,
                                     appearance.ui_font_family(),
                                     16.,
                                 )
@@ -401,19 +402,22 @@ impl<S: Slide> LaunchModal<S> {
                             Container::new(
                                 Shrinkable::new(
                                     1.,
-                                    FormattedTextElement::new(
-                                        parse_markdown(self.slide.content()).unwrap(),
-                                        14.,
-                                        appearance.ui_font_family(),
-                                        appearance.ui_font_family(),
-                                        blended_colors::text_sub(
-                                            theme,
-                                            blended_colors::neutral_4(theme),
-                                        ),
-                                        self.state_handles.slides[&self.slide]
-                                            .content_hyperlink
-                                            .clone(),
-                                    )
+                                    {
+                                        let content = self.slide.content(app);
+                                        FormattedTextElement::new(
+                                            parse_markdown(&content).unwrap(),
+                                            14.,
+                                            appearance.ui_font_family(),
+                                            appearance.ui_font_family(),
+                                            blended_colors::text_sub(
+                                                theme,
+                                                blended_colors::neutral_4(theme),
+                                            ),
+                                            self.state_handles.slides[&self.slide]
+                                                .content_hyperlink
+                                                .clone(),
+                                        )
+                                    }
                                     .with_hyperlink_font_color(theme.accent().into_solid())
                                     .register_default_click_handlers_with_action_support(
                                         |hyperlink_lens, _event, ctx| {
@@ -437,7 +441,7 @@ impl<S: Slide> LaunchModal<S> {
                 Align::new(
                     Flex::row()
                         .with_main_axis_alignment(MainAxisAlignment::End)
-                        .with_children(self.slide.secondary_cta_button().map(|_| {
+                        .with_children(self.slide.secondary_cta_button(app).map(|_| {
                             Container::new(ChildView::new(&self.secondary_button).finish())
                                 .with_margin_right(8.)
                                 .finish()
@@ -485,7 +489,7 @@ impl<S: Slide> LaunchModal<S> {
     }
 
     fn handle_cta_button_action(&self, ctx: &mut ViewContext<Self>) {
-        let cta_button = self.slide.cta_button();
+        let cta_button = self.slide.cta_button(ctx);
         match cta_button.action {
             CTAButtonAction::NextSlide(_) => {}
             CTAButtonAction::Close => {
@@ -503,7 +507,7 @@ impl<S: Slide> LaunchModal<S> {
     }
 
     fn handle_secondary_cta_button_action(&self, ctx: &mut ViewContext<Self>) {
-        let Some(cta_button) = self.slide.secondary_cta_button() else {
+        let Some(cta_button) = self.slide.secondary_cta_button(ctx) else {
             return;
         };
         match cta_button.action {
@@ -548,34 +552,32 @@ impl<S: Slide> View for LaunchModal<S> {
 
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let modal_subtext_paragraphs = self.slide.modal_subtext_paragraphs(app);
 
-        let control_panel = Container::new(
-            Flex::column()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(
-                    Container::new(
-                        FormattedTextElement::from_str(
-                            self.slide.modal_title(),
-                            appearance.ui_font_family(),
-                            24.,
+        let control_panel =
+            Container::new(
+                Flex::column()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_child(
+                        Container::new(
+                            FormattedTextElement::from_str(
+                                self.slide.modal_title(app),
+                                appearance.ui_font_family(),
+                                24.,
+                            )
+                            .with_color(blended_colors::text_main(
+                                theme,
+                                blended_colors::neutral_1(theme),
+                            ))
+                            .with_weight(Weight::Bold)
+                            .finish(),
                         )
-                        .with_color(blended_colors::text_main(
-                            theme,
-                            blended_colors::neutral_1(theme),
-                        ))
-                        .with_weight(Weight::Bold)
+                        .with_margin_bottom(12.)
                         .finish(),
                     )
-                    .with_margin_bottom(12.)
-                    .finish(),
-                )
-                .with_children(
-                    self.slide
-                        .modal_subtext_paragraphs()
-                        .iter()
-                        .enumerate()
-                        .map(|(index, line)| {
-                            let is_last = index == self.slide.modal_subtext_paragraphs().len() - 1;
+                    .with_children(modal_subtext_paragraphs.iter().enumerate().map(
+                        |(index, line)| {
+                            let is_last = index == modal_subtext_paragraphs.len() - 1;
 
                             let text_element = FormattedTextElement::new(
                                 FormattedText::new([line.clone()]),
@@ -591,16 +593,16 @@ impl<S: Slide> View for LaunchModal<S> {
                             Container::new(text_element)
                                 .with_margin_bottom(if is_last { 40. } else { 8. })
                                 .finish()
-                        }),
-                )
-                .with_child(Expanded::new(1., self.render_slide_controls(app)).finish())
-                .with_children(self.render_checkbox(app))
-                .finish(),
-        )
-        .with_background_color(blended_colors::neutral_1(theme))
-        .with_corner_radius(CornerRadius::with_left(Radius::Pixels(10.)))
-        .with_uniform_padding(24.)
-        .finish();
+                        },
+                    ))
+                    .with_child(Expanded::new(1., self.render_slide_controls(app)).finish())
+                    .with_children(self.render_checkbox(app))
+                    .finish(),
+            )
+            .with_background_color(blended_colors::neutral_1(theme))
+            .with_corner_radius(CornerRadius::with_left(Radius::Pixels(10.)))
+            .with_uniform_padding(24.)
+            .finish();
 
         let close_button = appearance
             .ui_builder()

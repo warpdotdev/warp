@@ -26,6 +26,7 @@ use super::{
 };
 use crate::{
     appearance::Appearance,
+    localization,
     settings::CloudPreferencesSettings,
     themes::theme::Fill,
     ui_components::icons::Icon,
@@ -171,6 +172,7 @@ impl SettingsPage {
 
     pub fn render_page_button(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         match_data: MatchData,
         clicked: bool,
@@ -185,7 +187,7 @@ impl SettingsPage {
                 },
                 self.button_state_handle.clone(),
             )
-            .with_text_label(self.section.to_string() + &match_data.to_string())
+            .with_text_label(self.section.localized_label(app) + &match_data.to_string())
             .with_style(
                 UiComponentStyles::default()
                     .set_border_width(0.)
@@ -243,6 +245,7 @@ pub fn render_customer_type_badge(appearance: &Appearance, text: String) -> Box<
 
 /// Adds padding to the sub header
 pub fn render_sub_header(
+    _app: &AppContext,
     appearance: &Appearance,
     text_name: impl Into<Cow<'static, str>>,
     local_only_icon_state: Option<LocalOnlyIconState>,
@@ -321,6 +324,7 @@ pub fn render_sub_header_with_description(
 
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub fn render_sub_sub_header(
+    _app: &AppContext,
     appearance: &Appearance,
     text_name: impl Into<Cow<'static, str>>,
     local_only_icon_state: Option<LocalOnlyIconState>,
@@ -621,6 +625,7 @@ pub fn render_local_only_icon(
 }
 
 pub fn render_body_item_label<T: Clone + Action>(
+    _app: &AppContext,
     label_text: String,
     label_color_override: Option<Fill>,
     additional_info: Option<AdditionalInfo<T>>,
@@ -640,6 +645,7 @@ pub fn render_body_item_label<T: Clone + Action>(
 }
 
 pub fn render_body_item_label_with_icon<T: Clone + Action>(
+    _app: &AppContext,
     label_text: String,
     icon: Icon,
     label_color_override: Option<Fill>,
@@ -778,6 +784,7 @@ pub fn render_page_title(text: &str, size: f32, appearance: &Appearance) -> Box<
 /// Renders a toggle with a label on the left and a toggle on the right,
 /// including bottom padding.
 pub fn render_body_item<T: Clone + Action>(
+    app: &AppContext,
     label_text: String,
     additional_info: Option<AdditionalInfo<T>>,
     local_only_icon_state: LocalOnlyIconState,
@@ -788,6 +795,7 @@ pub fn render_body_item<T: Clone + Action>(
 ) -> Box<dyn Element> {
     build_toggle_element(
         render_body_item_label(
+            app,
             label_text,
             None,
             additional_info,
@@ -860,6 +868,7 @@ pub fn build_toggle_element(
 }
 
 pub fn render_dropdown_item_label(
+    _app: &AppContext,
     label_text: String,
     secondary_text: Option<String>,
     local_only_icon_state: LocalOnlyIconState,
@@ -922,6 +931,7 @@ pub fn render_dropdown_item_label(
 }
 
 pub(crate) fn render_dropdown_item<T: Clone + Action>(
+    app: &AppContext,
     appearance: &Appearance,
     label: &str,
     secondary_text: Option<&str>,
@@ -933,6 +943,7 @@ pub(crate) fn render_dropdown_item<T: Clone + Action>(
     let row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
     let dropdown_item_label = Align::new(render_dropdown_item_label(
+        app,
         label.to_string(),
         secondary_text.map(|secondary_text| secondary_text.to_string()),
         local_only_icon_state,
@@ -1043,6 +1054,7 @@ pub struct InputListItem<SettingsPageAction: Action + Clone> {
 ///
 /// TODO: standardize this and remove [`render_alternating_color_list`].
 pub fn render_input_list<SettingsPageAction: Action + Clone>(
+    app: &AppContext,
     title: Option<&str>,
     items: impl IntoIterator<Item = InputListItem<SettingsPageAction>>,
     handle: Option<&ViewHandle<SubmittableTextInput>>,
@@ -1081,7 +1093,7 @@ pub fn render_input_list<SettingsPageAction: Action + Clone>(
             appearance,
         );
         let row_element = if let Some(tooltip_mouse_state) = item.tooltip_mouse_state {
-            render_workspace_override_row_tooltip(row_element, tooltip_mouse_state, appearance)
+            render_workspace_override_row_tooltip(row_element, tooltip_mouse_state, appearance, app)
         } else {
             row_element
         };
@@ -1131,13 +1143,18 @@ fn render_workspace_override_row_tooltip(
     child: Box<dyn Element>,
     mouse_state: MouseStateHandle,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     Hoverable::new(mouse_state, |state| {
         let mut stack = Stack::new().with_child(child);
         if state.is_hovered() {
             let tooltip = appearance
                 .ui_builder()
-                .tool_tip(WORKSPACE_OVERRIDE_TOOLTIP_TEXT.to_string())
+                .tool_tip(crate::localization::text_for_app_or(
+                    app,
+                    "settings.tooltip.organization_enforced",
+                    WORKSPACE_OVERRIDE_TOOLTIP_TEXT,
+                ))
                 .build()
                 .finish();
             stack.add_positioned_child(
@@ -1256,6 +1273,7 @@ pub(super) enum PageType<V: warpui::View> {
     Monolith {
         widget: Box<dyn SettingsWidget<View = V>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         filter: bool,
         vertical_scroll_state: Option<ClippedScrollStateHandle>,
         horizontal_scroll_state: Option<ClippedScrollStateHandle>,
@@ -1265,6 +1283,7 @@ pub(super) enum PageType<V: warpui::View> {
     Uncategorized {
         widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         filter: Vec<usize>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
@@ -1275,6 +1294,7 @@ pub(super) enum PageType<V: warpui::View> {
     Categorized {
         categories: Vec<Category<V>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         filter: Vec<Vec<usize>>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
@@ -1348,10 +1368,27 @@ impl<V: warpui::View> PageType<V> {
             filter: true,
             widget: Box::new(widget),
             title,
+            title_is_localization_key: false,
             vertical_scroll_state,
             horizontal_scroll_state,
             min_page_width: MIN_PAGE_WIDTH,
         }
+    }
+
+    pub(super) fn new_monolith_localized(
+        widget: impl SettingsWidget<View = V> + 'static,
+        title_key: Option<&'static str>,
+        is_dual_scrollable: bool,
+    ) -> Self {
+        let mut page = Self::new_monolith(widget, title_key, is_dual_scrollable);
+        if let Self::Monolith {
+            title_is_localization_key,
+            ..
+        } = &mut page
+        {
+            *title_is_localization_key = true;
+        }
+        page
     }
 
     /// A page which is a series of [`SettingsWidget`]s that don't fall under sub-categories.
@@ -1363,11 +1400,27 @@ impl<V: warpui::View> PageType<V> {
             filter: widgets.iter().enumerate().map(|(i, _)| i).collect(),
             widgets,
             title,
+            title_is_localization_key: false,
             vertical_scroll_state: Default::default(),
             horizontal_scroll_state: Default::default(),
             highlighted_widget_id: Default::default(),
             min_page_width: MIN_PAGE_WIDTH,
         }
+    }
+
+    pub(super) fn new_uncategorized_localized(
+        widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
+        title_key: Option<&'static str>,
+    ) -> Self {
+        let mut page = Self::new_uncategorized(widgets, title_key);
+        if let Self::Uncategorized {
+            title_is_localization_key,
+            ..
+        } = &mut page
+        {
+            *title_is_localization_key = true;
+        }
+        page
     }
 
     /// A page which is a series of [`SettingsWidget`]s that fall under sub-categories.
@@ -1389,6 +1442,7 @@ impl<V: warpui::View> PageType<V> {
                 .collect(),
             categories,
             title,
+            title_is_localization_key: false,
             vertical_scroll_state: Default::default(),
             horizontal_scroll_state: Default::default(),
             highlighted_widget_id: Default::default(),
@@ -1524,12 +1578,14 @@ impl<V: warpui::View> PageType<V> {
                 widget,
                 filter,
                 title,
+                title_is_localization_key,
                 vertical_scroll_state,
                 horizontal_scroll_state,
                 ..
             } => FilteredPageType::Monolith {
                 widget: filter.then_some(widget.as_ref()),
                 title: *title,
+                title_is_localization_key: *title_is_localization_key,
                 vertical_scroll_state: vertical_scroll_state.clone(),
                 horizontal_scroll_state: horizontal_scroll_state.clone(),
             },
@@ -1537,6 +1593,7 @@ impl<V: warpui::View> PageType<V> {
                 widgets,
                 filter,
                 title,
+                title_is_localization_key,
                 vertical_scroll_state,
                 horizontal_scroll_state,
                 highlighted_widget_id,
@@ -1544,6 +1601,7 @@ impl<V: warpui::View> PageType<V> {
             } => FilteredPageType::Uncategorized {
                 widgets: filter.iter().map(|i| widgets[*i].as_ref()).collect(),
                 title: *title,
+                title_is_localization_key: *title_is_localization_key,
                 vertical_scroll_state: vertical_scroll_state.clone(),
                 horizontal_scroll_state: horizontal_scroll_state.clone(),
                 highlighted_widget_id: *highlighted_widget_id,
@@ -1552,6 +1610,7 @@ impl<V: warpui::View> PageType<V> {
                 categories,
                 filter,
                 title,
+                title_is_localization_key,
                 vertical_scroll_state,
                 horizontal_scroll_state,
                 highlighted_widget_id,
@@ -1565,7 +1624,9 @@ impl<V: warpui::View> PageType<V> {
                         let category = &categories[i];
                         FilteredCategory {
                             title: category.title,
+                            title_is_localization_key: category.title_is_localization_key,
                             subtitle: category.subtitle,
+                            subtitle_is_localization_key: category.subtitle_is_localization_key,
                             widgets: indices
                                 .iter()
                                 .map(|i| category.widgets[*i].as_ref())
@@ -1574,6 +1635,7 @@ impl<V: warpui::View> PageType<V> {
                     })
                     .collect(),
                 title: *title,
+                title_is_localization_key: *title_is_localization_key,
                 vertical_scroll_state: vertical_scroll_state.clone(),
                 horizontal_scroll_state: horizontal_scroll_state.clone(),
                 highlighted_widget_id: *highlighted_widget_id,
@@ -1628,13 +1690,23 @@ impl<V: warpui::View> PageType<V> {
     pub(super) fn render_page(&self, view: &V, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let page = match self.get_filtered() {
-            FilteredPageType::Monolith { widget, title, .. } => {
+            FilteredPageType::Monolith {
+                widget,
+                title,
+                title_is_localization_key,
+                ..
+            } => {
                 let mut page = Empty::new().finish();
                 if let Some(widget) = widget {
                     if widget.should_render(app) {
                         if let Some(title) = title {
+                            let title = if title_is_localization_key {
+                                localization::text_for_app(app, title)
+                            } else {
+                                title.to_string()
+                            };
                             let col = Flex::column()
-                                .with_child(render_page_title(title, HEADER_FONT_SIZE, appearance))
+                                .with_child(render_page_title(&title, HEADER_FONT_SIZE, appearance))
                                 .with_child(widget.render_widget(view, false, appearance, app));
                             page = col.finish();
                         } else {
@@ -1647,12 +1719,18 @@ impl<V: warpui::View> PageType<V> {
             FilteredPageType::Uncategorized {
                 widgets,
                 title,
+                title_is_localization_key,
                 highlighted_widget_id,
                 ..
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
-                    page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
+                    let title = if title_is_localization_key {
+                        localization::text_for_app(app, title)
+                    } else {
+                        title.to_string()
+                    };
+                    page.add_child(render_page_title(&title, HEADER_FONT_SIZE, appearance));
                 }
                 for widget in widgets {
                     let highlighted =
@@ -1666,24 +1744,45 @@ impl<V: warpui::View> PageType<V> {
             FilteredPageType::Categorized {
                 categories,
                 title,
+                title_is_localization_key,
                 highlighted_widget_id,
                 ..
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
-                    page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
+                    let title = if title_is_localization_key {
+                        localization::text_for_app(app, title)
+                    } else {
+                        title.to_string()
+                    };
+                    page.add_child(render_page_title(&title, HEADER_FONT_SIZE, appearance));
                 }
                 let num_categories = categories.len();
                 for (i, category) in categories.into_iter().enumerate() {
                     if !category.title.is_empty() {
+                        let category_title = if category.title_is_localization_key {
+                            localization::text_for_app(app, category.title)
+                        } else {
+                            category.title.to_string()
+                        };
                         if let Some(subtitle) = category.subtitle {
+                            let subtitle = if category.subtitle_is_localization_key {
+                                localization::text_for_app(app, subtitle)
+                            } else {
+                                subtitle.to_string()
+                            };
                             page.add_child(render_sub_header_with_description(
                                 appearance,
-                                category.title,
+                                category_title,
                                 subtitle,
                             ));
                         } else {
-                            page.add_child(render_sub_header(appearance, category.title, None));
+                            page.add_child(render_sub_header(
+                                app,
+                                appearance,
+                                category_title,
+                                None,
+                            ));
                         }
                     }
                     for widget in &category.widgets {
@@ -1802,12 +1901,14 @@ pub(super) enum FilteredPageType<'a, V: warpui::View> {
     Monolith {
         widget: Option<&'a dyn SettingsWidget<View = V>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         vertical_scroll_state: Option<ClippedScrollStateHandle>,
         horizontal_scroll_state: Option<ClippedScrollStateHandle>,
     },
     Uncategorized {
         widgets: Vec<&'a dyn SettingsWidget<View = V>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
         highlighted_widget_id: Option<&'static str>,
@@ -1815,6 +1916,7 @@ pub(super) enum FilteredPageType<'a, V: warpui::View> {
     Categorized {
         categories: Vec<FilteredCategory<'a, V>>,
         title: Option<&'static str>,
+        title_is_localization_key: bool,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
         highlighted_widget_id: Option<&'static str>,
@@ -1824,7 +1926,9 @@ pub(super) enum FilteredPageType<'a, V: warpui::View> {
 /// A grouping of related [`SettingsWidget`]s that fall under the same sub-header.
 pub(super) struct Category<V: warpui::View> {
     title: &'static str,
+    title_is_localization_key: bool,
     subtitle: Option<&'static str>,
+    subtitle_is_localization_key: bool,
     widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
 }
 
@@ -1835,13 +1939,29 @@ impl<V: warpui::View> Category<V> {
     ) -> Self {
         Self {
             title,
+            title_is_localization_key: false,
             subtitle: None,
+            subtitle_is_localization_key: false,
             widgets,
         }
     }
 
-    pub(super) fn with_subtitle(mut self, subtitle: &'static str) -> Self {
-        self.subtitle = Some(subtitle);
+    pub(super) fn new_localized(
+        title_key: &'static str,
+        widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
+    ) -> Self {
+        Self {
+            title: title_key,
+            title_is_localization_key: true,
+            subtitle: None,
+            subtitle_is_localization_key: false,
+            widgets,
+        }
+    }
+
+    pub(super) fn with_localized_subtitle(mut self, subtitle_key: &'static str) -> Self {
+        self.subtitle = Some(subtitle_key);
+        self.subtitle_is_localization_key = true;
         self
     }
 }
@@ -1849,7 +1969,9 @@ impl<V: warpui::View> Category<V> {
 /// A [`Category`] with only the results which match a search query.
 pub(super) struct FilteredCategory<'a, V: warpui::View> {
     pub(super) title: &'static str,
+    pub(super) title_is_localization_key: bool,
     pub(super) subtitle: Option<&'static str>,
+    pub(super) subtitle_is_localization_key: bool,
     pub(super) widgets: Vec<&'a dyn SettingsWidget<View = V>>,
 }
 
@@ -1907,6 +2029,7 @@ pub(super) trait SettingsWidget {
 /// Callers should add an `on_click` handler and add the button to the UI below
 /// the setting.
 pub(super) fn build_reset_button(
+    _app: &AppContext,
     appearance: &Appearance,
     mouse_state: MouseStateHandle,
     changed_from_default: bool,

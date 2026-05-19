@@ -15,6 +15,7 @@ use warpui::{
 
 use crate::{
     appearance::Appearance,
+    localization,
     terminal::{
         ssh::warpify::warpify_description,
         view::{RememberForWarpification, TerminalAction},
@@ -95,10 +96,15 @@ impl WarpifyBannerState {
         self.mode.is_ssh()
     }
 
-    pub fn title(&self) -> &str {
+    pub fn title(&self, app: &AppContext) -> String {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => "Warpify SSH session",
-            WarpificationMode::Subshell { .. } => "Warpify subshell",
+            WarpificationMode::Ssh { .. } => localization::text_for_app(
+                app,
+                "terminal.use_agent_footer.action.warpify_ssh_session",
+            ),
+            WarpificationMode::Subshell { .. } => {
+                localization::text_for_app(app, "terminal.use_agent_footer.action.warpify_subshell")
+            }
         }
     }
 
@@ -150,6 +156,7 @@ pub fn render_warpification_banner(
         &state.initialize_warpify_keybinding,
         &state.accept_button_mouse_state,
         appearance,
+        app,
     );
 
     let remember = state.remember_for_warpification(true);
@@ -160,7 +167,10 @@ pub fn render_warpification_banner(
                 ButtonVariant::Text,
                 state.dont_ask_button_mouse_state.clone(),
             )
-            .with_text_label("Do not show again".to_owned())
+            .with_text_label(localization::text_for_app(
+                app,
+                "terminal.use_agent_footer.action.dont_show_again",
+            ))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
@@ -231,11 +241,12 @@ fn render_yes_button(
     initialize_warpification_keybinding: &Option<Keystroke>,
     mouse_state: &MouseStateHandle,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let yes_button = match initialize_warpification_keybinding {
         Some(keystroke) => appearance
             .ui_builder()
-            .keyboard_shortcut_button(state.title().to_owned(), keystroke, mouse_state.clone())
+            .keyboard_shortcut_button(state.title(app), keystroke, mouse_state.clone())
             .with_style(UiComponentStyles {
                 height: Some(36.),
                 padding: Some(Coords {
@@ -249,7 +260,7 @@ fn render_yes_button(
         None => appearance
             .ui_builder()
             .button(ButtonVariant::Basic, mouse_state.clone())
-            .with_text_label(state.title().to_owned())
+            .with_text_label(state.title(app))
             .with_style(UiComponentStyles {
                 background: Some(Fill::Solid(ColorU::transparent_black()).into()),
                 height: Some(36.),

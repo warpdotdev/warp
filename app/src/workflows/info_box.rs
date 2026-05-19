@@ -61,8 +61,6 @@ const ENV_VAR_HORIZONTAL_MARGIN: f32 = 20.;
 const ENV_VAR_RIGHT_ELEMENT_VERTICAL_MARGIN: f32 = 5.;
 const ENV_VAR_SPAN_VERTICAL_MARGIN: f32 = 15.;
 const ENV_VAR_BUTTON_HEIGHT: f32 = 30.;
-const ENV_VAR_SPAN: &str = "Environment variables";
-const NEW_ENV_VAR_BUTTON_LABEL: &str = "New environment variables";
 
 /// Scale factor the title should be from the user's current font size.
 const TITLE_FONT_SIZE_SCALE_FACTOR: f32 = 1.12;
@@ -416,7 +414,11 @@ impl WorkflowsMoreInfoView {
         flex_column.finish()
     }
 
-    fn render_command_edited_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_command_edited_menu(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let contents = Flex::row()
             .with_child(
                 Container::new(
@@ -439,7 +441,7 @@ impl WorkflowsMoreInfoView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Command edited.",
+                        crate::localization::text_for_app(app, "workflow.info_box.command_edited"),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -461,7 +463,10 @@ impl WorkflowsMoreInfoView {
                         ButtonVariant::Text,
                         self.button_mouse_states.reset_command.clone(),
                     )
-                    .with_centered_text_label(String::from("Reset"))
+                    .with_centered_text_label(crate::localization::text_for_app(
+                        app,
+                        "workflow.info_box.reset",
+                    ))
                     .with_style(UiComponentStyles {
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(appearance.monospace_font_size()),
@@ -486,7 +491,11 @@ impl WorkflowsMoreInfoView {
             .finish()
     }
 
-    fn render_keyboard_shortcut_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_keyboard_shortcut_menu(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let cycle_parameter_text = Flex::row()
             .with_child(
                 appearance
@@ -504,7 +513,10 @@ impl WorkflowsMoreInfoView {
                     1.,
                     Container::new(
                         Text::new_inline(
-                            "to cycle parameters",
+                            crate::localization::text_for_app(
+                                app,
+                                "workflow.info_box.cycle_parameters",
+                            ),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size(),
                         )
@@ -570,7 +582,10 @@ impl WorkflowsMoreInfoView {
             Align::new(
                 appearance
                     .ui_builder()
-                    .span(ENV_VAR_SPAN.to_string())
+                    .span(crate::localization::text_for_app(
+                        app,
+                        "workflow.env_vars.title",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(ENV_VAR_SPAN_FONT_SIZE),
                         ..Default::default()
@@ -597,7 +612,10 @@ impl WorkflowsMoreInfoView {
                             ButtonVariant::Secondary,
                             self.button_mouse_states.add_env_var_collection.clone(),
                         )
-                        .with_centered_text_label(NEW_ENV_VAR_BUTTON_LABEL.to_owned())
+                        .with_centered_text_label(crate::localization::text_for_app(
+                            app,
+                            "workflow.env_vars.new",
+                        ))
                         .build()
                         .on_click(|ctx, _, _| {
                             // Create envvars in personal drive for max extensibility (can be moved
@@ -782,9 +800,9 @@ impl WorkflowsMoreInfoView {
         }
 
         if !self.show_shift_tab_treatment {
-            children.push(self.render_command_edited_menu(appearance));
+            children.push(self.render_command_edited_menu(appearance, app));
         } else if !workflow.arguments().is_empty() {
-            children.push(self.render_keyboard_shortcut_menu(appearance));
+            children.push(self.render_keyboard_shortcut_menu(appearance, app));
         }
 
         match input_mode {

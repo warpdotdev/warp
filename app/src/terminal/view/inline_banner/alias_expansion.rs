@@ -1,9 +1,10 @@
 use warpui::{
     elements::{MouseStateHandle, Text},
-    Element,
+    AppContext, Element,
 };
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::terminal::alias::AliasedCommand;
 use crate::terminal::view::TerminalAction;
 
@@ -37,12 +38,13 @@ pub struct AliasExpansionBannerState {
 pub fn render_alias_expansion_banner(
     state: &AliasExpansionBannerState,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color();
     let accent_color = appearance.theme().accent().into_solid();
 
     let buttons = vec![InlineBannerTextButton {
-        text: "Enable alias expansion".to_owned(),
+        text: localization::text_for_app(app, "terminal.inline_banner.alias_expansion.enable"),
         text_color: active_ui_text_color.into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::AliasExpansionBanner(
@@ -91,7 +93,7 @@ pub fn render_alias_expansion_banner(
         InlineBannerStyle::VeryLowPriority,
         appearance,
         InlineBannerContent {
-            title: "Warp can auto-expand aliases.".into(),
+            title: localization::text_for_app(app, "terminal.inline_banner.alias_expansion.title"),
             buttons,
             content: Some(content),
             close_button: Some(close_button),

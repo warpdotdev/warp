@@ -305,7 +305,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     image: KittyImage::try_from(message)?,
                 };
 
@@ -326,11 +326,11 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_id: message
                         .control_data
                         .placement_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_data: KittyPlacementData {
                         z_index: message.control_data.z_index,
                         cols: message.control_data.cols,
@@ -363,7 +363,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     placement_id: message
                         .control_data
                         .placement_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_data: KittyPlacementData {
                         z_index: message.control_data.z_index,
                         cols: message.control_data.cols,
@@ -377,7 +377,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     image: KittyImage::try_from(message)?,
                 };
 
@@ -746,7 +746,7 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
         Err(err) => {
             return Err(InvalidKittyPayload::FileError(FileError::FileReadError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -806,7 +806,7 @@ fn read_shared_memory(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::ObjectOpenError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -845,7 +845,7 @@ fn read_from_shared_memory_fd(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::FileStatError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -927,7 +927,7 @@ pub fn set_kitty_png_size(mut image: KittyImage) -> Result<KittyImage, KittyPngE
         None => {
             return Err(KittyPngError::InvalidBytes(
                 "Could not retrieve image size from ImageType for Kitty PNG.".to_string(),
-            ))
+            ));
         }
     };
 

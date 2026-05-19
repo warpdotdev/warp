@@ -17,13 +17,16 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     external_secrets::ExternalSecret,
+    localization,
     search::{
         external_secrets::{
             external_secret_data_source::ExternalSecretDataSource,
             searcher::{ExternalSecretSearchItemAction, ExternalSecretSearchMixer},
         },
         result_renderer::{QueryResultRenderer, QueryResultRendererStyles},
-        search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering},
+        search_bar::{
+            SearchBar, SearchBarEvent, SearchBarPlaceholder, SearchBarState, SearchResultOrdering,
+        },
     },
 };
 
@@ -40,8 +43,6 @@ lazy_static! {
             ..Default::default()
         };
 }
-
-const DEFAULT_PLACEHOLDER_TEXT: &str = "Search for a secret";
 
 pub struct ExternalSecretsMenu {
     scroll_state: ScrollStateHandle,
@@ -88,7 +89,7 @@ impl ExternalSecretsMenu {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                DEFAULT_PLACEHOLDER_TEXT,
+                SearchBarPlaceholder::localized("search.external_secrets.placeholder"),
                 |result_index, result| {
                     QueryResultRenderer::new(
                         result,
@@ -179,11 +180,11 @@ impl ExternalSecretsMenu {
         self.close(ctx);
     }
 
-    fn render_no_results(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_no_results(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         // There are no results to display, so notify the user of that fact.
         let text = appearance
             .ui_builder()
-            .span("No results found.")
+            .span(localization::text_for_app(app, "search.no_results"))
             .with_style(UiComponentStyles {
                 font_size: Some(appearance.monospace_font_size()),
                 font_family_id: Some(appearance.ui_font_family()),
@@ -278,7 +279,7 @@ impl ExternalSecretsMenu {
         let selected_index = self.search_bar_state.as_ref(app).selected_index();
         match (query_result_renderers, selected_index) {
             (Some(query_result_renderers), _) if query_result_renderers.is_empty() => {
-                self.render_no_results(appearance)
+                self.render_no_results(appearance, app)
             }
             (Some(query_result_renderers), Some(selected_index)) => {
                 self.render_present_results(appearance, selected_index, query_result_renderers)

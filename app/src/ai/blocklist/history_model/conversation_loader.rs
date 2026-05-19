@@ -137,7 +137,9 @@ pub async fn load_conversation_from_server(
                 }
                 AIAgentHarness::ClaudeCode | AIAgentHarness::Gemini | AIAgentHarness::Codex => {
                     if !FeatureFlag::AgentHarness.is_enabled() {
-                        log::warn!("Ignoring non-Oz conversation {conversation_id}: AgentHarness flag is disabled");
+                        log::warn!(
+                            "Ignoring non-Oz conversation {conversation_id}: AgentHarness flag is disabled"
+                        );
                         return None;
                     }
                     // Fetch snapshot data for third-party harness conversations.

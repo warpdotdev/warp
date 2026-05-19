@@ -1422,7 +1422,9 @@ impl AIExecutionProfilesModel {
         let Some(object) = cloud_model
             .get_object_of_type::<GenericStringObjectId, CloudAIExecutionProfileModel>(&sync_id)
         else {
-            log::warn!("Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}");
+            log::warn!(
+                "Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}"
+            );
             return;
         };
 
@@ -1485,7 +1487,9 @@ impl AIExecutionProfilesModel {
             // If the default profile was deleted, transition back to unsynced state
             let is_default = matches!(&self.default_profile_state, DefaultProfileState::Synced { id } if *id == profile_id);
             if is_default {
-                log::warn!("Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}");
+                log::warn!(
+                    "Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}"
+                );
                 self.default_profile_state = DefaultProfileState::Unsynced {
                     id: profile_id,
                     profile: AIExecutionProfile {

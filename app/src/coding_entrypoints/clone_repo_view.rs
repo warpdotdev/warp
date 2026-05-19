@@ -1,4 +1,5 @@
 use crate::coding_entrypoints::glowing_editor::{GlowingEditor, GlowingEditorEvent};
+use crate::localization;
 use crate::TelemetryEvent;
 use warp_core::send_telemetry_from_ctx;
 use warpui::{
@@ -16,11 +17,15 @@ pub enum CloneRepoEvent {
     Cancel,
 }
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
 impl CloneRepoView {
     pub fn new(is_ftux: bool, ctx: &mut ViewContext<Self>) -> Self {
         let editor = ctx.add_typed_action_view(|ctx| {
             GlowingEditor::new(
-                "Provide a repository URL e.g. \"git@github.com:username/project.git\"",
+                text(ctx, "coding_entrypoints.clone_repository.placeholder"),
                 ctx,
             )
         });

@@ -1,4 +1,5 @@
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{active_theme_kind, ThemeSettings};
@@ -25,10 +26,6 @@ const BUTTON_PADDING: f32 = 12.;
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_BORDER_RADIUS: f32 = 4.;
 const BORDER_WIDTH: f32 = 1.;
-
-const MODAL_SUBHEADER: &str = "This will permanently delete the theme.";
-const CANCEL_BUTTON_TEXT: &str = "Cancel";
-const DELETE_BUTTON_TEXT: &str = "Delete theme";
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -86,7 +83,9 @@ impl ThemeDeletionBody {
                             let image_path_in_themes_dir = dir.join(path.as_str());
                             let _ = remove_file(image_path_in_themes_dir);
                         } else {
-                            log::warn!("Attempted to delete a custom theme image with an unexpected image source");
+                            log::warn!(
+                                "Attempted to delete a custom theme image with an unexpected image source"
+                            );
                         }
                     }
 
@@ -107,7 +106,10 @@ impl ThemeDeletionBody {
             }
         }
         if errored {
-            self.send_error_toast("Something went wrong", ctx);
+            self.send_error_toast(
+                &localization::text_for_app(ctx, "settings.theme_deletion.error.generic"),
+                ctx,
+            );
         }
     }
 
@@ -196,7 +198,10 @@ impl View for ThemeDeletionBody {
                 Some(cancel_hovered_styles),
                 Some(disabled_styles),
             )
-            .with_centered_text_label(CANCEL_BUTTON_TEXT.into());
+            .with_centered_text_label(localization::text_for_app(
+                app,
+                "settings.theme_deletion.cancel",
+            ));
 
         let create_button = appearance
             .ui_builder()
@@ -208,15 +213,22 @@ impl View for ThemeDeletionBody {
                 Some(create_hovered_styles),
                 Some(disabled_styles),
             )
-            .with_centered_text_label(DELETE_BUTTON_TEXT.into());
+            .with_centered_text_label(localization::text_for_app(
+                app,
+                "settings.theme_deletion.delete_theme",
+            ));
 
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(
                 Container::new(
-                    Text::new_inline(MODAL_SUBHEADER, appearance.ui_font_family(), 14.)
-                        .with_color(appearance.theme().active_ui_text_color().into())
-                        .finish(),
+                    Text::new_inline(
+                        localization::text_for_app(app, "settings.theme_deletion.subheader"),
+                        appearance.ui_font_family(),
+                        14.,
+                    )
+                    .with_color(appearance.theme().active_ui_text_color().into())
+                    .finish(),
                 )
                 .finish(),
             )

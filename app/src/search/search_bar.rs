@@ -21,6 +21,7 @@ use crate::search::mixer::SearchMixer;
 use crate::search::result_renderer::QueryResultIndex;
 use crate::search::result_renderer::QueryResultRenderer;
 use crate::search::QueryFilter;
+use crate::{localization, localization::LocalizationUpdater};
 
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -122,7 +123,7 @@ pub struct SearchBar<T: Action + Clone> {
     mixer: ModelHandle<SearchMixer<T>>,
     /// The placeholder text that is rendered in the search bar when no query has been run or
     /// filters have been applied.
-    placeholder_text: &'static str,
+    placeholder: SearchBarPlaceholder,
     create_query_result_renderer_fn: CreateQueryResultRendererFn<T>,
     /// Font family to use when rendering the editor and query filters. If `None` the monospace font
     /// family is used.
@@ -343,11 +344,36 @@ pub enum SelectionUpdate {
     Clear,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum SearchBarPlaceholder {
+    Static(&'static str),
+    Localized(&'static str),
+}
+
+impl SearchBarPlaceholder {
+    pub fn localized(key: &'static str) -> Self {
+        Self::Localized(key)
+    }
+
+    fn text(self, app: &AppContext) -> String {
+        match self {
+            Self::Static(text) => text.to_string(),
+            Self::Localized(key) => localization::text_for_app(app, key),
+        }
+    }
+}
+
+impl From<&'static str> for SearchBarPlaceholder {
+    fn from(value: &'static str) -> Self {
+        Self::Static(value)
+    }
+}
+
 impl<T: Action + Clone> SearchBar<T> {
     pub fn new(
         mixer: ModelHandle<SearchMixer<T>>,
         state: ModelHandle<SearchBarState<T>>,
-        placeholder_text: &'static str,
+        placeholder: impl Into<SearchBarPlaceholder>,
         create_query_result_renderer_fn: CreateQueryResultRendererFn<T>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -370,11 +396,15 @@ impl<T: Action + Clone> SearchBar<T> {
         ctx.subscribe_to_model(&mixer, |me, _handle, event, ctx| {
             me.handle_mixer_event(event, ctx);
         });
+        ctx.subscribe_to_model(&LocalizationUpdater::handle(ctx), |me, _, _, ctx| {
+            me.update_placeholder_text(ctx);
+            ctx.notify();
+        });
 
         let me = Self {
             editor_handle,
             mixer,
-            placeholder_text,
+            placeholder: placeholder.into(),
             state,
             create_query_result_renderer_fn,
             font_family_override: None,
@@ -782,10 +812,10 @@ impl<T: Action + Clone> SearchBar<T> {
                 // Set the appropriate placeholder text if the editor buffer is empty.
                 match self.state.as_ref(ctx).query_filter {
                     Some(filter) => {
-                        editor.set_placeholder_text(filter.placeholder_text(), ctx);
+                        editor.set_placeholder_text(filter.localized_placeholder_text(ctx), ctx);
                     }
                     None => {
-                        editor.set_placeholder_text(self.placeholder_text, ctx);
+                        editor.set_placeholder_text(self.placeholder.text(ctx), ctx);
                     }
                 }
             }

@@ -1,3 +1,4 @@
+use crate::localization;
 use crate::view_components::action_button::{
     ActionButtonTheme, DisabledSecondaryTheme, SecondaryTheme,
 };
@@ -8,6 +9,11 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warpui::elements::MouseState;
+use warpui::AppContext;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// A button rendered within the gutter of the editor.
 pub(super) trait GutterButton {
@@ -47,7 +53,7 @@ pub(super) trait GutterButton {
     fn is_enabled(&self) -> bool;
 
     /// The tooltip text displayed when the button is hovered.
-    fn tooltip_text(&self) -> Option<&'static str>;
+    fn tooltip_text(&self, app: &AppContext) -> Option<String>;
 
     /// The icon of the button.
     fn icon(&self) -> Icon;
@@ -69,11 +75,11 @@ impl GutterButton for AddAsContextButton {
         self.is_enabled
     }
 
-    fn tooltip_text(&self) -> Option<&'static str> {
+    fn tooltip_text(&self, app: &AppContext) -> Option<String> {
         if self.is_enabled {
-            Some("Add diff hunk as context")
+            Some(text(app, "code.gutter.tooltip.add_diff_hunk_as_context"))
         } else {
-            Some("Save changes to attach as context.")
+            Some(text(app, "code.gutter.tooltip.save_changes_to_attach"))
         }
     }
 
@@ -98,11 +104,11 @@ impl GutterButton for RevertHunkButton {
         self.is_enabled
     }
 
-    fn tooltip_text(&self) -> Option<&'static str> {
+    fn tooltip_text(&self, app: &AppContext) -> Option<String> {
         if self.is_enabled {
-            Some("Revert diff hunk")
+            Some(text(app, "code.gutter.tooltip.revert_diff_hunk"))
         } else {
-            Some("Save changes to revert")
+            Some(text(app, "code.gutter.tooltip.save_changes_to_revert"))
         }
     }
 
@@ -151,11 +157,15 @@ impl GutterButton for CommentButton {
         )
     }
 
-    fn tooltip_text(&self) -> Option<&'static str> {
+    fn tooltip_text(&self, app: &AppContext) -> Option<String> {
         match self {
-            CommentButton::CreateNewComment => Some("Add comment on line"),
-            CommentButton::Disabled => Some("Save changes to add comment"),
-            CommentButton::AddedComment => Some("Show saved comment"),
+            CommentButton::CreateNewComment => Some(text(app, "code.gutter.tooltip.add_comment")),
+            CommentButton::Disabled => {
+                Some(text(app, "code.gutter.tooltip.save_changes_to_add_comment"))
+            }
+            CommentButton::AddedComment => {
+                Some(text(app, "code.gutter.tooltip.show_saved_comment"))
+            }
             CommentButton::EditorOpenedToCreateNewComment
             | CommentButton::EditorOpenedToUpdateComment => None,
         }

@@ -1,3 +1,4 @@
+use crate::user_defaults::defaults_for_integration_tests;
 use crate::util::{set_zsh_histfile_location, write_rc_files_for_test, ShellRcType};
 use std::collections::HashMap;
 use std::future::Future;
@@ -50,7 +51,7 @@ impl Builder {
         Self {
             inner: builder,
             setup: None,
-            user_prefs: Default::default(),
+            user_prefs: defaults_for_integration_tests(),
         }
     }
 

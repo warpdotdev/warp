@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use warp_util::path::LineAndColumnArg;
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::styles;
 use crate::search::item::{IconLocation, SearchItem};
@@ -161,7 +162,8 @@ impl SearchItem for CreateFileSearchItem {
         let text_color = highlight_state.sub_text_fill(appearance).into_solid();
 
         let label = Text::new_inline(
-            format!("Create {}…", &self.file_name),
+            localization::text_for_app(app, "search.files.create_file")
+                .replace("{file}", &self.file_name),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )

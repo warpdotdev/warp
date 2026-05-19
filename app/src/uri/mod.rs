@@ -10,6 +10,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
+use crate::localization;
 use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
@@ -596,7 +597,10 @@ impl WindowBehaviorHint {
 enum WindowActivationFallbackBehavior {
     /// If the primary window picked to handle the URL is not the active one, send a native push
     /// notification.
-    Notify { title: String, description: String },
+    Notify {
+        title_key: &'static str,
+        description_key: &'static str,
+    },
     /// Create a new window to handle the URI.
     NewWindow {
         /// Close the former "primary window" as determined by [`get_primary_window`]. This should
@@ -613,7 +617,10 @@ impl WindowActivationFallbackBehavior {
     #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     fn resolve(self, primary_window_id: WindowId, ctx: &mut AppContext) -> Option<WindowId> {
         match self {
-            WindowActivationFallbackBehavior::Notify { title, description } => {
+            WindowActivationFallbackBehavior::Notify {
+                title_key,
+                description_key,
+            } => {
                 if ctx
                     .windows()
                     .active_window()
@@ -627,6 +634,8 @@ impl WindowActivationFallbackBehavior {
                     .map(|mut views| views.swap_remove(0))
                 {
                     view_handle.update(ctx, |_, ctx| {
+                        let title = localization::text_for_app(ctx, title_key);
+                        let description = localization::text_for_app(ctx, description_key);
                         ctx.send_desktop_notification(
                             UserNotification::new(title, description, None),
                             |_, err, ctx| {
@@ -861,8 +870,10 @@ impl Action {
                 if let Err(err) = open_docker_container(url, ctx) {
                     if let Some(window_id) = primary_window_id {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                            let toast =
-                                DismissibleToast::error("Custom URI is invalid.".to_owned());
+                            let toast = DismissibleToast::error(localization::text_for_app(
+                                ctx,
+                                "uri.toast.custom_invalid",
+                            ));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });
                     }
@@ -1062,8 +1073,8 @@ impl Action {
             | Self::NewAgentConversation
             | Self::FocusCloudMode => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
-                title: "New tab created".to_owned(),
-                description: "Go to Warp to see your new tab.".to_owned(),
+                title_key: "uri.notification.new_tab_created.title",
+                description_key: "uri.notification.new_tab_created.description",
             }),
             Self::NewWindow => W::Nothing,
         }
@@ -1108,7 +1119,10 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
         Err(e) => {
             if let Some(window_id) = primary_window_id {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error(format!("Custom URI is invalid: {e:?}"));
+                    let message =
+                        localization::text_for_app(ctx, "uri.toast.custom_invalid_with_error")
+                            .replace("{error}", &format!("{e:?}"));
+                    let toast = DismissibleToast::error(message);
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }

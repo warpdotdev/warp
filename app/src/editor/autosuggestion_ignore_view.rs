@@ -1,6 +1,7 @@
 //! This module contains the code for the ignore button shown inline next to autosuggestions.
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use pathfinder_geometry::vector::vec2f;
@@ -139,7 +140,10 @@ impl View for AutosuggestionIgnore {
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .autosuggestion_tool_tip("Ignore this suggestion".into())
+                    .autosuggestion_tool_tip(localization::text_for_app(
+                        ctx,
+                        "input_suggestions.tooltip.ignore",
+                    ))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

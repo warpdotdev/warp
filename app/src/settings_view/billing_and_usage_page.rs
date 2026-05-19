@@ -120,7 +120,11 @@ const AMBIENT_AGENT_TRIAL_TITLE: &str = "Cloud agent trial";
 /// The threshold below which we only show the "Buy more" button (not "New agent").
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
 
-pub fn create_discount_badge(discount: u32, appearance: &Appearance) -> Box<dyn Element> {
+pub fn create_discount_badge(
+    discount: u32,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     if discount == 0 {
         return Empty::new().finish();
     }
@@ -129,9 +133,17 @@ pub fn create_discount_badge(discount: u32, appearance: &Appearance) -> Box<dyn 
     let bg_color: Fill = theme.terminal_colors().normal.green.into();
 
     Container::new(
-        Text::new_inline(format!("{discount}% off"), appearance.ui_font_family(), 10.)
-            .with_color(theme.main_text_color(bg_color).into())
-            .finish(),
+        Text::new_inline(
+            crate::localization::text_for_app_with_args(
+                app,
+                "settings.billing.discount_badge",
+                &[("discount", &discount.to_string())],
+            ),
+            appearance.ui_font_family(),
+            10.,
+        )
+        .with_color(theme.main_text_color(bg_color).into())
+        .finish(),
     )
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
     .with_background(bg_color)
@@ -1929,6 +1941,7 @@ impl BillingAndUsagePageView {
         };
 
         let auto_reload_switch = Container::new(render_body_item::<BillingAndUsagePageAction>(
+            app,
             "Auto reload".into(),
             None,
             Default::default(),
@@ -1988,7 +2001,7 @@ impl BillingAndUsagePageView {
                 };
 
                 let discount_badge =
-                    Container::new(create_discount_badge(discount_percent, appearance))
+                    Container::new(create_discount_badge(discount_percent, appearance, app))
                         .with_margin_right(8.)
                         .finish();
                 (rendered_price, discount_badge)

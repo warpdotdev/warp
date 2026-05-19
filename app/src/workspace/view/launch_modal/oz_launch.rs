@@ -1,5 +1,6 @@
 use super::{CTAButton, CheckboxConfig, LaunchModalEvent, Slide};
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+use crate::localization;
 use crate::terminal::view::OnboardingIntention;
 use crate::ui_components::icons::Icon;
 use crate::workspace::action::WorkspaceAction;
@@ -21,15 +22,13 @@ pub enum OzLaunchSlide {
 }
 
 impl Slide for OzLaunchSlide {
-    fn modal_title(&self) -> String {
-        "Introducing Oz".to_string()
+    fn modal_title(&self, app: &AppContext) -> String {
+        text(app, "workspace.launch_modal.oz.modal_title")
     }
 
-    fn modal_subtext_paragraphs(&self) -> Vec<FormattedTextLine> {
+    fn modal_subtext_paragraphs(&self, app: &AppContext) -> Vec<FormattedTextLine> {
         vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "Infinitely scalable coding agent — run in local sessions or in the cloud.",
-            ),
+            FormattedTextFragment::plain_text(text(app, "workspace.launch_modal.oz.modal_subtext")),
         ])]
     }
 
@@ -55,33 +54,51 @@ impl Slide for OzLaunchSlide {
         }
     }
 
-    fn display_text(&self) -> Option<&'static str> {
+    fn display_text(&self, app: &AppContext) -> Option<String> {
         Some(match self {
-            OzLaunchSlide::CloudAgents => "Cloud agents",
-            OzLaunchSlide::AgentAutomations => "Agent automations",
-            OzLaunchSlide::AgentManagement => "Agent management",
-            OzLaunchSlide::LaunchCredits => "A little gift",
+            OzLaunchSlide::CloudAgents => text(app, "workspace.launch_modal.oz.cloud_agents.tab"),
+            OzLaunchSlide::AgentAutomations => {
+                text(app, "workspace.launch_modal.oz.agent_automations.tab")
+            }
+            OzLaunchSlide::AgentManagement => {
+                text(app, "workspace.launch_modal.oz.agent_management.tab")
+            }
+            OzLaunchSlide::LaunchCredits => {
+                text(app, "workspace.launch_modal.oz.launch_credits.tab")
+            }
         })
     }
 
-    fn short_label(&self) -> &'static str {
+    fn short_label(&self, app: &AppContext) -> String {
         match self {
-            OzLaunchSlide::CloudAgents => "Cloud agents",
-            OzLaunchSlide::AgentAutomations => "Agent automations",
-            OzLaunchSlide::AgentManagement => "Agent management",
-            OzLaunchSlide::LaunchCredits => "Launch credits",
+            OzLaunchSlide::CloudAgents => {
+                text(app, "workspace.launch_modal.oz.cloud_agents.short_label")
+            }
+            OzLaunchSlide::AgentAutomations => text(
+                app,
+                "workspace.launch_modal.oz.agent_automations.short_label",
+            ),
+            OzLaunchSlide::AgentManagement => text(
+                app,
+                "workspace.launch_modal.oz.agent_management.short_label",
+            ),
+            OzLaunchSlide::LaunchCredits => {
+                text(app, "workspace.launch_modal.oz.launch_credits.short_label")
+            }
         }
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self, app: &AppContext) -> String {
         match self {
-            OzLaunchSlide::CloudAgents => "Break out of your laptop with cloud agents",
+            OzLaunchSlide::CloudAgents => text(app, "workspace.launch_modal.oz.cloud_agents.title"),
             OzLaunchSlide::AgentAutomations => {
-                "Orchestrate agents, turning Skills into automations"
+                text(app, "workspace.launch_modal.oz.agent_automations.title")
             }
-            OzLaunchSlide::AgentManagement => "Track local and cloud agents seamlessly",
+            OzLaunchSlide::AgentManagement => {
+                text(app, "workspace.launch_modal.oz.agent_management.title")
+            }
             OzLaunchSlide::LaunchCredits => {
-                "1,000 free cloud agent credits when you upgrade to Warp Build"
+                text(app, "workspace.launch_modal.oz.launch_credits.title")
             }
         }
     }
@@ -90,19 +107,19 @@ impl Slide for OzLaunchSlide {
         None
     }
 
-    fn content(&self) -> &'static str {
+    fn content(&self, app: &AppContext) -> String {
         match self {
             OzLaunchSlide::CloudAgents => {
-                "Use cloud agents to run many agents in parallel, keep agents working when you close your laptop, or start agents programmatically. Plus, you can check on their work through the web."
+                text(app, "workspace.launch_modal.oz.cloud_agents.content")
             }
             OzLaunchSlide::AgentAutomations => {
-                "Oz agents can be defined using the standard Skills format. You can use the built in scheduler to setup agents to run autonomously at set intervals, or use the Oz SDK or API to programmatically start and manage Oz agents."
+                text(app, "workspace.launch_modal.oz.agent_automations.content")
             }
             OzLaunchSlide::AgentManagement => {
-                "View all of your agents across local and cloud sessions in the Warp app or at [oz.warp.dev](https://oz.warp.dev). Join live agent sessions, continue tasks locally, and steer agents with one click."
+                text(app, "workspace.launch_modal.oz.agent_management.content")
             }
             OzLaunchSlide::LaunchCredits => {
-                "Upgrade to Build this month and receive 1,000 extra credits to try using Oz. Credits are only eligible for Oz runs in Warp-hosted cloud environments."
+                text(app, "workspace.launch_modal.oz.launch_credits.content")
             }
         }
     }
@@ -134,45 +151,55 @@ impl Slide for OzLaunchSlide {
         ]
     }
 
-    fn cta_button(&self) -> CTAButton<Self> {
+    fn cta_button(&self, app: &AppContext) -> CTAButton<Self> {
         match self {
             OzLaunchSlide::CloudAgents
             | OzLaunchSlide::AgentAutomations
             | OzLaunchSlide::AgentManagement => {
                 let next = self.next().expect("Non-final slides should have a next");
-                CTAButton::next_slide(next, format!("Next: {}", next.short_label()))
+                CTAButton::next_slide(
+                    next,
+                    text(app, "workspace.launch_modal.oz.action.next")
+                        .replace("{slide}", &next.short_label(app)),
+                )
             }
-            OzLaunchSlide::LaunchCredits => CTAButton::custom("Try it out", |ctx| {
-                send_telemetry_from_ctx!(
-                    CloudAgentTelemetryEvent::EnteredCloudMode {
-                        entry_point: CloudModeEntryPoint::OzLaunchModal,
-                    },
-                    ctx
-                );
-                ctx.emit(LaunchModalEvent::Close);
-                ctx.dispatch_typed_action(&WorkspaceAction::StartAgentOnboardingTutorial(
-                    OnboardingTutorial::NoProject {
-                        intention: OnboardingIntention::AgentDrivenDevelopment,
-                    },
-                ));
-                ctx.dispatch_typed_action(&WorkspaceAction::AddAmbientAgentTab);
-            }),
+            OzLaunchSlide::LaunchCredits => CTAButton::custom(
+                text(app, "workspace.launch_modal.oz.action.try_it_out"),
+                |ctx| {
+                    send_telemetry_from_ctx!(
+                        CloudAgentTelemetryEvent::EnteredCloudMode {
+                            entry_point: CloudModeEntryPoint::OzLaunchModal,
+                        },
+                        ctx
+                    );
+                    ctx.emit(LaunchModalEvent::Close);
+                    ctx.dispatch_typed_action(&WorkspaceAction::StartAgentOnboardingTutorial(
+                        OnboardingTutorial::NoProject {
+                            intention: OnboardingIntention::AgentDrivenDevelopment,
+                        },
+                    ));
+                    ctx.dispatch_typed_action(&WorkspaceAction::AddAmbientAgentTab);
+                },
+            ),
         }
     }
 
-    fn secondary_cta_button(&self) -> Option<CTAButton<Self>> {
+    fn secondary_cta_button(&self, app: &AppContext) -> Option<CTAButton<Self>> {
         match self {
-            OzLaunchSlide::LaunchCredits => Some(CTAButton::close("Skip for now")),
+            OzLaunchSlide::LaunchCredits => Some(CTAButton::close(text(
+                app,
+                "workspace.launch_modal.oz.action.skip_for_now",
+            ))),
             OzLaunchSlide::CloudAgents
             | OzLaunchSlide::AgentAutomations
             | OzLaunchSlide::AgentManagement => None,
         }
     }
 
-    fn checkbox_config(&self) -> Option<CheckboxConfig> {
+    fn checkbox_config(&self, app: &AppContext) -> Option<CheckboxConfig> {
         Some(CheckboxConfig {
-            label: "Sync conversations to cloud",
-            description: "Agent conversations stored in the cloud can be shared with anyone with one click, and allow conversations to be continued across devices and on logout.",
+            label: text(app, "workspace.launch_modal.oz.checkbox.sync_conversations"),
+            description: text(app, "workspace.launch_modal.oz.checkbox.description"),
         })
     }
 
@@ -195,6 +222,10 @@ impl Slide for OzLaunchSlide {
             },
         ));
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 pub fn init(app: &mut warpui::AppContext) {

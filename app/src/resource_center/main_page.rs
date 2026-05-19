@@ -6,7 +6,7 @@ use crate::{
     resource_center::skip_tips_and_write_to_user_defaults,
     send_telemetry_from_ctx,
     server::telemetry::TelemetryEvent,
-    settings::Settings,
+    settings::{LanguageSettings, Settings},
     themes::theme::{Blend, Fill as FillTheme},
 };
 use pathfinder_geometry::vector::vec2f;
@@ -26,6 +26,7 @@ use warpui::{
     ViewHandle, WindowId,
 };
 
+use crate::localization;
 use crate::{appearance::Appearance, workspace::WorkspaceAction};
 
 use super::{
@@ -86,6 +87,14 @@ impl ResourceCenterMainView {
         }
     }
 
+    fn on_language_settings_changed(
+        &mut self,
+        _language_settings: ModelHandle<LanguageSettings>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.notify();
+    }
+
     fn initialize_section_views(
         tips_completed: ModelHandle<TipsCompleted>,
         action_target: ModelHandle<ActionTarget>,
@@ -93,6 +102,11 @@ impl ResourceCenterMainView {
         changelog_model_handle: ModelHandle<ChangelogModel>,
     ) -> Vec<SectionViewHandle> {
         let sections = sections(ctx);
+        let language_settings = LanguageSettings::handle(ctx);
+        ctx.observe(
+            &language_settings,
+            ResourceCenterMainView::on_language_settings_changed,
+        );
 
         // Set gamified tips count
         let gamified_tips_count = sections
@@ -344,7 +358,7 @@ impl ResourceCenterMainView {
         .finish()
     }
 
-    fn render_invite_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_invite_button(&self, app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         let default_styles = UiComponentStyles {
             font_size: Some(DETAIL_FONT_SIZE),
             font_family_id: Some(appearance.ui_font_family()),
@@ -394,7 +408,7 @@ impl ResourceCenterMainView {
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
-                        "Invite a friend to Warp",
+                        localization::text_for_app(app, "resource_center.invite_friend"),
                         Icon::new(SEND_SVG_PATH, appearance.theme().accent()),
                         MainAxisSize::Max,
                         MainAxisAlignment::Center,
@@ -415,7 +429,11 @@ impl ResourceCenterMainView {
         .finish()
     }
 
-    fn render_skip_tips_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_skip_tips_button(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         Container::new(
             Align::new(
                 Hoverable::new(self.button_mouse_states.skip_tips.clone(), |state| {
@@ -433,7 +451,10 @@ impl ResourceCenterMainView {
 
                     appearance
                         .ui_builder()
-                        .wrappable_text("Mark all as read", false)
+                        .wrappable_text(
+                            localization::text_for_app(app, "resource_center.mark_all_as_read"),
+                            false,
+                        )
                         .with_style(style)
                         .build()
                         .finish()
@@ -507,8 +528,8 @@ impl View for ResourceCenterMainView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let body = self.render_body(appearance);
-        let invite_button = self.render_invite_button(appearance);
-        let skip_tips = self.render_skip_tips_button(appearance);
+        let invite_button = self.render_invite_button(app, appearance);
+        let skip_tips = self.render_skip_tips_button(app, appearance);
 
         let mut main_page = Flex::column();
 

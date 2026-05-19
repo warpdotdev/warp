@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_util::settings::initialize_settings_for_tests;
 use warpui::{
     elements::{ChildView, Empty, SavePosition},
     platform::WindowStyle,
@@ -45,6 +46,7 @@ impl TypedActionView for TipContainer {
 #[test]
 fn test_render_tip_view() {
     App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| Appearance::mock());
         let tips_completed = app.add_model(|_| TipsCompleted::default());
         let (_window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {

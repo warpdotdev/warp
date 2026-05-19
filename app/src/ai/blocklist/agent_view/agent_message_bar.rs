@@ -426,6 +426,10 @@ pub struct AgentMessageArgs<'a> {
 }
 
 impl AttachedContextArgs for AgentMessageArgs<'_> {
+    fn app(&self) -> &AppContext {
+        self.app
+    }
+
     fn terminal_model(&self) -> &TerminalModel {
         self.terminal_model
     }

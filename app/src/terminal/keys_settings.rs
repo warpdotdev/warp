@@ -197,7 +197,9 @@ impl KeysSettings {
         }
 
         if *self.quake_mode_enabled && *self.activation_hotkey_enabled {
-            log::error!("Both quake mode AND activation hotkey enabled. Either one or the other should be active.");
+            log::error!(
+                "Both quake mode AND activation hotkey enabled. Either one or the other should be active."
+            );
             // Quake mode takes precedence
             selected = GlobalHotkeyMode::QuakeMode;
         } else if *self.quake_mode_enabled {

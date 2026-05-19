@@ -44,6 +44,7 @@ mod gpu_state;
 mod input_classifier;
 mod interval_timer;
 mod linear;
+mod localization;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod login_item;
 mod menu;
@@ -976,7 +977,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_dev_icon(dev_icon);
 
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
-        app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
+        app_builder.set_dock_menu_builder(|ctx| app_menus::dock_menu(ctx));
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1389,6 +1390,8 @@ pub(crate) fn initialize_app(
     if !launch_mode.is_headless() {
         AppearanceManager::as_ref(ctx).set_app_icon(ctx);
     }
+
+    localization::register_localization_updater(ctx);
 
     #[cfg(feature = "local_tty")]
     terminal::available_shells::register(ctx);
@@ -1997,6 +2000,11 @@ pub(crate) fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppC
                 .update(ctx, move |me, ctx| me.reachability_changed(reachable, ctx));
         })),
         on_become_active: Some(Box::new(move |ctx| {
+            let locale_changed = localization::refresh_system_locale_candidates_if_needed(ctx);
+            if locale_changed {
+                localization::notify_locale_changed(ctx);
+            }
+
             let auth_state = AuthStateProvider::as_ref(ctx).get();
             ctx.record_app_focus(
                 auth_state.user_id().map(|uid| uid.as_string()),

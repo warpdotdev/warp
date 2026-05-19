@@ -1,3 +1,4 @@
+use crate::localization;
 use crate::modal::Modal;
 use crate::themes::theme::ThemeKind;
 use crate::themes::theme_creator_body::{
@@ -15,8 +16,6 @@ use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::ViewHandle;
 use warpui::{AppContext, SingletonEntity as _};
 use warpui::{Element, Entity, TypedActionView, View, ViewContext};
-
-const THEME_CREATOR_MODAL_HEADER: &str = "Create new theme from image";
 
 pub struct ThemeCreatorModal {
     theme_creator_modal: ViewHandle<Modal<ThemeCreatorBody>>,
@@ -56,7 +55,10 @@ impl ThemeCreatorModal {
 
         let theme_creator_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(THEME_CREATOR_MODAL_HEADER.to_string()),
+                Some(localization::text_for_app(
+                    ctx,
+                    "settings.theme_creator.modal_header",
+                )),
                 theme_creator_body,
                 ctx,
             )

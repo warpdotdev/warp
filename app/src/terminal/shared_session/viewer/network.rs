@@ -364,25 +364,32 @@ impl Network {
         );
 
         // Send messages back up the websocket to the server.
-        ctx.spawn(async move {
-            let mut ws_proxy_rx = pin!(ws_proxy_rx);
-            while let Some(message) = ws_proxy_rx.next().await {
-                let serialized = message.to_json();
-                match serialized {
-                    Ok(serialized) => {
-                        if let Err(e) = sink.send(Message::new(serialized)).await {
-                            log::warn!("Failed to send message over shared session websocket: {e}");
-                            break;
+        ctx.spawn(
+            async move {
+                let mut ws_proxy_rx = pin!(ws_proxy_rx);
+                while let Some(message) = ws_proxy_rx.next().await {
+                    let serialized = message.to_json();
+                    match serialized {
+                        Ok(serialized) => {
+                            if let Err(e) = sink.send(Message::new(serialized)).await {
+                                log::warn!(
+                                    "Failed to send message over shared session websocket: {e}"
+                                );
+                                break;
+                            }
                         }
+                        Err(e) => log::warn!(
+                            "Failed to serialize message to send over shared session websocket: {e}"
+                        ),
                     }
-                    Err(e) => log::warn!("Failed to serialize message to send over shared session websocket: {e}")
                 }
-            }
-            log::info!("Closing websocket to session sharing server as viewer");
-            if let Err(e) = sink.close().await {
-                log::error!("Failed to close session sharing websocket due to {e}");
-            }
-        }, |_, _, _| {});
+                log::info!("Closing websocket to session sharing server as viewer");
+                if let Err(e) = sink.close().await {
+                    log::error!("Failed to close session sharing websocket due to {e}");
+                }
+            },
+            |_, _, _| {},
+        );
     }
 
     fn start_websocket(
@@ -576,7 +583,9 @@ impl Network {
             }
             DownstreamMessage::RejoinedSuccessfully { participant_list } => {
                 if matches!(self.stage, Stage::JoinedSuccessfully) {
-                    log::warn!("Received unexpected RejoinedSuccessfully message when we've already joined");
+                    log::warn!(
+                        "Received unexpected RejoinedSuccessfully message when we've already joined"
+                    );
                     return;
                 }
                 log::info!("Successfully reconnected to shared session as viewer.");

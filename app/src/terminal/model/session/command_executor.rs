@@ -325,7 +325,9 @@ fn new_command_executor_for_local_tty_session(
                 log::info!("creating a legacy ssh executor!");
                 Arc::new(RemoteCommandExecutor::new(socket_path.clone(), wsl_distro))
             } else {
-                unreachable!("Unreachable because of match! above. Unfortunately if let guards in rust are still experimental.")
+                unreachable!(
+                    "Unreachable because of match! above. Unfortunately if let guards in rust are still experimental."
+                )
             }
         }
         _ => {

@@ -21,6 +21,7 @@ use crate::{
     appearance::Appearance,
     cloud_object::{model::persistence::CloudModel, CloudObject},
     completer::SessionAgnosticContext,
+    localization,
     notebooks::{
         styles::block_footer_action_button,
         telemetry::{ActionEntrypoint, BlockInfo},
@@ -33,6 +34,10 @@ use crate::{
     util::bindings::CustomAction,
     workflows::{CloudWorkflow, WorkflowId},
 };
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 use super::{
     embedded_item::EmbeddedWorkflow,
@@ -319,7 +324,7 @@ impl EmbeddedItemModel for NotebookEmbed {
                             .remove_embedding_button_state
                             .clone(),
                     )
-                    .with_text_label("Remove".to_string())
+                    .with_text_label(text(ctx, "code_review.comments.remove"))
                     .build()
                     .with_cursor(Cursor::Arrow)
                     .on_click(move |ctx, _, _| {

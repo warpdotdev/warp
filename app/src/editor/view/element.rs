@@ -14,6 +14,7 @@ use crate::editor::accept_autosuggestion_keybinding_view::{
 };
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
+use crate::localization;
 use crate::settings::CursorDisplayType;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -1005,7 +1006,9 @@ impl EditorElement {
                     let cursor_row_layout = match layout.frame_layouts.get_line(index) {
                         Some(layout) => layout,
                         None => {
-                            log::warn!("Attempting to access line {index}, but there are fewer lines in the layout.");
+                            log::warn!(
+                                "Attempting to access line {index}, but there are fewer lines in the layout."
+                            );
                             continue;
                         }
                     };
@@ -1490,11 +1493,12 @@ impl EditorElement {
         // If the input buffer is empty, down arrow cycles suggestions.
         let cycle_next_command_hint = if self.should_show_cycle_next_command_hint(is_cycling, ctx) {
             let appearance = Appearance::as_ref(ctx);
-            Some(
-                self.render_cycle_next_command_hint(warp_core::ui::theme::Fill::Solid(
-                    blended_colors::semantic_text_disabled(appearance.theme()),
+            Some(self.render_cycle_next_command_hint(
+                warp_core::ui::theme::Fill::Solid(blended_colors::semantic_text_disabled(
+                    appearance.theme(),
                 )),
-            )
+                ctx,
+            ))
         } else {
             None
         };
@@ -1504,7 +1508,11 @@ impl EditorElement {
         }
     }
 
-    fn render_cycle_next_command_hint(&self, color: Fill) -> Box<dyn Element + 'static> {
+    fn render_cycle_next_command_hint(
+        &self,
+        color: Fill,
+        app: &AppContext,
+    ) -> Box<dyn Element + 'static> {
         let font_size = self.view_snapshot.font_size - 2.;
         let icon_height = Self::cursor_height(font_size, self.view_snapshot.line_height_ratio);
         Flex::row()
@@ -1519,7 +1527,7 @@ impl EditorElement {
                 .with_margin_right(self.view_snapshot.em_width)
                 .finish(),
                 Text::new(
-                    "Cycle suggestions",
+                    localization::text_for_app(app, "editor.suggestions.cycle_suggestions"),
                     self.view_snapshot.font_family,
                     font_size,
                 )

@@ -2,6 +2,7 @@
 //! shown inline in the input.
 use crate::appearance::Appearance;
 use crate::editor::ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME;
+use crate::localization;
 use crate::menu::{Menu, MenuItemFields};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
@@ -100,11 +101,14 @@ impl AcceptAutosuggestionKeybinding {
                     },
                 )
                 .into_item(),
-            MenuItemFields::new("Custom...")
-                .with_on_select_action(
-                    AcceptAutosuggestionKeybindingAction::OpenSettingsForCustomKeybinding,
-                )
-                .into_item(),
+            MenuItemFields::new(localization::text_for_app(
+                ctx,
+                "editor.autosuggestion.keybinding.custom",
+            ))
+            .with_on_select_action(
+                AcceptAutosuggestionKeybindingAction::OpenSettingsForCustomKeybinding,
+            )
+            .into_item(),
         ];
         select_keybinding_menu.update(ctx, |menu, ctx| {
             menu.set_items(menu_items, ctx);
@@ -156,9 +160,12 @@ impl AcceptAutosuggestionKeybinding {
             {
                 let found =
                     menu.set_selected_by_name(accept_autosuggestion_keybinding_displayed, ctx);
-                // If the keybinding is not one of our default options, select the "Custom..." item.
+                // If the keybinding is not one of our default options, select the custom item.
                 if !found {
-                    menu.set_selected_by_name("Custom...", ctx);
+                    menu.set_selected_by_name(
+                        localization::text_for_app(ctx, "editor.autosuggestion.keybinding.custom"),
+                        ctx,
+                    );
                 }
             } else {
                 // If the keybinding is not set, we show right arrow which always works.
@@ -345,7 +352,10 @@ impl View for AcceptAutosuggestionKeybinding {
             if !is_menu_open && state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .autosuggestion_tool_tip("Change keybinding".into())
+                    .autosuggestion_tool_tip(localization::text_for_app(
+                        ctx,
+                        "settings.features.keybinding.change",
+                    ))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

@@ -1,11 +1,11 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 
-use crate::appearance::Appearance;
 use crate::code::editor::find::view::{FIND_BAR_PADDING, FIND_EDITOR_BORDER_RADIUS};
 use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::{appearance::Appearance, localization};
 use warpui::{
     elements::{
         Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, DropShadow, Flex,
@@ -22,6 +22,10 @@ const GOTO_LINE_ERROR_FONT_SIZE: f32 = 11.;
 const GOTO_LINE_EDITOR_PADDING: f32 = 6.;
 const GOTO_LINE_EDITOR_BORDER_WIDTH: f32 = 1.;
 const GOTO_LINE_ROW_SPACING: f32 = 6.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug)]
 pub enum Event {
@@ -50,7 +54,7 @@ impl GoToLineView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Line number:Column", ctx);
+            editor.set_placeholder_text(text(ctx, "code.goto_line.placeholder"), ctx);
             editor
         });
 
@@ -135,7 +139,7 @@ impl View for GoToLineView {
         let theme = appearance.theme();
 
         let label = Text::new_inline(
-            "Go to line",
+            text(app, "code.goto_line.title"),
             appearance.ui_font_family(),
             GOTO_LINE_LABEL_FONT_SIZE,
         )

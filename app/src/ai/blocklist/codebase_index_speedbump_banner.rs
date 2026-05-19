@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -14,20 +15,15 @@ use warpui::{
     },
     platform::Cursor,
     ui_components::components::{UiComponent, UiComponentStyles},
-    Element,
+    AppContext, Element,
 };
 
-const SPEEDBUMP_HEADER: &str = "Index Codebase?";
-const SPEEDBUMP_TEXT: &str = "Indexing helps agents quickly understand context and provide targeted solutions. Code is never stored on the server.";
 /// Uniform padding around the banner
 const PADDING: f32 = 12.;
-/// Text for the button that allows execution
-const ALLOW_BUTTON_TEXT: &str = "Index codebase";
-const ALLOW_SETTINGS_TEXT: &str = "Allow automatic indexing";
-const DISMISS_FOREVER_BUTTON_TEXT: &str = "Don't show again";
 
-const INDEXING_HEADER: &str = "Indexing codebase";
-const VIEW_STATUS_BUTTON_TEXT: &str = "View status";
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(PartialEq, Clone)]
 pub enum VisibilityState {
@@ -94,7 +90,7 @@ impl CodebaseIndexSpeedbumpBannerState {
         self.visibility_state = VisibilityState::Indexing;
     }
 
-    fn render_text_column(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_text_column(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
 
@@ -102,9 +98,9 @@ impl CodebaseIndexSpeedbumpBannerState {
 
         let title = ui_builder
             .span(if self.visibility_state == VisibilityState::Speedbump {
-                SPEEDBUMP_HEADER
+                text(app, "agent.codebase_index_speedbump.title")
             } else {
-                INDEXING_HEADER
+                text(app, "agent.codebase_index_speedbump.indexing_title")
             })
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().foreground().into_solid()),
@@ -117,7 +113,7 @@ impl CodebaseIndexSpeedbumpBannerState {
         col.add_child(title);
 
         let body = ui_builder
-            .span(SPEEDBUMP_TEXT)
+            .span(text(app, "agent.codebase_index_speedbump.description"))
             .with_style(UiComponentStyles {
                 font_color: Some(blended_colors::text_sub(theme, theme.surface_1())),
                 font_size: Some(appearance.ui_font_size()),
@@ -136,6 +132,7 @@ impl CodebaseIndexSpeedbumpBannerState {
     pub fn render_codebase_index_speedbump_banner(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
@@ -164,7 +161,7 @@ impl CodebaseIndexSpeedbumpBannerState {
         left.add_child(
             Shrinkable::new(
                 1.,
-                Align::new(self.render_text_column(appearance))
+                Align::new(self.render_text_column(appearance, app))
                     .left()
                     .finish(),
             )
@@ -194,7 +191,10 @@ impl CodebaseIndexSpeedbumpBannerState {
                 .finish();
 
             let checkbox_text = ui_builder
-                .span(ALLOW_SETTINGS_TEXT)
+                .span(text(
+                    app,
+                    "agent.codebase_index_speedbump.allow_automatic_indexing",
+                ))
                 .with_style(UiComponentStyles {
                     font_color: Some(blended_colors::text_disabled(theme, theme.surface_1())),
                     font_size: Some(appearance.ui_font_size()),
@@ -229,7 +229,10 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.dont_show_again_mouse_state.clone(),
                                 )
-                                .with_text_label(DISMISS_FOREVER_BUTTON_TEXT.to_string())
+                                .with_text_label(text(
+                                    app,
+                                    "agent.codebase_index_speedbump.dont_show_again",
+                                ))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),
@@ -264,7 +267,10 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.allow_button_mouse_state.clone(),
                                 )
-                                .with_text_label(ALLOW_BUTTON_TEXT.to_string())
+                                .with_text_label(text(
+                                    app,
+                                    "agent.codebase_index_speedbump.index_codebase",
+                                ))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),
@@ -301,7 +307,10 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.view_status_button_mouse_state.clone(),
                                 )
-                                .with_text_label(VIEW_STATUS_BUTTON_TEXT.to_string())
+                                .with_text_label(text(
+                                    app,
+                                    "agent.codebase_index_speedbump.view_status",
+                                ))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),

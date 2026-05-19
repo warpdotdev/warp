@@ -1,4 +1,3 @@
-use warp_core::ui::appearance::Appearance;
 use warpui::{
     elements::{Container, MouseStateHandle},
     fonts::Weight,
@@ -7,20 +6,22 @@ use warpui::{
         button::ButtonVariant,
         components::{Coords, UiComponent, UiComponentStyles},
     },
-    Element,
+    AppContext, Element,
 };
 
 use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::{localization, Appearance};
 
 use super::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView};
 
-const UNSAVED_CHANGES_TEXT: &str = "You have unsaved changes.";
-const KEEP_EDITING_TEXT: &str = "Keep editing";
-const DISCARD_CHANGES_TEXT: &str = "Discard changes";
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_PADDING: f32 = 12.;
 const MODAL_HORIZONTAL_MARGIN: f32 = 28.;
 const DIALOG_WIDTH: f32 = 460.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 impl EnvVarCollectionView {
     pub fn render_unsaved_changes_dialog_button(
@@ -46,24 +47,28 @@ impl EnvVarCollectionView {
             .finish()
     }
 
-    pub fn render_unsaved_changes_dialog(&self, appearance: &Appearance) -> Box<dyn Element> {
+    pub fn render_unsaved_changes_dialog(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let keep_editing_button = self.render_unsaved_changes_dialog_button(
             appearance,
             self.button_mouse_states.keep_editing_state.clone(),
             EnvVarCollectionAction::CloseUnsavedChangesDialog,
-            KEEP_EDITING_TEXT,
+            &text(app, "workflow.unsaved_changes.keep_editing"),
         );
 
         let discard_changes_button = self.render_unsaved_changes_dialog_button(
             appearance,
             self.button_mouse_states.discard_changes_state.clone(),
             EnvVarCollectionAction::ForceClose,
-            DISCARD_CHANGES_TEXT,
+            &text(app, "workflow.unsaved_changes.discard"),
         );
 
         Container::new(
             Dialog::new(
-                UNSAVED_CHANGES_TEXT.to_string(),
+                text(app, "workflow.unsaved_changes.message"),
                 None,
                 dialog_styles(appearance),
             )

@@ -10,6 +10,10 @@ use warpui::{
 
 use crate::appearance::Appearance;
 
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 // Constants for the *tada* emoji rendering
 // Note: Long-term, we should convert this to a SVG, since there's no guarantee the emoji will be
 // always renderable or that the size will be the same
@@ -17,24 +21,14 @@ const TADA: &str = "🎉";
 const TADA_FONT_SIZE: f32 = 60.;
 const TADA_MARGIN_TOP: f32 = 0.;
 const TADA_MARGIN_BOTTOM: f32 = 50.;
-// Constants for the main title
-const TITLE: &str = "Congrats!";
 const TITLE_FONT_SIZE: f32 = 20.;
 const TITLE_MARGIN_BOTTOM: f32 = 25.;
-// Constants for the subtitle
-const SUBTITLE_SENT_REFERRAL: &str =
-    "You earned an exclusive Warp theme for referring someone to Warp.";
-const SUBTITLE_RECEIVED_REFERRAL: &str =
-    "You earned an exclusive Warp theme for being referred to Warp.";
 const SUBTITLE_FONT_SIZE: f32 = 14.;
 const SUBTITLE_MARGIN_BOTTOM: f32 = 40.;
-// Constants for the button
-const BUTTON_CTA: &str = "Try it out!";
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_HEIGHT: f32 = 45.;
 const BUTTON_WIDTH: f32 = 240.;
 const BUTTON_MARGIN_BOTTOM: f32 = 14.;
-const ACCESSIBILITY_HELP: &str = "Press enter to open the theme chooser or escape to dismiss.";
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -88,10 +82,10 @@ impl RewardView {
         ctx.notify();
     }
 
-    fn subtitle(&self) -> &'static str {
+    fn subtitle(&self, app: &AppContext) -> String {
         match self.kind {
-            RewardKind::SentReferralTheme => SUBTITLE_SENT_REFERRAL,
-            RewardKind::ReceivedReferralTheme => SUBTITLE_RECEIVED_REFERRAL,
+            RewardKind::SentReferralTheme => text(app, "reward.subtitle.sent_referral"),
+            RewardKind::ReceivedReferralTheme => text(app, "reward.subtitle.received_referral"),
         }
     }
 
@@ -114,10 +108,10 @@ impl RewardView {
         .finish()
     }
 
-    fn render_title(&self, ui_builder: &UiBuilder) -> Box<dyn Element> {
+    fn render_title(&self, ui_builder: &UiBuilder, app: &AppContext) -> Box<dyn Element> {
         Align::new(
             ui_builder
-                .span(TITLE)
+                .span(text(app, "reward.title"))
                 .with_style(UiComponentStyles {
                     font_size: Some(TITLE_FONT_SIZE),
                     margin: Some(Coords {
@@ -132,10 +126,10 @@ impl RewardView {
         .finish()
     }
 
-    fn render_subtitle(&self, ui_builder: &UiBuilder) -> Box<dyn Element> {
+    fn render_subtitle(&self, ui_builder: &UiBuilder, app: &AppContext) -> Box<dyn Element> {
         Align::new(
             ui_builder
-                .paragraph(self.subtitle().to_owned())
+                .paragraph(self.subtitle(app))
                 .with_style(UiComponentStyles {
                     font_size: Some(SUBTITLE_FONT_SIZE),
                     margin: Some(Coords {
@@ -150,12 +144,12 @@ impl RewardView {
         .finish()
     }
 
-    fn render_button(&self, ui_builder: &UiBuilder) -> Box<dyn Element> {
+    fn render_button(&self, ui_builder: &UiBuilder, app: &AppContext) -> Box<dyn Element> {
         Align::new(
             Container::new(
                 ui_builder
                     .button(ButtonVariant::Accent, self.cta_mouse_state.clone())
-                    .with_centered_text_label(BUTTON_CTA.into())
+                    .with_centered_text_label(text(app, "reward.button.try_it_out"))
                     .with_style(UiComponentStyles {
                         height: Some(BUTTON_HEIGHT),
                         width: Some(BUTTON_WIDTH),
@@ -182,10 +176,10 @@ impl View for RewardView {
         "RewardView"
     }
 
-    fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
+    fn accessibility_contents(&self, app: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            format!("{} {}", TITLE, self.subtitle()),
-            ACCESSIBILITY_HELP,
+            format!("{} {}", text(app, "reward.title"), self.subtitle(app)),
+            text(app, "reward.a11y.help"),
             WarpA11yRole::WindowRole,
         ))
     }
@@ -194,9 +188,9 @@ impl View for RewardView {
         let ui_builder = Appearance::as_ref(app).ui_builder();
         Flex::column()
             .with_child(self.render_icon(ui_builder))
-            .with_child(self.render_title(ui_builder))
-            .with_child(self.render_subtitle(ui_builder))
-            .with_child(self.render_button(ui_builder))
+            .with_child(self.render_title(ui_builder, app))
+            .with_child(self.render_subtitle(ui_builder, app))
+            .with_child(self.render_button(ui_builder, app))
             .finish()
     }
 }
