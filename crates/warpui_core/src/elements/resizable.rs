@@ -89,11 +89,10 @@ impl ResizableState {
     fn check_for_resize(
         &mut self,
         position: Vector2F,
-        origin: Option<Vector2F>,
         dragbar_side: DragBarSide,
     ) -> Option<Vector2F> {
         if let ResizableMode::Dragging { last_position } = self.mode {
-            self.resize(last_position, position, origin, dragbar_side)
+            self.resize(last_position, position, dragbar_side)
         } else {
             None
         }
@@ -107,60 +106,43 @@ impl ResizableState {
         &mut self,
         old_position: Vector2F,
         new_position: Vector2F,
-        origin: Option<Vector2F>,
         dragbar_side: DragBarSide,
     ) -> Option<Vector2F> {
-        let mut resized = false;
+        let delta = match dragbar_side {
+            DragBarSide::Right => new_position.x() - old_position.x(),
+            DragBarSide::Left => old_position.x() - new_position.x(),
+            DragBarSide::Bottom => new_position.y() - old_position.y(),
+            DragBarSide::Top => old_position.y() - new_position.y(),
+        };
 
-        if let Some(origin) = origin {
-            let delta = match dragbar_side {
-                DragBarSide::Right => new_position.x() - old_position.x(),
-                DragBarSide::Left => old_position.x() - new_position.x(),
-                DragBarSide::Bottom => new_position.y() - old_position.y(),
-                DragBarSide::Top => old_position.y() - new_position.y(),
+        let old_size = self.size;
+        if delta.abs() < f32::EPSILON {
+            self.mode = ResizableMode::Dragging {
+                last_position: new_position,
             };
-
-            let old_size = self.size;
-            if delta.abs() >= f32::EPSILON {
-                resized = true;
-                self.size += delta;
-                self.clamp_size();
-            }
-            let size = self.size;
-
-            // The last position should reflect the latest position of the dragbar.
-            let last_position = match dragbar_side {
-                // With a right-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element plus the new width/height.
-                DragBarSide::Right => origin + vec2f(size, 0.),
-                // With a left-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element minus the bounded delta of the drag.
-                DragBarSide::Left => origin - vec2f(size - old_size, 0.),
-                // With a bottom-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element plus the new height.
-                DragBarSide::Bottom => origin + vec2f(0., size),
-                // With a top-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element minus the bounded delta of the drag.
-                DragBarSide::Top => origin - vec2f(0., size - old_size),
-            };
-
-            let origin_delta = match dragbar_side {
-                DragBarSide::Right => Vector2F::zero(),
-                DragBarSide::Left => vec2f(old_size - size, 0.),
-                DragBarSide::Bottom => Vector2F::zero(),
-                DragBarSide::Top => vec2f(0., old_size - size),
-            };
-
-            self.mode = ResizableMode::Dragging { last_position };
-
-            if resized {
-                Some(origin_delta)
-            } else {
-                None
-            }
-        } else {
-            None
+            return None;
         }
+
+        self.size += delta;
+        self.clamp_size();
+        let size = self.size;
+
+        // Track the actual cursor position so that the next drag event computes
+        // delta correctly (cursor_prev → cursor_now). Using the computed dragbar
+        // position instead accumulates error — especially when size is clamped at
+        // a boundary, causing the panel to jump when the cursor reverses direction.
+        self.mode = ResizableMode::Dragging {
+            last_position: new_position,
+        };
+
+        let origin_delta = match dragbar_side {
+            DragBarSide::Right => Vector2F::zero(),
+            DragBarSide::Left => vec2f(old_size - size, 0.),
+            DragBarSide::Bottom => Vector2F::zero(),
+            DragBarSide::Top => vec2f(0., old_size - size),
+        };
+
+        Some(origin_delta)
     }
 
     pub fn begin_resizing(&mut self, position: Vector2F) {
@@ -449,12 +431,11 @@ impl Element for Resizable {
             }
 
             crate::Event::LeftMouseDragged { position, .. } => {
-                if self.state().is_resizing() {
+                if self.state().is_resizing() && self.origin.is_some() {
                     let dragbar_side = self.dragbar.side;
-                    let origin = self.origin.map(|origin| origin + self.origin_delta);
                     let resized = self
                         .state()
-                        .check_for_resize(*position, origin, dragbar_side);
+                        .check_for_resize(*position, dragbar_side);
                     self.origin_delta += resized.unwrap_or_default();
                     if resized.is_some() {
                         dispatch_callback(self.resize_handler.as_mut(), ctx, app)
