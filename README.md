@@ -110,3 +110,133 @@ We'd like to call out a few of the [open source dependencies](https://docs.warp.
 - [FontKit](https://github.com/servo/font-kit)
 - [Core-foundation](https://github.com/servo/core-foundation-rs)
 - [Smol](https://github.com/smol-rs/smol)
+
+## QEMU VM Helper Scripts
+
+This repository includes two local PowerShell scripts for creating and starting simple QEMU virtual machines on Windows:
+
+- `start-qemu-vm.ps1` creates and starts a general-purpose QEMU VM.
+- `start-android-emulator.ps1` creates and starts an Android-x86 QEMU VM.
+
+### Requirements
+
+- Windows PowerShell.
+- QEMU installed and available on `PATH`.
+- `qemu-img` available on `PATH`.
+- `qemu-system-x86_64` available on `PATH`.
+- Optional but recommended: Windows Hypervisor Platform enabled for WHPX acceleration.
+- An installer ISO for installation workflows.
+
+To verify the QEMU commands are available:
+
+```powershell
+qemu-img --version
+qemu-system-x86_64 --version
+```
+
+If either command is not found, restart the shell so it picks up the persisted user `PATH`.
+
+### General VM Script
+
+Use `start-qemu-vm.ps1` for a standard QEMU VM backed by a QCOW2 disk.
+
+Create a disk and boot an installer ISO:
+
+```powershell
+.\start-qemu-vm.ps1 -Name test-vm -IsoPath .\installer.iso -Install
+```
+
+Start the installed VM later:
+
+```powershell
+.\start-qemu-vm.ps1 -Name test-vm
+```
+
+Customize CPU, memory, and disk size:
+
+```powershell
+.\start-qemu-vm.ps1 -Name test-vm -MemoryMB 8192 -CpuCount 4 -DiskSizeGB 60
+```
+
+Disable WHPX acceleration if it causes startup issues:
+
+```powershell
+.\start-qemu-vm.ps1 -Name test-vm -NoAccel
+```
+
+Defaults:
+
+- VM name: `basic-vm`
+- Disk size: `30` GB
+- Memory: `4096` MB
+- CPU count: `2`
+- VM storage root: `vms`
+- Disk path pattern: `vms\<name>\<name>.qcow2`
+
+### Android Emulator Script
+
+Use `start-android-emulator.ps1` with an Android-x86 ISO. It uses Android-friendly defaults, including USB tablet input and user-mode networking.
+
+Create a disk and boot the Android installer:
+
+```powershell
+.\start-android-emulator.ps1 -IsoPath .\android-x86.iso -Install
+```
+
+Start the installed Android VM later:
+
+```powershell
+.\start-android-emulator.ps1
+```
+
+Boot an Android live session without creating or using a disk:
+
+```powershell
+.\start-android-emulator.ps1 -IsoPath .\android-x86.iso -Live
+```
+
+Customize resources:
+
+```powershell
+.\start-android-emulator.ps1 -Name android-test -MemoryMB 8192 -CpuCount 4 -DiskSizeGB 32
+```
+
+Disable WHPX acceleration if needed:
+
+```powershell
+.\start-android-emulator.ps1 -IsoPath .\android-x86.iso -Install -NoAccel
+```
+
+Defaults:
+
+- VM name: `google-pixel-9-pro-fold-x86`
+- Disk size: `16` GB
+- Memory: `4096` MB
+- CPU count: `4`
+- VM storage root: `vms`
+- Disk path pattern: `vms\<name>\<name>.qcow2`
+
+### Common Parameters
+
+- `-Name`: VM name and disk folder name.
+- `-IsoPath`: Path to an installer or live ISO.
+- `-DiskSizeGB`: QCOW2 disk size to create if the disk does not already exist.
+- `-MemoryMB`: RAM assigned to the VM.
+- `-CpuCount`: Number of virtual CPUs assigned to the VM.
+- `-VmRoot`: Root directory for VM storage.
+- `-Install`: Boot from the ISO and attach a VM disk for OS installation.
+- `-NoAccel`: Skip WHPX acceleration.
+
+The Android script also supports:
+
+- `-Live`: Boot from the Android ISO without creating or attaching a disk.
+
+### Notes and Troubleshooting
+
+- Press `Ctrl+Alt+G` to release mouse and keyboard capture from the QEMU window.
+- The scripts create a disk only when one does not already exist.
+- Providing `-IsoPath` without `-Install` in the general VM script boots from disk only.
+- In the Android script, `-Install` and `-Live` require `-IsoPath`.
+- In the Android script, `-Install` and `-Live` cannot be used together.
+- If `-accel whpx` fails, enable Windows Hypervisor Platform or rerun with `-NoAccel`.
+- A dummy `.iso` file can test script argument handling, but a real bootable ISO is required to install or run an operating system.
