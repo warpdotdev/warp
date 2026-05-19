@@ -142,20 +142,34 @@ impl AtContextMenuDisabledReason {
             .as_ref()
             .map(|session| {
                 let session_type = session.session_type();
-                let is_legacy_ssh = session.is_legacy_ssh_session();
-                let is_warpified_no_host = matches!(
+                let has_connected_remote_server = matches!(
                     session_type,
-                    SessionType::WarpifiedRemote { host_id: None }
+                    SessionType::WarpifiedRemote {
+                        host_id: Some(_)
+                    }
                 );
                 // The @ menu requires repo metadata which is only available for:
                 // - Local sessions
                 // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
-                // Block legacy SSH and WarpifiedRemote sessions still connecting (host_id is None).
-                let is_ssh_without_remote_server = is_legacy_ssh || is_warpified_no_host;
+                //
+                // Block when:
+                // - Legacy SSH without a remote server upgrade
+                // - WarpifiedRemote still connecting (host_id is None)
+                //
+                // Note: is_legacy_ssh_session() is set at bootstrap time and stays true
+                // even after the session transitions to WarpifiedRemote with a host_id.
+                // So we must check has_connected_remote_server first to avoid
+                // incorrectly blocking upgraded sessions.
+                let is_ssh_without_remote_server =
+                    !has_connected_remote_server && (session.is_legacy_ssh_session()
+                        || matches!(
+                            session_type,
+                            SessionType::WarpifiedRemote { host_id: None }
+                        ));
                 let is_subshell = session.subshell_info().is_some();
                 log::info!(
-                    "[at-context-debug] session_type={:?} is_legacy_ssh={} is_warpified_no_host={} is_ssh_without_remote_server={} is_subshell={}",
-                    session_type, is_legacy_ssh, is_warpified_no_host, is_ssh_without_remote_server, is_subshell
+                    "[at-context-debug] session_type={:?} is_legacy_ssh={} has_connected_remote_server={} is_ssh_without_remote_server={} is_subshell={}",
+                    session_type, session.is_legacy_ssh_session(), has_connected_remote_server, is_ssh_without_remote_server, is_subshell
                 );
                 (is_ssh_without_remote_server, is_subshell)
             })
