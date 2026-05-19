@@ -33,6 +33,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_util::file::FileLoadError;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::Rect;
 use warpui::fonts::Style;
@@ -522,7 +523,7 @@ impl CodeView {
                     return;
                 }
                 log::warn!("Failed to load file. {err:?}");
-                CodeView::display_load_failure(ctx.window_id(), ctx);
+                CodeView::display_load_failure(err, ctx.window_id(), ctx);
             }
             LocalCodeEditorEvent::SelectionAddedAsContext {
                 relative_file_path,
@@ -919,10 +920,23 @@ impl CodeView {
         }
     }
 
-    fn display_load_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+    fn display_load_failure(
+        error: &std::rc::Rc<FileLoadError>,
+        window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let message = match error.as_ref() {
+            FileLoadError::FileTooLarge { size_bytes } => {
+                let size_mb = *size_bytes as f64 / 1_000_000.0;
+                format!(
+                    "File is too large to open ({size_mb:.1} MB). Maximum supported size is 20 MB."
+                )
+            }
+            _ => String::from("Failed to load file."),
+        };
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from("Failed to load file."))
-                .with_object_id("failed_to_load_file".to_string());
+            let toast =
+                DismissibleToast::error(message).with_object_id("failed_to_load_file".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }

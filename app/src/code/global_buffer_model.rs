@@ -17,7 +17,7 @@ use warp_editor::content::diff::{text_diff, TextDiff};
 use warp_editor::content::edit::PreciseDelta;
 use warp_editor::content::version::BufferVersion;
 use warp_util::content_version::ContentVersion;
-use warp_util::file::{FileId, FileLoadError, FileSaveError};
+use warp_util::file::{FileId, FileLoadError, FileSaveError, MAX_EDITOR_FILE_SIZE};
 use warp_util::host_id::HostId;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -1829,6 +1829,23 @@ impl GlobalBufferModel {
                     content.len(),
                     server_version,
                 );
+
+                // Reject oversized remote file content to prevent multi-gigabyte
+                // SumTree/render-layout allocations (same guard as local files).
+                if content.len() as u64 > MAX_EDITOR_FILE_SIZE {
+                    log::warn!(
+                        "[remote-buffer] Rejecting oversized remote file: {} bytes",
+                        content.len()
+                    );
+                    ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                        file_id,
+                        error: Rc::new(FileLoadError::FileTooLarge {
+                            size_bytes: content.len() as u64,
+                        }),
+                    });
+                    return;
+                }
+
                 let Some(state) = self.buffers.get_mut(&file_id) else {
                     safe_error!(
                         safe: ("[remote-buffer] Buffer state missing after OpenBuffer response"),

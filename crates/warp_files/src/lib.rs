@@ -31,7 +31,7 @@ use repo_metadata::{
 };
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileSaveError;
-use warp_util::file::{FileId, FileLoadError};
+use warp_util::file::{FileId, FileLoadError, MAX_EDITOR_FILE_SIZE};
 use warpui::ModelHandle;
 use warpui::{r#async::SpawnedFutureHandle, AppContext, Entity, ModelContext, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
@@ -419,47 +419,65 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
+                // Check file size before reading to prevent huge allocations in
+                // the editor buffer (SumTree, StyledBufferBlock, tree-sitter).
+                let metadata = async_fs::metadata(&file_path_buf)
+                    .await
+                    .map_err(FileLoadError::from)?;
+                if metadata.len() > MAX_EDITOR_FILE_SIZE {
+                    return Err(FileLoadError::FileTooLarge {
+                        size_bytes: metadata.len(),
+                    });
+                }
                 let contents = async_fs::read_to_string(&file_path_buf)
                     .await
                     .map_err(FileLoadError::from);
-                (file_id, contents)
+                Ok((file_id, contents))
             },
-            move |me, (file_id, load_result), ctx| match load_result {
-                Ok(content) => {
-                    let version = ContentVersion::new();
-                    me.set_version(file_id, version);
+            move |me,
+                  result: Result<(FileId, Result<String, FileLoadError>), FileLoadError>,
+                  ctx| {
+                let load_result = match result {
+                    Ok((_, inner)) => inner,
+                    Err(e) => Err(e),
+                };
+                match load_result {
+                    Ok(content) => {
+                        let version = ContentVersion::new();
+                        me.set_version(file_id, version);
 
-                    // Only register individual watcher if not using repo subscription.
-                    // Watch the parent directory (NonRecursive) instead of the file
-                    // itself so the watch survives editors that use a
-                    // delete+create/rename pattern (vim, sed -i, etc.). Watching
-                    // the file directly would lose the inotify watch when the
-                    // original inode is deleted.
-                    if use_individual_watcher {
-                        let watch_path = file_path_clone
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| file_path_clone.clone());
-                        me.watcher.update(ctx, |watcher, _ctx| {
-                            std::mem::drop(watcher.register_path(
-                                &watch_path,
-                                WatchFilter::accept_all(),
-                                RecursiveMode::NonRecursive,
-                            ));
+                        // Only register individual watcher if not using repo subscription.
+                        // Watch the parent directory (NonRecursive) instead of the file
+                        // itself so the watch survives editors that use a
+                        // delete+create/rename pattern (vim, sed -i, etc.). Watching
+                        // the file directly would lose the inotify watch when the
+                        // original inode is deleted.
+                        if use_individual_watcher {
+                            let watch_path = file_path_clone
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| file_path_clone.clone());
+                            me.watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.register_path(
+                                    &watch_path,
+                                    WatchFilter::accept_all(),
+                                    RecursiveMode::NonRecursive,
+                                ));
+                            });
+                        }
+
+                        ctx.emit(FileModelEvent::FileLoaded {
+                            content,
+                            id: file_id,
+                            version,
                         });
                     }
-
-                    ctx.emit(FileModelEvent::FileLoaded {
-                        content,
-                        id: file_id,
-                        version,
-                    });
-                }
-                Err(err) => {
-                    ctx.emit(FileModelEvent::FailedToLoad {
-                        id: file_id,
-                        error: Rc::new(err),
-                    });
+                    Err(err) => {
+                        ctx.emit(FileModelEvent::FailedToLoad {
+                            id: file_id,
+                            error: Rc::new(err),
+                        });
+                    }
                 }
             },
         );
@@ -472,8 +490,13 @@ impl FileModel {
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
-        if !Self::file_exists(file_path).await {
-            return Err(FileLoadError::DoesNotExist);
+        let metadata = async_fs::metadata(file_path)
+            .await
+            .map_err(|_| FileLoadError::DoesNotExist)?;
+        if metadata.len() > MAX_EDITOR_FILE_SIZE {
+            return Err(FileLoadError::FileTooLarge {
+                size_bytes: metadata.len(),
+            });
         }
         async_fs::read_to_string(file_path)
             .await
@@ -1109,6 +1132,18 @@ impl FileModel {
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
+                    // Skip files that have grown beyond the editor size limit.
+                    let too_large = async_fs::metadata(&file_path)
+                        .await
+                        .map(|m| m.len() > MAX_EDITOR_FILE_SIZE)
+                        .unwrap_or(false);
+                    if too_large {
+                        log::warn!(
+                            "Skipping auto-reload for oversized file: {}",
+                            file_path.display()
+                        );
+                        continue;
+                    }
                     if let Ok(content) = async_fs::read_to_string(&file_path).await {
                         res.push((file_path, content));
                     }
