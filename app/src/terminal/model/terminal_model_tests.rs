@@ -765,6 +765,47 @@ fn test_unset_bracketed_paste_mode_on_command_finished() {
     assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
 }
 
+/// Regression test for #9817 / #9426.
+///
+/// Some TUI programs (notably OpenCode on macOS) emit
+/// `end_in_band_command_output` without a matching `start`. Before the fix,
+/// this only logged a warning and the terminal stayed stuck in alt-screen mode
+/// (rendering a blank screen). After the fix, the unexpected end marker also
+/// restores presentation state: exit alt screen and unset bracketed paste.
+#[test]
+fn test_unexpected_end_in_band_command_output_exits_alt_screen() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+
+    terminal.enter_alt_screen(true);
+    assert!(terminal.is_alt_screen_active());
+
+    // No matching `start_in_band_command_output` — simulates the OpenCode
+    // misbehavior described in #9817.
+    terminal.end_in_band_command_output(false);
+
+    assert!(
+        !terminal.is_alt_screen_active(),
+        "alt screen should be exited as part of stuck-state recovery"
+    );
+}
+
+/// Regression test for #9817 / #9426.
+///
+/// Companion to the alt-screen test above: ensure bracketed paste is also
+/// cleared when we hit the unexpected `end_in_band_command_output` path so
+/// the local shell isn't left wrapping its input in bracketed-paste markers.
+#[test]
+fn test_unexpected_end_in_band_command_output_unsets_bracketed_paste() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+
+    terminal.set_mode(Mode::BracketedPaste);
+    assert!(terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
+
+    terminal.end_in_band_command_output(false);
+
+    assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
+}
+
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);

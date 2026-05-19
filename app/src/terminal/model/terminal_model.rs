@@ -3081,6 +3081,10 @@ impl ansi::Handler for TerminalModel {
 
     #[cfg_attr(not(windows), allow(unused_variables))]
     fn end_in_band_command_output(&mut self, from_osc_sequence: bool) {
+        let was_unexpected = matches!(
+            &self.is_receiving_in_band_command_output,
+            IsReceivingInBandCommandOutput::No
+        );
         match &mut self.is_receiving_in_band_command_output {
             IsReceivingInBandCommandOutput::Yes { output } => {
                 match validate_and_decode_in_band_command_output_to_bytes(output.as_str()) {
@@ -3108,6 +3112,26 @@ impl ansi::Handler for TerminalModel {
             IsReceivingInBandCommandOutput::No => {
                 log::warn!("Received 'end_in_band_command_output' while not expecting to read in-band command output.");
             }
+        }
+
+        if was_unexpected {
+            // Recovery path for stuck terminal presentation state.
+            //
+            // Some TUI programs (notably OpenCode on macOS, see #9426 / #9817)
+            // emit the `end_in_band_command_output` marker without a matching
+            // `start_in_band_command_output`. When this happens around a TUI
+            // teardown, Warp may not receive the usual `CommandFinished` /
+            // `Precmd` lifecycle, leaving the terminal stuck in alternate
+            // screen mode and/or with bracketed paste enabled. The user sees
+            // a blank screen until they manually reset the session.
+            //
+            // Restore presentation state defensively here, mirroring the
+            // recovery `command_finished` performs. We intentionally do NOT
+            // synthesize `CommandFinished` or mark the block complete,
+            // because the shell lifecycle is genuinely unknown at this
+            // point — we only fix the visible "stuck blank screen" state.
+            self.unset_mode(Mode::BracketedPaste);
+            self.exit_alt_screen(true);
         }
 
         #[cfg(windows)]
