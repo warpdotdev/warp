@@ -3201,7 +3201,10 @@ impl AIBlock {
             );
 
             code_diff_view.update(ctx, |diff_view, ctx| {
-                diff_view.set_candidate_diffs(file_diffs, ctx);
+                // Use deferred diffs to avoid creating heavy CodeEditorView/InlineDiffView
+                // instances for restored conversations. The views will be materialized
+                // on-demand when the user expands the diff.
+                diff_view.set_deferred_candidate_diffs(file_diffs, ctx);
 
                 // For restored conversations that include a passive code diff, we assume the diff
                 // is no longer live, so we display it as embedded instead of inline.
