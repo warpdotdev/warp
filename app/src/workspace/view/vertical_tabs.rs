@@ -1308,6 +1308,8 @@ fn render_detail_kind_badge_icon(
                 .is_some()
             {
                 WarpIcon::Oz
+            } else if let Some(shell_indicator) = terminal_view.shell_indicator_type() {
+                shell_indicator.to_icon()
             } else {
                 WarpIcon::Terminal
             };
