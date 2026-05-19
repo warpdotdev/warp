@@ -61,9 +61,6 @@ pub enum FeatureFlag {
     /// Enabling context chips functionality for prompt
     ContextChips,
 
-    /// Ligature Support in the Editor and Grid
-    Ligatures,
-
     /// When enabled, the `History` rule from the command_corrections crate
     /// will be enabled. When the `History` rule is enabled, the command_corrections
     /// lib will use the user's history as a last-ditch effort to find a reasonable correction.

@@ -1,5 +1,3 @@
-use crate::features::FeatureFlag;
-
 use settings::{
     macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
@@ -18,9 +16,7 @@ define_settings_group!(LigatureSettings, settings: [
 ]);
 
 pub fn should_use_ligature_rendering(app: &AppContext) -> bool {
-    let enabled_in_settings = *LigatureSettings::as_ref(app)
+    *LigatureSettings::as_ref(app)
         .ligature_rendering_enabled
-        .value();
-
-    enabled_in_settings && FeatureFlag::Ligatures.is_enabled()
+        .value()
 }

@@ -2571,8 +2571,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::InBandGeneratorsForSSH,
         #[cfg(feature = "run_generators_with_cmd_exe")]
         FeatureFlag::RunGeneratorsWithCmdExe,
-        #[cfg(feature = "ligatures")]
-        FeatureFlag::Ligatures,
         #[cfg(feature = "selectable_prompt")]
         FeatureFlag::SelectablePrompt,
         #[cfg(feature = "viewing_shared_sessions")]

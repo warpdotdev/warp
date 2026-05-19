@@ -476,7 +476,6 @@ default = [
     "avatar_in_tab_bar",
     "full_screen_zen_mode",
     "workflow_aliases",
-    "ligatures",
     "dynamic_workflow_enums",
     "rect_selection",
     "reload_stale_conversation_files",
@@ -715,7 +714,6 @@ run_generators_with_cmd_exe = []
 inline_ssh_banner = []
 kitty_images = []
 kitty_keyboard_protocol = []
-ligatures = []
 trim_trailing_blank_lines = []
 cli_agent_rich_input = []
 list_skills = []

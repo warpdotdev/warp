@@ -5649,7 +5649,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 EnablementState::Always
             }
             Self::OpenedSharingDialog => EnablementState::Always,
-            Self::ToggleLigatureRendering => EnablementState::Flag(FeatureFlag::Ligatures),
+            Self::ToggleLigatureRendering => EnablementState::Always,
             Self::WorkflowAliasAdded
             | Self::WorkflowAliasRemoved
             | Self::WorkflowAliasArgumentEdited
