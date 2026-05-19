@@ -11,8 +11,6 @@ use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
 use warp_graphql::billing::AddonCreditsOption;
 use warpui::prelude::ChildView;
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
     elements::{
         Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
@@ -24,20 +22,21 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
+    ViewContext, ViewHandle,
 };
 
 use settings::Setting;
 
 use crate::{
-    WorkspaceAction,
     ai::{
-        AIRequestUsageModel,
         request_usage_model::{
-            AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
         },
+        AIRequestUsageModel,
     },
     auth::{
-        AuthManager, AuthStateProvider, auth_state::AuthState, auth_view_modal::AuthViewVariant,
+        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
     },
     modal::{Modal, ModalEvent, ModalViewState},
     pricing::PricingInfoModel,
@@ -51,18 +50,18 @@ use crate::{
         tab_selector::{self, SettingsTab},
     },
     view_components::{
-        ToastFlavor,
         action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
+        ToastFlavor,
     },
     workspaces::{
         update_manager::TeamUpdateManager,
         user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
         workspace::{CustomerType, Workspace, WorkspaceUid},
     },
+    WorkspaceAction,
 };
 
 use super::{
-    SettingsSection,
     billing_and_usage::{
         billing_cycle_usage_section::BillingCycleUsageSectionView,
         overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
@@ -70,7 +69,8 @@ use super::{
         usage_history_model::UsageHistoryModel,
     },
     billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon},
+    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
+    SettingsSection,
 };
 
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
