@@ -133,4 +133,9 @@ impl TerminalView {
     pub fn rich_content_view_count_for_test(&self) -> usize {
         self.rich_content_views.len()
     }
+
+    #[cfg(test)]
+    pub fn set_login_shell_bootstrapped_for_test(&mut self) {
+        self.is_login_shell_bootstrapped = true;
+    }
 }
