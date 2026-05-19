@@ -63,13 +63,21 @@ pub(crate) fn fuzzy_match_history(
     Box::pin(async move {
         let mut results = Vec::new();
 
+        // Reuse a single matcher across all entries so that the internal scoring
+        // buffers are allocated once and recycled, instead of creating a new
+        // SkimMatcherV2 (with fresh heap allocations) per entry.  This fixes a
+        // memory spike where fuzzy-matching tens of thousands of history entries
+        // could consume multiple GiB of transient heap (APP-4542).
+        let matcher = fuzzy_match::CachedFuzzyMatcher::case_insensitive();
+
         // History entries are cheap to match (single short string), so we use a large chunk
         // size to reduce yield overhead while still allowing cancellation of stale queries.
         for chunk in snapshot.commands.chunks(512) {
             for entry in chunk {
-                if let Some(match_result) = fuzzy_match::match_indices_case_insensitive(
+                if let Some(match_result) = fuzzy_match::match_indices_case_insensitive_with(
                     entry.command.as_str(),
                     snapshot.query_text.as_str(),
+                    &matcher,
                 ) {
                     results.push(
                         HistorySearchItem {

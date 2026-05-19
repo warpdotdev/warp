@@ -62,6 +62,31 @@ pub struct FuzzyMatchResult {
     pub matched_indices: Vec<usize>,
 }
 
+/// A reusable fuzzy matcher that avoids re-allocating internal scoring buffers
+/// on every call. Create one instance and pass it by reference to
+/// [`match_indices_case_insensitive_with`] (or similar) when matching in a
+/// tight loop.
+pub struct CachedFuzzyMatcher {
+    inner: SkimMatcherV2,
+}
+
+impl CachedFuzzyMatcher {
+    /// Creates a case-insensitive cached matcher.
+    pub fn case_insensitive() -> Self {
+        Self {
+            inner: SkimMatcherV2::default().ignore_case(),
+        }
+    }
+
+    /// Creates a smart-case cached matcher (case-insensitive unless the query
+    /// contains uppercase characters).
+    pub fn smart_case() -> Self {
+        Self {
+            inner: SkimMatcherV2::default(),
+        }
+    }
+}
+
 impl FuzzyMatchResult {
     /// Constructs a dummy [`FuzzyMatchResult`] that represents an item that is unmatched. The item
     /// will have no matching indices and a score of 0.
@@ -79,14 +104,25 @@ impl FuzzyMatchResult {
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default())
+    match_internal(text, query, &SkimMatcherV2::default())
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings.
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices_case_insensitive(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default().ignore_case())
+    match_internal(text, query, &SkimMatcherV2::default().ignore_case())
+}
+
+/// Like [`match_indices_case_insensitive`], but uses a pre-built
+/// [`CachedFuzzyMatcher`] so that internal scoring buffers are reused across
+/// calls. Use this variant when matching many items in a loop.
+pub fn match_indices_case_insensitive_with(
+    text: &str,
+    query: &str,
+    matcher: &CachedFuzzyMatcher,
+) -> Option<FuzzyMatchResult> {
+    match_internal(text, query, &matcher.inner)
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings,
@@ -121,11 +157,11 @@ pub fn match_indices_case_insensitive_ignore_spaces(
     match_internal(
         text,
         &query_no_spaces,
-        SkimMatcherV2::default().ignore_case(),
+        &SkimMatcherV2::default().ignore_case(),
     )
 }
 
-fn match_internal(text: &str, query: &str, matcher: SkimMatcherV2) -> Option<FuzzyMatchResult> {
+fn match_internal(text: &str, query: &str, matcher: &SkimMatcherV2) -> Option<FuzzyMatchResult> {
     matcher
         // The fuzzy_indices API returns char indices, so we don't need to manually convert.
         .fuzzy_indices(text, query)

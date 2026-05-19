@@ -371,3 +371,51 @@ fn test_ignore_spaces_single_word_query() {
     );
     assert_eq!(regular_result.score, space_ignoring_result.score);
 }
+
+#[test]
+fn test_cached_matcher_produces_identical_results() {
+    let matcher = crate::CachedFuzzyMatcher::case_insensitive();
+
+    let cases = [
+        ("AXBYcz", "abc"),
+        ("button.rs", "btn"),
+        ("getUserName", "getuser"),
+        ("myFunction", "function"),
+        ("abcdef", "ghijk"), // no match
+        ("abcdef", ""),      // empty query
+    ];
+
+    for (text, query) in cases {
+        let uncached = crate::match_indices_case_insensitive(text, query);
+        let cached = crate::match_indices_case_insensitive_with(text, query, &matcher);
+        assert_eq!(
+            uncached, cached,
+            "Results differ for text={text:?}, query={query:?}"
+        );
+    }
+}
+
+#[test]
+fn test_cached_matcher_reuse_across_many_calls() {
+    // Simulate the hot path: matching many entries with the same matcher.
+    let matcher = crate::CachedFuzzyMatcher::case_insensitive();
+    let query = "git";
+    let commands = vec![
+        "git status",
+        "git commit -m 'fix'",
+        "ls -la",
+        "cargo build",
+        "git push origin main",
+        "echo hello",
+        "git log --oneline",
+    ];
+
+    let mut match_count = 0;
+    for cmd in &commands {
+        if crate::match_indices_case_insensitive_with(cmd, query, &matcher).is_some() {
+            match_count += 1;
+        }
+    }
+    // "git status", "git commit", "git push", "git log" should match
+    assert_eq!(match_count, 4);
+}
