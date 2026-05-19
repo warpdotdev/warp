@@ -107,7 +107,12 @@ const DETAIL_SIDECAR_CORNER_RADIUS: f32 = 4.;
 /// so the row doesn't resize when badges are toggled.
 const METADATA_ROW_HEIGHT: f32 = BADGE_ICON_SIZE + 2.;
 const TAB_COLOR_OPACITY: Opacity = 15;
-const TAB_COLOR_HOVER_OPACITY: Opacity = 50;
+const TAB_COLOR_HOVER_OPACITY: Opacity = 35;
+const TAB_COLOR_SELECTED_OPACITY: Opacity = 75;
+/// Opacity applied to the tab color when it is used as the active row's
+/// border. Boosts saturation so the colored border reads as a clear active
+/// indicator on top of the same color used (more faintly) as the row fill.
+const TAB_COLOR_ACTIVE_BORDER_OPACITY: Opacity = 90;
 
 // Circular icon constants
 const ICON_WITH_STATUS_GAP: f32 = 8.;
@@ -279,7 +284,11 @@ fn pane_row_background(
     theme: &WarpTheme,
 ) -> Option<ThemeFill> {
     if let Some(color) = pane_color {
-        let opacity = if is_selected || is_hovered {
+        // Distinct opacities for selected vs. hovered so the active colored
+        // tab is clearly brighter than a merely-hovered one.
+        let opacity = if is_selected {
+            TAB_COLOR_SELECTED_OPACITY
+        } else if is_hovered {
             TAB_COLOR_HOVER_OPACITY
         } else {
             TAB_COLOR_OPACITY
@@ -291,6 +300,24 @@ fn pane_row_background(
         Some(internal_colors::fg_overlay_1(theme))
     } else {
         None
+    }
+}
+
+/// Border fill for a vertical tab pane row. When the row is selected and
+/// colored, render a saturated border in the same ANSI color so the active
+/// colored tab stands out from inactive colored tabs.
+fn pane_row_border_fill(
+    pane_color: Option<ThemeFill>,
+    is_selected: bool,
+    theme: &WarpTheme,
+) -> ElementFill {
+    if !is_selected {
+        return ElementFill::None;
+    }
+    if let Some(color) = pane_color {
+        color.with_opacity(TAB_COLOR_ACTIVE_BORDER_OPACITY).into()
+    } else {
+        internal_colors::fg_overlay_3(theme).into()
     }
 }
 
@@ -350,11 +377,11 @@ fn render_pane_row_element(
         }
 
         container
-            .with_border(Border::all(1.).with_border_fill(if is_selected {
-                internal_colors::fg_overlay_3(theme).into()
-            } else {
-                ElementFill::None
-            }))
+            .with_border(Border::all(1.).with_border_fill(pane_row_border_fill(
+                pane_color,
+                is_selected,
+                theme,
+            )))
             .finish()
     })
     .on_click(move |ctx, _, _| {

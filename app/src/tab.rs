@@ -64,6 +64,20 @@ pub fn uses_vertical_tabs(ctx: &AppContext) -> bool {
 
 const WARP_2_TAB_COLOR_OPACITY: Opacity = 25;
 const WARP_2_HOVERED_TAB_COLOR_OPACITY: Opacity = 50;
+/// Opacity applied to the colored fill of the active tab in the legacy
+/// (non-`NewTabStyling`) tab bar. Higher than the hover/inactive opacities
+/// so the active colored tab is clearly distinguishable.
+const WARP_2_ACTIVE_TAB_COLOR_OPACITY: Opacity = 80;
+/// Opacity used for the active tab's colored background in the
+/// `NewTabStyling` tab bar. Bumped relative to hover/inactive so the active
+/// colored tab is clearly brighter than its neighbours.
+const NEW_TAB_ACTIVE_COLOR_OPACITY: u8 = 85;
+const NEW_TAB_HOVERED_COLOR_OPACITY: u8 = 40;
+const NEW_TAB_INACTIVE_COLOR_OPACITY: u8 = 20;
+/// Opacity (0..=100) for the saturated colored border drawn around the
+/// active tab when the tab has a custom color. Used by both legacy and new
+/// tab styling.
+const ACTIVE_TAB_COLOR_BORDER_OPACITY: Opacity = 95;
 const TAB_CLOSE_BUTTON_OPACITY: Opacity = 60;
 const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
@@ -1325,26 +1339,25 @@ impl<'a> TabComponent<'a> {
         let theme = self.appearance.theme();
         let is_active = self.is_active_tab();
 
+        let custom_background_solid = self.styles.background.map(|fill| match fill {
+            ThemeFill::Solid(color) => color,
+            ThemeFill::VerticalGradient(gradient) => gradient.get_most_opaque(),
+            ThemeFill::HorizontalGradient(gradient) => gradient.get_most_opaque(),
+        });
+
         let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
-            // If there is a custom tab background, we overlay it with varying opacities.
-            let bg = if let Some(custom_background) = self.styles.background {
+            // If there is a custom tab background, we overlay it with varying opacities so the
+            // active tab pops while inactive colored tabs remain a subtle tint.
+            let bg = if let Some(color) = custom_background_solid {
                 let base_opacity = if is_active {
-                    60
+                    NEW_TAB_ACTIVE_COLOR_OPACITY
                 } else if is_hovered {
-                    40
+                    NEW_TAB_HOVERED_COLOR_OPACITY
                 } else {
-                    20
+                    NEW_TAB_INACTIVE_COLOR_OPACITY
                 };
                 let opacity = (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
-                match custom_background {
-                    ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
-                    ThemeFill::VerticalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                    }
-                    ThemeFill::HorizontalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                    }
-                }
+                coloru_with_opacity(color, opacity).into()
             } else if is_active {
                 internal_colors::fg_overlay_2(theme).into()
             } else if is_hovered {
@@ -1354,34 +1367,38 @@ impl<'a> TabComponent<'a> {
             };
 
             let border = if is_active {
-                internal_colors::fg_overlay_2(theme)
+                if let Some(color) = custom_background_solid {
+                    ThemeFill::Solid(coloru_with_opacity(color, ACTIVE_TAB_COLOR_BORDER_OPACITY))
+                } else {
+                    internal_colors::fg_overlay_2(theme)
+                }
             } else {
                 internal_colors::fg_overlay_1(theme)
             };
 
             (bg, border)
         } else {
-            let tab_opacity = if is_active || is_hovered {
+            let tab_opacity = if is_active {
+                WARP_2_ACTIVE_TAB_COLOR_OPACITY
+            } else if is_hovered {
                 WARP_2_HOVERED_TAB_COLOR_OPACITY
             } else {
                 WARP_2_TAB_COLOR_OPACITY
             };
 
-            let bg = if let Some(custom_background) = self.styles.background {
-                match custom_background {
-                    ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
-                    ThemeFill::VerticalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                    }
-                    ThemeFill::HorizontalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                    }
-                }
+            let bg = if let Some(color) = custom_background_solid {
+                coloru_with_opacity(color, tab_opacity).into()
             } else {
                 coloru_with_opacity(theme.surface_3().into(), tab_opacity).into()
             };
 
-            let border = if is_active || is_hovered {
+            let border = if is_active {
+                if let Some(color) = custom_background_solid {
+                    ThemeFill::Solid(coloru_with_opacity(color, ACTIVE_TAB_COLOR_BORDER_OPACITY))
+                } else {
+                    internal_colors::fg_overlay_2(theme)
+                }
+            } else if is_hovered {
                 internal_colors::fg_overlay_2(theme)
             } else {
                 internal_colors::fg_overlay_1(theme)
