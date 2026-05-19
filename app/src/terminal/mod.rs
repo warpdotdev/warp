@@ -40,6 +40,7 @@ pub mod enable_auto_reload_modal;
 pub mod event;
 pub mod event_listener;
 pub mod find;
+pub(crate) mod focus_env;
 pub mod general_settings;
 pub mod grid_renderer;
 pub mod grid_size_util;

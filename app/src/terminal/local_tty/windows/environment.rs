@@ -15,6 +15,7 @@ use winreg::{
 };
 
 use crate::safe_info;
+use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
 use crate::terminal::local_tty::{shell::ShellStarter, PtyOptions};
 
 const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
@@ -199,6 +200,8 @@ fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
         format!("{IS_LOCAL_SESSION_NAME}/u"),
         format!("{SSH_SOCKET_DIR}/u"),
         format!("{CLIENT_VERSION_NAME}/u"),
+        format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+        format!("{FOCUS_URL_ENV}/u"),
     ];
 
     if FeatureFlag::HOANotifications.is_enabled() {
@@ -383,6 +386,8 @@ mod tests {
                 format!("{IS_LOCAL_SESSION_NAME}/u"),
                 format!("{SSH_SOCKET_DIR}/u"),
                 format!("{CLIENT_VERSION_NAME}/u"),
+                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+                format!("{FOCUS_URL_ENV}/u"),
             ],
         );
     }
@@ -403,6 +408,8 @@ mod tests {
                 format!("{IS_LOCAL_SESSION_NAME}/u"),
                 format!("{SSH_SOCKET_DIR}/u"),
                 format!("{CLIENT_VERSION_NAME}/u"),
+                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+                format!("{FOCUS_URL_ENV}/u"),
                 format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
                 format!("{INITIAL_WORKING_DIR_NAME}/pu"),
             ],
