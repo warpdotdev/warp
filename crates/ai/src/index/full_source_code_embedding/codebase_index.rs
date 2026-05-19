@@ -49,7 +49,6 @@ cfg_if::cfg_if! {
             Entry,
             matches_gitignores,
             full_source_code_embedding::sync_client::CodebaseIndexSyncOperation,
-            full_source_code_embedding::FragmentLocation
         };
         use warp_core::send_telemetry_from_ctx;
         use warp_core::interval_timer::IntervalTimer;
