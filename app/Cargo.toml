@@ -674,7 +674,7 @@ grep_tool = []
 # feature set is for a minimal build of Warp, and we add on GUI-specific features here.
 # For the most part, including GUI code in headless builds is fine; the main use case is
 # for things that pull in external dependencies.
-gui = ["voice_input"]
+gui = ["voice_input", "ime_marked_text"]
 nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
 nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
