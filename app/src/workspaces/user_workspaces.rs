@@ -512,9 +512,15 @@ impl UserWorkspaces {
 
         self.current_workspace()
             .map(|workspace| {
-                workspace.billing_metadata.customer_type != CustomerType::Enterprise
-                    || FeatureFlag::CustomInferenceEndpointsEnterprise.is_enabled()
-                    || ChannelState::channel().is_dogfood()
+                let is_enterprise_customer =
+                    workspace.billing_metadata.customer_type == CustomerType::Enterprise;
+                let is_warp_plan_billing_workspace = workspace.billing_metadata.is_warp_plan();
+                let is_custom_inference_enterprise_flag_on =
+                    FeatureFlag::CustomInferenceEndpointsEnterprise.is_enabled();
+
+                !is_enterprise_customer
+                    || is_warp_plan_billing_workspace
+                    || is_custom_inference_enterprise_flag_on
             })
             .unwrap_or(true)
     }

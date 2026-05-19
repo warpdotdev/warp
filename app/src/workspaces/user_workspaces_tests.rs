@@ -18,8 +18,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    Workspace,
+    AdminEnablementSetting, CodebaseContextSettings, CustomerType, HostEnablementSetting,
+    LlmHostSettings, Workspace,
 };
 
 use mockall::Sequence;
@@ -34,12 +34,33 @@ use super::*;
 struct CachedResources {
     workspaces: Vec<Workspace>,
 }
+#[derive(Clone, Copy)]
+enum AuthTestState {
+    LoggedIn,
+    LoggedOut,
+}
 
 fn initialize_app(
     app: &mut App,
     resources: CachedResources,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
+) {
+    initialize_app_with_auth_state(
+        app,
+        resources,
+        team_client,
+        workspace_client,
+        AuthTestState::LoggedIn,
+    );
+}
+
+fn initialize_app_with_auth_state(
+    app: &mut App,
+    resources: CachedResources,
+    team_client: Arc<dyn TeamClient>,
+    workspace_client: Arc<dyn WorkspaceClient>,
+    auth_state: AuthTestState,
 ) {
     // Add the necessary singleton models to the App
     app.add_singleton_model(|_| NetworkStatus::new());
@@ -59,7 +80,10 @@ fn initialize_app(
     app.add_singleton_model(UpdateManager::mock);
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(move |_| match auth_state {
+        AuthTestState::LoggedIn => AuthStateProvider::new_for_test(),
+        AuthTestState::LoggedOut => AuthStateProvider::new_logged_out_for_test(),
+    });
     app.add_singleton_model(AuthManager::new_for_test);
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(|_| {
@@ -353,7 +377,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
             CachedResources {
                 workspaces: vec![workspace],
             },
-            Arc::new(MockTeamClient::new()),
+            Arc::new(team_client),
             Arc::new(MockWorkspaceClient::new()),
         );
 
@@ -396,6 +420,157 @@ fn workspace_for_test(team: &Team) -> Workspace {
     }
 }
 
+fn mock_team_client_returning_workspaces(workspaces: Vec<Workspace>) -> MockTeamClient {
+    let mut team_client = MockTeamClient::new();
+    team_client.expect_workspaces_metadata().returning(move || {
+        Ok(WorkspacesMetadataWithPricing {
+            metadata: WorkspacesMetadataResponse {
+                workspaces: workspaces.clone(),
+                joinable_teams: vec![],
+                experiments: None,
+                feature_model_choices: None,
+            },
+            pricing_info: None,
+        })
+    });
+    team_client
+}
+
+#[test]
+fn test_custom_inference_enabled_for_non_enterprise_workspace() {
+    let mut team = team_for_test();
+    team.billing_metadata.customer_type = CustomerType::Free;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.customer_type = CustomerType::Free;
+
+    App::test((), |mut app| async move {
+        let team_client = mock_team_client_returning_workspaces(vec![workspace.clone()]);
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(team_client),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx),
+                "custom inference should be enabled for non-enterprise workspaces"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_custom_inference_disabled_for_enterprise_workspace_without_warp_plan_or_flag() {
+    let _flag = FeatureFlag::CustomInferenceEndpointsEnterprise.override_enabled(false);
+
+    let mut team = team_for_test();
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.customer_type = CustomerType::Enterprise;
+    workspace.billing_metadata.tier.name = "Enterprise".to_string();
+
+    App::test((), |mut app| async move {
+        let team_client = mock_team_client_returning_workspaces(vec![workspace.clone()]);
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(team_client),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx),
+                "custom inference should be disabled for enterprise workspaces when neither Warp Plan nor enterprise flag is enabled"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_custom_inference_enabled_for_enterprise_warp_plan_workspace() {
+    let _flag = FeatureFlag::CustomInferenceEndpointsEnterprise.override_enabled(false);
+
+    let mut team = team_for_test();
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.customer_type = CustomerType::Enterprise;
+    workspace.billing_metadata.tier.name = "Warp Plan".to_string();
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx),
+                "custom inference should be enabled for enterprise workspaces on Warp Plan"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_custom_inference_enabled_for_enterprise_workspace_when_flag_on() {
+    let _flag = FeatureFlag::CustomInferenceEndpointsEnterprise.override_enabled(true);
+
+    let mut team = team_for_test();
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.customer_type = CustomerType::Enterprise;
+    workspace.billing_metadata.tier.name = "Enterprise".to_string();
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx),
+                "custom inference should be enabled for enterprise workspaces when enterprise flag is on"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_custom_inference_disabled_for_logged_out_user() {
+    App::test((), |mut app| async move {
+        let team_client = mock_team_client_returning_workspaces(vec![]);
+        initialize_app_with_auth_state(
+            &mut app,
+            CachedResources { workspaces: vec![] },
+            Arc::new(team_client),
+            Arc::new(MockWorkspaceClient::new()),
+            AuthTestState::LoggedOut,
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx),
+                "custom inference should be disabled for logged-out users"
+            );
+        });
+    })
+}
 #[test]
 fn test_codebase_context_enabled_by_team_disabled_by_user() {
     // Enable codebase context on a team level
