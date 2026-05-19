@@ -1290,14 +1290,30 @@ async fn read_binary_file_context(
     })
 }
 
+/// Builds the shell command used by [`is_file_path`]. The `path` is escaped
+/// for the target shell family so metacharacters (`$(...)`, backticks,
+/// `$VAR`, `;`, etc.) in a legitimate or attacker-influenced filename do not
+/// get re-interpreted by the shell.
+fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
+    let escaped = warp_util::path::ShellFamily::from(shell_type).shell_escape(path);
+    if shell_type == ShellType::PowerShell {
+        format!("if (Test-Path -PathType Leaf {escaped}) {{ exit 0 }} else {{ exit 1 }}")
+    } else {
+        format!("test -f {escaped}")
+    }
+}
+
+/// Builds the shell command used by [`is_git_repository`]. See
+/// [`build_is_file_path_command`] for why escaping is required.
+fn build_is_git_repository_command(absolute_path: &str, shell_type: ShellType) -> String {
+    let escaped = warp_util::path::ShellFamily::from(shell_type).shell_escape(absolute_path);
+    format!("git -C {escaped} rev-parse")
+}
+
 /// Returns true if the given path is a regular file on the session's filesystem.
 /// Runs a shell command on the session so it works for both local and remote sessions.
 async fn is_file_path(path: &str, session: &Session) -> bool {
-    let command = if session.shell().shell_type() == ShellType::PowerShell {
-        format!("if (Test-Path -PathType Leaf \"{path}\") {{ exit 0 }} else {{ exit 1 }}")
-    } else {
-        format!("test -f \"{path}\"")
-    };
+    let command = build_is_file_path_command(path, session.shell().shell_type());
     session
         .execute_command(&command, None, None, ExecuteCommandOptions::default())
         .await
@@ -1307,7 +1323,7 @@ async fn is_file_path(path: &str, session: &Session) -> bool {
 
 /// Returns true if git is installed and the given path is in a git repository.
 async fn is_git_repository(absolute_path: &str, session: &Session) -> anyhow::Result<bool> {
-    let git_command = format!("git -C \"{absolute_path}\" rev-parse");
+    let git_command = build_is_git_repository_command(absolute_path, session.shell().shell_type());
     let command_output = session
         .execute_command(
             git_command.as_str(),

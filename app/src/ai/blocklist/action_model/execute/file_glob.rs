@@ -33,6 +33,68 @@ use super::{
     ExecuteActionInput, PreprocessActionInput,
 };
 
+/// Builds the `git ls-files` command emitted by [`run_git_ls_files_command`].
+/// Both `target_path` and `patterns` are agent-controlled; without shell
+/// escaping a pattern containing `'` could close the surrounding single-quote
+/// pair and append a second command. Each joined path is escaped with
+/// `ShellFamily::escape` (no tilde preservation, since these are pathspecs
+/// rather than user paths) for the session's shell family — `git ls-files`
+/// runs under PowerShell too, so we cannot hard-code POSIX backslash escapes.
+pub(crate) fn build_git_ls_files_command(
+    patterns: &[String],
+    target_path: &str,
+    shell_launch_data: Option<&ShellLaunchData>,
+    shell_type: ShellType,
+) -> String {
+    let shell_family = warp_util::path::ShellFamily::from(shell_type);
+    let pattern_args = patterns
+        .iter()
+        .flat_map(|pattern| {
+            [
+                // Matches on files in the target path.
+                join_paths(&[target_path, pattern], shell_launch_data),
+                // Matches on files in any subdirectory of the target path.
+                join_paths(&[target_path, "*", pattern], shell_launch_data),
+            ]
+        })
+        .map(|joined| shell_family.escape(&joined).into_owned())
+        .join(" ");
+    format!("git ls-files -c -o --exclude-standard -- {pattern_args}")
+}
+
+/// Builds the `find` command emitted by [`run_find_command`]. See
+/// [`build_git_ls_files_command`] for the threat model.
+pub(crate) fn build_find_command(patterns: &[String], target_path: &str) -> String {
+    let shell_family = warp_util::path::ShellFamily::Posix;
+    // Build a find command with -name for each pattern. Each pattern is
+    // shell-escaped to neutralise embedded `'`, `$(...)`, backticks, etc.
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| format!(" -name {}", shell_family.escape(pattern)))
+        .join(" -o");
+    let escaped_target = shell_family.shell_escape(target_path);
+    format!("find {escaped_target} -type f {pattern_args}")
+}
+
+/// Builds the PowerShell `Get-ChildItem` command emitted by
+/// [`run_powershell_get_childitem_command`]. See
+/// [`build_git_ls_files_command`] for the threat model.
+pub(crate) fn build_powershell_get_childitem_command(
+    patterns: &[String],
+    target_path: &str,
+) -> String {
+    let shell_family = warp_util::path::ShellFamily::PowerShell;
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| shell_family.escape(pattern))
+        .collect::<Vec<_>>()
+        .join(",");
+    let escaped_target = shell_family.shell_escape(target_path);
+    format!(
+        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_target} | ForEach-Object {{ $_.FullName }}"
+    )
+}
+
 pub struct FileGlobExecutor {
     active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
@@ -223,6 +285,7 @@ async fn run_file_glob(
             &absolute_path,
             session.as_ref(),
             shell_launch_data,
+            session.shell().shell_type(),
         )
         .await
     } else if session.shell().shell_type() == ShellType::PowerShell {
@@ -238,20 +301,10 @@ async fn run_git_ls_files_command(
     target_path: &str,
     session: &Session,
     shell_launch_data: Option<ShellLaunchData>,
+    shell_type: ShellType,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .flat_map(|pattern| {
-            [
-                // Matches on files in the target path.
-                join_paths(&[target_path, pattern], shell_launch_data.as_ref()),
-                // Matches on files in any subdirectory of the target path.
-                join_paths(&[target_path, "*", pattern], shell_launch_data.as_ref()),
-            ]
-        })
-        .map(|pattern| format!("'{pattern}'"))
-        .join(" ");
-    let command = format!("git ls-files -c -o --exclude-standard -- {pattern_args}");
+    let command =
+        build_git_ls_files_command(patterns, target_path, shell_launch_data.as_ref(), shell_type);
 
     let command_output = session
         .execute_command(
@@ -287,12 +340,7 @@ async fn run_find_command(
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    // Build a find command with -name for each pattern
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!(" -name '{pattern}'"))
-        .join(" -o");
-    let find_command = format!("find \"{target_path}\" -type f {pattern_args}");
+    let find_command = build_find_command(patterns, target_path);
 
     let command_output = session
         .execute_command(
@@ -331,13 +379,7 @@ async fn run_powershell_get_childitem_command(
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!("'{pattern}'"))
-        .join(",");
-    let command = format!(
-        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path \"{target_path}\" | ForEach-Object {{ $_.FullName }}"
-    );
+    let command = build_powershell_get_childitem_command(patterns, target_path);
 
     let command_output = session
         .execute_command(

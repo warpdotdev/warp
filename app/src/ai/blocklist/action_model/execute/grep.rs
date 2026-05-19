@@ -39,12 +39,67 @@ use super::{
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";
 
-fn escape_double_quotes(s: &str) -> String {
-    s.replace('"', "\\\"")
+/// Builds the `git grep` command emitted by [`run_git_grep_command`]. Both
+/// `queries` (regex patterns) and `target_path` are agent-controlled; without
+/// shell escaping a query like `$(touch /tmp/PWNED)` or a path containing
+/// `$(...)` / backticks would be re-interpreted by the shell before the
+/// underlying `git grep` ever runs. Queries are escaped with `ShellFamily::escape`
+/// (no tilde preservation) since they are literal regex bodies; the path uses
+/// `shell_escape` so a legitimate `~/...` argument still resolves to `$HOME`.
+pub(crate) fn build_git_grep_command(
+    queries: &[String],
+    target_path: &str,
+    shell_type: ShellType,
+) -> String {
+    let shell_family = warp_util::path::ShellFamily::from(shell_type);
+    // This command works on all the shells we support (even PowerShell).
+    let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
+    for query in queries {
+        let escaped_query = shell_family.escape(query);
+        grep_command.push_str(format!(" -e {escaped_query}").as_str());
+    }
+    let escaped_target = shell_family.shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_target}").as_str());
+    grep_command
 }
 
-fn powershell_escape_double_quotes(s: &str) -> String {
-    s.replace('"', "`\"")
+/// Builds the POSIX `grep` command emitted by [`run_grep_command`]. See
+/// [`build_git_grep_command`] for the threat model.
+pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> String {
+    let shell_family = warp_util::path::ShellFamily::Posix;
+    // Summary of the options we use:
+    // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
+    // * "-n" includes line numbers
+    // * "-r" performs a recursive search
+    // * "-I" ignores binary files
+    // * "-H" prints file name headers
+    // * "-E" uses extended regex expressions
+    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
+    for query in queries {
+        let escaped_query = shell_family.escape(query);
+        grep_command.push_str(format!(" -e {escaped_query}").as_str());
+    }
+    let escaped_target = shell_family.shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_target}").as_str());
+    grep_command
+}
+
+/// Builds the PowerShell `Select-String` command emitted by
+/// [`run_select_string_command`]. See [`build_git_grep_command`] for the
+/// threat model.
+pub(crate) fn build_select_string_command(queries: &[String], target_path: &str) -> String {
+    let shell_family = warp_util::path::ShellFamily::PowerShell;
+    let escaped_target = shell_family.shell_escape(target_path);
+    let escaped_patterns = queries
+        .iter()
+        .map(|q| shell_family.escape(q))
+        .collect::<Vec<_>>()
+        .join(",");
+    // We enable the `-CaseSensitive` flag to match the default behavior of grep.
+    // TODO(CODE-239): Make this command more efficient when searching a file.
+    format!(
+        "Get-ChildItem -Path {escaped_target} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {escaped_patterns}"
+    )
 }
 
 /// Information about the Grep call that resulted in an error, used to send
@@ -472,20 +527,7 @@ async fn run_git_grep_command(
     shell_type: ShellType,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // This command works on all the shells we support (even PowerShell).
-    let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
-    for query in queries {
-        let escaped_query = format!(
-            "\"{}\"",
-            if shell_type == ShellType::PowerShell {
-                powershell_escape_double_quotes(query)
-            } else {
-                escape_double_quotes(query)
-            }
-        );
-        grep_command.push_str(format!(" -e {escaped_query}").as_str());
-    }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let grep_command = build_git_grep_command(queries, target_path, shell_type);
 
     let command_output = session
         .execute_command(
@@ -533,18 +575,7 @@ async fn run_grep_command(
     shell_launch_data: Option<ShellLaunchData>,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // Summary of the options we use:
-    // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
-    // * "-n" includes line numbers
-    // * "-r" performs a recursive search
-    // * "-I" ignores binary files
-    // * "-H" prints file name headers
-    // * "-E" uses extended regex expressions
-    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
-    for query in queries {
-        grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
-    }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let grep_command = build_grep_command(queries, target_path);
 
     let command_output = session
         .execute_command(
@@ -593,17 +624,7 @@ async fn run_select_string_command(
     shell_launch_data: Option<ShellLaunchData>,
     execute_directory: &str,
 ) -> Result<GrepResult, GrepError> {
-    // We enable the `-CaseSensitive` flag to match the default behavior of grep.
-    // TODO(CODE-239): Make this command more efficient when searching a file.
-    let select_string_command = format!(
-        "Get-ChildItem -Path \"{}\" -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
-        target_path,
-        queries
-            .iter()
-            .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
-            .collect::<Vec<_>>()
-            .join(",")
-    );
+    let select_string_command = build_select_string_command(queries, target_path);
 
     let command_output = session
         .execute_command(
