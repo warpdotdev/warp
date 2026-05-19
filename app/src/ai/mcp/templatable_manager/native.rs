@@ -806,10 +806,11 @@ impl TemplatableMCPServerManager {
         let executor = ctx.background_executor().clone();
         let logger = match LogManager::handle(ctx).update(ctx, |mgr, _| {
             mgr.register_namespace("mcp", true);
-            mgr.register(
+            mgr.register_with_rotation(
                 "mcp",
                 logs::relative_log_file_path_from_uuid(&template_uuid),
                 executor,
+                logs::mcp_log_rotation_config(),
             )
         }) {
             Ok(logger) => logger,

@@ -16,3 +16,7 @@ log = { workspace = true }
 thiserror.workspace = true
 warp_core = { workspace = true }
 warpui.workspace = true
+
+[dev-dependencies]
+instant = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
