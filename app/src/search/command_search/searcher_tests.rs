@@ -248,6 +248,47 @@ fn test_no_query_filter_runs_all_data_sources() {
 }
 
 #[test]
+fn test_history_source_runs_in_zero_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source(vec![
+                    HistoryEntry::command_only("git checkout main".to_owned()),
+                    HistoryEntry::command_only("cargo test".to_owned()),
+                ]),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: true,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+
+            mixer.run_query(Query::default(), ctx);
+        });
+
+        Timer::after(Duration::from_millis(200)).await;
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(
+                results
+                    .iter()
+                    .map(|result| result.accessibility_label())
+                    .collect_vec(),
+                vec![
+                    "History item: git checkout main",
+                    "History item: cargo test"
+                ]
+            );
+        });
+    });
+}
+
+#[test]
 fn test_query_filter_limits_data_sources() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

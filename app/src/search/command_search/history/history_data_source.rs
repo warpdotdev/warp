@@ -61,6 +61,24 @@ pub(crate) fn fuzzy_match_history(
 ) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
 {
     Box::pin(async move {
+        if snapshot.query_text.is_empty() {
+            let mut results = Vec::with_capacity(snapshot.commands.len());
+            for chunk in snapshot.commands.chunks(512) {
+                for entry in chunk {
+                    results.push(
+                        HistorySearchItem {
+                            entry: entry.clone(),
+                            match_result: fuzzy_match::FuzzyMatchResult::no_match(),
+                        }
+                        .into(),
+                    );
+                }
+                yield_now().await;
+            }
+
+            return Ok(results);
+        }
+
         let mut results = Vec::new();
 
         // History entries are cheap to match (single short string), so we use a large chunk

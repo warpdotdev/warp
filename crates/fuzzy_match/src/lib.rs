@@ -126,6 +126,10 @@ pub fn match_indices_case_insensitive_ignore_spaces(
 }
 
 fn match_internal(text: &str, query: &str, matcher: SkimMatcherV2) -> Option<FuzzyMatchResult> {
+    if query.is_empty() {
+        return Some(FuzzyMatchResult::no_match());
+    }
+
     matcher
         // The fuzzy_indices API returns char indices, so we don't need to manually convert.
         .fuzzy_indices(text, query)

@@ -184,6 +184,7 @@ fn test_empty_query_fuzzy_match_search() {
     let query = "";
 
     let result = match_indices(text, query).unwrap();
+    assert_eq!(result.score, 0);
     assert_eq!(result.matched_indices.len(), 0);
 }
 
