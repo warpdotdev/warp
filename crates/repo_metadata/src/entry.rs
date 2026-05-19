@@ -360,26 +360,43 @@ pub fn matches_gitignores(
     })
 }
 
-/// Returns the path components after `.git` in a git-internal path,
-/// skipping the worktree indirection (`.git/worktrees/<name>/…`) if present.
-/// Returns `None` if the path has no `.git` component or nothing follows it.
+/// Returns the path components after the logical `.git/` root.
+///
+/// The "logical root" is whichever directory acts as `.git/` for a repo:
+///   - `.git/` itself (main repo).
+///   - `.git/worktrees/<name>/` (each linked worktree's gitdir).
+///
+/// Returns:
+///   - `None` if `path` has no `.git` component (not git-internal).
+///   - `Some(vec![])` if `path` *is* a logical root, or one of the worktree
+///     shells (`.git/worktrees/` and `.git/worktrees/<name>/`). Callers treat
+///     the empty vec as "this path is an ancestor of everything inside
+///     `.git/`" so the allowlist predicates can keep these directories in
+///     the watcher's watch set.
+///   - `Some([..])` with the components past the logical root otherwise. For
+///     `.git/worktrees/<name>/<rest>` the `worktrees/<name>` prefix is
+///     stripped, so callers see the same structure as a normal repo.
 fn git_suffix_components(path: &Path) -> Option<Vec<Component<'_>>> {
     let components: Vec<_> = path.components().collect();
     let git_index = components.iter().position(|c| c.as_os_str() == ".git")?;
 
     let after_git = &components[git_index + 1..];
+
+    // `.git/` itself.
     if after_git.is_empty() {
-        return None;
+        return Some(Vec::new());
     }
 
-    // For worktrees the layout is `.git/worktrees/<name>/…`.
-    // Skip the `worktrees/<name>` prefix so callers see the same
-    // logical structure as a normal repo.
-    if after_git.first().map(|c| c.as_os_str()) == Some(std::ffi::OsStr::new("worktrees"))
-        && after_git.len() >= 3
-    {
-        // after_git[0] = "worktrees", [1] = <name>, [2..] = actual content
-        return Some(after_git[2..].to_vec());
+    // Worktree layout. The shells `.git/worktrees/` and
+    // `.git/worktrees/<name>/` normalize to "empty suffix" — same logical
+    // position as `.git/` itself. Anything below normalizes by stripping the
+    // `worktrees/<name>/` prefix so callers see the same structure as a
+    // normal repo.
+    if after_git.first().map(|c| c.as_os_str()) == Some(std::ffi::OsStr::new("worktrees")) {
+        return match after_git.len() {
+            1 | 2 => Some(Vec::new()),
+            _ => Some(after_git[2..].to_vec()),
+        };
     }
 
     Some(after_git.to_vec())
@@ -411,48 +428,107 @@ pub(crate) fn is_shared_git_ref(path: &Path) -> bool {
     if extract_worktree_git_dir(path).is_some() {
         return false;
     }
-    let components: Vec<_> = path.components().collect();
-    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+    let Some(suffix) = git_suffix_components(path) else {
         return false;
     };
-    let after_git = &components[git_index + 1..];
-    after_git
-        .first()
-        .map(|c| c.as_os_str() == "refs")
-        .unwrap_or(false)
-        && after_git
-            .get(1)
-            .map(|c| c.as_os_str() == "heads")
-            .unwrap_or(false)
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(names.as_slice(), [Some("refs"), Some("heads"), Some(_), ..])
 }
 
-/// Returns `true` for loose remote-tracking refs under the shared `.git`
-/// directory, e.g. `.git/refs/remotes/origin/main`.
+/// Returns `true` for shared ref paths or ancestors that must be routed through
+/// the shared common-git-dir path.
+pub(crate) fn is_shared_git_ref_or_ancestor(path: &Path) -> bool {
+    if is_shared_git_ref(path) {
+        return true;
+    }
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        [Some("refs")] | [Some("refs"), Some("heads")]
+    )
+}
+
+/// Returns `true` for loose remote-tracking ref files under the shared `.git`
+/// directory, such as `.git/refs/remotes/origin/main`.
 pub(crate) fn is_remote_tracking_ref(path: &Path) -> bool {
     if extract_worktree_git_dir(path).is_some() {
         return false;
     }
-    let components: Vec<_> = path.components().collect();
-    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+    let Some(suffix) = git_suffix_components(path) else {
         return false;
     };
-    let after_git = &components[git_index + 1..];
-    after_git.len() >= 4
-        && after_git[0].as_os_str() == "refs"
-        && after_git[1].as_os_str() == "remotes"
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        [Some("refs"), Some("remotes"), Some(_), Some(_), ..]
+    )
+}
+
+/// Returns `true` for loose remote-tracking refs under the shared `.git` directory or their ancestor directories
+/// (note: this is for watcher allowlisting only; event classification should use [`is_remote_tracking_ref`] instead):
+/// - `.git/refs/remotes/origin/main`
+/// - `.git/refs/` (the ancestor directory that contains the refs/remotes/ directory)
+/// - `.git/refs/remotes/` (the ancestor directory that contains the refs/remotes/ directory)
+/// - `.git/refs/remotes/<remote>/` (the ancestor directory that contains the refs/remotes/<remote>/ directory)
+pub(crate) fn is_remote_tracking_ref_or_ancestor(path: &Path) -> bool {
+    if is_remote_tracking_ref(path) {
+        return true;
+    }
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        [Some("refs")]                                              // .git/refs/ (ancestor)
+            | [Some("refs"), Some("remotes")]                       // .git/refs/remotes/ (ancestor)
+            | [Some("refs"), Some("remotes"), Some(_)]              // .git/refs/remotes/<remote>/ (ancestor)
+            | [Some("refs"), Some("remotes"), Some(_), Some(_), ..] // .git/refs/remotes/<remote>/<ref...>
+    )
 }
 
 /// Returns true for Git files that can change the current branch's tracked
-/// upstream ref.
+/// upstream ref:
+/// - `.git/HEAD`
+/// - `.git/config`
+/// - `.git/worktrees/*/config.worktree` (its worktree equivalent)
+/// - `.git/` (the logical `.git/` root that contains the HEAD file)
 pub(crate) fn is_tracking_state_git_file(path: &Path) -> bool {
     let Some(suffix) = git_suffix_components(path) else {
         return false;
     };
-    suffix.len() == 1
-        && matches!(
-            suffix[0].as_os_str().to_str(),
-            Some("HEAD" | "config" | "config.worktree")
-        )
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        []                                  // logical `.git/` root (ancestor)
+            | [Some("HEAD")]                // `.git/HEAD`
+            | [Some("config")]              // `.git/config`
+            | [Some("config.worktree")] // `.git/<worktree>/config.worktree`
+    )
 }
 
 /// Returns true for `.git/config` in the shared Git directory.
@@ -469,27 +545,39 @@ pub(crate) fn is_common_git_config(path: &Path) -> bool {
 }
 
 /// Returns true for `.git/HEAD` and `.git/refs/heads/*`
-/// (and their worktree equivalents `.git/worktrees/*/HEAD`, etc.).
+/// - `.git/worktrees/*/HEAD` (its worktree equivalent)
+/// - `.git/` (the logical `.git/` root that contains the HEAD file)
+/// - `.git/refs/` (the ancestor directory that contains the refs/heads/ directory)
 pub(crate) fn is_commit_related_git_file(path: &Path) -> bool {
     let Some(suffix) = git_suffix_components(path) else {
         return false;
     };
-    match suffix.first().map(|c| c.as_os_str()) {
-        Some(name) if name == "HEAD" => true,
-        Some(name) if name == "refs" => {
-            suffix.get(1).map(|c| c.as_os_str()) == Some(std::ffi::OsStr::new("heads"))
-        }
-        _ => false,
-    }
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        []                                          // logical `.git/` root (ancestor)
+            | [Some("HEAD")]                        // `.git/HEAD`
+            | [Some("refs")]                        // `.git/refs/` (ancestor of refs/heads/)
+            | [Some("refs"), Some("heads"), ..] // `.git/refs/heads/` and below
+    )
 }
 
-/// Returns true for `.git/index.lock`
-/// (and its worktree equivalent `.git/worktrees/*/index.lock`).
+/// Returns true for:
+/// - `.git/index.lock`
+/// - `.git/worktrees/*/index.lock` (its worktree equivalent)
+/// - `.git/` (the logical `.git/` root that contains the index.lock file)
 pub(crate) fn is_index_lock_file(path: &Path) -> bool {
     let Some(suffix) = git_suffix_components(path) else {
         return false;
     };
-    suffix.len() == 1 && suffix[0].as_os_str() == "index.lock"
+    let names = suffix
+        .iter()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    matches!(names.as_slice(), [] | [Some("index.lock")])
 }
 
 /// Determines if a git-related path should be ignored by the filesystem watcher.
@@ -497,6 +585,9 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
 /// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*),
 /// loose remote-tracking refs, tracked-upstream state files, and the index lock
 /// file are allowed through. Everything else inside `.git/` is ignored.
+///
+/// Note: this allowslist includes the ancestor directories of the allowlisted files.
+/// This is because the file watcher on Linux watches the directories themselves, not just the files inside them.
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
@@ -504,7 +595,7 @@ pub fn should_ignore_git_path(path: &Path) -> bool {
     // Ignore everything inside .git/ except the allowlisted patterns.
     !is_commit_related_git_file(path)
         && !is_index_lock_file(path)
-        && !is_remote_tracking_ref(path)
+        && !is_remote_tracking_ref_or_ancestor(path)
         && !is_tracking_state_git_file(path)
 }
 

@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
             is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
-            is_shared_git_ref, is_tracking_state_git_file,
+            is_shared_git_ref_or_ancestor, is_tracking_state_git_file,
         };
         /// Duration between filesystem watch events in milliseconds
         const FILESYSTEM_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
@@ -169,7 +169,7 @@ impl DirectoryWatcher {
                     affected.push(repo_handle.clone());
                 }
             }
-        } else if is_shared_git_ref(git_path) {
+        } else if is_shared_git_ref_or_ancestor(git_path) {
             // Tier 3: shared ref — broadcast to every repo whose
             // common_git_dir() is a prefix of the event path.
             log::debug!(
