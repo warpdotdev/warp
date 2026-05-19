@@ -168,6 +168,7 @@ pub struct AddWindowOptions {
     pub window_bounds: WindowBounds,
     pub title: Option<String>,
     pub fullscreen_state: FullscreenState,
+    pub hide_cursor_while_typing: bool,
 
     /// If true, new windows created immediately after this window is closed
     /// will have the same position and size as this window.

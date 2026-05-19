@@ -97,6 +97,7 @@ pub struct WindowOptions {
     pub bounds: WindowBounds,
     pub fullscreen_state: FullscreenState,
     pub hide_title_bar: bool,
+    pub hide_cursor_while_typing: bool,
     pub title: Option<String>,
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
@@ -116,6 +117,7 @@ impl std::fmt::Debug for WindowOptions {
         f.debug_struct("WindowOptions")
             .field("bounds", &self.bounds)
             .field("hide_title_bar", &self.hide_title_bar)
+            .field("hide_cursor_while_typing", &self.hide_cursor_while_typing)
             .field("title", &self.title)
             .field("style", &self.style)
             .field(
@@ -452,6 +454,7 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     /// Whether the window has the native OS window frame (title bar and buttons).
     fn uses_native_window_decorations(&self) -> bool;
     fn set_titlebar_height(&self, height: f64);
+    fn set_hide_cursor_while_typing(&self, _enabled: bool) {}
 
     /// Whether any hardware supports window transparency
     fn supports_transparency(&self) -> bool;

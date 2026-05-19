@@ -7,6 +7,7 @@ void warp_view_set_frame_size(WarpHostView *, NSSize, BOOL);
 void warp_update_layer(WarpHostView *);
 BOOL warp_handle_view_event(WarpHostView *, NSEvent *, BOOL);
 BOOL warp_handle_first_mouse_event(WarpHostView *, NSEvent *);
+BOOL warp_should_hide_cursor_while_typing(WarpHostView *);
 void warp_handle_insert_text(WarpHostView *, id);
 void warp_update_ime_state(WarpHostView *, BOOL);
 void warp_handle_drag_and_drop(WarpHostView *, NSArray *, NSPoint);
@@ -159,6 +160,10 @@ void warp_marked_text_cleared(WarpHostView *);
 }
 
 - (BOOL)keyDownImpl:(NSEvent *)event {
+    if (self.readyForWarp && warp_should_hide_cursor_while_typing(self)) {
+        [NSCursor setHiddenUntilMouseMoves:YES];
+    }
+
     BOOL wasComposing = [self hasMarkedText];
     [textToInsert setString:@""];
     imeTouchedMarkedTextDuringInterpret = NO;

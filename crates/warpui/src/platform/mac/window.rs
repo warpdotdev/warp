@@ -489,6 +489,7 @@ pub struct WindowState {
     synthetic_drag_counter: Cell<usize>,
     executor: Rc<executor::Foreground>,
     ime_active: Cell<bool>,
+    hide_cursor_while_typing: Cell<bool>,
     pub(super) capture_callback: RefCell<Option<FrameCaptureCallback>>,
 }
 
@@ -602,6 +603,7 @@ impl Window {
                 synthetic_drag_counter: Cell::new(0),
                 executor,
                 ime_active: Cell::new(false),
+                hide_cursor_while_typing: Cell::new(options.hide_cursor_while_typing),
                 capture_callback: RefCell::new(None),
             });
 
@@ -987,6 +989,10 @@ impl platform::Window for Window {
     fn set_titlebar_height(&self, height: f64) {
         self.0.set_titlebar_height(height);
     }
+
+    fn set_hide_cursor_while_typing(&self, enabled: bool) {
+        self.0.set_hide_cursor_while_typing(enabled);
+    }
 }
 
 impl platform::WindowContext for Window {
@@ -1108,6 +1114,10 @@ impl WindowState {
         unsafe {
             set_titlebar_height(self.native_window, height);
         }
+    }
+
+    fn set_hide_cursor_while_typing(&self, enabled: bool) {
+        self.hide_cursor_while_typing.set(enabled);
     }
 }
 
@@ -1424,6 +1434,12 @@ extern "C-unwind" fn warp_handle_view_event(
     }
 
     false
+}
+
+#[no_mangle]
+extern "C-unwind" fn warp_should_hide_cursor_while_typing(this: &Object) -> bool {
+    let window = unsafe { get_window_state(this) };
+    window.hide_cursor_while_typing.get()
 }
 
 /// Handles the "first mouse event" - the first mouse event fired that causes an unfocused window to
