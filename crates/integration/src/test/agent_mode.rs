@@ -22,6 +22,7 @@ use warp::{
     },
     settings::SelectionSettings,
 };
+use prost_types;
 use warp_multi_agent_api as api;
 use warpui::{async_assert, integration::TestStep, text::SelectionType, Event, SingletonEntity};
 
@@ -183,6 +184,129 @@ fn restored_markdown_visuals_conversation_data() -> api::ConversationData {
         }],
         ..Default::default()
     }
+}
+
+const REASONING_MESSAGE_ID: &str = "reasoning-msg";
+
+fn reasoning_conversation_data() -> api::ConversationData {
+    let task_id = "reasoning-task";
+    let request_id = "reasoning-request";
+    api::ConversationData {
+        tasks: vec![api::Task {
+            id: task_id.to_string(),
+            messages: vec![
+                api::Message {
+                    id: "user-query".to_string(),
+                    task_id: task_id.to_string(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                        query: "What is 2+2?".to_string(),
+                        context: None,
+                        referenced_attachments: HashMap::new(),
+                        mode: None,
+                        intended_agent: Default::default(),
+                    })),
+                    request_id: request_id.to_string(),
+                    timestamp: None,
+                },
+                api::Message {
+                    id: REASONING_MESSAGE_ID.to_string(),
+                    task_id: task_id.to_string(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(api::message::Message::AgentReasoning(
+                        api::message::AgentReasoning {
+                            reasoning: "Let me think about this carefully. 2+2 is 4.".to_string(),
+                            finished_duration: Some(prost_types::Duration {
+                                seconds: 2,
+                                nanos: 0,
+                            }),
+                        },
+                    )),
+                    request_id: request_id.to_string(),
+                    timestamp: None,
+                },
+                api::Message {
+                    id: "agent-output".to_string(),
+                    task_id: task_id.to_string(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(api::message::Message::AgentOutput(
+                        api::message::AgentOutput {
+                            text: "The answer is 4.".to_string(),
+                        },
+                    )),
+                    request_id: request_id.to_string(),
+                    timestamp: None,
+                },
+            ],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Verifies that hovering over a finished thinking block header shows the correct tooltip.
+/// The thinking block auto-collapses after streaming finishes, so the tooltip should say "Expand".
+/// After clicking to expand, hovering should show "Collapse".
+///
+/// This test requires a real display and must be run manually:
+///   WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 cargo run -p integration --bin integration -- test_thinking_block_tooltip
+#[allow(dead_code)]
+pub fn test_thinking_block_tooltip() -> Builder {
+    let position_id = format!("collapsible_header:{REASONING_MESSAGE_ID}");
+    let position_id_clone = position_id.clone();
+
+    new_builder()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(
+            new_step_with_default_assertions("Load reasoning conversation")
+                .with_action(|app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.update(app, |view, ctx| {
+                        view.load_conversation_from_tasks(reasoning_conversation_data(), ctx);
+                    });
+                }),
+        )
+        .with_step(
+            TestStep::new("Wait for AI block with thinking header and take initial screenshot")
+                .set_timeout(Duration::from_secs(20))
+                .with_take_screenshot("thinking_block_initial.png")
+                .add_named_assertion(
+                    "AI block with thinking header should be present",
+                    |app, window_id| {
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        terminal_view.read(app, |view, _ctx| {
+                            async_assert!(
+                                view.last_ai_block().is_some(),
+                                "AI block should exist after loading conversation"
+                            )
+                        })
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Hover over collapsed thinking block header and take screenshot")
+                .set_timeout(Duration::from_secs(10))
+                .with_hover_over_saved_position(position_id.clone())
+                .with_take_screenshot("thinking_block_hover_collapsed.png"),
+        )
+        .with_step(
+            new_step_with_default_assertions("Click thinking block header to expand it")
+                .with_click_on_saved_position(position_id.clone()),
+        )
+        .with_step(
+            TestStep::new("Hover over expanded thinking block header and take screenshot")
+                .set_timeout(Duration::from_secs(10))
+                .with_hover_over_saved_position(position_id_clone)
+                .with_take_screenshot("thinking_block_hover_expanded.png"),
+        )
 }
 
 pub fn test_restored_ai_block_renders_mermaid_and_local_images() -> Builder {

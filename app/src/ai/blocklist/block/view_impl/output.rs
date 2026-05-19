@@ -3505,9 +3505,10 @@ fn render_collapsible_header(
     };
     let message_id_clone = message_id.clone();
     let toggle_mouse_state = element_state.expansion_toggle_mouse_state.clone();
+    let ui_builder = appearance.ui_builder().clone();
 
-    let expandable = Hoverable::new(toggle_mouse_state, move |_is_hovered| {
-        Flex::row()
+    let expandable = Hoverable::new(toggle_mouse_state, move |mouse_state| {
+        let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new(
@@ -3529,7 +3530,27 @@ fn render_collapsible_header(
                 .with_margin_right(4.)
                 .finish(),
             )
-            .finish()
+            .finish();
+
+        if mouse_state.is_hovered() {
+            let tooltip_text = if is_expanded { "Collapse" } else { "Expand" };
+            let tooltip = ui_builder
+                .tool_tip(tooltip_text.to_string())
+                .build()
+                .finish();
+            let offset = OffsetPositioning::offset_from_parent(
+                vec2f(0., -8.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::TopMiddle,
+                ChildAnchor::BottomMiddle,
+            );
+            let mut stack = Stack::new();
+            stack.add_child(row);
+            stack.add_positioned_overlay_child(tooltip, offset);
+            stack.finish()
+        } else {
+            row
+        }
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
@@ -3538,9 +3559,19 @@ fn render_collapsible_header(
         ));
     });
 
-    Container::new(Flex::row().with_child(expandable.finish()).finish())
+    let container = Container::new(Flex::row().with_child(expandable.finish()).finish())
         .with_horizontal_margin(CONTENT_HORIZONTAL_PADDING + icon_size + 16.)
-        .finish()
+        .finish();
+
+    #[cfg(feature = "integration_tests")]
+    {
+        use warpui::elements::SavePosition;
+        let position_id = format!("collapsible_header:{}", message_id);
+        return SavePosition::new(container, &position_id).finish();
+    }
+
+    #[allow(unreachable_code)]
+    container
 }
 
 pub fn are_all_text_sections_empty(text_sections: &[AIAgentTextSection]) -> bool {

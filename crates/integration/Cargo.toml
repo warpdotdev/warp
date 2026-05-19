@@ -27,6 +27,7 @@ log = { version = "0.4", features = ["serde"] }
 mockito.workspace = true
 parking_lot = { version = "0.12.1", features = ["serde"] }
 pathfinder_geometry.workspace = true
+prost-types.workspace = true
 rand = "0.8.2"
 regex.workspace = true
 rust-embed.workspace = true
