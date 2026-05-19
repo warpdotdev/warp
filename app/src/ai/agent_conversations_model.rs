@@ -525,6 +525,9 @@ pub struct AgentConversationsModel {
     /// and are absent from this map.
     task_fetch_state: HashMap<AmbientAgentTaskId, TaskFetchState>,
     rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState,
+    /// Earliest RTC timestamp received while no consumer view was open.
+    /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
+    dirty_since: Option<DateTime<Utc>>,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -572,6 +575,7 @@ impl AgentConversationsModel {
                 has_finished_initial_load: true,
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+                dirty_since: None,
             };
         }
 
@@ -610,6 +614,7 @@ impl AgentConversationsModel {
             has_finished_initial_load: false,
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+            dirty_since: None,
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -675,23 +680,50 @@ impl AgentConversationsModel {
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let UpdateManagerEvent::AmbientTaskUpdated { timestamp } = event {
-            match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
-                RtcTaskRefreshThrottleState::Idle => {
-                    self.fetch_tasks_updated_after(*timestamp, ctx);
-                    self.start_rtc_task_refresh_throttle_timer(ctx);
-                }
-                RtcTaskRefreshThrottleState::CoolingDown {
-                    mut pending_timestamp,
+        let UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp } = event else {
+            return;
+        };
+
+        // (a) If this task has an open tab (any window), force a re-fetch.
+        let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+            .get_terminal_view_id_for_ambient_task(*task_id)
+            .is_some();
+        if has_open_tab {
+            self.get_or_async_fetch_task_data_internal(task_id, true, ctx);
+        }
+
+        // (b) If management view or conversation list is open, throttled list-fetch.
+        let has_list_consumers = self
+            .active_data_consumers_per_window
+            .values()
+            .any(|views| !views.is_empty());
+        if has_list_consumers {
+            self.handle_rtc_for_list_views(*timestamp, ctx);
+        } else {
+            // (c) Nothing open: record earliest timestamp for flush on next view open.
+            record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+        }
+    }
+
+    fn handle_rtc_for_list_views(
+        &mut self,
+        timestamp: DateTime<Utc>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
+            RtcTaskRefreshThrottleState::Idle => {
+                self.fetch_tasks_updated_after(timestamp, ctx);
+                self.start_rtc_task_refresh_throttle_timer(ctx);
+            }
+            RtcTaskRefreshThrottleState::CoolingDown {
+                mut pending_timestamp,
+                timer_abort_handle,
+            } => {
+                record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, timestamp);
+                self.rtc_task_refresh_throttle_state = RtcTaskRefreshThrottleState::CoolingDown {
+                    pending_timestamp,
                     timer_abort_handle,
-                } => {
-                    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, *timestamp);
-                    self.rtc_task_refresh_throttle_state =
-                        RtcTaskRefreshThrottleState::CoolingDown {
-                            pending_timestamp,
-                            timer_abort_handle,
-                        };
-                }
+                };
             }
         }
     }
@@ -942,6 +974,11 @@ impl AgentConversationsModel {
             .or_default()
             .insert(view_id);
         self.update_polling_state(ctx);
+
+        // Flush dirty tasks accumulated while no view was open.
+        if let Some(dirty_since) = self.dirty_since.take() {
+            self.fetch_tasks_updated_after(dirty_since, ctx);
+        }
     }
 
     /// Called when a view that consumes this model's data becomes hidden.
@@ -1521,29 +1558,44 @@ impl AgentConversationsModel {
         task_id: &AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<AmbientAgentTask> {
-        // If we already have it, return it
-        if let Some(task) = self.tasks.get(task_id) {
-            return Some(task.clone());
+        self.get_or_async_fetch_task_data_internal(task_id, false, ctx)
+    }
+
+    // If `force_refresh` is true, this will invalidate the cache entry for the stored
+    // task's data and refetch the data from the server. We use this for handling RTC
+    // invalidations.
+    fn get_or_async_fetch_task_data_internal(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        force_refresh: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AmbientAgentTask> {
+        if !force_refresh {
+            if let Some(task) = self.tasks.get(task_id) {
+                return Some(task.clone());
+            }
         }
 
-        // Consult the per-task fetch state. The three variants are mutually exclusive: at most
-        // one applies to a given id.
-        match self.task_fetch_state.get(task_id) {
-            Some(TaskFetchState::InFlight) => return None,
-            Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
-                if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+        // Consult the per-task fetch state unless force-refreshing.
+        if !force_refresh {
+            match self.task_fetch_state.get(task_id) {
+                Some(TaskFetchState::InFlight) => return None,
+                Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
+                    if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
+                        return None;
+                    }
+                    self.task_fetch_state.remove(task_id);
                 }
-                // Cooldown has elapsed; clear the entry and fall through to fetch again.
-                self.task_fetch_state.remove(task_id);
-            }
-            Some(TaskFetchState::TransientlyFailed { at, .. }) => {
-                if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+                Some(TaskFetchState::TransientlyFailed { at, .. }) => {
+                    if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
+                        return None;
+                    }
+                    self.task_fetch_state.remove(task_id);
                 }
-                self.task_fetch_state.remove(task_id);
+                None => {}
             }
-            None => {}
+        } else {
+            self.task_fetch_state.remove(task_id);
         }
 
         // Opportunistically purge other expired entries so the map doesn't grow unbounded.
@@ -1600,7 +1652,8 @@ impl AgentConversationsModel {
             },
         );
 
-        None
+        // Return the stale cached copy if available (force_refresh keeps it in the map).
+        self.tasks.get(task_id).cloned()
     }
 
     /// Returns all (name, uid) pairs for creators of tasks in the model.

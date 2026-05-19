@@ -581,6 +581,7 @@ fn create_test_model() -> AgentConversationsModel {
         has_finished_initial_load: false,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+        dirty_since: None,
     }
 }
 
