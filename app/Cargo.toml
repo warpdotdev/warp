@@ -469,7 +469,6 @@ default = [
     "viewing_shared_sessions",
     "render_continuous_block_selections_with_single_border",
     "shared_with_me",
-    "session_sharing_acls",
     "external_agent_mode_context",
     "shell_selector",
     "minimalist_ui",
@@ -779,7 +778,6 @@ selectable_prompt = []
 settings_file = []
 sequential_storage = []
 session_sharing = []
-session_sharing_acls = []
 skip_login = []
 # This feature should only be enabled when building a self-contained binary with the bundle script.
 standalone = []

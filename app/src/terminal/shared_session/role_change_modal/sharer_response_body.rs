@@ -20,8 +20,6 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use warp_core::features::FeatureFlag;
-
 use super::{BODY_PADDING, HEADER_FONT_SIZE, MODAL_PADDING, TEXT_FONT_SIZE};
 
 pub const BUTTON_HEIGHT: f32 = 32.;
@@ -102,16 +100,10 @@ impl SharerResponseBody {
             },
         };
 
-        // Ensure there exists only one request per participant
-        // by removing the previous request (if it exists)
-        // If ACLs are enabled, we make sure there is only one request per user.
+        // Ensure there exists only one request per user
+        // by removing the previous request (if it exists).
         if let Some(request_id) = self.role_requests.iter().find_map(|(request_id, params)| {
-            let is_duplicate = if FeatureFlag::SessionSharingAcls.is_enabled() {
-                params.firebase_uid == firebase_uid
-            } else {
-                params.participant_id == participant_id
-            };
-            is_duplicate.then_some(request_id.clone())
+            (params.firebase_uid == firebase_uid).then_some(request_id.clone())
         }) {
             self.role_requests.remove(&request_id);
         }

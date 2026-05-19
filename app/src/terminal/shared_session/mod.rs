@@ -8,7 +8,6 @@ use warpui::{id, keymap::ContextPredicate, AppContext};
 use crate::{
     channel::{Channel, ChannelState},
     editor::{InteractionState, ReplicaId},
-    features::FeatureFlag,
 };
 
 use super::{
@@ -322,15 +321,12 @@ pub fn join_link(session_id: &SessionId) -> String {
 /// Returns the full session sharing URL given a path.
 pub fn connect_endpoint(path: String) -> Option<String> {
     let base = ChannelState::session_sharing_server_url()?;
-    if FeatureFlag::SessionSharingAcls.is_enabled() {
-        let version = ChannelState::app_version().unwrap_or("v0.00.000");
-        if path.contains("?") {
-            return Some(format!("{base}{path}&version={version}"));
-        } else {
-            return Some(format!("{base}{path}?version={version}"));
-        }
+    let version = ChannelState::app_version().unwrap_or("v0.00.000");
+    if path.contains('?') {
+        Some(format!("{base}{path}&version={version}"))
+    } else {
+        Some(format!("{base}{path}?version={version}"))
     }
-    Some(format!("{base}{path}"))
 }
 
 /// The event number for events sent to the server. The newtype

@@ -3,7 +3,7 @@
 //! This is tightly coupled to the pane header so that different overlays (context menus, the
 //! sharing dialog, and so on) are correctly displayed.
 
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::ui::appearance::Appearance;
 use warpui::{
     elements::{MouseStateHandle, ParentElement},
     platform::Cursor,
@@ -85,12 +85,7 @@ impl<P: BackingView> PaneHeader<P> {
     }
 
     pub fn is_sharing_dialog_enabled<C: warpui::ViewAsRef>(&self, ctx: &C) -> bool {
-        let sharing_enabled = self.has_shareable_object(ctx);
-        if self.has_shareable_shared_session(ctx) {
-            sharing_enabled && FeatureFlag::SessionSharingAcls.is_enabled()
-        } else {
-            sharing_enabled
-        }
+        self.has_shareable_object(ctx)
     }
 
     /// Share the panes' contents.

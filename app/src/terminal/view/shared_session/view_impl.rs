@@ -1646,15 +1646,11 @@ impl TerminalView {
 
             let is_self = {
                 let presence_manager = shared_session.presence_manager().as_ref(ctx);
-                if FeatureFlag::SessionSharingAcls.is_enabled() {
-                    // If the participant has the same UID as us, then our ACL
-                    // changed too and we need to update our state.
-                    let self_uid = presence_manager.firebase_uid();
-                    let participant_uid = presence_manager.viewer_firebase_uid(participant_id);
-                    participant_uid.is_some_and(|uid| uid == self_uid)
-                } else {
-                    *participant_id == presence_manager.id()
-                }
+                // If the participant has the same UID as us, then our ACL
+                // changed too and we need to update our state.
+                let self_uid = presence_manager.firebase_uid();
+                let participant_uid = presence_manager.viewer_firebase_uid(participant_id);
+                participant_uid.is_some_and(|uid| uid == self_uid)
             };
             if is_self {
                 self.on_self_role_updated(new_role, ctx);
