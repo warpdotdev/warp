@@ -2946,6 +2946,23 @@ pub struct BlockSelectionDetails {
     is_shift_down: bool,
 }
 
+/// Why `apply_block_metadata_update` is being invoked. The two sources have
+/// different cardinalities — precmd fires exactly once per block, whereas OSC 7
+/// can fire many times mid-block from chatty prompts. Once-per-block work
+/// (git-repo detection on unchanged CWDs, `block_completed_callbacks` drain)
+/// must be gated on this distinction.
+#[derive(Copy, Clone, Debug)]
+enum BlockMetadataUpdateSource {
+    /// `Event::BlockMetadataReceived` — the shell's precmd hook fired between
+    /// blocks. Run all once-per-block work.
+    Precmd,
+    /// `Event::BlockWorkingDirectoryUpdated` — the running command emitted an
+    /// OSC 7 sequence (`\e]7;file://host/path\a`). Skip repo detection unless
+    /// the CWD actually changed, and never run block-completion callbacks
+    /// (the block hasn't completed).
+    Osc7,
+}
+
 impl TerminalView {
     /// Returns the path to the current repository, if any.
     pub fn current_repo_path(&self) -> Option<&LocalOrRemotePath> {
@@ -10851,11 +10868,17 @@ impl TerminalView {
         });
     }
 
+    /// Apply a block metadata update from either the precmd hook
+    /// ([`Event::BlockMetadataReceived`]) or an OSC 7 sequence emitted
+    /// mid-block ([`Event::BlockWorkingDirectoryUpdated`]). The `source`
+    /// controls work that's safe to do once per block but wrong to do
+    /// repeatedly mid-block — see [`BlockMetadataUpdateSource`].
     fn apply_block_metadata_update(
         &mut self,
         block_metadata: &BlockMetadata,
         is_after_in_band_command: bool,
         is_done_bootstrapping: bool,
+        source: BlockMetadataUpdateSource,
         ctx: &mut ViewContext<Self>,
     ) {
         // In-band commands don't change the CWD, git state, or session
@@ -10896,7 +10919,16 @@ impl TerminalView {
 
             // Check if the block is done bootstrapping and the directory is set.
             if let Some(active_directory) = block_metadata.current_working_directory() {
-                if is_done_bootstrapping {
+                // See `BlockMetadataUpdateSource` for why OSC 7 needs the
+                // CWD-changed gate; precmd keeps its once-per-block semantics.
+                let should_run_detection = match source {
+                    BlockMetadataUpdateSource::Precmd => true,
+                    BlockMetadataUpdateSource::Osc7 => {
+                        prev_block_metadata.current_working_directory()
+                            != block_metadata.current_working_directory()
+                    }
+                };
+                if is_done_bootstrapping && should_run_detection {
                     // Derive locality directly from the incoming block's
                     // session_id. We cannot use `active_session_is_local(ctx)`
                     // here because `active_block_metadata` was just consumed
@@ -10949,9 +10981,19 @@ impl TerminalView {
                                 ctx.emit(Event::Pane(PaneEvent::RepoChanged));
                             }
 
-                            let callbacks = me.block_completed_callbacks.drain(..).collect_vec();
-                            for callback in callbacks {
-                                callback(me, ctx);
+                            // `block_completed_callbacks` are scheduled via
+                            // `on_next_block_completed` and expect the block
+                            // to have finished. OSC 7 fires mid-block, so
+                            // draining them here would run callbacks like
+                            // `maybe_set_pending_repo_init_path`'s project
+                            // init before the actual command (e.g. `git
+                            // clone`) finishes.
+                            if matches!(source, BlockMetadataUpdateSource::Precmd) {
+                                let callbacks =
+                                    me.block_completed_callbacks.drain(..).collect_vec();
+                                for callback in callbacks {
+                                    callback(me, ctx);
+                                }
                             }
 
                             match &repo_path_opt {
@@ -11857,6 +11899,7 @@ impl TerminalView {
                     &block_metadata_received_event.block_metadata,
                     block_metadata_received_event.is_after_in_band_command,
                     block_metadata_received_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Precmd,
                     ctx,
                 );
             }
@@ -11865,6 +11908,7 @@ impl TerminalView {
                     &block_working_directory_updated_event.block_metadata,
                     block_working_directory_updated_event.is_for_in_band_command,
                     block_working_directory_updated_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Osc7,
                     ctx,
                 );
                 // Recompute Warp-prompt chip values (notably the
