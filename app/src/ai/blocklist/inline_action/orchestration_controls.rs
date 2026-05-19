@@ -58,7 +58,7 @@ const DEFAULT_HOST_ENV_VAR: &str = "WARP_CLOUD_MODE_DEFAULT_HOST";
 // ── Shared constants ────────────────────────────────────────────────
 
 pub const ORCHESTRATION_WARP_WORKER_HOST: &str = "warp";
-pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "(no environment)";
+pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "Empty environment";
 
 pub const ORCHESTRATION_PICKER_HEIGHT: f32 = 36.;
 pub const ORCHESTRATION_PICKER_BORDER_WIDTH: f32 = 1.;
