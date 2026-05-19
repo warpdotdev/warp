@@ -4,7 +4,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
         CrossAxisAlignment, DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink,
@@ -13,6 +12,7 @@ use warpui::{
     },
     fonts::{Properties, Weight},
     platform::Cursor,
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::{
@@ -22,8 +22,8 @@ use crate::{
     settings_view::{
         admin_actions::AdminActions,
         billing_and_usage::{
-            billing_cycle_usage_common::{BillingUsageMouseStates, filter_legacy_buckets},
-            billing_cycle_usage_rows::{SourceFilter, render_rows},
+            billing_cycle_usage_common::{filter_legacy_buckets, BillingUsageMouseStates},
+            billing_cycle_usage_rows::{render_rows, SourceFilter},
             billing_cycle_usage_team_totals::render_team_totals_block,
         },
         billing_and_usage_page_v2::{
@@ -62,6 +62,7 @@ pub enum BillingCycleUsageAction {
     ChangeSourceFilter(SourceFilter),
     OpenUpgrade,
     ContactSales,
+    OpenAdminPanel,
 }
 
 impl Entity for BillingCycleUsageSectionView {
@@ -193,6 +194,11 @@ impl TypedActionView for BillingCycleUsageSectionView {
             BillingCycleUsageAction::ContactSales => {
                 AdminActions::contact_sales(ctx);
             }
+            BillingCycleUsageAction::OpenAdminPanel => {
+                if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                    AdminActions::open_admin_panel(team_uid, ctx);
+                }
+            }
         }
     }
 }
@@ -263,7 +269,7 @@ impl View for BillingCycleUsageSectionView {
         }
 
         if is_admin {
-            if let Some(banner) = self.render_upgrade_visibility_banner(&workspace, appearance) {
+            if let Some(banner) = self.render_visibility_cta_banner(&workspace, appearance) {
                 column.add_child(Container::new(banner).with_margin_top(16.).finish());
             }
         }
@@ -573,7 +579,12 @@ impl BillingCycleUsageSectionView {
         .finish()
     }
 
-    fn render_upgrade_visibility_banner(
+    /// Renders the CTA banner that sits between the team-totals block and
+    /// the per-member rows. The copy and action vary by visibility tier:
+    /// non-FullBreakdown admins see an upgrade nudge; FullBreakdown admins
+    /// see a pointer to the admin panel where per-user spend limits actually
+    /// get configured.
+    fn render_visibility_cta_banner(
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
@@ -583,10 +594,11 @@ impl BillingCycleUsageSectionView {
             .tier
             .usage_visibility_policy?
             .admin_granularity;
-        let (link_text, trailing_copy, action) = upgrade_copy_for(admin_granularity)?;
+        let (link_text, trailing_copy, action, leading_icon) =
+            visibility_cta_for(admin_granularity)?;
 
         // Only show when there are teammates -- a single-member workspace
-        // doesn't benefit from any of the team-level visibility upgrades.
+        // doesn't benefit from any of the team-level visibility CTAs.
         if workspace.members.len() <= 1 {
             return None;
         }
@@ -615,7 +627,7 @@ impl BillingCycleUsageSectionView {
         })
         .finish();
 
-        let icon = ConstrainedBox::new(Icon::ArrowCircleBrokenUp.to_warpui_icon(sub_text).finish())
+        let icon = ConstrainedBox::new(leading_icon.to_warpui_icon(sub_text).finish())
             .with_width(14.)
             .with_height(14.)
             .finish();
@@ -636,26 +648,38 @@ impl BillingCycleUsageSectionView {
     }
 }
 
-fn upgrade_copy_for(
+/// Returns the (link text, trailing copy, action, icon) tuple for the
+/// visibility CTA banner, or `None` to suppress the banner entirely.
+fn visibility_cta_for(
     granularity: UsageVisibilityGranularity,
-) -> Option<(&'static str, &'static str, BillingCycleUsageAction)> {
+) -> Option<(&'static str, &'static str, BillingCycleUsageAction, Icon)> {
     match granularity {
         UsageVisibilityGranularity::OwnOnly => Some((
             "Upgrade to Build",
             "to see team-level credit usage.",
             BillingCycleUsageAction::OpenUpgrade,
+            Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::TeamAggregate => Some((
             "Upgrade to Business",
             "to see per-user credit attribution.",
             BillingCycleUsageAction::OpenUpgrade,
+            Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::PerUserTotals => Some((
             "Contact sales",
             "to see fine-grained credit attribution and set per-user spend limits.",
             BillingCycleUsageAction::ContactSales,
+            Icon::ArrowCircleBrokenUp,
         )),
-        UsageVisibilityGranularity::FullBreakdown => None,
+        // FullBreakdown viewers already have full visibility; nudge them to
+        // the admin panel where per-user spend limits actually get configured.
+        UsageVisibilityGranularity::FullBreakdown => Some((
+            "Open the admin panel",
+            "to set per-user spend limits.",
+            BillingCycleUsageAction::OpenAdminPanel,
+            Icon::Users,
+        )),
     }
 }
 

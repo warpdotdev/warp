@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    AppContext, Element, EventContext, SingletonEntity,
     elements::{
         Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -11,14 +10,15 @@ use warpui::{
         Stack, Text,
     },
     platform::Cursor,
+    AppContext, Element, EventContext, SingletonEntity,
 };
 
 use crate::{
     auth::AuthStateProvider,
     settings_view::billing_and_usage::billing_cycle_usage_common::{
-        BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
         aggregate_segments, cost_type_color, format_cost_cents, format_credits,
-        render_breakdown_tooltip, render_section_subheader,
+        render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
+        ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
     },
     ui_components::{blended_colors, icons::Icon},
     workspaces::workspace::{
@@ -77,6 +77,10 @@ pub struct MemberUsageRow {
     pub base_limit: Option<i64>,
     /// Sorted by cost-type then bucket order; zero-credit entries dropped.
     pub segments: Vec<BarSegment>,
+    /// Denominator the row's stacked bar fills against. Always populated by
+    /// `build_rows` — the underlying row builders leave it at 0 since the
+    /// scaling rule depends on visibility, not on any single row in isolation.
+    pub bar_max_credits: i64,
 }
 
 fn member_base_limit(member: &WorkspaceMember) -> Option<i64> {
@@ -118,6 +122,7 @@ pub fn build_own_usage_row(
         total_cost_cents,
         base_limit: viewer_base_limit,
         segments,
+        bar_max_credits: 0,
     }
 }
 
@@ -135,6 +140,7 @@ fn build_other_members_usage_row(entries: &[BillingCycleUsageEntry]) -> MemberUs
         total_cost_cents,
         base_limit: None,
         segments,
+        bar_max_credits: 0,
     }
 }
 
@@ -210,6 +216,7 @@ pub fn build_member_usage_rows(
             total_cost_cents,
             base_limit: member_base_limit(member),
             segments,
+            bar_max_credits: 0,
         });
     }
 
@@ -227,6 +234,7 @@ pub fn build_member_usage_rows(
             total_cost_cents,
             base_limit: None,
             segments,
+            bar_max_credits: 0,
         });
     }
 
@@ -585,8 +593,13 @@ fn build_viewer_own_usage_row(
 
 /// Top-level row dispatcher. Caller is expected to have already filtered
 /// legacy buckets via `filter_legacy_buckets` and rendered the team-totals
-/// block (if any) above. `on_filter_change` is only consumed by the
-/// `PerUserTotals` branch.
+/// block (if any) above.
+///
+/// Thin orchestrator over three siblings:
+///   - [`build_rows`] derives the row data (including `bar_max_credits`),
+///   - [`render_member_header`] optionally emits the "Member usage" subheader
+///     (and source-filter toggle for `FullBreakdown`),
+///   - [`render_member_row_list`] blindly renders the row vec.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
     workspace: &Workspace,
@@ -598,31 +611,47 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
+    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(8.);
+    if let Some(header) = render_member_header(
+        visibility,
+        entries,
+        source_filter,
+        mouse_states,
+        appearance,
+        on_filter_change,
+    ) {
+        column.add_child(header);
+    }
+    column.add_child(render_member_row_list(&rows, mouse_states, appearance));
+    column.finish()
+}
 
-    match visibility.granularity {
-        UsageVisibilityGranularity::OwnOnly => {
-            let row = build_viewer_own_usage_row(workspace, entries, app, source_filter);
-            let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
-            let max_credits = row.total_credits.max(1);
-            column.add_child(render_member_row(
-                &row,
-                max_credits,
-                tooltip_state,
-                appearance,
-            ));
-        }
+/// Per-visibility row construction with `bar_max_credits` already populated.
+///
+/// `OwnOnly` / `TeamAggregate` give each row its own 100% denominator so the
+/// rows read as parallel summaries. `PerUserTotals` / `FullBreakdown` share
+/// a single top-member denominator so heaviest user fills the bar and the
+/// rest scale proportionally.
+fn build_rows(
+    workspace: &Workspace,
+    entries: &[BillingCycleUsageEntry],
+    visibility: &UsageVisibility,
+    source_filter: SourceFilter,
+    app: &AppContext,
+) -> Vec<MemberUsageRow> {
+    let mut rows: Vec<MemberUsageRow> = match visibility.granularity {
+        UsageVisibilityGranularity::OwnOnly => vec![build_viewer_own_usage_row(
+            workspace,
+            entries,
+            app,
+            source_filter,
+        )],
         UsageVisibilityGranularity::TeamAggregate => {
-            // Subheader only — TeamAggregate hardcodes SourceFilter::All so no
-            // toggle is shown on the right.
-            column.add_child(
-                Container::new(render_section_subheader("Member usage", appearance))
-                    .with_margin_bottom(8.)
-                    .finish(),
-            );
-
+            // Force SourceFilter::All — TeamAggregate has no toggle.
             let mut rows = vec![build_viewer_own_usage_row(
                 workspace,
                 entries,
@@ -636,108 +665,97 @@ pub fn render_rows(
             {
                 rows.push(build_other_members_usage_row(entries));
             }
-            let max_credits = rows
+            rows
+        }
+        UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
+            build_member_usage_rows(entries, &workspace.members, source_filter)
+        }
+    };
+
+    match visibility.granularity {
+        UsageVisibilityGranularity::OwnOnly | UsageVisibilityGranularity::TeamAggregate => {
+            for row in &mut rows {
+                row.bar_max_credits = row.total_credits.max(1);
+            }
+        }
+        UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
+            let top = rows
                 .iter()
-                .map(|row| row.total_credits)
+                .map(|r| r.total_credits)
                 .max()
                 .unwrap_or(0)
                 .max(1);
-            for row in &rows {
-                let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
-                column.add_child(render_member_row(
-                    row,
-                    max_credits,
-                    tooltip_state,
-                    appearance,
-                ));
+            for row in &mut rows {
+                row.bar_max_credits = top;
             }
-        }
-        UsageVisibilityGranularity::PerUserTotals => {
-            let member_rows = build_member_usage_rows(entries, &workspace.members, source_filter);
-
-            // Member usage subheader; source filter (if any cloud usage) lives
-            // on the right of the same row.
-            let mut member_header_row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(render_section_subheader("Member usage", appearance));
-            if has_cloud_usage(entries) {
-                member_header_row.add_child(render_source_filter_toggle(
-                    source_filter,
-                    mouse_states,
-                    appearance,
-                    on_filter_change,
-                ));
-            }
-            column.add_child(
-                Container::new(member_header_row.finish())
-                    .with_margin_bottom(8.)
-                    .finish(),
-            );
-
-            if member_rows.iter().all(|r| r.total_credits == 0) {
-                column.add_child(render_empty_filter_state(source_filter, appearance));
-            } else {
-                // Member rows are scaled against the top individual member so
-                // the heaviest user fills the bar and everyone else reads as a
-                // fraction of that user. Team totals live in the cards above.
-                let top_member_max = member_rows
-                    .iter()
-                    .map(|r| r.total_credits)
-                    .max()
-                    .unwrap_or(0)
-                    .max(1);
-                for row in &member_rows {
-                    let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
-                    column.add_child(render_member_row(
-                        row,
-                        top_member_max,
-                        tooltip_state,
-                        appearance,
-                    ));
-                }
-            }
-        }
-        UsageVisibilityGranularity::FullBreakdown => {
-            // Enterprise admins short-circuit to the admin-panel CTA before
-            // render_rows runs, so this branch is unreachable in practice.
-            column.add_child(Empty::new().finish());
         }
     }
 
-    column.finish()
+    rows
 }
 
-fn render_empty_filter_state(
+/// "Member usage" subheader + optional source-filter toggle.
+///
+/// `None` for `OwnOnly` (single row tells its own story). The toggle is only
+/// surfaced for `FullBreakdown` and only when there's any cloud usage to
+/// filter to.
+fn render_member_header(
+    visibility: &UsageVisibility,
+    entries: &[BillingCycleUsageEntry],
     source_filter: SourceFilter,
+    mouse_states: &BillingUsageMouseStates,
+    appearance: &Appearance,
+    on_filter_change: FilterChangeFn,
+) -> Option<Box<dyn Element>> {
+    match visibility.granularity {
+        UsageVisibilityGranularity::OwnOnly => None,
+        UsageVisibilityGranularity::TeamAggregate
+        | UsageVisibilityGranularity::PerUserTotals
+        | UsageVisibilityGranularity::FullBreakdown => {
+            let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
+                && has_cloud_usage(entries);
+
+            let subheader = render_section_subheader("Member usage", appearance);
+            let header = if show_toggle {
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_child(subheader)
+                    .with_child(render_source_filter_toggle(
+                        source_filter,
+                        mouse_states,
+                        appearance,
+                        on_filter_change,
+                    ))
+                    .finish()
+            } else {
+                subheader
+            };
+
+            Some(Container::new(header).with_margin_bottom(8.).finish())
+        }
+    }
+}
+
+/// Dumb iteration over the row vec. Each row carries its own
+/// `bar_max_credits` so we don't need any cross-row context here.
+fn render_member_row_list(
+    rows: &[MemberUsageRow],
+    mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let bg = theme.background().into_solid();
-    let text = match source_filter {
-        SourceFilter::All => "No usage this period",
-        SourceFilter::Local => "No local usage this period",
-        SourceFilter::Cloud => "No cloud usage this period",
-    };
-    Container::new(
-        Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_child(
-                Text::new_inline(
-                    text.to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(blended_colors::text_sub(theme, bg))
-                .finish(),
-            )
-            .finish(),
-    )
-    .with_background_color(bg)
-    .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
-    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)))
-    .with_vertical_padding(24.)
-    .finish()
+    let mut column = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(8.);
+    for row in rows {
+        let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
+        column.add_child(render_member_row(
+            row,
+            row.bar_max_credits,
+            tooltip_state,
+            appearance,
+        ));
+    }
+    column.finish()
 }

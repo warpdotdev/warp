@@ -6,13 +6,13 @@ use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    Element,
     elements::{
         Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
         Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
         Shrinkable, Text,
     },
     fonts::{Properties, Weight},
+    Element,
 };
 
 use crate::{

@@ -1,7 +1,6 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    Element,
     elements::{
         Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -9,13 +8,14 @@ use warpui::{
         Stack, Text,
     },
     fonts::{Properties, Weight},
+    Element,
 };
 
 use crate::{
     settings_view::billing_and_usage::billing_cycle_usage_common::{
-        BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
         aggregate_segments, cost_type_color, format_cost_cents, format_credits,
-        render_breakdown_tooltip, render_section_subheader,
+        render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
+        ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
     },
     ui_components::blended_colors,
     workspaces::workspace::{
