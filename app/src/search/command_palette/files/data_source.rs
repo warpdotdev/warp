@@ -198,6 +198,7 @@ impl FileDataSource {
 
         let opened_files = OpenedFilesModel::as_ref(app);
 
+        #[cfg(feature = "local_fs")]
         let repo_root = file_search_model.repo_root(app);
         let repo_root_location = file_search_model.repo_root_location(app);
 
