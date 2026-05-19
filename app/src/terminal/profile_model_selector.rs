@@ -343,8 +343,11 @@ impl ProfileModelSelector {
         let sidecar_dropdown = ctx.add_typed_action_view(|_ctx| Menu::new());
 
         let new_model_popup = ctx.add_typed_action_view(|_ctx| {
-            FeaturePopup::new_feature(NewFeaturePopupLabel::FromCallable(Box::new(|ctx| {
+            FeaturePopup::new_feature(NewFeaturePopupLabel::FromCallable(Box::new(move |ctx| {
                 let llm_preferences = LLMPreferences::as_ref(ctx);
+                if llm_preferences.should_show_premium_models_unlocked_popup(terminal_view_id) {
+                    return "Build unlocked premium models".to_string();
+                }
                 let new_choices = llm_preferences.new_choices_since_last_update();
                 if let Some(new_choices) = new_choices {
                     let deduped_names = dedupe_model_display_names(new_choices.iter());
@@ -2334,24 +2337,38 @@ impl View for ProfileModelSelector {
                 .is_none_or(|ts| Instant::now().duration_since(ts) > NEW_MODEL_CHOICES_POPUP_DELAY)
         {
             let llm_preferences = LLMPreferences::as_ref(app);
-            match (
-                llm_preferences.should_show_new_choices_popup(self.terminal_view_id),
-                llm_preferences.new_choices_since_last_update(),
-            ) {
-                (true, Some(new_choices)) if !new_choices.is_empty() => {
-                    llm_preferences.mark_new_choices_popup_as_shown(self.terminal_view_id);
-                    stack.add_positioned_overlay_child(
-                        ChildView::new(&self.new_model_popup).finish(),
-                        // Render the popup above the chip, centered horizontally.
-                        OffsetPositioning::offset_from_parent(
-                            vec2f(0., -6.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    );
+            if llm_preferences.should_show_premium_models_unlocked_popup(self.terminal_view_id) {
+                llm_preferences.mark_premium_models_unlocked_popup_as_shown(self.terminal_view_id);
+                stack.add_positioned_overlay_child(
+                    ChildView::new(&self.new_model_popup).finish(),
+                    // Render the popup above the chip, centered horizontally.
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -6.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
+            } else {
+                match (
+                    llm_preferences.should_show_new_choices_popup(self.terminal_view_id),
+                    llm_preferences.new_choices_since_last_update(),
+                ) {
+                    (true, Some(new_choices)) if !new_choices.is_empty() => {
+                        llm_preferences.mark_new_choices_popup_as_shown(self.terminal_view_id);
+                        stack.add_positioned_overlay_child(
+                            ChildView::new(&self.new_model_popup).finish(),
+                            // Render the popup above the chip, centered horizontally.
+                            OffsetPositioning::offset_from_parent(
+                                vec2f(0., -6.),
+                                ParentOffsetBounds::WindowByPosition,
+                                ParentAnchor::TopMiddle,
+                                ChildAnchor::BottomMiddle,
+                            ),
+                        );
+                    }
+                    _ => (),
                 }
-                _ => (),
             }
         }
 

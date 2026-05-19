@@ -3060,11 +3060,17 @@ impl Workspace {
                 ctx,
             ),
             |me, _, event, ctx| {
-                let BonusGrantNotificationEvent::ShowNotification { message, .. } = event;
-                me.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack
-                        .add_persistent_toast(DismissibleToast::success(message.clone()), ctx);
-                });
+                match event {
+                    BonusGrantNotificationEvent::ShowNotification { message, .. } => {
+                        me.toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_persistent_toast(
+                                DismissibleToast::success(message.clone()),
+                                ctx,
+                            );
+                        });
+                    }
+                    BonusGrantNotificationEvent::BuildPlanAmbientGrantReceived => {}
+                }
             },
         );
 

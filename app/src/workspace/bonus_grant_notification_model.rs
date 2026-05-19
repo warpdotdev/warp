@@ -1,5 +1,5 @@
 use crate::ai::request_usage_model::{
-    AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
+    AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope, BonusGrantType,
 };
 use crate::terminal::general_settings::GeneralSettings;
 use chrono::{Duration, Utc};
@@ -17,6 +17,7 @@ pub struct BonusGrantNotificationModel {
 #[derive(Debug, Clone)]
 pub enum BonusGrantNotificationEvent {
     ShowNotification { grant: BonusGrant, message: String },
+    BuildPlanAmbientGrantReceived,
 }
 
 impl Entity for BonusGrantNotificationModel {
@@ -93,6 +94,9 @@ impl BonusGrantNotificationModel {
 
         for (grant, message, grant_key) in grants_to_notify {
             self.shown_grants_session.insert(grant_key);
+            if Self::is_build_plan_ambient_grant(&grant) {
+                ctx.emit(BonusGrantNotificationEvent::BuildPlanAmbientGrantReceived);
+            }
             ctx.emit(BonusGrantNotificationEvent::ShowNotification { grant, message });
         }
 
@@ -115,6 +119,12 @@ impl BonusGrantNotificationModel {
 
     fn create_grant_key(grant: &BonusGrant) -> String {
         format!("{}:{}", grant.reason, grant.created_at.timestamp())
+    }
+
+    fn is_build_plan_ambient_grant(grant: &BonusGrant) -> bool {
+        grant.reason == "one_time_ambient_grant"
+            && grant.grant_type == BonusGrantType::AmbientOnly
+            && grant.request_credits_granted == 1000
     }
 
     fn mark_grant_as_shown(&self, grant_key: &str, ctx: &mut ModelContext<Self>) {
