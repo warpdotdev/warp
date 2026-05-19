@@ -24,7 +24,10 @@ const REMOTE_SERVER_TARBALL_DOWNLOAD_RETRY_DELAY: Duration = Duration::from_mill
 /// Exit codes where SCP fallback would not help because the failure is on the
 /// remote host itself, not a network/download issue.
 pub(super) fn should_try_install(error: &Error) -> bool {
-    !matches!(error, Error::ScriptFailed { exit_code, .. } if *exit_code == 2)
+    !matches!(
+        error,
+        Error::EnvironmentFailure { .. } | Error::ScriptFailed { exit_code: 2, .. }
+    )
 }
 
 /// Installs the remote server via SCP fallback.
@@ -34,6 +37,7 @@ pub(super) fn should_try_install(error: &Error) -> bool {
 /// archive. This avoids requiring the remote host to download the tarball itself.
 pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
     let platform = super::super::detect_remote_platform(socket_path).await?;
+    super::run_filesystem_preflight(socket_path).await?;
 
     let client_tarball_path = cached_remote_server_tarball(&platform)
         .await
@@ -43,25 +47,6 @@ pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
     let remote_tarball_name = format!("oz-upload-{}.tar.gz", uuid::Uuid::new_v4());
     let remote_tarball_path = format!("{install_dir}/{remote_tarball_name}");
 
-    // The normal install script creates this directory before downloading, but
-    // SCP fallback can run after a failure that happened before that point.
-    // Ensure the destination exists before uploading the staged tarball.
-    let mkdir_output = remote_server::ssh::run_ssh_command(
-        socket_path,
-        &format!("mkdir -p {install_dir}"),
-        remote_server::setup::CHECK_TIMEOUT,
-    )
-    .await
-    .map_err(Error::from)?;
-    if !mkdir_output.status.success() {
-        let code = mkdir_output.status.code().unwrap_or(-1);
-        let stderr = String::from_utf8_lossy(&mkdir_output.stderr).to_string();
-        return Err(Error::ScriptFailed {
-            exit_code: code,
-            stderr,
-        });
-    }
-
     log::info!("Uploading tarball to remote at {remote_tarball_path}");
     remote_server::ssh::scp_upload(
         socket_path,
@@ -70,7 +55,10 @@ pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
         timeout,
     )
     .await
-    .map_err(Error::Other)?;
+    .map_err(|e| {
+        let stderr = e.to_string();
+        Error::from_script_failure(-1, stderr)
+    })?;
 
     log::info!("Running extraction via install script with tarball at {remote_tarball_path}");
     let script = remote_server::setup::install_script(Some(&remote_tarball_path));
@@ -83,10 +71,7 @@ pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
     } else {
         let code = output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(Error::ScriptFailed {
-            exit_code: code,
-            stderr,
-        })
+        Err(Error::from_script_failure(code, stderr))
     }
 }
 

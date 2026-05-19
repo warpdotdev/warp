@@ -9,6 +9,10 @@
 #   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
 #   {no_http_client_exit_code}  — exit code when neither curl nor wget is available
+#   {filesystem_preflight_exit_code} — exit code for local remote-filesystem environment failures
+#   {required_install_space_kib} — minimum available KiB required in install_dir
+#   {required_install_inodes}   — minimum available inodes required in install_dir
+#   {filesystem_preflight_failure_marker} — stable stderr marker for typed client classification
 #   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally)
 set -e
 
@@ -41,7 +45,61 @@ install_dir="{install_dir}"
 case "$install_dir" in
   "~"|"~/"*) install_dir="${HOME}${install_dir#\~}" ;;
 esac
-mkdir -p "$install_dir"
+
+required_kib={required_install_space_kib}
+required_inodes={required_install_inodes}
+fs_preflight_marker="{filesystem_preflight_failure_marker}"
+
+emit_fs_preflight_failure() {
+  kind="$1"
+  detail="$2"
+  echo "$fs_preflight_marker kind=$kind path=$install_dir detail=$detail action=fix_remote_install_directory" >&2
+  exit {filesystem_preflight_exit_code}
+}
+
+mkdir_error=$(mkdir -p "$install_dir" 2>&1) || {
+  case "$mkdir_error" in
+    *"Permission denied"*) kind=permission_denied ;;
+    *"Read-only file system"*) kind=read_only_filesystem ;;
+    *"No space left on device"*) kind=no_space ;;
+    *"Disk quota exceeded"*|*"Quota exceeded"*) kind=quota_exceeded ;;
+    *) kind=write_probe_failed ;;
+  esac
+  emit_fs_preflight_failure "$kind" "mkdir_failed"
+}
+
+probe_path="$install_dir/.warp-write-probe.$$"
+probe_error=$({ : > "$probe_path"; } 2>&1) || {
+  case "$probe_error" in
+    *"Permission denied"*) kind=permission_denied ;;
+    *"Read-only file system"*) kind=read_only_filesystem ;;
+    *"No space left on device"*) kind=no_space ;;
+    *"Disk quota exceeded"*|*"Quota exceeded"*) kind=quota_exceeded ;;
+    *) kind=write_probe_failed ;;
+  esac
+  emit_fs_preflight_failure "$kind" "write_probe_failed"
+}
+rm -f "$probe_path" 2>/dev/null || true
+
+available_kib=$(df -Pk "$install_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+case "$available_kib" in
+  ""|*[!0-9]*) ;;
+  *)
+    if [ "$available_kib" -lt "$required_kib" ]; then
+      emit_fs_preflight_failure "no_space" "available_kib=${available_kib},required_kib=${required_kib}"
+    fi
+    ;;
+esac
+
+available_inodes=$(df -Pi "$install_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+case "$available_inodes" in
+  ""|*[!0-9]*) ;;
+  *)
+    if [ "$available_inodes" -lt "$required_inodes" ]; then
+      emit_fs_preflight_failure "inode_exhausted" "available_inodes=${available_inodes},required_inodes=${required_inodes}"
+    fi
+    ;;
+esac
 
 tmpdir=$(mktemp -d "$install_dir/.install.XXXXXX")
 # Best-effort cleanup of the staging directory. A failure here (e.g.

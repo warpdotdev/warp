@@ -22,7 +22,10 @@ use warpui::r#async::executor;
 use crate::client::RemoteServerLog;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::manager::RemoteServerExitStatus;
-use crate::setup::{PreinstallCheckResult, RemotePlatform};
+use crate::setup::{
+    classify_install_environment_failure, InstallEnvironmentFailure, PreinstallCheckResult,
+    RemotePlatform,
+};
 use serde::Serialize;
 
 /// How the remote server binary was installed. Used for telemetry to
@@ -95,6 +98,9 @@ pub enum Error {
     /// The remote host reported a CPU architecture not supported by the prebuilt binary.
     #[error("unsupported architecture: {arch}")]
     UnsupportedArch { arch: String },
+    /// The remote host environment cannot support installing the binary at the chosen path.
+    #[error("{failure}")]
+    EnvironmentFailure { failure: InstallEnvironmentFailure },
     /// A remote script ran but exited with a non-zero code.
     #[error("script failed (exit {exit_code}): {stderr}")]
     ScriptFailed { exit_code: i32, stderr: String },
@@ -109,6 +115,39 @@ pub enum Error {
 const MAX_STDERR_DISPLAY_CHARS: usize = 512;
 
 impl Error {
+    pub fn from_script_failure(exit_code: i32, stderr: String) -> Self {
+        if let Some(failure) = classify_install_environment_failure(exit_code, &stderr) {
+            Self::EnvironmentFailure { failure }
+        } else {
+            Self::ScriptFailed { exit_code, stderr }
+        }
+    }
+
+    pub fn is_environment_failure(&self) -> bool {
+        matches!(self, Self::EnvironmentFailure { .. })
+    }
+
+    pub fn setup_failure_class(&self) -> Option<&'static str> {
+        match self {
+            Self::EnvironmentFailure { failure } => Some(failure.setup_failure_class()),
+            Self::TimedOut
+            | Self::UnsupportedOs { .. }
+            | Self::UnsupportedArch { .. }
+            | Self::ScriptFailed { .. }
+            | Self::Other(_) => None,
+        }
+    }
+
+    pub fn counts_as_product_error(&self) -> bool {
+        match self {
+            Self::EnvironmentFailure { failure } => failure.counts_as_product_error(),
+            Self::TimedOut
+            | Self::UnsupportedOs { .. }
+            | Self::UnsupportedArch { .. }
+            | Self::ScriptFailed { .. }
+            | Self::Other(_) => true,
+        }
+    }
     /// Converts this error into a [`UserFacingError`] suitable for the
     /// SSH remote-server failed banner, using `stage` to provide
     /// context-appropriate copy.
@@ -120,6 +159,7 @@ impl Error {
             }
             Self::UnsupportedOs { os } => Some(format!("Unsupported OS: {os}")),
             Self::UnsupportedArch { arch } => Some(format!("Unsupported architecture: {arch}")),
+            Self::EnvironmentFailure { failure } => Some(failure.user_facing_detail()),
             Self::ScriptFailed { exit_code, stderr } => {
                 let truncated = if stderr.chars().count() > MAX_STDERR_DISPLAY_CHARS {
                     let end: usize = stderr

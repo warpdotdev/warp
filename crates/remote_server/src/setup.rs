@@ -5,6 +5,7 @@ pub use glibc::{GlibcVersion, RemoteLibc};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use serde::Serialize;
 use warp_core::channel::{Channel, ChannelState};
 pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
@@ -131,6 +132,7 @@ impl UnsupportedReason {
                 Some(Self::UnsupportedArch { arch: arch.clone() })
             }
             crate::transport::Error::TimedOut
+            | crate::transport::Error::EnvironmentFailure { .. }
             | crate::transport::Error::ScriptFailed { .. }
             | crate::transport::Error::Other(_) => None,
         }
@@ -144,6 +146,192 @@ impl UnsupportedReason {
             Self::UnsupportedArch { .. } => "unsupported_arch",
         }
     }
+}
+
+pub const FILESYSTEM_PREFLIGHT_EXIT_CODE: i32 = 4;
+pub const REQUIRED_INSTALL_SPACE_KIB: u64 = 256 * 1024;
+const REQUIRED_INSTALL_INODES: u64 = 16;
+const FILESYSTEM_PREFLIGHT_FAILURE_MARKER: &str = "warp_remote_server_filesystem_preflight_failed";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallEnvironmentFailure {
+    pub kind: InstallEnvironmentFailureKind,
+    pub path: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallEnvironmentFailureKind {
+    PermissionDenied,
+    ReadOnlyFilesystem,
+    NoSpace,
+    QuotaExceeded,
+    InodeExhausted,
+    WriteProbeFailed,
+    Unknown,
+}
+
+impl InstallEnvironmentFailureKind {
+    fn from_preflight_kind(kind: &str) -> Self {
+        match kind {
+            "permission_denied" => Self::PermissionDenied,
+            "read_only_filesystem" => Self::ReadOnlyFilesystem,
+            "no_space" => Self::NoSpace,
+            "quota_exceeded" => Self::QuotaExceeded,
+            "inode_exhausted" => Self::InodeExhausted,
+            "write_probe_failed" => Self::WriteProbeFailed,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PermissionDenied => "permission_denied",
+            Self::ReadOnlyFilesystem => "read_only_filesystem",
+            Self::NoSpace => "no_space",
+            Self::QuotaExceeded => "quota_exceeded",
+            Self::InodeExhausted => "inode_exhausted",
+            Self::WriteProbeFailed => "write_probe_failed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn user_guidance(self) -> &'static str {
+        match self {
+            Self::PermissionDenied => {
+                "Grant write permission to the SSH extension install directory or configure a writable home directory."
+            }
+            Self::ReadOnlyFilesystem => {
+                "Remount the filesystem as writable or choose a writable install location."
+            }
+            Self::NoSpace => {
+                "Free disk space on the remote host or move the SSH extension install directory to a larger filesystem."
+            }
+            Self::QuotaExceeded => {
+                "Free space within your remote-user quota or ask the host administrator to raise the quota."
+            }
+            Self::InodeExhausted => {
+                "Remove files from the remote filesystem or choose an install location with available inodes."
+            }
+            Self::WriteProbeFailed | Self::Unknown => {
+                "Check that the remote install directory is writable and has enough disk space."
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for InstallEnvironmentFailureKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl InstallEnvironmentFailure {
+    pub fn setup_failure_class(&self) -> &'static str {
+        "unsupported_environment"
+    }
+
+    pub fn counts_as_product_error(&self) -> bool {
+        false
+    }
+
+    pub fn user_facing_detail(&self) -> String {
+        let path = self
+            .path
+            .as_ref()
+            .map(|path| format!(" at {path}"))
+            .unwrap_or_default();
+        format!(
+            "The remote host cannot write the Warp SSH extension{path}: {} {}",
+            self.detail,
+            self.kind.user_guidance(),
+        )
+    }
+}
+
+impl std::fmt::Display for InstallEnvironmentFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.path {
+            Some(path) => write!(
+                f,
+                "remote install environment failure: {} at {} ({})",
+                self.kind, path, self.detail
+            ),
+            None => write!(
+                f,
+                "remote install environment failure: {} ({})",
+                self.kind, self.detail
+            ),
+        }
+    }
+}
+
+pub fn classify_install_environment_failure(
+    exit_code: i32,
+    stderr: &str,
+) -> Option<InstallEnvironmentFailure> {
+    if stderr.contains(FILESYSTEM_PREFLIGHT_FAILURE_MARKER) {
+        return Some(parse_preflight_failure(stderr));
+    }
+
+    let lowercase = stderr.to_ascii_lowercase();
+    let kind = if lowercase.contains("no space left on device")
+        || lowercase.contains("failure writing output to destination")
+    {
+        InstallEnvironmentFailureKind::NoSpace
+    } else if lowercase.contains("disk quota exceeded") || lowercase.contains("quota exceeded") {
+        InstallEnvironmentFailureKind::QuotaExceeded
+    } else if lowercase.contains("read-only file system")
+        || lowercase.contains("readonly file system")
+    {
+        InstallEnvironmentFailureKind::ReadOnlyFilesystem
+    } else if lowercase.contains("permission denied") {
+        InstallEnvironmentFailureKind::PermissionDenied
+    } else {
+        return None;
+    };
+
+    Some(InstallEnvironmentFailure {
+        kind,
+        path: None,
+        detail: format!(
+            "install script failed with exit code {exit_code}: {}",
+            stderr.trim()
+        ),
+    })
+}
+
+fn parse_preflight_failure(stderr: &str) -> InstallEnvironmentFailure {
+    let line = stderr
+        .lines()
+        .find(|line| line.contains(FILESYSTEM_PREFLIGHT_FAILURE_MARKER))
+        .unwrap_or(stderr)
+        .trim();
+    let kind = extract_preflight_field(line, "kind")
+        .map(|kind| InstallEnvironmentFailureKind::from_preflight_kind(&kind))
+        .unwrap_or(InstallEnvironmentFailureKind::Unknown);
+    let path = extract_preflight_path(line);
+    let detail = extract_preflight_field(line, "detail").unwrap_or_else(|| line.to_string());
+
+    InstallEnvironmentFailure { kind, path, detail }
+}
+
+fn extract_preflight_field(line: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    let value = line
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix(&prefix))?;
+    Some(value.to_string())
+}
+
+fn extract_preflight_path(line: &str) -> Option<String> {
+    let start = line.find(" path=")? + " path=".len();
+    let end = line[start..]
+        .find(" detail=")
+        .map(|offset| start + offset)
+        .unwrap_or(line.len());
+    Some(line[start..end].to_string())
 }
 
 impl PreinstallCheckResult {
@@ -539,6 +727,70 @@ pub fn remote_server_artifact_version() -> &'static str {
 /// [`install_script`].
 const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 
+const FILESYSTEM_PREFLIGHT_SCRIPT_TEMPLATE: &str = r#"
+set -e
+
+install_dir="{install_dir}"
+case "$install_dir" in
+  "~"|"~/"*) install_dir="${HOME}${install_dir#\~}" ;;
+esac
+
+required_kib={required_install_space_kib}
+required_inodes={required_install_inodes}
+fs_preflight_marker="{filesystem_preflight_failure_marker}"
+
+emit_fs_preflight_failure() {
+  kind="$1"
+  detail="$2"
+  echo "$fs_preflight_marker kind=$kind path=$install_dir detail=$detail action=fix_remote_install_directory" >&2
+  exit {filesystem_preflight_exit_code}
+}
+
+mkdir_error=$(mkdir -p "$install_dir" 2>&1) || {
+  case "$mkdir_error" in
+    *"Permission denied"*) kind=permission_denied ;;
+    *"Read-only file system"*) kind=read_only_filesystem ;;
+    *"No space left on device"*) kind=no_space ;;
+    *"Disk quota exceeded"*|*"Quota exceeded"*) kind=quota_exceeded ;;
+    *) kind=write_probe_failed ;;
+  esac
+  emit_fs_preflight_failure "$kind" "mkdir_failed"
+}
+
+probe_path="$install_dir/.warp-write-probe.$$"
+probe_error=$({ : > "$probe_path"; } 2>&1) || {
+  case "$probe_error" in
+    *"Permission denied"*) kind=permission_denied ;;
+    *"Read-only file system"*) kind=read_only_filesystem ;;
+    *"No space left on device"*) kind=no_space ;;
+    *"Disk quota exceeded"*|*"Quota exceeded"*) kind=quota_exceeded ;;
+    *) kind=write_probe_failed ;;
+  esac
+  emit_fs_preflight_failure "$kind" "write_probe_failed"
+}
+rm -f "$probe_path" 2>/dev/null || true
+
+available_kib=$(df -Pk "$install_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+case "$available_kib" in
+  ""|*[!0-9]*) ;;
+  *)
+    if [ "$available_kib" -lt "$required_kib" ]; then
+      emit_fs_preflight_failure "no_space" "available_kib=${available_kib},required_kib=${required_kib}"
+    fi
+    ;;
+esac
+
+available_inodes=$(df -Pi "$install_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+case "$available_inodes" in
+  ""|*[!0-9]*) ;;
+  *)
+    if [ "$available_inodes" -lt "$required_inodes" ]; then
+      emit_fs_preflight_failure "inode_exhausted" "available_inodes=${available_inodes},required_inodes=${required_inodes}"
+    fi
+    ;;
+esac
+"#;
+
 /// Returns the install script that downloads and installs the CLI binary
 /// at the current client version.
 ///
@@ -570,7 +822,44 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
             "{no_http_client_exit_code}",
             &NO_HTTP_CLIENT_EXIT_CODE.to_string(),
         )
+        .replace(
+            "{filesystem_preflight_exit_code}",
+            &FILESYSTEM_PREFLIGHT_EXIT_CODE.to_string(),
+        )
+        .replace(
+            "{required_install_space_kib}",
+            &REQUIRED_INSTALL_SPACE_KIB.to_string(),
+        )
+        .replace(
+            "{required_install_inodes}",
+            &REQUIRED_INSTALL_INODES.to_string(),
+        )
+        .replace(
+            "{filesystem_preflight_failure_marker}",
+            FILESYSTEM_PREFLIGHT_FAILURE_MARKER,
+        )
         .replace("{staging_tarball_path}", staging_tarball_path.unwrap_or(""))
+}
+
+pub fn filesystem_preflight_script() -> String {
+    FILESYSTEM_PREFLIGHT_SCRIPT_TEMPLATE
+        .replace("{install_dir}", &remote_server_dir())
+        .replace(
+            "{filesystem_preflight_exit_code}",
+            &FILESYSTEM_PREFLIGHT_EXIT_CODE.to_string(),
+        )
+        .replace(
+            "{required_install_space_kib}",
+            &REQUIRED_INSTALL_SPACE_KIB.to_string(),
+        )
+        .replace(
+            "{required_install_inodes}",
+            &REQUIRED_INSTALL_INODES.to_string(),
+        )
+        .replace(
+            "{filesystem_preflight_failure_marker}",
+            FILESYSTEM_PREFLIGHT_FAILURE_MARKER,
+        )
 }
 
 /// Construct the download URL from the server root URL.

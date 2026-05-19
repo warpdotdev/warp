@@ -2835,6 +2835,9 @@ pub enum TelemetryEvent {
         install_source: Option<remote_server::transport::InstallSource>,
         remote_os: Option<String>,
         remote_arch: Option<String>,
+        is_environment_failure: bool,
+        counts_as_product_error: bool,
+        setup_failure_class: Option<String>,
     },
     /// Emitted when the remote server connection + initialization completes.
     /// `error` is `None` on success, `Some(reason)` on failure.
@@ -4237,11 +4240,17 @@ impl TelemetryEvent {
                 install_source,
                 remote_os,
                 remote_arch,
+                is_environment_failure,
+                counts_as_product_error,
+                setup_failure_class,
             } => Some(json!({
                 "error": error,
                 "install_source": install_source,
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
+                "is_environment_failure": is_environment_failure,
+                "counts_as_product_error": counts_as_product_error,
+                "setup_failure_class": setup_failure_class,
             })),
             TelemetryEvent::RemoteServerInitialization {
                 phase,

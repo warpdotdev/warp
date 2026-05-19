@@ -280,8 +280,8 @@ fn install_script_tilde_expansion_resolves_correctly() {
     };
 
     let script = install_script(None);
-    let cutoff = script.find("mkdir -p \"$install_dir\"").expect(
-        "install script no longer contains the `mkdir -p \"$install_dir\"` \
+    let cutoff = script.find("mkdir_error=$(").expect(
+        "install script no longer contains the `mkdir_error=$(` \
          checkpoint this test relies on; update the test alongside the \
          script change",
     );
@@ -366,6 +366,92 @@ fn install_script_avoids_pattern_substitution_for_tilde_expansion() {
     );
 }
 
+#[test]
+fn classify_preflight_failure_extracts_kind_path_and_detail() {
+    let stderr = format!(
+        "ignored noise\n{FILESYSTEM_PREFLIGHT_FAILURE_MARKER} kind=no_space path=/home/test user/.warp/remote-server detail=available_kib=1024,required_kib=262144 action=fix_remote_install_directory\n"
+    );
+
+    let failure = classify_install_environment_failure(FILESYSTEM_PREFLIGHT_EXIT_CODE, &stderr)
+        .expect("preflight marker should classify as environment failure");
+
+    assert_eq!(failure.kind, InstallEnvironmentFailureKind::NoSpace);
+    assert_eq!(
+        failure.path,
+        Some("/home/test user/.warp/remote-server".to_string())
+    );
+    assert_eq!(failure.detail, "available_kib=1024,required_kib=262144");
+    assert_eq!(failure.setup_failure_class(), "unsupported_environment");
+    assert!(!failure.counts_as_product_error());
+}
+
+#[test]
+fn classify_late_no_space_stderr_as_environment_failure() {
+    let stderr = "tar: write error: No space left on device";
+    let failure = classify_install_environment_failure(1, stderr)
+        .expect("late no-space stderr should classify as environment failure");
+
+    assert_eq!(failure.kind, InstallEnvironmentFailureKind::NoSpace);
+    assert_eq!(failure.path, None);
+    assert!(failure.detail.contains("exit code 1"));
+    assert!(failure.detail.contains(stderr));
+}
+
+#[test]
+fn classify_late_quota_stderr_as_environment_failure() {
+    let stderr = "scp: dest open \"/home/user/.warp/file\": Disk quota exceeded";
+    let failure = classify_install_environment_failure(1, stderr)
+        .expect("late quota stderr should classify as environment failure");
+
+    assert_eq!(failure.kind, InstallEnvironmentFailureKind::QuotaExceeded);
+}
+
+#[test]
+fn classify_late_read_only_and_permission_stderr() {
+    let read_only = classify_install_environment_failure(
+        1,
+        "mkdir: cannot create directory '/opt/warp': Read-only file system",
+    )
+    .expect("read-only stderr should classify");
+    assert_eq!(
+        read_only.kind,
+        InstallEnvironmentFailureKind::ReadOnlyFilesystem
+    );
+
+    let permission = classify_install_environment_failure(
+        1,
+        "mkdir: cannot create directory '/root/.warp': Permission denied",
+    )
+    .expect("permission stderr should classify");
+    assert_eq!(
+        permission.kind,
+        InstallEnvironmentFailureKind::PermissionDenied
+    );
+}
+
+#[test]
+fn script_failure_promotes_environment_failures() {
+    let error = crate::transport::Error::from_script_failure(
+        23,
+        "curl: (23) Failure writing output to destination".to_string(),
+    );
+
+    assert!(error.is_environment_failure());
+    assert_eq!(error.setup_failure_class(), Some("unsupported_environment"));
+    assert!(!error.counts_as_product_error());
+}
+
+#[test]
+fn filesystem_preflight_script_contains_required_checks() {
+    let script = filesystem_preflight_script();
+
+    assert!(script.contains("mkdir -p \"$install_dir\""));
+    assert!(script.contains(".warp-write-probe"));
+    assert!(script.contains("df -Pk \"$install_dir\""));
+    assert!(script.contains("df -Pi \"$install_dir\""));
+    assert!(script.contains(FILESYSTEM_PREFLIGHT_FAILURE_MARKER));
+    assert!(script.contains(&REQUIRED_INSTALL_SPACE_KIB.to_string()));
+}
 #[test]
 fn version_hash_is_deterministic() {
     // version_hash uses the compile-time GIT_RELEASE_TAG which is typically
