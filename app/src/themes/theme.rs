@@ -1,6 +1,7 @@
 use super::default_themes::*;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::path::PathBuf;
@@ -156,12 +157,9 @@ impl ThemeKind {
     Hash,
     PartialEq,
     Eq,
-    Serialize,
-    Deserialize,
     PartialOrd,
     Ord,
     schemars::JsonSchema,
-    settings_value::SettingsValue,
 )]
 #[schemars(description = "A user-provided custom theme.")]
 pub struct CustomTheme {
@@ -170,6 +168,43 @@ pub struct CustomTheme {
     #[schemars(description = "The file path to the custom theme definition.")]
     path: PathBuf,
 }
+
+// Custom Serialize: normalize absolute paths under $HOME to ~-relative so that
+// Settings Sync produces portable paths across machines with different usernames.
+impl Serialize for CustomTheme {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("CustomTheme", 2)?;
+        state.serialize_field("name", &self.name)?;
+        let portable_path = match dirs::home_dir() {
+            Some(home) if self.path.starts_with(&home) => {
+                let relative = self.path.strip_prefix(&home).unwrap();
+                PathBuf::from("~").join(relative)
+            }
+            _ => self.path.clone(),
+        };
+        state.serialize_field("path", &portable_path)?;
+        state.end()
+    }
+}
+
+// Custom Deserialize: expand ~ back to the local machine's home directory.
+impl<'de> Deserialize<'de> for CustomTheme {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct CustomThemeData {
+            name: String,
+            path: PathBuf,
+        }
+        let data = CustomThemeData::deserialize(deserializer)?;
+        let expanded = shellexpand::tilde(&data.path.to_string_lossy()).into_owned();
+        Ok(CustomTheme {
+            name: data.name,
+            path: PathBuf::from(expanded),
+        })
+    }
+}
+
+impl settings_value::SettingsValue for CustomTheme {}
 
 impl CustomTheme {
     pub fn new(s: String, p: PathBuf) -> Self {
