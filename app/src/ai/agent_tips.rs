@@ -565,7 +565,7 @@ impl AITipModel<AgentTip> {
             return;
         }
 
-        // Rebuild tips from current settings so changes (e.g. voice toggle) are picked up.
+        // Rebuild tips from current settings so changes are picked up.
         self.tips = get_agent_tips(ctx);
 
         self.current_tip =

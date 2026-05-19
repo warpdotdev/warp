@@ -235,9 +235,7 @@ use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{
-    AISettings, AISettingsChangedEvent, AccessibilitySettings, ScrollSettings, SelectionSettings,
-};
+use crate::settings::{AISettings, AccessibilitySettings, ScrollSettings, SelectionSettings};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -1902,19 +1900,13 @@ pub(crate) fn initialize_app(
         ai::agent_tips::AITipModel::<ai::AgentTip>::new_for_agent_tips(ctx)
     });
     {
-        // Rebuild the tip pool when voice-related settings change so that the voice tip
-        // appears/disappears without waiting for the next cooldown cycle.
+        // Rebuild the tip pool when AI settings change so tips whose applicability
+        // depends on AI settings appear/disappear without waiting for the next cooldown cycle.
         let tip_model_handle_for_ai = tip_model_handle.clone();
-        ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, event, ctx| {
-            if matches!(
-                event,
-                AISettingsChangedEvent::VoiceInputToggleKey { .. }
-                    | AISettingsChangedEvent::VoiceInputEnabled { .. }
-            ) {
-                tip_model_handle_for_ai.update(ctx, |model, ctx| {
-                    model.revalidate_tips(ctx);
-                });
-            }
+        ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, ctx| {
+            tip_model_handle_for_ai.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
         });
         // Also revalidate when workspace/team data changes (e.g. voice toggled at
         // the org level). Billing metadata — including `warp_ai_policy.is_voice_enabled`
