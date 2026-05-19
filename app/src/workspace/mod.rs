@@ -426,7 +426,7 @@ pub fn init(app: &mut AppContext) {
             )
             .with_context_predicate(id!("Workspace"))
             .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("ctrl-shift->"),
+            .with_key_binding("alt-shift->"),
             EditableBinding::new(
                 "workspace:decrease_font_size",
                 "Decrease font size",
@@ -434,7 +434,7 @@ pub fn init(app: &mut AppContext) {
             )
             .with_context_predicate(id!("Workspace"))
             .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("ctrl-shift-<"),
+            .with_key_binding("alt-shift-<"),
             EditableBinding::new(
                 "workspace:reset_font_size",
                 "Reset font size to default",
@@ -776,6 +776,15 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
         .with_enabled(|| FeatureFlag::GlobalSearch.is_enabled())
         .with_custom_action(CustomAction::ToggleGlobalSearch),
+        EditableBinding::new(
+            "file_tree:toggle_hidden_files",
+            BindingDescription::new("Toggle hidden files in Project Explorer"),
+            WorkspaceAction::ToggleHiddenFiles,
+        )
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & id!(flags::SHOW_PROJECT_EXPLORER))
+        .with_mac_key_binding("cmd-shift->")
+        .with_linux_or_windows_key_binding("ctrl-shift->"),
         EditableBinding::new(
             LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
             BindingDescription::new("Left Panel: Warp Drive"),
