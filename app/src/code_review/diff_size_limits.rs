@@ -6,7 +6,7 @@ use super::diff_state::{DiffHunk, DiffLineType};
  * Maximum diff size that we will attempt to render. Diffs larger than this
  * should not be rendered to avoid performance issues.
  */
-const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
+pub(crate) const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
 
 /**
  * Reasonable limit for diff size. Diffs bigger than this _could_ be displayed
@@ -61,9 +61,11 @@ fn is_diff_too_large(diff: &[DiffHunk]) -> bool {
 
 /// Categorizes a diff based on multiple size heuristics
 pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
-    if is_diff_unrenderable(diff_size) {
+    if compute_diff_size_for_buffer_length(diff_size) == DiffSize::Unrenderable {
         return DiffSize::Unrenderable;
     }
+
+    let buffer_size = compute_diff_size_for_buffer_length(diff_size);
 
     let additions = diffs
         .iter()
@@ -82,7 +84,7 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
         return DiffSize::Unrenderable;
     }
 
-    if is_buffer_too_large(diff_size)
+    if buffer_size == DiffSize::Large
         || is_diff_too_large(diffs)
         || additions > DIFF_LINE_RENDER_LIMIT
         || deletions > DIFF_LINE_RENDER_LIMIT
@@ -91,4 +93,30 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
     }
 
     DiffSize::Normal
+}
+
+/// Categorizes a diff based only on the buffered git output length.
+pub fn compute_diff_size_for_buffer_length(diff_size: usize) -> DiffSize {
+    if is_diff_unrenderable(diff_size) {
+        return DiffSize::Unrenderable;
+    }
+
+    if is_buffer_too_large(diff_size) {
+        return DiffSize::Large;
+    }
+
+    DiffSize::Normal
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_diff_size_for_buffer_length_marks_unrenderable() {
+        assert_eq!(
+            compute_diff_size_for_buffer_length(MAX_DIFF_SIZE + 1),
+            DiffSize::Unrenderable
+        );
+    }
 }

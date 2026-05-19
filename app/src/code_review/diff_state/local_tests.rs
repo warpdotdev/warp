@@ -278,3 +278,33 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result[0].0, "simple.txt");
     assert_eq!(result[0].1, GitFileStatus::Modified);
 }
+
+#[test]
+fn test_parse_diff_hunks_multiple_hunks_without_collecting_lines() {
+    let diff_output = "\
+diff --git a/file.txt b/file.txt
+--- a/file.txt
++++ b/file.txt
+@@ -1,2 +1,2 @@
+ old context
+-old line
++new line
+@@ -10,2 +10,3 @@
+ more context
++added line
+ unchanged
+diff --git a/other.txt b/other.txt
+";
+
+    let hunks = LocalDiffStateModel::parse_diff_hunks(diff_output).unwrap();
+
+    assert_eq!(hunks.len(), 2);
+    assert_eq!(hunks[0].old_start_line, 1);
+    assert_eq!(hunks[0].new_start_line, 1);
+    assert_eq!(hunks[0].lines.len(), 3);
+    assert_eq!(hunks[1].old_start_line, 10);
+    assert_eq!(hunks[1].new_start_line, 10);
+    assert_eq!(hunks[1].lines.len(), 3);
+    assert_eq!(hunks[1].lines[1].line_type, DiffLineType::Add);
+    assert_eq!(hunks[1].lines[1].text, "added line");
+}
