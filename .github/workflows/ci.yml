@@ -481,6 +481,18 @@ jobs:
           DEFAULT_BASH_VERSION="$($DEFAULT_BASH_PATH --version)"
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
+      - name: Run ssh-agent for SSH tests
+        run: |
+          # Create the .ssh dir.
+          mkdir -p ~/.ssh
+
+          # Run the agent.
+          eval "$(ssh-agent -s)"
+
+          # Persist the SSH_AUTH_SOCK and SSH_AGENT_PID for future steps
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
       - name: Install cargo nextest
         uses: taiki-e/install-action@9a29ce630c67077a359246f3e4f84941e05f28b5 # v1
         with:
