@@ -188,7 +188,7 @@ pub enum SizeUpdateReason {
     /// Updated because of some general refresh (e.g. a font-size change)
     Refresh,
 
-    /// Updated after the temrinal has been laid out, so some of the element
+    /// Updated after the terminal has been laid out, so some of the element
     /// sizes that drive terminal size may have changed.
     AfterLayout,
 
@@ -306,8 +306,8 @@ pub struct SizeInfo {
     ///
     /// Note that *rows* is always determined as a function of pane size, not
     /// the content element size, which is somewhat counterintuitive.  The reason
-    /// is that the content element size changes frequenetly as the input size
-    /// changes or the input dissapears for long running commands, but many
+    /// is that the content element size changes frequently as the input size
+    /// changes or the input disappears for long running commands, but many
     /// programs do not handle size changes while they are running very well.  To
     /// get around this we make them think that rows always comes from the pane size.
     rows: usize,

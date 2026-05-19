@@ -8270,7 +8270,7 @@ fn move_single_word(text: &str) -> CharOffset {
 /// The anchor for showing command x-ray information
 #[derive(Debug)]
 pub enum CommandXRayAnchor {
-    /// Show x-ray info based on the cursor positon
+    /// Show x-ray info based on the cursor position
     Cursor,
 
     /// Show x-ray info based on a hover at the given display point

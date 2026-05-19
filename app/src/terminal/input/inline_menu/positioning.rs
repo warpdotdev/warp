@@ -154,16 +154,16 @@ impl InlineMenuPositioner {
     /// This inset application is done in one of two ways in waterfall mode:
     /// * If there is no gap, we subtract the 'inset', equivalent to the inline menu
     ///   height from the max height constraint of the blocklist element
-    /// * If there _is_ a gap, we subtract the inset from painted visible blocklist element originj
+    /// * If there _is_ a gap, we subtract the inset from painted visible blocklist element origin
     ///   at paint time.
     ///
     /// When there is no gap, that's pretty much all we need to do.
     ///
     /// When there is a gap, there is further accounting to be done: this blocklist translation is
     /// applied at paint-time to reduce the surface area of logic that needs to be aware of the
-    /// inline menu visiblity/height (for example, the sumtree doesn't need to be aware of this at
+    /// inline menu visibility/height (for example, the sumtree doesn't need to be aware of this at
     /// all). This means, however, we do need to account for inset value in logic that translates
-    /// artifacts of rendering (layout/paint) back to the data model -- main in places where the
+    /// artifacts of rendering (layout/paint) back to the data model -- mainly in places where the
     /// sumtree heights are dependent on the laid out input size (the inline menu is part of the
     /// input element subtree). The main areas considered are:
     ///

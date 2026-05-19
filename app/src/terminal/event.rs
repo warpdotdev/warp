@@ -193,8 +193,8 @@ pub struct InitShellEvent {
 pub struct BootstrappedEvent {
     /// The command which spawned the shell.
     pub spawning_command: String,
-    // This is wrapped in an `Box` to surpress clippy's large-enum-variant warning, not because it
-    // functionally needs to be wrapped in an `Box`.
+    // This is wrapped in a `Box` to suppress clippy's large-enum-variant warning, not because it
+    // functionally needs to be wrapped in a `Box`.
     pub session_info: Box<SessionInfo>,
     pub restored_block_commands: Vec<HistoryEntry>,
     /// The time we spent sourcing the user's rcfiles, in seconds.  This may be
@@ -296,11 +296,11 @@ pub struct UserBlockCompleted {
     pub command_with_obfuscated_secrets: String,
 
     /// The output lines for a block without any escape sequences.
-    /// They are truncated to the number of lines specificed by the caller.
+    /// They are truncated to the number of lines specified by the caller.
     pub output_truncated: String,
 
     /// The output lines for a block without any escape sequences.
-    /// They are truncated to the number of lines specificed by the caller.
+    /// They are truncated to the number of lines specified by the caller.
     /// Forced secrets to be obfuscated as well.
     pub output_truncated_with_obfuscated_secrets: String,
 
