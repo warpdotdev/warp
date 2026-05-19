@@ -107,7 +107,7 @@ const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
 pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.).with_right(16.),
+    margin: Margin::uniform(0.).with_top(8.).with_bottom(8.),
     padding: Padding::uniform(0.),
 };
 
@@ -138,20 +138,17 @@ pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
 };
 
 pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.)
-        .with_top(12.)
-        .with_bottom(12.)
-        .with_right(16.),
+    margin: Margin::uniform(0.).with_top(12.).with_bottom(6.),
     padding: Padding::uniform(0.),
 };
 
-pub const UNORDERED_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const UNORDERED_LIST_MARGIN: Margin = Margin::uniform(0.);
 pub const UNIT_UNORDERED_LIST_PADDING: f32 = 20.;
 
-pub const ORDERED_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const ORDERED_LIST_MARGIN: Margin = Margin::uniform(0.);
 pub const UNIT_ORDERED_LIST_PADDING: f32 = 20.;
 
-pub const TASK_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const TASK_LIST_MARGIN: Margin = Margin::uniform(0.);
 pub const UNIT_TASK_LIST_PADDING: f32 = 20.;
 
 pub const DEFAULT_BLOCK_SPACINGS: BlockSpacings = BlockSpacings {
@@ -515,6 +512,13 @@ pub struct IndentableBlockSpacing {
 }
 
 impl IndentableBlockSpacing {
+    pub fn new(margin: Margin, unit_padding: f32) -> Self {
+        Self {
+            margin,
+            unit_padding,
+        }
+    }
+
     pub fn to_spacing(&self, indent_level: ListIndentLevel) -> BlockSpacing {
         BlockSpacing {
             margin: self.margin,

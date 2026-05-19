@@ -10,12 +10,17 @@ use warp_editor::{
         BlockHeaderSize, BlockType as ContentBlockType, BufferBlockStyle, CodeBlockType,
     },
     render::model::{
-        BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle, InlineCodeStyle,
-        ParagraphStyles, RichTextStyles, TableStyle, PARAGRAPH_MIN_HEIGHT,
+        BlockSpacings, BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle,
+        InlineCodeStyle, ParagraphStyles, RichTextStyles, TableStyle,
     },
 };
 use warp_util::user_input::UserInput;
-use warpui::{elements::Border, fonts::FamilyId, ui_components::checkbox::HOVER_BACKGROUND_COLOR};
+use warpui::{
+    elements::{Border, ListIndentLevel},
+    fonts::FamilyId,
+    text_layout::DEFAULT_TOP_BOTTOM_RATIO,
+    ui_components::checkbox::HOVER_BACKGROUND_COLOR,
+};
 
 use crate::{
     appearance::Appearance,
@@ -40,10 +45,11 @@ mod omnibar;
 pub mod view;
 
 pub use block_insertion_menu::BlockInsertionSource;
-use warpui::elements::ListIndentLevel;
 
-const NOTEBOOK_LINE_HEIGHT_RATIO: f32 = 1.6;
-const NOTEBOOK_BASELINE_RATIO: f32 = 0.7;
+// Rich text uses slightly roomier line metrics than the app-wide editor setting
+// for readability in mixed Markdown content. Gaps between paragraphs and headers
+// are handled separately by block spacing.
+const RICH_TEXT_LINE_HEIGHT_RATIO_ADJUSTMENT: f32 = 0.15;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MarkdownTableAppearance {
@@ -59,6 +65,12 @@ pub(crate) struct MarkdownTableAppearance {
     pub outer_border: bool,
     pub column_dividers: bool,
     pub row_dividers: bool,
+}
+
+fn rich_text_line_height_ratio(appearance: &Appearance) -> f32 {
+    // This adjusts the vertical advance of lines within a paragraph. Paragraph
+    // and header separation comes from block spacings instead.
+    appearance.line_height_ratio() + RICH_TEXT_LINE_HEIGHT_RATIO_ADJUSTMENT
 }
 
 /// A kind of block that can be added to a notebook.
@@ -202,26 +214,31 @@ pub(crate) fn markdown_table_style(
 
 /// Build [`RichTextStyles`] based on the current [`Appearance`].
 pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -> RichTextStyles {
+    let line_height_ratio = rich_text_line_height_ratio(appearance);
+    let baseline_ratio = DEFAULT_TOP_BOTTOM_RATIO;
     let theme = appearance.theme();
     let inline_font_color: ColorU = theme.terminal_colors().normal.red.into();
     let font_size = derived_notebook_font_size(font_settings);
+
+    let base_text = ParagraphStyles {
+        font_size,
+        font_weight: Default::default(),
+        line_height_ratio,
+        font_family: appearance.ui_font_family(),
+        text_color: theme.main_text_color(theme.background()).into_solid(),
+        baseline_ratio,
+        fixed_width_tab_size: None,
+    };
+
     RichTextStyles {
-        base_text: ParagraphStyles {
-            font_size,
-            font_weight: Default::default(),
-            line_height_ratio: NOTEBOOK_LINE_HEIGHT_RATIO,
-            font_family: appearance.ui_font_family(),
-            text_color: theme.main_text_color(theme.background()).into_solid(),
-            baseline_ratio: NOTEBOOK_BASELINE_RATIO,
-            fixed_width_tab_size: None,
-        },
+        base_text,
         code_text: ParagraphStyles {
             font_family: appearance.monospace_font_family(),
             font_size,
             font_weight: Default::default(),
-            line_height_ratio: NOTEBOOK_LINE_HEIGHT_RATIO,
+            line_height_ratio,
             text_color: theme.main_text_color(theme.background()).into_solid(),
-            baseline_ratio: NOTEBOOK_BASELINE_RATIO,
+            baseline_ratio,
             fixed_width_tab_size: Some(4),
         },
         code_background: theme.background().into(),
@@ -229,10 +246,10 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         embedding_text: ParagraphStyles {
             font_size,
             font_weight: Default::default(),
-            line_height_ratio: NOTEBOOK_LINE_HEIGHT_RATIO,
+            line_height_ratio,
             font_family: appearance.monospace_font_family(),
             text_color: theme.main_text_color(theme.surface_2()).into_solid(),
-            baseline_ratio: NOTEBOOK_BASELINE_RATIO,
+            baseline_ratio,
             fixed_width_tab_size: Some(4),
         },
         code_border: Border::all(1.).with_border_fill(theme.surface_3()),
@@ -266,10 +283,10 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
             icon_path: "bundled/svg/link-broken-02.svg",
             icon_color: theme.terminal_colors().normal.red.into(),
         },
-        block_spacings: Default::default(),
+        block_spacings: BlockSpacings::default(),
         show_placeholder_text_on_empty_block: true,
-        minimum_paragraph_height: Some(PARAGRAPH_MIN_HEIGHT),
-        cursor_width: 1.,
+        minimum_paragraph_height: Some(base_text.line_height()),
+        cursor_width: 3.,
         highlight_urls: true,
         table_style: markdown_table_style(appearance, appearance.ui_font_family(), font_size),
     }
