@@ -926,6 +926,18 @@ fn render_cell(
         ctx,
     );
 
+    // Extend the cached background to also cover the WIDE_CHAR_SPACER cell on the right.
+    // Spacer cells are skipped during cell iteration (they're placeholders for the wide
+    // glyph drawn by the leading cell), so without this extension the spacer's column
+    // would never paint a background. That breaks any background attribute applied to a
+    // wide character via SGR — most visibly the reverse-video pseudo-cursor that
+    // Ink-based TUIs (Claude Code, ink-text-input, etc.) emit via `chalk.inverse(<cjk>)`,
+    // which would otherwise show only the left half of the wide character highlighted.
+    if cell.flags().intersects(Flags::WIDE_CHAR) && col + 1 < grid.columns() {
+        cached_background_color =
+            cached_background_color.map(|cached| cached.with_end(col + 1, offset_row));
+    }
+
     let glyph_offset = cell_size * vec2f(col as f32, offset_row as f32);
 
     render_cell_glyph(
@@ -1359,6 +1371,16 @@ fn render_grid_with_ligatures<'a>(
                 cell_colors.background_color,
                 ctx,
             );
+
+            // Same wide-char background extension as in `render_cell` above. The ligature
+            // rendering path also skips WIDE_CHAR_SPACER cells via `continue;` earlier in
+            // this loop, so without this extension the spacer's column would not receive
+            // the leading cell's background — manifesting as half-reversed wide chars when
+            // a TUI emits e.g. `chalk.inverse(<cjk>)`.
+            if cell.flags().intersects(Flags::WIDE_CHAR) && col + 1 < grid.columns() {
+                cached_background_color =
+                    cached_background_color.map(|cached| cached.with_end(col + 1, offset_row));
+            }
 
             let glyph_offset = cell_size * vec2f(col as f32, offset_row as f32);
             if first_cell_in_link {
