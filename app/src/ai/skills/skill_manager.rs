@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::keyboard::keybinding_file_path;
-use crate::settings::user_preferences_toml_file_path;
+use crate::settings::{user_preferences_toml_file_path, AISettings};
 
 use super::SkillDescriptor;
 use crate::ai::skills::skill_utils::unique_skills;
@@ -30,6 +30,8 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 pub enum BundledSkillActivation {
     /// Always active.
     Always,
+    /// Active only when the built-in feedback skill setting is enabled.
+    FeedbackSkillSetting,
     /// Active only when a specific MCP server is running.
     RequiresMcp(McpIntegration),
     /// Active only when a specific file exists on disk.
@@ -40,6 +42,7 @@ impl BundledSkillActivation {
     pub fn is_enabled(&self, ctx: &AppContext) -> bool {
         match self {
             Self::Always => true,
+            Self::FeedbackSkillSetting => *AISettings::as_ref(ctx).feedback_bundled_skill_enabled,
             Self::RequiresMcp(integration) => {
                 TemplatableMCPServerManager::as_ref(ctx).is_mcp_server_running(*integration)
             }
@@ -475,6 +478,25 @@ impl SkillManager {
         self.skills_by_path.insert(path.clone(), skill);
         self.skills_by_name.entry(name).or_default().insert(path);
     }
+
+    /// Adds a bundled skill to the skill manager for testing purposes.
+    #[cfg(test)]
+    pub fn add_bundled_skill_for_testing(
+        &mut self,
+        id: impl Into<String>,
+        skill: ParsedSkill,
+        activation: BundledSkillActivation,
+    ) {
+        let id = id.into();
+        self.bundled_skills.insert(
+            id.clone(),
+            BundledSkill {
+                skill,
+                activation,
+                icon: icon_for_bundled_skill(&id),
+            },
+        );
+    }
 }
 
 /// Read bundled skill definitions from the specified directory.
@@ -588,6 +610,7 @@ fn icon_for_bundled_skill(skill_id: &str) -> Icon {
 /// file use `RequiresFile` so they only appear when the resource is present.
 fn activation_for_bundled_skill(skill_id: &str, resources_dir: &Path) -> BundledSkillActivation {
     match skill_id {
+        "feedback" => BundledSkillActivation::FeedbackSkillSetting,
         "modify-settings" => {
             BundledSkillActivation::RequiresFile(resources_dir.join("settings_schema.json"))
         }
