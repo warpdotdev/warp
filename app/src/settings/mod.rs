@@ -342,6 +342,11 @@ pub struct QuakeModeSettings {
     /// user focuses on another warp window or another app.
     #[schemars(description = "Whether to hide the hotkey window when it loses focus.")]
     pub hide_window_when_unfocused: bool,
+    #[schemars(
+        description = "macOS only. Whether Warp should hide its Dock icon while the dedicated hotkey window is the active global hotkey mode and a keybinding is configured. Has no effect on Linux or Windows."
+    )]
+    #[serde(default)]
+    pub hide_dock_icon: bool,
 }
 
 impl Default for QuakeModeSettings {
@@ -353,6 +358,7 @@ impl Default for QuakeModeSettings {
             pin_screen: Default::default(),
             // Defaults to `true` only when it's supported on this platform.
             hide_window_when_unfocused: QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+            hide_dock_icon: false,
         }
     }
 }

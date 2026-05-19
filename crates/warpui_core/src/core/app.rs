@@ -1136,6 +1136,11 @@ impl AppContext {
         self.platform_delegate.register_global_shortcut(shortcut);
     }
 
+    /// Show or hide the Dock icon (macOS only — no-op elsewhere).
+    pub fn set_dock_icon_visible(&self, visible: bool) {
+        self.platform_delegate.set_dock_icon_visible(visible);
+    }
+
     fn dispatch_draw_frame_error_callback(&mut self, window_id: WindowId) {
         let callback = self.on_draw_frame_error_callback.take();
         if let Some(callback) = &callback {

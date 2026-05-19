@@ -88,6 +88,8 @@ impl KeysSettings {
         report_if_error!(self
             .activation_hotkey_enabled
             .set_value(enable_activation_hotkey, ctx));
+
+        self.apply_effective_dock_icon_visibility(ctx);
     }
 
     // Note that registering an empty keybinding when enabling quake mode will be a no-op.
@@ -101,6 +103,8 @@ impl KeysSettings {
         quake_mode_settings.keybinding = keystroke;
 
         report_if_error!(self.quake_mode_settings.set_value(quake_mode_settings, ctx));
+
+        self.apply_effective_dock_icon_visibility(ctx);
     }
 
     pub fn set_activation_hotkey_keybinding_and_write_to_user_defaults(
@@ -189,6 +193,54 @@ impl KeysSettings {
         report_if_error!(self.quake_mode_settings.set_value(quake_mode_settings, ctx));
     }
 
+    pub fn set_hide_dock_icon_when_using_quake_mode_and_write_to_user_defaults(
+        &mut self,
+        value: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut quake_mode_settings = self.quake_mode_settings.value().clone();
+        quake_mode_settings.hide_dock_icon = value;
+
+        report_if_error!(self.quake_mode_settings.set_value(quake_mode_settings, ctx));
+
+        self.apply_effective_dock_icon_visibility(ctx);
+    }
+
+    pub fn toggle_hide_dock_icon_when_using_quake_mode_and_write_to_user_defaults(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut quake_mode_settings = self.quake_mode_settings.value().clone();
+        quake_mode_settings.hide_dock_icon = !quake_mode_settings.hide_dock_icon;
+
+        report_if_error!(self.quake_mode_settings.set_value(quake_mode_settings, ctx));
+
+        self.apply_effective_dock_icon_visibility(ctx);
+    }
+
+    /// Returns true when Warp should hide the Dock icon based on the current
+    /// effective hotkey configuration. Only true on macOS, when Quake Mode is
+    /// the global hotkey mode, the user enabled Dock hiding, and a dedicated
+    /// hotkey window keybinding is configured. The "hide" framing means
+    /// non-macOS and unsupported paths naturally default to visible.
+    pub fn should_hide_dock_icon(&self, app: &AppContext) -> bool {
+        let quake_mode_settings = self.quake_mode_settings.value();
+        compute_should_hide_dock_icon(
+            cfg!(target_os = "macos"),
+            self.global_hotkey_mode(app),
+            quake_mode_settings.hide_dock_icon,
+            quake_mode_settings.keybinding.is_some(),
+        )
+    }
+
+    /// Computes the effective Dock visibility state and asks the platform to
+    /// apply it. Safe to call from settings change paths and at startup. No-op
+    /// on non-macOS via the platform delegate's default implementation.
+    pub fn apply_effective_dock_icon_visibility(&self, app: &AppContext) {
+        let visible = !self.should_hide_dock_icon(app);
+        app.set_dock_icon_visible(visible);
+    }
+
     pub fn global_hotkey_mode(&self, app: &AppContext) -> GlobalHotkeyMode {
         let mut selected = GlobalHotkeyMode::Disabled;
 
@@ -207,5 +259,87 @@ impl KeysSettings {
         }
 
         selected
+    }
+}
+
+/// Pure decision function for whether Warp should hide its Dock icon, given
+/// the effective hotkey configuration. Extracted so it can be unit-tested
+/// without an `AppContext`. Returns true only when all four conditions hold:
+/// running on macOS, Quake Mode is selected, the user opted in, and a
+/// dedicated hotkey window keybinding is configured.
+pub(crate) fn compute_should_hide_dock_icon(
+    is_macos: bool,
+    mode: GlobalHotkeyMode,
+    hide_dock_icon_setting: bool,
+    has_keybinding: bool,
+) -> bool {
+    is_macos
+        && matches!(mode, GlobalHotkeyMode::QuakeMode)
+        && hide_dock_icon_setting
+        && has_keybinding
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_should_hide_dock_icon, GlobalHotkeyMode};
+
+    #[test]
+    fn hides_dock_icon_when_all_conditions_met() {
+        assert!(compute_should_hide_dock_icon(
+            true,
+            GlobalHotkeyMode::QuakeMode,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn default_setting_never_hides() {
+        assert!(!compute_should_hide_dock_icon(
+            true,
+            GlobalHotkeyMode::QuakeMode,
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn activation_hotkey_mode_does_not_hide() {
+        assert!(!compute_should_hide_dock_icon(
+            true,
+            GlobalHotkeyMode::ActivationHotkey,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn disabled_mode_does_not_hide() {
+        assert!(!compute_should_hide_dock_icon(
+            true,
+            GlobalHotkeyMode::Disabled,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn missing_keybinding_does_not_hide() {
+        assert!(!compute_should_hide_dock_icon(
+            true,
+            GlobalHotkeyMode::QuakeMode,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn non_macos_never_hides_even_when_all_other_conditions_met() {
+        assert!(!compute_should_hide_dock_icon(
+            false,
+            GlobalHotkeyMode::QuakeMode,
+            true,
+            true,
+        ));
     }
 }

@@ -262,6 +262,10 @@ pub trait Delegate: 'static {
     fn register_global_shortcut(&self, shortcut: Keystroke);
     fn unregister_global_shortcut(&self, shortcut: &Keystroke);
 
+    /// Show or hide the application's Dock icon (macOS only).
+    /// Default no-op for platforms without a Dock concept.
+    fn set_dock_icon_visible(&self, _visible: bool) {}
+
     fn terminate_app(&self, termination_mode: TerminationMode);
 
     /// Returns whether or not a screen reader is enabled, or None if we do not

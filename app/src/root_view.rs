@@ -678,6 +678,8 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
         timer.mark_interval_end("HANDLING_OPEN_ACTION");
     });
 
+    KeysSettings::as_ref(ctx).apply_effective_dock_icon_visibility(ctx);
+
     if let Some(app_state) = &arg.app_state {
         maybe_register_global_window_shortcuts(global_resource_handles.clone(), ctx);
 

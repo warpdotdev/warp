@@ -394,6 +394,14 @@ impl platform::Delegate for AppDelegate {
         }
     }
 
+    fn set_dock_icon_visible(&self, visible: bool) {
+        // NSApplicationActivationPolicyRegular = 0, NSApplicationActivationPolicyAccessory = 1.
+        let policy: i64 = if visible { 0 } else { 1 };
+        dispatch::Queue::main().exec_async(move || unsafe {
+            let _: BOOL = msg_send![NSApp(), setActivationPolicy: policy];
+        });
+    }
+
     fn terminate_app(&self, termination_mode: TerminationMode) {
         // Execute `[NSApp terminate]` asynchronously on the main thread to
         // ensure we don't accidentally run into any double-borrow errors.
