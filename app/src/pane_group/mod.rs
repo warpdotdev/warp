@@ -1604,17 +1604,7 @@ impl PaneGroup {
                     .iter()
                     .filter(|&conversation_id| {
                         RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                            store
-                                .get_conversation(conversation_id)
-                                .is_some_and(|persisted_conv| {
-                                    // Filter conversations that contain no tasks.
-                                    if persisted_conv.all_tasks().next().is_none() {
-                                        return false;
-                                    }
-
-                                    // Filter conversations that are entirely passive.
-                                    !persisted_conv.is_entirely_passive()
-                                })
+                            store.should_restore_conversation(conversation_id)
                         })
                     })
                     .copied()
@@ -3229,9 +3219,7 @@ impl PaneGroup {
             .and_then(|conversation| conversation.parent_conversation_id())
             .or_else(|| {
                 RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                    store
-                        .get_conversation(&child_conversation_id)
-                        .and_then(|conversation| conversation.parent_conversation_id())
+                    store.get_parent_conversation_id(&child_conversation_id)
                 })
             });
 
