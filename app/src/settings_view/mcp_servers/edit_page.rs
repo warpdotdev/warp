@@ -906,6 +906,18 @@ impl TypedActionView for MCPServersEditPageView {
                         return;
                     }
 
+                    for parsed_server in &parsed_servers {
+                        if self
+                            .detect_secrets_in_templatable_mcp_server(
+                                ctx,
+                                &parsed_server.templatable_mcp_server,
+                            )
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+
                     for parsed_server in parsed_servers {
                         TemplatableMCPServerManager::handle(ctx).update(
                             ctx,
