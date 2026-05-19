@@ -876,9 +876,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
           # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
           # support.
-          command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
-          -t "${@:1}" \
-"
+          local remote_command="
 export TERM_PROGRAM='WarpTerminal'
 # Mark the remote side of a Warp-managed SSH session so the bootstrap
 # body can distinguish it from local shells. Used to gate the ExitShell
@@ -951,6 +949,13 @@ case "'${SHELL##*/}'" in
       ;;
 esac
 "
+          local remote_command_octal
+          remote_command_octal=$(printf '%s' "$remote_command" | command -p od -An -v -to1 | command -p tr -d ' \n' | command -p sed 's/.../\\&/g')
+
+          # Run the POSIX bootstrap payload through sh so remote Fish login shells do not parse it.
+          command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
+          -t "${@:1}" \
+          "command sh -c 'printf \"%b\" \"\$1\" | command sh' sh '$remote_command_octal'"
       }
 
       function ssh() {

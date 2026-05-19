@@ -609,9 +609,7 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
-        command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
-        -t $argv \
-"
+        set -l remote_command "
 export TERM_PROGRAM='WarpTerminal'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
@@ -679,6 +677,12 @@ TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$W
     ;;
 esac
 "
+        set -l remote_command_octal (printf '%s' "$remote_command" | command od -An -v -to1 | command tr -d ' \n' | command sed 's/.../\\&/g')
+
+        # Run the POSIX bootstrap payload through sh so remote Fish login shells do not parse it.
+        command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
+        -t $argv \
+        "command sh -c 'printf \"%b\" \"\$1\" | command sh' sh '$remote_command_octal'"
     end
 
     function ssh
