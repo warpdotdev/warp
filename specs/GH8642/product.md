@@ -1,0 +1,53 @@
+# Renaming Conversations — Product Spec
+GitHub issue: https://github.com/warpdotdev/warp/issues/8642
+Figma: none provided
+## Summary
+Let users set a custom title for any agent conversation. The custom title overrides the auto-generated conversation title everywhere a conversation's display title appears: vertical-tabs primary line, the conversation list panel, the command palette conversation search, and the macOS / Windows window title that follows the active conversation. The auto-generated title (`task.description()`, falling back to the first user query) is preserved underneath, so clearing the custom title returns to the previous behavior. Custom titles persist across restarts on the same machine.
+## Problem
+The conversation card on the agent panel renders three lines: a small label ("WARP" / "OZ" / agent kind), a large primary title, and a working-directory line. The primary title is the only line on the card the user cannot change.
+- The working directory comes from the user's `cd`.
+- The agent badge comes from the active conversation's agent kind.
+- The primary title is fully derived: it's the agent's auto-generated `task.description()`, falling back to the first user prompt, falling back to a rare internal default.
+This is a recurring complaint — a long-open feature request (#8642) plus three closed near-duplicates (#8860, #8856, #8697). Users want to keep multiple agent conversations open and recognize them at a glance, but the only line tall enough to read is the one they can't influence. A user who finishes a piece of work and starts another conversation in the same context loses the older conversation in a sea of agent-generated descriptions that don't reflect how they actually think about each thread.
+A related setting (`use_latest_user_prompt_as_conversation_title_in_tab_names`) already lets users swap which derived source is shown — auto-generated description vs. latest user prompt — but neither source is user-editable, and that setting applies globally rather than per-conversation. Renaming a single conversation is a different need: a per-conversation override that the user owns.
+## Goals
+- Add a per-conversation user-editable title that overrides the auto-generated conversation title when set.
+- Match the existing tab/pane rename interaction model exactly: inline editor in place of the title, double-click to enter edit mode, right-click context menu with **Rename conversation** and a conditional **Reset conversation name** item.
+- Surface rename from two entry points so the user can rename from wherever they're looking at the conversation: (a) the agent card in vertical tabs (the surface in the originating issue's screenshot), and (b) the conversation list panel overflow menu.
+- Provide an explicit reset affordance (Reset conversation name) that clears the user-set title and restores the auto-generated title, mirroring `Reset tab name`.
+- Persist user-set titles locally so they survive restarts and conversation restore on the same machine.
+- Preserve the auto-generated title underneath so clearing the custom title falls back to the existing behavior unchanged.
+- Apply the custom title consistently anywhere the conversation's display title is shown (vertical tabs, conversation list, command palette, window/tab title).
+- Leave the existing `use_latest_user_prompt_as_conversation_title_in_tab_names` setting untouched: when a user-set title exists it wins; otherwise the existing setting continues to choose between the two derived sources.
+## Non-goals
+- Syncing the user-set title across machines or to other clients viewing the same shared session. The custom title is local-only in this iteration. Other machines / shared-session viewers continue to see the auto-generated title.
+- Renaming ambient-agent (task-only) conversations that don't have a backing local `AIConversation` record. Rename and Reset entries are shown but disabled for these, mirroring how Delete is disabled today.
+- Renaming a conversation while it is actively streaming a response. We don't restrict the action — saving a new title takes effect immediately, and the next stream completion does not overwrite it because the auto-generated title is no longer the source of truth for display.
+- A modal rename dialog. Per parity with the existing tab-rename UX, rename happens via an **inline editor** rendered in place of the title text. No modal, no separate dialog file.
+- Adding a "rename" slash command. Out of scope; can be a follow-up.
+- Search treating user-set titles as a separate index. The existing conversation search reads through the same `title()` accessor and will pick up the override automatically.
+- Migrating any existing manually-set tab name (`tab_settings.tab_name`) into the new conversation title. Tab names and conversation titles remain independent; the existing tab-rename UX is unchanged.
+## Behavior
+The rename interaction model is **identical to the existing tab and pane rename UX** (`WorkspaceAction::RenameTab` / `ResetTabName` / `RenamePane` / `ResetPaneName`): inline editor in place of the title, double-click to enter edit mode, right-click context menu for Rename and a conditional Reset, no modal dialog. The product invariants below are written to match that model so users get one mental model for renaming everything in the workspace.
+1. **Default behavior is unchanged.** A conversation with no user-set title continues to display the auto-generated title (auto `task.description()` → first user prompt → internal default). Vertical-tabs, conversation list, command palette, and window/tab title all show the same string they show today.
+2. **Double-click on the conversation title enters inline rename mode.** Both surfaces support this:
+   - The agent card primary line in vertical tabs (the largest, most-readable text on the card).
+   - The conversation row title in the conversation list panel.
+   In rename mode, the title text is replaced by a single-line editor seeded with the current title (the user-set title if one exists; otherwise the auto-generated title). The card / row click-to-activate handler is suppressed while the editor is focused, so typing inside the editor does not also activate the card. This matches `is_tab_being_renamed` behavior in `tab.rs:1614-1629` and `vertical_tabs.rs:431-444`.
+3. **Pressing Enter saves; pressing Esc cancels.** On save, the editor commits the trimmed input as the conversation's user-set title. On cancel, the editor restores the original title and exits rename mode without persisting.
+4. **Right-click context menu adds Rename and (conditionally) Reset.** Both surfaces gain the same two items, mirroring `"Rename tab"` + `"Reset tab name"` in `tab.rs:301-313`:
+   - **Rename conversation** — always shown for non-ambient, non-shared-viewer conversations. Selecting it puts the corresponding surface into inline rename mode.
+   - **Reset conversation name** — shown only when a user-set title exists for that conversation. Selecting it clears the user-set title and reverts to the auto-generated title.
+   In the conversation-list overflow menu (kebab), these items appear above the Delete separator, in the order: Share conversation (when shareable) → Rename conversation → Reset conversation name (when user-set title exists) → Fork in new pane → Fork in new tab → Delete.
+5. **Saving a non-empty value sets the user-set title.** Trim leading/trailing whitespace before persisting. Internal whitespace and emoji are preserved as-is. Length cap: 200 characters; the editor truncates input above that and shows no error.
+6. **Saving an empty / whitespace-only value clears the user-set title.** The conversation reverts to the existing derived chain. This is the same outcome as Reset, just reached through the editor instead of the menu — users get to the same place either way.
+7. **A successful save or reset updates every display surface immediately.** All of the following reflect the new title without a restart: vertical-tabs primary line, the conversation list row text, the command palette conversation search results, the OS window title (when this conversation is active), and any tab title that derives from the conversation title.
+8. **Custom titles persist across restarts.** Closing and reopening Warp restores the user-set title. Restoring a conversation from history (re-opening it in a tab via the conversation list) also restores the user-set title.
+9. **Forking does not inherit the source's user-set title.** When a conversation is forked, the new conversation starts with no user-set title of its own and uses the forked source's auto chain — i.e. the user explicitly renames the fork if they want a custom name on it. Rationale: fork means "branch the work," and a name like "Fix login bug" rarely fits both branches.
+10. **Ambient-agent (task-only) conversations show Rename and Reset as disabled.** Disabled items carry the same tooltip pattern Delete uses for ambient conversations today ("Ambient agent conversations cannot be renamed"). This applies in both the conversation list overflow menu and the vertical-tabs context menu. Double-click on an ambient-agent card does not enter rename mode.
+11. **Rename and Reset are hidden in shared-session viewer mode.** When a user opens a conversation as a shared-session viewer (`is_viewing_shared_session = true`), the local `AIConversation` exists but the conversation is not theirs. Both menu items are hidden in both menus, and double-click does nothing on the title.
+12. **The existing `use_latest_user_prompt_as_conversation_title_in_tab_names` setting is unchanged.** When a user-set title exists, it overrides everything regardless of the setting. When no user-set title exists, the setting continues to choose between the auto description and the latest user prompt.
+13. **Cloud sync does not write the user-set title.** Other machines or shared-session viewers continue to see the auto-generated title. This is an explicit non-goal in this iteration; following up to sync is a separate change.
+14. **No new keyboard shortcut.** This iteration does not add a global "rename current conversation" shortcut. Follow-up if it proves useful — and if added later, it would dispatch the same action that double-click does.
+15. **No telemetry change.** This iteration does not add a new telemetry event for renames. Follow-up if maintainers request it.
+16. **Only one rename editor is open at a time per surface.** Initiating rename on a second conversation card / row cancels any in-flight rename on that surface. This matches existing tab-rename ownership semantics — the surface owns the editor handle, and there is exactly one such handle per surface.
