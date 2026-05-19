@@ -338,7 +338,7 @@ use crate::terminal::view::ambient_agent::{
 use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
-use crate::terminal::{self, SizeInfo, TerminalView};
+use crate::terminal::{self, CLIAgent, SizeInfo, TerminalView};
 #[cfg(target_os = "macos")]
 use crate::workspace::cli_install;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -1087,6 +1087,18 @@ pub struct Workspace {
     /// orchestration cards' "New API key…" flow. Cloud mode renders the
     /// FTUX view inline and does not use this.
     create_auth_secret_modal: Option<ViewHandle<Modal<AuthSecretFtuxView>>>,
+}
+
+fn pane_name_menu_labels(
+    is_cli_agent_pane: bool,
+    is_active_pane_target: bool,
+) -> (&'static str, &'static str) {
+    match (is_cli_agent_pane, is_active_pane_target) {
+        (true, true) => ("Edit active agent summary", "Reset active agent summary"),
+        (true, false) => ("Edit agent summary", "Reset agent summary"),
+        (false, true) => ("Rename active pane", "Reset active pane name"),
+        (false, false) => ("Rename pane", "Reset pane name"),
+    }
 }
 
 impl Workspace {
@@ -6632,17 +6644,34 @@ impl Workspace {
             return;
         }
 
+        let is_cli_agent_pane = tab
+            .pane_group
+            .as_ref(ctx)
+            .terminal_view_from_pane_id(pane.pane_id, ctx)
+            .and_then(|terminal_view| {
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(terminal_view.id())
+                    .map(|session| session.agent)
+            })
+            .is_some_and(|agent| !matches!(agent, CLIAgent::Unknown));
+
         let pane_name_target = match target {
-            VerticalTabsPaneContextMenuTarget::ClickedPane(locator) => PaneNameMenuTarget {
-                locator,
-                rename_label: "Rename pane",
-                reset_label: "Reset pane name",
-            },
-            VerticalTabsPaneContextMenuTarget::ActivePane(locator) => PaneNameMenuTarget {
-                locator,
-                rename_label: "Rename active pane",
-                reset_label: "Reset active pane name",
-            },
+            VerticalTabsPaneContextMenuTarget::ClickedPane(locator) => {
+                let (rename_label, reset_label) = pane_name_menu_labels(is_cli_agent_pane, false);
+                PaneNameMenuTarget {
+                    locator,
+                    rename_label,
+                    reset_label,
+                }
+            }
+            VerticalTabsPaneContextMenuTarget::ActivePane(locator) => {
+                let (rename_label, reset_label) = pane_name_menu_labels(is_cli_agent_pane, true);
+                PaneNameMenuTarget {
+                    locator,
+                    rename_label,
+                    reset_label,
+                }
+            }
         };
         let menu_items = tab.menu_items_with_pane_name_target(
             tab_index,

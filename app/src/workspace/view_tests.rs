@@ -88,6 +88,30 @@ use warp_editor::editor::NavigationKey;
 use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
 
+#[test]
+fn pane_name_menu_labels_use_summary_copy_for_cli_agent_panes() {
+    assert_eq!(
+        pane_name_menu_labels(true, false),
+        ("Edit agent summary", "Reset agent summary")
+    );
+    assert_eq!(
+        pane_name_menu_labels(true, true),
+        ("Edit active agent summary", "Reset active agent summary")
+    );
+}
+
+#[test]
+fn pane_name_menu_labels_keep_rename_copy_for_regular_panes() {
+    assert_eq!(
+        pane_name_menu_labels(false, false),
+        ("Rename pane", "Reset pane name")
+    );
+    assert_eq!(
+        pane_name_menu_labels(false, true),
+        ("Rename active pane", "Reset active pane name")
+    );
+}
+
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
