@@ -11,6 +11,8 @@ use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
 use warp_graphql::billing::AddonCreditsOption;
 use warpui::prelude::ChildView;
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
+    ViewContext, ViewHandle,
     elements::{
         Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
@@ -22,21 +24,20 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
 };
 
 use settings::Setting;
 
 use crate::{
+    WorkspaceAction,
     ai::{
-        request_usage_model::{
-            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
-        },
         AIRequestUsageModel,
+        request_usage_model::{
+            AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+        },
     },
     auth::{
-        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
+        AuthManager, AuthStateProvider, auth_state::AuthState, auth_view_modal::AuthViewVariant,
     },
     modal::{Modal, ModalEvent, ModalViewState},
     pricing::PricingInfoModel,
@@ -50,18 +51,18 @@ use crate::{
         tab_selector::{self, SettingsTab},
     },
     view_components::{
-        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
         ToastFlavor,
+        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
     },
     workspaces::{
         update_manager::TeamUpdateManager,
         user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
         workspace::{CustomerType, Workspace, WorkspaceUid},
     },
-    WorkspaceAction,
 };
 
 use super::{
+    SettingsSection,
     billing_and_usage::{
         billing_cycle_usage_section::BillingCycleUsageSectionView,
         overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
@@ -69,8 +70,7 @@ use super::{
         usage_history_model::UsageHistoryModel,
     },
     billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
-    SettingsSection,
+    settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon},
 };
 
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
@@ -86,8 +86,7 @@ const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
 const ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Contact your team admin to update their payment method.";
 const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
-const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method.";
+const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
@@ -1665,13 +1664,17 @@ impl BillingAndUsagePageV2View {
             }
         }
 
-        content.add_child(
-            Container::new(ChildView::new(&self.billing_cycle_usage_section).finish())
+        let mut billing_cycle_usage_section =
+            Container::new(ChildView::new(&self.billing_cycle_usage_section).finish());
+        if !content.is_empty() {
+            billing_cycle_usage_section = billing_cycle_usage_section
                 .with_margin_top(16.)
                 .with_padding_top(24.)
-                .with_border(Border::top(1.).with_border_color(appearance.theme().outline().into()))
-                .finish(),
-        );
+                .with_border(
+                    Border::top(1.).with_border_color(appearance.theme().outline().into()),
+                );
+        }
+        content.add_child(billing_cycle_usage_section.finish());
 
         content.finish()
     }
