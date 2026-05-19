@@ -678,7 +678,7 @@ pub async fn run_push(_repo_path: &Path, _branch: &str, _path_env: Option<&str>)
 // ── gh CLI helpers ───────────────────────────────────────────────────────────
 
 /// PR information returned by `gh pr view`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrInfo {
     pub number: u64,
     pub url: String,
@@ -724,10 +724,24 @@ async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>)
 }
 
 /// Looks up the PR for the current branch via `gh pr view`.
-/// Returns `Ok(None)` if there is simply no PR for this branch.
-/// Returns `Err` for real failures (auth, network, gh not installed).
+/// Returns `Ok(None)` when the repo context is not eligible for a PR lookup or
+/// there is simply no PR for this branch. Returns `Err` for real failures
+/// (auth, network, gh not installed).
 #[cfg(feature = "local_fs")]
 pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Result<Option<PrInfo>> {
+    if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    if run_git_command(repo_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
     match run_gh_command(repo_path, &["pr", "view", "--json", "number,url"], path_env).await {
         Ok(stdout) => {
             let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -743,7 +757,7 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
         }
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("no pull requests found") {
+            if is_pr_lookup_not_applicable_error(&msg) {
                 Ok(None)
             } else {
                 Err(e)
@@ -760,7 +774,42 @@ pub async fn get_pr_for_branch(
     Err(anyhow!("Not supported on wasm"))
 }
 
-/// PR-ready diff (default branch vs `origin/<current>` or HEAD),
+fn is_no_pr_for_branch_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    lower.contains("no pull requests found for branch")
+        || lower.contains("no open pull requests found for branch")
+}
+
+fn is_pr_lookup_not_applicable_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    is_no_pr_for_branch_error(error_msg)
+        || lower.contains(
+            "none of the git remotes configured for this repository point to a known github host",
+        )
+        || lower.contains("no github remotes")
+        || lower.contains("not a github repository")
+        || lower.contains("could not determine base repo")
+}
+
+/// Heuristic check for `gh` CLI authentication errors in an error message.
+pub fn is_gh_auth_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    lower.contains("not logged in")
+        || lower.contains("authentication required")
+        || lower.contains("gh auth login")
+}
+
+/// Heuristic check for errors caused by `gh` not being executable from `PATH`.
+pub fn is_gh_missing_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    lower.contains("failed to execute gh command")
+        && (lower.contains("no such file or directory")
+            || lower.contains("not found")
+            || lower.contains("cannot find")
+            || lower.contains("could not find"))
+}
+
+/// PR-ready diff
 /// truncated for AI token limits.
 #[cfg(feature = "local_fs")]
 pub async fn get_diff_for_pr(repo_path: &Path) -> Result<String> {

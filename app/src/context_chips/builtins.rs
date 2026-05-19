@@ -186,6 +186,9 @@ pub fn shell_git_line_changes() -> ShellCommandGenerator {
     ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
 }
 
+/// Generator function that prints the URL of the current branch's pull request via `gh`.
+///
+/// Used as a remote-session fallback when `GitRepoStatusModel` is unavailable.
 pub fn github_pull_request_url() -> ShellCommandGenerator {
     // `gh pr view` exits non-zero both when there is no PR for the current branch and when the
     // command actually fails. We inspect its output so that "no PR found" is treated as an empty

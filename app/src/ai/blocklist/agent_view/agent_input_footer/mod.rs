@@ -744,7 +744,8 @@ impl AgentInputFooter {
                     ctx.notify();
                 }
                 SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
-                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
                     me.update_display_chips(&prompt_for_session_settings, ctx);
                     ctx.notify();
                 }
