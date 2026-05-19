@@ -375,9 +375,6 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::CopyBlock => Keystroke::parse(cmd_or_ctrl_shift("c")).ok(),
         CustomAction::FindWithinBlock => Keystroke::parse(cmd_or_ctrl_shift("f")).ok(),
-        CustomAction::ToggleSyncTerminalInputsInCurrentTab => {
-            Keystroke::parse("alt-cmdorctrl-i").ok()
-        }
         CustomAction::ReopenClosedSession => {
             if OperatingSystem::get().is_mac() {
                 Keystroke::parse("cmd-shift-T").ok()
@@ -452,6 +449,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         | CustomAction::TriggerWelcomeBlock
         | CustomAction::HistorySearch
         | CustomAction::DisableSyncTerminalInputs
+        | CustomAction::ToggleSyncTerminalInputsInCurrentTab
         | CustomAction::ToggleSyncAllTerminalInputsInAllTabs
         | CustomAction::NewPersonalWorkflow
         | CustomAction::NewPersonalNotebook
