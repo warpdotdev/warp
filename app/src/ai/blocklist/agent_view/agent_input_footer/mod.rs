@@ -909,6 +909,12 @@ impl AgentInputFooter {
         }
     }
 
+    pub fn open_handoff_environment_selector(&mut self, ctx: &mut ViewContext<Self>) {
+        self.handoff_environment_selector
+            .clone()
+            .update(ctx, |s, ctx| s.open_menu(ctx));
+    }
+
     fn should_render_cloud_mode_v2(&self, app: &AppContext) -> bool {
         FeatureFlag::CloudModeInputV2.is_enabled()
             && FeatureFlag::CloudMode.is_enabled()

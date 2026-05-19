@@ -786,14 +786,25 @@ impl Input {
                 return true;
             }
             environment if command.name == commands::ENVIRONMENT.name => {
-                if !self.is_cloud_mode_input_v2_composing(ctx) {
+                let is_v2 = self.is_cloud_mode_input_v2_composing(ctx);
+                let is_handoff = self.handoff_compose_state.as_ref(ctx).is_active();
+                if !is_v2 && !is_handoff {
                     return false;
                 }
                 self.suggestions_mode_model.update(ctx, |model, ctx| {
                     model.set_mode(InputSuggestionsMode::Closed, ctx);
                 });
-                self.clear_buffer_and_reset_undo_stack(ctx);
-                self.open_v2_environment_selector(ctx);
+                if is_handoff {
+                    // Only clear the editor text — `clear_buffer_and_reset_undo_stack`
+                    // exits handoff compose, which would tear down the selector.
+                    self.editor.update(ctx, |editor, ctx| {
+                        editor.clear_buffer(ctx);
+                    });
+                    self.open_handoff_environment_selector(ctx);
+                } else {
+                    self.clear_buffer_and_reset_undo_stack(ctx);
+                    self.open_v2_environment_selector(ctx);
+                }
                 return true;
             }
             models if command.name == commands::MODEL.name => {

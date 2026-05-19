@@ -3263,6 +3263,7 @@ impl Input {
                 cli_subagent_controller: cli_subagent_controller.clone(),
                 terminal_view_id,
                 ambient_agent_view_model: ambient_agent_view_model.clone(),
+                handoff_compose_state: handoff_compose_state.clone(),
             };
             SlashCommandDataSource::new(args, ctx)
         });
@@ -3275,6 +3276,7 @@ impl Input {
                     cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id,
                     ambient_agent_view_model: ambient_agent_view_model.clone(),
+                    handoff_compose_state: handoff_compose_state.clone(),
                 };
                 Some(ctx.add_model(|ctx| SlashCommandDataSource::for_cloud_mode_v2(args, ctx)))
             } else {
@@ -3747,6 +3749,12 @@ impl Input {
         self.agent_input_footer
             .clone()
             .update(ctx, |footer, ctx| footer.open_v2_environment_selector(ctx));
+    }
+
+    pub(super) fn open_handoff_environment_selector(&mut self, ctx: &mut ViewContext<Self>) {
+        self.agent_input_footer
+            .clone()
+            .update(ctx, |footer, ctx| footer.open_handoff_environment_selector(ctx));
     }
 
     /// Restores the `&` handoff compose draft after a workspace failure.

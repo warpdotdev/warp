@@ -25,6 +25,7 @@ use crate::search::slash_command_menu::static_commands::Availability;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::input::handoff_compose::HandoffComposeState;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 #[cfg(not(target_family = "wasm"))]
@@ -59,6 +60,7 @@ pub struct DataSourceArgs {
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
     pub ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    pub handoff_compose_state: ModelHandle<HandoffComposeState>,
 }
 
 /// Context needed to decide which slash commands are enabled.
@@ -71,6 +73,7 @@ struct ActiveCommandsContext {
     active_conversation_is_cloud_oz: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
+    is_handoff_compose_active: bool,
 }
 
 pub struct SlashCommandDataSource {
@@ -81,6 +84,7 @@ pub struct SlashCommandDataSource {
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
     active_repo_root: Option<PathBuf>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    handoff_compose_state: ModelHandle<HandoffComposeState>,
     is_cloud_mode_v2: bool,
 }
 
@@ -100,6 +104,7 @@ impl SlashCommandDataSource {
             cli_subagent_controller,
             terminal_view_id,
             ambient_agent_view_model,
+            handoff_compose_state,
         } = args;
         ctx.subscribe_to_model(&active_session, |me, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
@@ -192,6 +197,10 @@ impl SlashCommandDataSource {
             }
         });
 
+        ctx.subscribe_to_model(&handoff_compose_state, |me, _, ctx| {
+            me.recompute_active_commands(ctx);
+        });
+
         let mut me = Self {
             active_session,
             agent_view_controller,
@@ -200,6 +209,7 @@ impl SlashCommandDataSource {
             active_commands_by_id: Default::default(),
             active_repo_root: None,
             ambient_agent_view_model,
+            handoff_compose_state,
             is_cloud_mode_v2,
         };
         me.recompute_active_commands(ctx);
@@ -315,6 +325,8 @@ impl SlashCommandDataSource {
             .is_some()
             || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
 
+        let is_handoff_compose_active = self.handoff_compose_state.as_ref(ctx).is_active();
+
         let ai_settings = AISettings::as_ref(ctx);
         ActiveCommandsContext {
             session_context,
@@ -326,6 +338,7 @@ impl SlashCommandDataSource {
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
             is_cli_agent_input,
+            is_handoff_compose_active,
         }
     }
 
@@ -360,6 +373,13 @@ impl SlashCommandDataSource {
         }
         // /host is only useful when a default self-hosted host is configured.
         if command.name == commands::HOST.name && !context.has_default_host {
+            return false;
+        }
+        // /environment is available in V2 cloud-mode composing or handoff compose mode.
+        if command.name == commands::ENVIRONMENT.name
+            && !context.session_context.contains(Availability::CLOUD_AGENT_V2)
+            && !context.is_handoff_compose_active
+        {
             return false;
         }
         // When CLI agent input is open, restrict to the explicit allowlist.

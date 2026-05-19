@@ -330,9 +330,9 @@ pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     name: "/environment",
     description: "Switch the cloud agent environment",
     icon_path: "bundled/svg/globe-04.svg",
-    availability: Availability::AGENT_VIEW
-        | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+    // Requires AGENT_VIEW + AI_ENABLED; further gated by a soft-check in
+    // `command_is_active_in_context` to V2 cloud-mode composing or handoff compose.
+    availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: None,
 });
