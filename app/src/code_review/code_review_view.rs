@@ -317,15 +317,6 @@ const REMOTE_TEXT: &str = "Diffs only work for local workspaces.";
 const DISABLED_TEXT: &str = "Diffs only work for git repositories.";
 const WSL_TEXT: &str = "Diffs don't currently work in WSL.";
 
-#[cfg(not(target_family = "wasm"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-enum InitButtons {
-    OpenRepository,
-    InitProject,
-    None,
-}
-
 pub fn get_discard_button_disabled_tooltip(git_operation_blocked: bool) -> String {
     if git_operation_blocked {
         "Cannot discard changes while a git operation (merge, rebase, etc.) is in progress"
@@ -2870,25 +2861,26 @@ impl CodeReviewView {
         app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        let open_repo_button = || Some(ChildView::new(&self.open_repository_button).finish());
         match self.session_env(app) {
-            Some(state)
-                if matches!(
-                    state.enablement,
-                    CodingPanelEnablementState::RemoteSession { .. }
-                ) =>
-            {
-                self.render_remote_state_with_buttons(appearance)
+            Some(GitSessionState {
+                enablement: CodingPanelEnablementState::RemoteSession { .. },
+            }) => {
+                // No "Open repository" CTA when the session is remote — the
+                // button navigates to a local folder, which is not meaningful
+                // in a remote session.
+                Self::render_remote_state(appearance, None)
             }
-            Some(state)
-                if matches!(
-                    state.enablement,
-                    CodingPanelEnablementState::UnsupportedSession
-                ) =>
-            {
-                self.render_wsl_state_with_buttons(appearance)
-            }
-            None => self.render_not_repo_state_with_buttons(appearance),
-            Some(_) => self.render_not_repo_state_with_buttons(appearance),
+            Some(GitSessionState {
+                enablement: CodingPanelEnablementState::UnsupportedSession,
+            }) => Self::render_wsl_state(appearance, open_repo_button()),
+            None
+            | Some(GitSessionState {
+                enablement:
+                    CodingPanelEnablementState::Enabled
+                    | CodingPanelEnablementState::PendingRemoteSession
+                    | CodingPanelEnablementState::Disabled,
+            }) => Self::render_not_repo_state(appearance, open_repo_button()),
         }
     }
 
@@ -3859,88 +3851,6 @@ impl CodeReviewView {
             .finish()
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    fn render_no_repo_found_state_with_buttons(
-        &self,
-        appearance: &Appearance,
-        message: &'static str,
-        buttons: InitButtons,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        let main_column = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Container::new(
-                    ConstrainedBox::new(
-                        Icon::FolderClosed
-                            .to_warpui_icon(warp_core::ui::theme::Fill::Solid(
-                                internal_colors::neutral_6(theme),
-                            ))
-                            .finish(),
-                    )
-                    .with_width(24.)
-                    .with_height(24.)
-                    .finish(),
-                )
-                .with_margin_bottom(12.)
-                .finish(),
-            )
-            .with_child(
-                Text::new(
-                    "Cannot detect diffs for this folder",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size() + 2.,
-                )
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .with_color(theme.sub_text_color(theme.background()).into())
-                .finish(),
-            )
-            .with_child(
-                Container::new(
-                    Text::new(
-                        message,
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size() + 2.,
-                    )
-                    .with_color(theme.disabled_text_color(theme.background()).into())
-                    .finish(),
-                )
-                .with_margin_top(4.)
-                .finish(),
-            );
-
-        let mut buttons_row = Flex::row()
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center);
-
-        match buttons {
-            InitButtons::OpenRepository => {
-                buttons_row.add_child(ChildView::new(&self.open_repository_button).finish());
-            }
-            InitButtons::InitProject => {
-                buttons_row.add_child(ChildView::new(&self.init_project_button).finish());
-            }
-            InitButtons::None => {}
-        }
-
-        let main_column = main_column
-            .with_child(
-                Container::new(buttons_row.finish())
-                    .with_margin_top(16.)
-                    .finish(),
-            )
-            .finish();
-
-        Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_child(main_column)
-            .finish()
-    }
-
     pub fn render_no_repo_found_state(
         appearance: &Appearance,
         message: &'static str,
@@ -4026,33 +3936,6 @@ impl CodeReviewView {
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
         Self::render_no_repo_found_state(appearance, DISABLED_TEXT, open_repo_button)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    fn render_remote_state_with_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
-        self.render_no_repo_found_state_with_buttons(
-            appearance,
-            REMOTE_TEXT,
-            InitButtons::OpenRepository,
-        )
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    fn render_wsl_state_with_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
-        self.render_no_repo_found_state_with_buttons(
-            appearance,
-            WSL_TEXT,
-            InitButtons::OpenRepository,
-        )
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    fn render_not_repo_state_with_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
-        self.render_no_repo_found_state_with_buttons(
-            appearance,
-            DISABLED_TEXT,
-            InitButtons::OpenRepository,
-        )
     }
 
     fn render_loaded_state(

@@ -838,17 +838,21 @@ impl RightPanelView {
 
             #[cfg(feature = "local_fs")]
             let no_repo_body = {
-                let button = Some(ChildView::new(&self.open_repository_button).finish());
+                let open_repo_button =
+                    || Some(ChildView::new(&self.open_repository_button).finish());
                 if let Some(env) = &self.code_review_session_env {
                     if env.is_remote {
-                        CodeReviewView::render_remote_state(appearance, button)
+                        // No "Open repository" CTA when the session is remote — the
+                        // button navigates to a local folder, which is not meaningful
+                        // in a remote session.
+                        CodeReviewView::render_remote_state(appearance, None)
                     } else if env.is_wsl {
-                        CodeReviewView::render_wsl_state(appearance, button)
+                        CodeReviewView::render_wsl_state(appearance, open_repo_button())
                     } else {
-                        CodeReviewView::render_not_repo_state(appearance, button)
+                        CodeReviewView::render_not_repo_state(appearance, open_repo_button())
                     }
                 } else {
-                    CodeReviewView::render_not_repo_state(appearance, button)
+                    CodeReviewView::render_not_repo_state(appearance, open_repo_button())
                 }
             };
 
