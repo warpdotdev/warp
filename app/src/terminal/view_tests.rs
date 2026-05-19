@@ -521,6 +521,133 @@ fn clear_buffer_action_in_fullscreen_agent_view_starts_new_conversation() {
 }
 
 #[test]
+fn appended_exchange_renders_in_restored_view_before_ownership_transfer() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let original_owner = add_window_with_terminal(&mut app, None);
+        let restored_view = add_window_with_terminal(&mut app, None);
+
+        let original_owner_view_id = original_owner.read(&app, |view, _| view.view_id);
+        let restored_view_id = restored_view.read(&app, |view, _| view.view_id);
+
+        let conversation_id = original_owner.update(&mut app, |view, ctx| {
+            let (conversation_id, _, _, _) = append_exchange_with_inputs_and_handle_event(
+                view,
+                vec![AIAgentInput::UserQuery {
+                    query: "first query".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                }],
+                ctx,
+            );
+            conversation_id
+        });
+
+        let restored_conversation =
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                history
+                    .conversation(&conversation_id)
+                    .cloned()
+                    .expect("conversation should exist")
+            });
+
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.restore_conversations(restored_view_id, vec![restored_conversation], ctx);
+            history.mark_active_conversation_id(conversation_id, restored_view_id, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert!(
+                history.terminal_view_owns_conversation(original_owner_view_id, &conversation_id)
+            );
+            assert!(history.terminal_view_owns_conversation(restored_view_id, &conversation_id));
+        });
+
+        let original_owner_block_count_after_restore =
+            original_owner.read(&app, |view, _| ai_block_count(view));
+        let restored_view_block_count_after_restore =
+            restored_view.read(&app, |view, _| ai_block_count(view));
+
+        let (task_id, exchange_id, response_stream_id) = BlocklistAIHistoryModel::handle(&app)
+            .update(&mut app, |history, ctx| {
+                let conversation = history
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation should exist");
+                let task_id = conversation.get_root_task_id().clone();
+                let response_stream_id = ResponseStreamId::new_for_test();
+                let exchange = exchange_with_inputs(vec![AIAgentInput::UserQuery {
+                    query: "follow up".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                }]);
+                let exchange_id = exchange.id;
+                conversation
+                    .append_reassigned_exchange(
+                        &response_stream_id,
+                        exchange,
+                        restored_view_id,
+                        ctx,
+                    )
+                    .expect("exchange should append");
+                (task_id, exchange_id, response_stream_id)
+            });
+
+        original_owner.update(&mut app, |view, ctx| {
+            view.handle_ai_history_model_event(
+                BlocklistAIHistoryModel::handle(ctx),
+                &BlocklistAIHistoryEvent::AppendedExchange {
+                    exchange_id,
+                    task_id: task_id.clone(),
+                    terminal_view_id: restored_view_id,
+                    conversation_id,
+                    is_hidden: false,
+                    response_stream_id: Some(response_stream_id.clone()),
+                },
+                ctx,
+            );
+        });
+
+        restored_view.update(&mut app, |view, ctx| {
+            view.handle_ai_history_model_event(
+                BlocklistAIHistoryModel::handle(ctx),
+                &BlocklistAIHistoryEvent::AppendedExchange {
+                    exchange_id,
+                    task_id,
+                    terminal_view_id: restored_view_id,
+                    conversation_id,
+                    is_hidden: false,
+                    response_stream_id: Some(response_stream_id),
+                },
+                ctx,
+            );
+        });
+
+        original_owner.read(&app, |view, _| {
+            assert_eq!(
+                ai_block_count(view),
+                original_owner_block_count_after_restore
+            );
+        });
+        restored_view.read(&app, |view, _| {
+            assert_eq!(
+                ai_block_count(view),
+                restored_view_block_count_after_restore + 1
+            );
+        });
+    })
+}
+
+#[test]
 fn appended_exchange_renders_in_current_owner_after_conversation_transfer() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

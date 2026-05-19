@@ -5381,26 +5381,44 @@ impl TerminalView {
         history_model: &BlocklistAIHistoryModel,
         event: &BlocklistAIHistoryEvent,
     ) -> Option<EntityId> {
+        let render_owner_for_event_source =
+            |terminal_view_id: EntityId, conversation_id: &AIConversationId| {
+                if history_model.terminal_view_owns_conversation(terminal_view_id, conversation_id)
+                {
+                    Some(terminal_view_id)
+                } else {
+                    history_model.terminal_view_id_for_conversation(conversation_id)
+                }
+            };
         match event {
             BlocklistAIHistoryEvent::AppendedExchange {
-                conversation_id, ..
+                terminal_view_id,
+                conversation_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-                conversation_id, ..
+                terminal_view_id,
+                conversation_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                conversation_id, ..
-            }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                conversation_id, ..
+                terminal_view_id,
+                conversation_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                conversation_id, ..
-            } => history_model.terminal_view_id_for_conversation(conversation_id),
+                terminal_view_id,
+                conversation_id,
+                ..
+            } => render_owner_for_event_source(*terminal_view_id, conversation_id),
             BlocklistAIHistoryEvent::ReassignedExchange {
+                terminal_view_id,
                 new_conversation_id,
                 ..
-            } => history_model.terminal_view_id_for_conversation(new_conversation_id),
+            } => render_owner_for_event_source(*terminal_view_id, new_conversation_id),
+            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                conversation_id, ..
+            } => history_model.terminal_view_id_for_conversation(conversation_id),
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }

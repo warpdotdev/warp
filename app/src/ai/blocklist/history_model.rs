@@ -599,6 +599,15 @@ impl BlocklistAIHistoryModel {
             .find(|(_, conversation_ids)| conversation_ids.contains(conversation_id))
             .map(|(terminal_view_id, _)| *terminal_view_id)
     }
+    pub fn terminal_view_owns_conversation(
+        &self,
+        terminal_view_id: EntityId,
+        conversation_id: &AIConversationId,
+    ) -> bool {
+        self.live_conversation_ids_for_terminal_view
+            .get(&terminal_view_id)
+            .is_some_and(|conversation_ids| conversation_ids.contains(conversation_id))
+    }
 
     /// Returns the conversation ID from the terminal view's history corresponding to the action,
     /// if any.
