@@ -269,7 +269,12 @@ impl LspServerModel {
                     Some(log_relative_path) => {
                         match LogManager::handle(ctx).update(ctx, |manager, _| {
                             manager.register_namespace("lsp", true);
-                            manager.register("lsp", &log_relative_path, executor.clone())
+                            manager.register_with_rotation(
+                                "lsp",
+                                &log_relative_path,
+                                executor.clone(),
+                                crate::logs::lsp_log_rotation_config(),
+                            )
                         }) {
                             Ok(logger) => Some(logger),
                             Err(e) => {
