@@ -73,6 +73,13 @@ lazy_static! {
             url_for_font("noto-sans-kr", "NotoSansKR-Regular.ttf"),
         ]),
     };
+    static ref NOTO_SANS_MYANMAR: ExternalFontFamily = ExternalFontFamily {
+        name: "Noto Sans Myanmar",
+        font_urls: Arc::new(vec![
+            url_for_font("noto-sans-myanmar", "NotoSansMyanmar-Bold.ttf"),
+            url_for_font("noto-sans-myanmar", "NotoSansMyanmar-Regular.ttf"),
+        ]),
+    };
     static ref NOTO_SANS_SC: ExternalFontFamily = ExternalFontFamily {
         name: "Noto Sans SC",
         font_urls: Arc::new(vec![
@@ -600,6 +607,9 @@ pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
         | '\u{FB50}'..='\u{FDFD}'
         | '\u{FE70}'..='\u{FEFC}' => Some(NOTO_SANS_ARABIC.clone()),
         '\u{0980}'..='\u{09FE}' | '\u{1CF7}'..='\u{1CF7}' => Some(NOTO_SANS_BENGALI.clone()),
+        '\u{1000}'..='\u{109F}'
+        | '\u{A9E0}'..='\u{A9FF}'
+        | '\u{AA60}'..='\u{AA7F}' => Some(NOTO_SANS_MYANMAR.clone()),
         '\u{1100}'..='\u{11FF}'
         | '\u{3164}'..='\u{3164}'
         | '\u{A960}'..='\u{D7FB}'
