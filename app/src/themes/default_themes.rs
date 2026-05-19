@@ -218,6 +218,51 @@ const ADEBERRY_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
     AnsiColor::from_u32(0xFFFFFFFF),
 );
 
+// Pure-saturated ANSI palette targeting WCAG AAA contrast on a black background.
+// Blue is lifted from pure 0000FF because its luminance is too low to read on black.
+const HIGH_CONTRAST_DARK_NORMAL_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x000000FF),
+    AnsiColor::from_u32(0xFF0000FF),
+    AnsiColor::from_u32(0x00FF00FF),
+    AnsiColor::from_u32(0xFFFF00FF),
+    AnsiColor::from_u32(0x4080FFFF),
+    AnsiColor::from_u32(0xFF00FFFF),
+    AnsiColor::from_u32(0x00FFFFFF),
+    AnsiColor::from_u32(0xFFFFFFFF),
+);
+const HIGH_CONTRAST_DARK_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x808080FF),
+    AnsiColor::from_u32(0xFF8080FF),
+    AnsiColor::from_u32(0x80FF80FF),
+    AnsiColor::from_u32(0xFFFF80FF),
+    AnsiColor::from_u32(0x80B0FFFF),
+    AnsiColor::from_u32(0xFF80FFFF),
+    AnsiColor::from_u32(0x80FFFFFF),
+    AnsiColor::from_u32(0xFFFFFFFF),
+);
+
+// Deeply saturated ANSI palette targeting WCAG AAA contrast on a white background.
+const HIGH_CONTRAST_LIGHT_NORMAL_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x000000FF),
+    AnsiColor::from_u32(0xC00000FF),
+    AnsiColor::from_u32(0x006000FF),
+    AnsiColor::from_u32(0x806000FF),
+    AnsiColor::from_u32(0x0000C0FF),
+    AnsiColor::from_u32(0x800080FF),
+    AnsiColor::from_u32(0x006060FF),
+    AnsiColor::from_u32(0xC0C0C0FF),
+);
+const HIGH_CONTRAST_LIGHT_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x404040FF),
+    AnsiColor::from_u32(0x800000FF),
+    AnsiColor::from_u32(0x004000FF),
+    AnsiColor::from_u32(0x604000FF),
+    AnsiColor::from_u32(0x000080FF),
+    AnsiColor::from_u32(0x600060FF),
+    AnsiColor::from_u32(0x004040FF),
+    AnsiColor::from_u32(0xFFFFFFFF),
+);
+
 pub(super) fn light_mode_colors() -> TerminalColors {
     TerminalColors::new(LIGHT_MODE_NORMAL_COLORS, LIGHT_MODE_BRIGHT_COLORS)
 }
@@ -258,6 +303,20 @@ pub(super) fn adeberry_colors() -> TerminalColors {
     TerminalColors::new(ADEBERRY_NORMAL_COLORS, ADEBERRY_BRIGHT_COLORS)
 }
 
+pub(super) fn high_contrast_dark_colors() -> TerminalColors {
+    TerminalColors::new(
+        HIGH_CONTRAST_DARK_NORMAL_COLORS,
+        HIGH_CONTRAST_DARK_BRIGHT_COLORS,
+    )
+}
+
+pub(super) fn high_contrast_light_colors() -> TerminalColors {
+    TerminalColors::new(
+        HIGH_CONTRAST_LIGHT_NORMAL_COLORS,
+        HIGH_CONTRAST_LIGHT_BRIGHT_COLORS,
+    )
+}
+
 /// Default bundled themes
 pub fn dark_theme() -> WarpTheme {
     WarpTheme::new(
@@ -282,6 +341,32 @@ pub fn light_theme() -> WarpTheme {
         light_mode_colors(),
         None,
         Some("Light".to_string()),
+    )
+}
+
+pub(super) fn high_contrast_dark() -> WarpTheme {
+    WarpTheme::new(
+        Fill::Solid(ColorU::from_u32(0x000000FF)),
+        ColorU::from_u32(0xFFFFFFFF),
+        Fill::Solid(ColorU::from_u32(0xFFFF00FF)),
+        None,
+        Some(Details::Darker),
+        high_contrast_dark_colors(),
+        None,
+        Some("High Contrast Dark".to_string()),
+    )
+}
+
+pub(super) fn high_contrast_light() -> WarpTheme {
+    WarpTheme::new(
+        Fill::Solid(ColorU::from_u32(0xFFFFFFFF)),
+        ColorU::from_u32(0x000000FF),
+        Fill::Solid(ColorU::from_u32(0x0000C8FF)),
+        None,
+        Some(Details::Lighter),
+        high_contrast_light_colors(),
+        None,
+        Some("High Contrast Light".to_string()),
     )
 }
 

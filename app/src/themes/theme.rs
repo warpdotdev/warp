@@ -90,6 +90,10 @@ pub enum ThemeKind {
     PinkCity,
     #[schemars(description = "Marble")]
     Marble,
+    #[schemars(description = "High Contrast Dark")]
+    HighContrastDark,
+    #[schemars(description = "High Contrast Light")]
+    HighContrastLight,
     #[schemars(description = "A user-provided custom theme loaded from a file.")]
     Custom(CustomTheme),
     /// Base16 themes are a special case of custom themes with their own semantics for ANSI colors that override "bright" color variants.
@@ -133,6 +137,8 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::Phenomenon => "Phenomenon",
             ThemeKind::SolarFlare => "Solar Flare",
             ThemeKind::Adeberry => "Adeberry",
+            ThemeKind::HighContrastDark => "High Contrast Dark",
+            ThemeKind::HighContrastLight => "High Contrast Light",
             ThemeKind::SentReferralReward => "Warp Referral",
             ThemeKind::ReceivedReferralReward => "Referred to Warp",
             ThemeKind::Custom(custom_theme) => custom_theme.name.as_str(),
@@ -321,6 +327,8 @@ impl WarpThemeConfig {
             (ThemeKind::Phenomenon, phenomenon()),
             (ThemeKind::SolarFlare, solar_flare()),
             (ThemeKind::Adeberry, adeberry()),
+            (ThemeKind::HighContrastDark, high_contrast_dark()),
+            (ThemeKind::HighContrastLight, high_contrast_light()),
         ]);
         WarpThemeConfig { theme_map }
     }
