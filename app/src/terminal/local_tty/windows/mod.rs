@@ -173,27 +173,34 @@ pub(super) fn spawn(
     };
     let mut process_information = PROCESS_INFORMATION::default();
 
-    let start_directory = options
+    let start_directory_path = options
         .start_dir
         .filter(|start_dir| start_dir.is_dir())
         .or_else(|| {
             std::env::var_os("USERPROFILE")
                 .map(PathBuf::from)
                 .filter(|path| path.is_dir())
-        })
+        });
+    let start_directory_wide = start_directory_path
+        .as_ref()
+        .map(|path| path.as_os_str().encode_wide().collect::<Vec<u16>>());
+    let start_directory = start_directory_path
+        .as_ref()
         .map(|path| HSTRING::from(path.as_os_str()));
+
+    let creation_flags = PROCESS_CREATION_FLAGS(0)
+        | EXTENDED_STARTUPINFO_PRESENT
+        | CREATE_UNICODE_ENVIRONMENT
+        | CREATE_BREAKAWAY_FROM_JOB;
 
     unsafe {
         CreateProcessW(
             PCWSTR::null(), /* lpApplicationName */
-            Some(PWSTR::from_raw(shell_command.as_ptr().cast_mut())),
+            Some(PWSTR::from_raw(shell_command.raw.as_ptr().cast_mut())),
             None,  /* lpProcessAttributes */
             None,  /* lpThreadAttributes */
             false, /* bInheritHandles */
-            PROCESS_CREATION_FLAGS(0)
-                | EXTENDED_STARTUPINFO_PRESENT
-                | CREATE_UNICODE_ENVIRONMENT
-                | CREATE_BREAKAWAY_FROM_JOB,
+            creation_flags,
             Some(environment_block.as_ptr() as *const std::ffi::c_void),
             start_directory
                 .as_ref()
@@ -204,6 +211,17 @@ pub(super) fn spawn(
         )
         .map_err(|error| {
             let detail = shell_starter.shell_detail();
+            log_create_process_failure(
+                &error,
+                &detail,
+                &shell_command,
+                &environment_block,
+                start_directory_wide.as_deref(),
+                creation_flags,
+                &startup_info,
+                size.columns,
+                size.rows,
+            );
             PtySpawnError::CreateShellProcessFailed { detail, error }
         })?;
     }
@@ -232,7 +250,23 @@ pub enum EncodingError {
     Other(#[from] windows::core::Error),
 }
 
-fn wsl_shell_command(wsl_shell_starter: &WslShellStarter) -> Result<HSTRING, EncodingError> {
+struct EncodedShellCommand {
+    raw: HSTRING,
+    wide_units: Vec<u16>,
+}
+
+impl EncodedShellCommand {
+    fn new(wide_units: Vec<u16>) -> Self {
+        Self {
+            raw: HSTRING::from_wide(&wide_units),
+            wide_units,
+        }
+    }
+}
+
+fn wsl_shell_command(
+    wsl_shell_starter: &WslShellStarter,
+) -> Result<EncodedShellCommand, EncodingError> {
     let mut encoded_shell_command = Vec::<u16>::new();
 
     log::info!(
@@ -247,14 +281,14 @@ fn wsl_shell_command(wsl_shell_starter: &WslShellStarter) -> Result<HSTRING, Enc
         }
         append_quoted(arg, &mut encoded_shell_command);
     }
-    Ok(HSTRING::from_wide(&encoded_shell_command))
+    Ok(EncodedShellCommand::new(encoded_shell_command))
 }
 
 /// Constructs the shell command in a Windows-native encoding using 16-bit values.
 ///
 /// Windows expects a single string for its command which includes all arguments, so we need to
 /// string them together and escape them appropriately.
-fn shell_command(shell_starter: &DirectShellStarter) -> Result<HSTRING, EncodingError> {
+fn shell_command(shell_starter: &DirectShellStarter) -> Result<EncodedShellCommand, EncodingError> {
     let mut encoded_shell_command = Vec::<u16>::new();
 
     log::info!(
@@ -273,7 +307,63 @@ fn shell_command(shell_starter: &DirectShellStarter) -> Result<HSTRING, Encoding
         }
         append_quoted(arg, &mut encoded_shell_command);
     }
-    Ok(HSTRING::from_wide(&encoded_shell_command))
+    Ok(EncodedShellCommand::new(encoded_shell_command))
+}
+
+fn log_create_process_failure(
+    error: &windows::core::Error,
+    detail: &str,
+    shell_command: &EncodedShellCommand,
+    environment_block: &[u16],
+    start_directory: Option<&[u16]>,
+    creation_flags: PROCESS_CREATION_FLAGS,
+    startup_info: &STARTUPINFOEXW,
+    columns: usize,
+    rows: usize,
+) {
+    let shell_command_bytes = wide_units_as_le_bytes_with_nul(&shell_command.wide_units, 1);
+    let environment_block_bytes = wide_units_as_le_bytes(environment_block);
+    let start_directory_bytes = start_directory
+        .map(|wide| wide_units_as_le_bytes_with_nul(wide, 1))
+        .unwrap_or_default();
+
+    log::error!(
+        "CreateProcessW failed for shell process {detail}: {error:#}. \
+        debug lpApplicationName_is_null=true \
+        lpCommandLine_utf16_units_len={} lpCommandLine_bytes={:?} \
+        lpEnvironment_utf16_units_len={} lpEnvironment_bytes={:?} \
+        lpCurrentDirectory_is_null={} lpCurrentDirectory_utf16_units_len={} lpCurrentDirectory_bytes={:?} \
+        dwCreationFlags={:#010x} bInheritHandles=false \
+        startup_cb={} startup_dwFlags={:#010x} startup_lpAttributeList_is_null={} \
+        conpty_size_columns={} conpty_size_rows={}",
+        shell_command.wide_units.len() + 1,
+        shell_command_bytes,
+        environment_block.len(),
+        environment_block_bytes,
+        start_directory.is_none(),
+        start_directory.map_or(0, |wide| wide.len() + 1),
+        start_directory_bytes,
+        creation_flags.0,
+        startup_info.StartupInfo.cb,
+        startup_info.StartupInfo.dwFlags.0,
+        startup_info.lpAttributeList.is_null(),
+        columns,
+        rows,
+    );
+}
+
+fn wide_units_as_le_bytes(wide_units: &[u16]) -> Vec<u8> {
+    wide_units
+        .iter()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect()
+}
+
+fn wide_units_as_le_bytes_with_nul(wide_units: &[u16], trailing_nuls: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity((wide_units.len() + trailing_nuls) * 2);
+    bytes.extend(wide_units_as_le_bytes(wide_units));
+    bytes.resize(bytes.len() + trailing_nuls * 2, 0);
+    bytes
 }
 
 /// Appends an argument and properly quotes it.
