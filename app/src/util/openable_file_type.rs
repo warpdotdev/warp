@@ -74,7 +74,7 @@ pub fn is_supported_image_file(path: impl AsRef<Path>) -> bool {
         .map(|ext| {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg"
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "ico" | "svg"
             )
         })
         .unwrap_or(false)
@@ -528,5 +528,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("nope");
         assert!(!starts_with_shebang(&p));
+    }
+
+    /// `is_supported_image_file` should agree with the image extensions in
+    /// `warp_util::file_type::is_binary_file`, otherwise binary image files
+    /// like `.bmp` / `.tiff` / `.ico` get rejected by `is_file_openable_in_warp`
+    /// without ever being routed to `FileTarget::SystemGeneric`, leaving the
+    /// click-to-open path with no working target.
+    #[test]
+    fn test_is_supported_image_file_covers_common_formats() {
+        for name in [
+            "photo.jpg",
+            "photo.jpeg",
+            "photo.png",
+            "icon.gif",
+            "screenshot.bmp",
+            "scan.tiff",
+            "scan.tif",
+            "asset.webp",
+            "favicon.ico",
+            "logo.svg",
+        ] {
+            assert!(
+                is_supported_image_file(Path::new(name)),
+                "{name} should be recognized as an image file"
+            );
+        }
+        // Case-insensitive on the extension.
+        assert!(is_supported_image_file(Path::new("photo.PNG")));
+        assert!(is_supported_image_file(Path::new("scan.TIFF")));
+        // Sanity: non-image extensions are still rejected.
+        assert!(!is_supported_image_file(Path::new("readme.md")));
+        assert!(!is_supported_image_file(Path::new("script.rs")));
     }
 }
