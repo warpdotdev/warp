@@ -11,8 +11,6 @@ use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
 use warp_graphql::billing::AddonCreditsOption;
 use warpui::prelude::ChildView;
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
     elements::{
         Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
         Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
@@ -24,20 +22,21 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
+    ViewContext, ViewHandle,
 };
 
 use settings::Setting;
 
 use crate::{
-    WorkspaceAction,
     ai::{
-        AIRequestUsageModel,
         request_usage_model::{
-            AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
         },
+        AIRequestUsageModel,
     },
     auth::{
-        AuthManager, AuthStateProvider, auth_state::AuthState, auth_view_modal::AuthViewVariant,
+        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
     },
     modal::{Modal, ModalEvent, ModalViewState},
     pricing::PricingInfoModel,
@@ -51,18 +50,18 @@ use crate::{
         tab_selector::{self, SettingsTab},
     },
     view_components::{
-        ToastFlavor,
         action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
+        ToastFlavor,
     },
     workspaces::{
         update_manager::TeamUpdateManager,
         user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
         workspace::{CustomerType, Workspace, WorkspaceUid},
     },
+    WorkspaceAction,
 };
 
 use super::{
-    SettingsSection,
     billing_and_usage::{
         billing_cycle_usage_section::BillingCycleUsageSectionView,
         overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
@@ -70,7 +69,8 @@ use super::{
         usage_history_model::UsageHistoryModel,
     },
     billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon},
+    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
+    SettingsSection,
 };
 
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
@@ -81,9 +81,10 @@ const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 const MANAGED_AUTO_RELOAD_TOOLTIP: &str = "Managed by your admin";
 
-const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
+const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const AUTO_RELOAD_NON_ADMIN_DELINQUENT_WARNING_STRING: &str = "Restricted due to billing issue. Contact your team admin to update their payment method.";
+const ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING: &str =
+    "Restricted due to billing issue. Contact your team admin to update their payment method.";
 const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -1149,8 +1150,10 @@ impl BillingAndUsagePageV2View {
             "When any member on your team’s credit balance reaches 100 credits remaining, \
             automatically purchase {auto_reload_credit_amount}."
         );
-        let warning_text = if delinquent {
-            Some(AUTO_RELOAD_DELINQUENT_WARNING_STRING)
+        let warning_text = if delinquent && has_admin_permissions {
+            Some(ADDON_CREDITS_DELINQUENT_WARNING_STRING)
+        } else if delinquent {
+            Some(ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING)
         } else if workspace
             .billing_metadata
             .has_failed_addon_credit_auto_reload_status()
@@ -1201,7 +1204,7 @@ impl BillingAndUsagePageV2View {
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
                 description_text,
-                warning_text: delinquent.then_some(AUTO_RELOAD_NON_ADMIN_DELINQUENT_WARNING_STRING),
+                warning_text,
             };
         }
 
