@@ -86,6 +86,8 @@ const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
 const ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Contact your team admin to update their payment method.";
 const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str =
+    "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
@@ -1158,7 +1160,11 @@ impl BillingAndUsagePageV2View {
             .billing_metadata
             .has_failed_addon_credit_auto_reload_status()
         {
-            Some(RESTRICTED_BILLING_USAGE_WARNING_STRING)
+            Some(if has_admin_permissions {
+                RESTRICTED_BILLING_USAGE_WARNING_STRING
+            } else {
+                RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING
+            })
         } else if would_exceed {
             Some(match (auto_reload_enabled, has_admin_permissions) {
                 (true, true) => {
