@@ -4,8 +4,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config_file::ConfigFileArgs, environment::EnvironmentCreateArgs, json_filter::JsonOutput,
-    mcp::MCPSpec, model::ModelArgs, scope::ObjectScope, share::ShareArgs, skill::SkillSpec,
+    SortOrderArg, config_file::ConfigFileArgs, environment::EnvironmentCreateArgs,
+    json_filter::JsonOutput, mcp::MCPSpec, model::ModelArgs, scope::ObjectScope, share::ShareArgs,
+    skill::SkillSpec,
 };
 
 /// Output format for agent results.
@@ -521,15 +522,6 @@ pub enum AgentSortByArg {
     CreatedAt,
 }
 
-/// Sort direction for named agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum AgentSortOrderArg {
-    #[value(name = "asc")]
-    Asc,
-    #[value(name = "desc")]
-    Desc,
-}
-
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
@@ -539,7 +531,7 @@ pub struct AgentListArgs {
 
     /// Sort direction. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-order", value_enum, value_name = "DIR")]
-    pub sort_order: Option<AgentSortOrderArg>,
+    pub sort_order: Option<SortOrderArg>,
 
     /// JSON formatting configuration.
     #[command(flatten)]

@@ -16,9 +16,9 @@ The named-agent API reference is in `../warp-server/public_api/openapi.yaml`:
 - `GET /agent/identities/{uid}`, `PUT /agent/identities/{uid}`, and `DELETE /agent/identities/{uid}` at `../warp-server/public_api/openapi.yaml (2783-2917)`.
 - `CreateAgentRequest`, `UpdateAgentRequest`, `AgentResponse`, and `ListAgentsResponse` at `../warp-server/public_api/openapi.yaml (5399-5539)`.
 
-Related named-agent environment work for `REMOTE-1695` adds an optional `environment_id` field to create/update/response models. The current checked-out OpenAPI schema does not yet show that field; the implementation should keep optional deserialization tolerant so the CLI can display it when the server begins returning it.
+Related named-agent environment work for `REMOTE-1695` adds an optional `environment_id` field to create/update/response models. The current checked-out OpenAPI schema may lag that server behavior, so the implementation keeps optional deserialization tolerant while still accepting `--environment` and `--remove-environment`.
 
-## Proposed changes
+## Implemented changes
 Add a new named-agent CLI surface and move the old skill-discovery command:
 - Rename the old skill-discovery command to `AgentCommand::Skills(ListAgentSkillsArgs)` with `#[command(name = "skills")]`.
 - Add `AgentCommand::List(AgentListArgs)`, `Get(AgentGetArgs)`, `Create(AgentCreateArgs)`, `Update(AgentUpdateArgs)`, and `Delete(AgentDeleteArgs)`.
@@ -28,7 +28,7 @@ Add a new named-agent CLI surface and move the old skill-discovery command:
 Command arguments:
 - `AgentListArgs`: `--sort-by <name|created-at>`, `--sort-order <asc|desc>`, and flattened `JsonOutput`.
 - `AgentGetArgs`: positional `uid` and flattened `JsonOutput`.
-- `AgentCreateArgs`: required `--name`; optional `--description`; repeatable `--secret <NAME>`; repeatable `--skill <SPEC>`; optional `--base-model <MODEL_ID>`; optional `--environment <ENVIRONMENT_ID>` once the API field is available; flattened `JsonOutput`.
+- `AgentCreateArgs`: required `--name`; optional `--description`; repeatable `--secret <NAME>`; repeatable `--skill <SPEC>`; optional `--base-model <MODEL_ID>`; optional `--environment <ENVIRONMENT_ID>`; flattened `JsonOutput`.
 - `AgentUpdateArgs`: positional `uid`; optional `--name`; optional `--description` conflicting with `--remove-description`; repeatable `--add-secret`; repeatable `--remove-secret`; `--remove-all-secrets` conflicting with individual secret add/remove flags; repeatable `--add-skill`; repeatable `--remove-skill`; `--remove-all-skills` conflicting with individual skill add/remove flags; optional `--base-model` conflicting with `--remove-base-model`; optional `--environment` conflicting with `--remove-environment`; flattened `JsonOutput`.
 - `AgentDeleteArgs`: positional `uid`. It intentionally does not flatten `JsonOutput` because delete has no API response body to filter with `--jq`.
 
@@ -50,12 +50,15 @@ Add API types and methods in `app/src/server/server_api/ai.rs`:
 - Add reusable `put_public_api`, `put_public_api_response`, and `delete_public_api_unit` helpers to `ServerApi` if no existing helper covers those verbs.
 
 Output behavior:
-- Implement `TableFormat` for a list row wrapper around `AgentResponse`.
+- Implement `TableFormat` for `AgentResponse`.
 - For list, fetch typed responses for pretty/text/ndjson and raw JSON for JSON/`--jq`. Apply client-side sorting before output for pretty/text/ndjson only.
 - Reject `--sort-by` or `--sort-order` when JSON output is requested or implied by `--jq`, because JSON mode should preserve raw API output rather than returning a client-mutated response.
 - In pretty list output, print `Looking for agent skills? Use <binary> agent skills instead.` after the named-agent list, where `<binary>` is resolved through the existing CLI binary-name helper.
-- For get/create/update, pretty output should render a detail table; text output should render stable key/value lines; JSON/`--jq` should process the raw API response.
-- For delete, text/pretty should say the agent was deleted; JSON output should print `{ "uid": "<uid>", "deleted": true }`. Delete does not support `--jq`.
+- List and single-agent pretty/text output share the same fields from `AgentResponse`: UID, name, created time, description, secret names, skill specs, base model, and environment.
+- Pretty/text list output filters out disabled agents. If any disabled agents are hidden, print `N disabled agents hidden` to stderr after stdout output. JSON output and `--jq` use the raw API response and do not filter or print this notice.
+- For get/create/update, pretty output renders a single-row table; text output renders stable tabular text with headers; JSON/`--jq` processes the raw API response.
+- List JSON is the raw public API response object with an `agents` array, so list `--jq` filters should address `.agents[]`.
+- For delete, pretty output says the agent was deleted, text output prints the deleted UID, and JSON/ndjson output prints `{ "uid": "<uid>", "deleted": true }`. Delete does not support `--jq`.
 
 Update references and naming:
 - Update user-facing help strings so "agents" means named agents and "skills" means repository-discovered skills.
@@ -73,9 +76,11 @@ Update references and naming:
 - Run `cargo fmt`.
 - Run targeted Rust tests for `warp_cli` and the new agent SDK module.
 - Run a focused clippy command if compile/test scope reveals warnings.
+- Manually validate against an authenticated staging server. On macOS, invoke the app runner with `WARP_CLI_MODE=1 ./script/run -- <cli args>` so the bundled app parses CLI subcommands rather than GUI URLs. For parallel manual validation, use the built binary with `WARP_CLI_MODE=1` to avoid concurrent `./script/run` rebundling and codesigning the same app path.
+- Manual validation should cover create/get/list/delete, update add/remove flags for skills and secrets, description/base-model/environment set and remove flags, invalid environment errors, nonexistent UID errors, update-with-no-flags errors, sort ordering by name and created time, JSON sort-flag rejection, pretty/text/ndjson/json output, and `--jq` scalar output.
 
 ## Parallelization
-Parallel child agents are not necessary for the first implementation pass. The change is medium-sized but tightly coupled across command definitions, SDK dispatch, API methods, and output tests; parallel edits would likely collide in `agent.rs`, `mod.rs`, and `ai.rs`. If this grows beyond the planned scope, validation can be delegated later to a child agent in a separate worktree after the main API/CLI shape lands.
+Parallel child agents are not necessary for implementation. The change is medium-sized but tightly coupled across command definitions, SDK dispatch, API methods, and output tests; parallel edits would likely collide in `agent.rs`, `mod.rs`, and `ai.rs`. Manual validation can be parallelized after the implementation lands because validators only run CLI commands and use isolated disposable named-agent prefixes.
 
 ## Risks and mitigations
 - **Patch semantics are easy to break:** use serialization tests for omitted, remove, and replacement cases.

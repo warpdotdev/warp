@@ -34,9 +34,9 @@ use warp_cli::{
     task::{
         ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
         MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
-        RunSortOrderArg, RunSourceArg, RunStateArg, TaskGetArgs,
+        RunSourceArg, RunStateArg, TaskGetArgs,
     },
-    GlobalOptions,
+    GlobalOptions, SortOrderArg,
 };
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -186,10 +186,10 @@ fn sort_by_from_arg(arg: RunSortByArg) -> RunSortBy {
     }
 }
 
-fn sort_order_from_arg(arg: RunSortOrderArg) -> RunSortOrder {
+fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     match arg {
-        RunSortOrderArg::Asc => RunSortOrder::Asc,
-        RunSortOrderArg::Desc => RunSortOrder::Desc,
+        SortOrderArg::Asc => RunSortOrder::Asc,
+        SortOrderArg::Desc => RunSortOrder::Desc,
     }
 }
 

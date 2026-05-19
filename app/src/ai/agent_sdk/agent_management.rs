@@ -7,10 +7,11 @@ use anyhow::anyhow;
 use comfy_table::Cell;
 use serde::Serialize;
 use warp_cli::agent::{
-    AgentCreateArgs, AgentDeleteArgs, AgentGetArgs, AgentListArgs, AgentSortByArg,
-    AgentSortOrderArg, AgentUpdateArgs, OutputFormat,
+    AgentCreateArgs, AgentDeleteArgs, AgentGetArgs, AgentListArgs, AgentSortByArg, AgentUpdateArgs,
+    OutputFormat,
 };
 use warp_cli::json_filter::JsonOutput;
+use warp_cli::SortOrderArg;
 use warpui::{platform::TerminationMode, AppContext, ModelContext, SingletonEntity};
 
 use crate::server::server_api::ai::{
@@ -260,6 +261,8 @@ impl AgentManagementRunner {
 fn secret_refs(secrets: Vec<String>) -> Vec<SecretRef> {
     secrets.into_iter().map(|name| SecretRef { name }).collect()
 }
+
+/// Add and remove the requested secrets, starting with `current` as a baseline.
 fn apply_secret_deltas(
     current: &[SecretRef],
     add_secrets: Vec<String>,
@@ -276,6 +279,7 @@ fn apply_secret_deltas(
     secret_refs(names)
 }
 
+/// Add and remove the requested values, starting with `current` as a baseline.
 fn apply_string_deltas(
     current: &[String],
     add_values: Vec<String>,
@@ -322,12 +326,12 @@ fn ensure_json_sort_is_not_requested(
 fn sort_agents(
     agents: &mut [AgentResponse],
     sort_by: Option<AgentSortByArg>,
-    sort_order: Option<AgentSortOrderArg>,
+    sort_order: Option<SortOrderArg>,
 ) {
     let sort_by = sort_by.unwrap_or(AgentSortByArg::Name);
     let default_order = match sort_by {
-        AgentSortByArg::Name => AgentSortOrderArg::Asc,
-        AgentSortByArg::CreatedAt => AgentSortOrderArg::Desc,
+        AgentSortByArg::Name => SortOrderArg::Asc,
+        AgentSortByArg::CreatedAt => SortOrderArg::Desc,
     };
     let sort_order = sort_order.unwrap_or(default_order);
 
@@ -345,8 +349,8 @@ fn sort_agents(
         };
 
         match sort_order {
-            AgentSortOrderArg::Asc => ordering,
-            AgentSortOrderArg::Desc => match ordering {
+            SortOrderArg::Asc => ordering,
+            SortOrderArg::Desc => match ordering {
                 Ordering::Less => Ordering::Greater,
                 Ordering::Equal => Ordering::Equal,
                 Ordering::Greater => Ordering::Less,
@@ -360,7 +364,6 @@ impl TableFormat for AgentResponse {
         vec![
             Cell::new("UID"),
             Cell::new("Name"),
-            Cell::new("Available"),
             Cell::new("Created"),
             Cell::new("Description"),
             Cell::new("Secrets"),
@@ -374,7 +377,6 @@ impl TableFormat for AgentResponse {
         vec![
             Cell::new(&self.uid),
             Cell::new(&self.name),
-            Cell::new(self.available.to_string()),
             Cell::new(self.created_at.to_rfc3339()),
             Cell::new(display_optional(self.description.as_deref())),
             Cell::new(display_list(
@@ -389,16 +391,25 @@ impl TableFormat for AgentResponse {
 
 fn print_agents(agents: &[AgentResponse], output_format: OutputFormat) -> anyhow::Result<()> {
     match output_format {
-        OutputFormat::Pretty if agents.is_empty() => {
-            println!("No agents found.");
-            print_skills_hint();
-        }
-        OutputFormat::Pretty => {
-            super::output::write_list(agents.to_vec(), output_format, std::io::stdout())?;
-            print_skills_hint();
-        }
-        OutputFormat::Text => {
-            super::output::write_list(agents.to_vec(), output_format, std::io::stdout())?;
+        OutputFormat::Pretty | OutputFormat::Text => {
+            let (visible_agents, hidden_count) = visible_agents_and_hidden_count(agents);
+            match output_format {
+                OutputFormat::Pretty if visible_agents.is_empty() => {
+                    println!("No agents found.");
+                    print_skills_hint();
+                }
+                OutputFormat::Pretty => {
+                    super::output::write_list(visible_agents, output_format, std::io::stdout())?;
+                    print_skills_hint();
+                }
+                OutputFormat::Text => {
+                    super::output::write_list(visible_agents, output_format, std::io::stdout())?;
+                }
+                OutputFormat::Json | OutputFormat::Ndjson => {
+                    unreachable!("handled by outer match")
+                }
+            }
+            print_disabled_agents_hidden_notice(hidden_count);
         }
         OutputFormat::Ndjson => {
             for agent in agents {
@@ -410,6 +421,21 @@ fn print_agents(agents: &[AgentResponse], output_format: OutputFormat) -> anyhow
     Ok(())
 }
 
+fn visible_agents_and_hidden_count(agents: &[AgentResponse]) -> (Vec<AgentResponse>, usize) {
+    let visible_agents = agents
+        .iter()
+        .filter(|agent| agent.available)
+        .cloned()
+        .collect::<Vec<_>>();
+    let hidden_count = agents.len() - visible_agents.len();
+    (visible_agents, hidden_count)
+}
+
+fn print_disabled_agents_hidden_notice(hidden_count: usize) {
+    if hidden_count > 0 {
+        eprintln!("{hidden_count} disabled agents hidden");
+    }
+}
 fn print_single_agent(agent: &AgentResponse, output_format: OutputFormat) -> anyhow::Result<()> {
     match output_format {
         OutputFormat::Pretty | OutputFormat::Text => {
@@ -481,6 +507,7 @@ fn display_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
 impl warpui::Entity for AgentManagementRunner {
     type Event = ();
 }
+
 impl SingletonEntity for AgentManagementRunner {}
 
 #[cfg(test)]

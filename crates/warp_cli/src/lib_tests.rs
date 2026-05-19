@@ -8,6 +8,7 @@ use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::schedule::ScheduleSubcommand;
+use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
 
 fn set_env_var(name: &str, value: &str) -> Option<OsString> {
@@ -2010,6 +2011,98 @@ fn report_shutdown_clean_parses() {
 
     assert!(shutdown_args.error_category.is_none());
     assert!(shutdown_args.error_message.is_none());
+}
+
+#[test]
+fn secret_create_codex_api_key_parses_minimal() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from([
+        "warp",
+        "secret",
+        "create",
+        "codex",
+        "api-key",
+        "my-openai-key",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret create codex api-key` command");
+    };
+    let CliCommand::Secret(SecretCommand::Create(create_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret create` command");
+    };
+    let Some(CreateProvider::Codex(codex)) = &create_args.provider else {
+        panic!("Expected `codex` provider subcommand");
+    };
+    let CodexMethod::ApiKey(api_key_args) = &codex.method;
+
+    assert_eq!(api_key_args.common.name, "my-openai-key");
+    assert!(api_key_args.common.description.is_none());
+    assert!(api_key_args.value.value_file.is_none());
+    assert!(api_key_args.base_url.is_none());
+}
+
+#[test]
+fn secret_create_codex_api_key_accepts_base_url_and_value_file() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from([
+        "warp",
+        "secret",
+        "create",
+        "codex",
+        "api-key",
+        "my-openai-key",
+        "--value-file",
+        "key.txt",
+        "--base-url",
+        "https://us.api.openai.com/v1",
+        "--description",
+        "OpenAI key for Codex",
+        "--team",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret create codex api-key` command");
+    };
+    let CliCommand::Secret(SecretCommand::Create(create_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret create` command");
+    };
+    let Some(CreateProvider::Codex(codex)) = &create_args.provider else {
+        panic!("Expected `codex` provider subcommand");
+    };
+    let CodexMethod::ApiKey(api_key_args) = &codex.method;
+
+    assert_eq!(api_key_args.common.name, "my-openai-key");
+    assert_eq!(
+        api_key_args.common.description.as_deref(),
+        Some("OpenAI key for Codex")
+    );
+    assert!(api_key_args.common.scope.team);
+    assert!(!api_key_args.common.scope.personal);
+    assert_eq!(
+        api_key_args
+            .value
+            .value_file
+            .as_ref()
+            .and_then(|p| p.to_str()),
+        Some("key.txt")
+    );
+    assert_eq!(
+        api_key_args.base_url.as_deref(),
+        Some("https://us.api.openai.com/v1")
+    );
+}
+
+#[test]
+fn secret_create_codex_api_key_requires_name() {
+    warp_core::features::mark_initialized();
+
+    let result = Args::try_parse_from(["warp", "secret", "create", "codex", "api-key"]);
+    assert!(result.is_err());
 }
 
 #[test]
