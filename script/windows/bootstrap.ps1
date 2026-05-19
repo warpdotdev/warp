@@ -46,7 +46,7 @@ function Show-BootstrapPreview {
     Write-Output 'It will:'
     Write-Output '  - Check for Git for Windows.'
     Write-Output '  - Install Rust if cargo is unavailable.'
-    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, InnoSetup, and gcloud as needed.'
+    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, InnoSetup, LLVM, Protobuf, and gcloud as needed.'
     Write-Output '  - Install Cargo test dependencies.'
 
     if (-not $InstallCommonSkills) {
@@ -88,6 +88,14 @@ if (-not $gitBinDir) {
     exit 1
 }
 $env:PATH = "$gitBinDir;$env:PATH"
+
+# Also add usr\bin so unix tools shipped with Git for Windows (patch.exe, awk, etc.)
+# are on PATH; patch is needed by the rquickjs-sys build script.
+$gitUsrBinDir = (Split-Path -Parent $gitBinDir) + '\usr\bin'
+if (Test-Path -PathType Container $gitUsrBinDir) {
+    $env:PATH = "$gitUsrBinDir;$env:PATH"
+}
+
 function Resolve-CommonSkillsScript {
     param([string]$ScriptName)
 
@@ -156,6 +164,16 @@ winget install -e --id Kitware.CMake
 
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup
+
+# libclang is required by `bindgen`, invoked transitively by the `minimp4-sys` crate build.
+winget install -e --id LLVM.LLVM --accept-package-agreements --accept-source-agreements
+$llvmBin = "$env:PROGRAMFILES\LLVM\bin"
+if (Test-Path -PathType Container $llvmBin) {
+    $env:LIBCLANG_PATH = $llvmBin
+}
+
+# protoc is required by `prost-build`, invoked transitively by the `warp_multi_agent_api` crate build.
+winget install -e --id Google.Protobuf --accept-package-agreements --accept-source-agreements
 
 # If we don't see gcloud command, try adding the install location to the PATH.
 if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
