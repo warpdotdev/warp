@@ -4,9 +4,10 @@ use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::{
     appearance::Appearance,
     cloud_object::{
-        CloudModelType, CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult,
-        CreateObjectRequest, GenericCloudObject, GenericServerObject, GenericStringObjectFormat,
-        GenericStringObjectUniqueKey, ObjectType, Revision, UpdateCloudObjectResult,
+        CloudModelType, CloudObject, CloudObjectEventEntrypoint, CloudObjectUpsertParams,
+        CreateCloudObjectResult, CreateObjectRequest, GenericCloudObject, GenericServerObject,
+        GenericStringObjectFormat, GenericStringObjectUniqueKey, ObjectType, Revision,
+        UpdateCloudObjectResult,
     },
     drive::{items::WarpDriveItem, CloudObjectTypeAndId},
     persistence::ModelEvent,
@@ -157,7 +158,7 @@ where
     }
 
     fn serialized(&self) -> SerializedModel {
-        self.model.serialized()
+        self.model().serialized()
     }
 
     fn clone_box(&self) -> Box<dyn CloudStringObject> {
@@ -205,8 +206,9 @@ where
         self.string_model.set_display_name(name);
     }
 
-    fn upsert_event(&self, object: &GenericCloudObject<GenericStringObjectId, Self>) -> ModelEvent {
-        let object = object as &dyn CloudStringObject;
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
+        let object = GenericCloudObject::<GenericStringObjectId, Self>::from(params);
+        let object = &object as &dyn CloudStringObject;
         ModelEvent::UpsertGenericStringObject {
             object: CloudStringObject::clone_box(object),
         }
@@ -228,11 +230,16 @@ where
         self.string_model.can_export()
     }
 
-    fn bulk_upsert_event(
-        objects: &[GenericCloudObject<GenericStringObjectId, Self>],
-    ) -> ModelEvent {
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
         ModelEvent::UpsertGenericStringObjects(
-            objects.iter().map(CloudStringObject::clone_box).collect(),
+            objects
+                .into_iter()
+                .map(|params| {
+                    Box::new(GenericCloudObject::<GenericStringObjectId, Self>::from(
+                        params,
+                    )) as Box<dyn CloudStringObject>
+                })
+                .collect(),
         )
     }
 
@@ -248,7 +255,7 @@ where
                 owner: object.permissions.owner,
                 id: client_id,
                 title: None,
-                serialized_model: Some(object.model.serialized().into()),
+                serialized_model: Some(object.model().serialized().into()),
                 initial_folder_id: object.metadata.folder_id,
                 entrypoint,
                 initiated_by,

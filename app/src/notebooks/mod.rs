@@ -22,9 +22,9 @@ use crate::{
     ai::document::ai_document_model::AIDocumentId,
     appearance::Appearance,
     cloud_object::{
-        CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Owner, Revision,
-        UpdateCloudObjectResult,
+        CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams,
+        CreateCloudObjectResult, CreateObjectRequest, GenericCloudObject, GenericServerObject,
+        ObjectType, Owner, Revision, UpdateCloudObjectResult,
     },
     drive::{
         items::{notebook::WarpDriveNotebook, WarpDriveItem},
@@ -90,14 +90,14 @@ impl CloudModelType for CloudNotebookModel {
         name.clone_into(&mut self.title);
     }
 
-    fn upsert_event(&self, notebook: &CloudNotebook) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertNotebook {
-            notebook: notebook.clone(),
+            notebook: CloudNotebook::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudNotebook]) -> ModelEvent {
-        ModelEvent::UpsertNotebooks(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertNotebooks(objects.into_iter().map(CloudNotebook::from).collect())
     }
 
     fn create_object_queue_item(

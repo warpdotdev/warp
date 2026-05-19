@@ -8,12 +8,11 @@ use crate::{
         model::{
             generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
             json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
         JsonObjectType, Revision,
     },
-    server::{ids::SyncId, sync_queue::QueueItem},
+    server::sync_queue::QueueItem,
     workspaces::user_workspaces::UserWorkspaces,
 };
 use warpui::{AppContext, SingletonEntity as _};
@@ -109,23 +108,6 @@ pub type CloudAmbientAgentEnvironment =
     GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
 pub type CloudAmbientAgentEnvironmentModel =
     GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
-
-impl CloudAmbientAgentEnvironment {
-    pub fn get_all(app: &AppContext) -> Vec<CloudAmbientAgentEnvironment> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(
-        sync_id: &'a SyncId,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudAmbientAgentEnvironment> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(sync_id)
-    }
-}
 
 impl AmbientAgentEnvironment {
     pub fn new(

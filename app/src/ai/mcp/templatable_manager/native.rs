@@ -3,6 +3,7 @@ use crate::ai::mcp::templatable_manager::oauth::{
     load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
     TEMPLATABLE_MCP_CREDENTIALS_KEY,
 };
+use crate::ai::mcp::CloudMCPServer;
 use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;
 use std::collections::HashSet;
@@ -13,15 +14,17 @@ use crate::ai::mcp::http_client::build_client_with_headers;
 use crate::ai::mcp::templatable::GalleryData;
 use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
 use crate::ai::mcp::{
-    Author, CloudMCPServer, JsonTemplate, MCPGalleryManager, MCPServerUpdate,
-    ParsedTemplatableMCPServerResult,
+    Author, JsonTemplate, MCPGalleryManager, MCPServerUpdate, ParsedTemplatableMCPServerResult,
 };
 
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::TemplatableMCPServer;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::cloud_object::{CloudObject, CloudObjectLocation, CloudObjectMetadataExt, Space};
+use crate::cloud_object::{
+    CloudObject, CloudObjectLocation, CloudObjectLookup as _, CloudObjectMetadataExt,
+    CloudObjectUuidLookup as _, Space,
+};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ClientId, ServerId};
 use crate::server::telemetry::{
@@ -1422,8 +1425,6 @@ impl TemplatableMCPServerManager {
         servers_to_restart: HashSet<Uuid>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Import inline because of circular dependencies
-        use crate::ai::mcp::CloudMCPServer;
         let cloud_legacy_servers = CloudMCPServer::get_all(ctx);
         log::info!(
             "Converting {} legacy MCP servers into templatable MCP servers",

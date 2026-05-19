@@ -806,7 +806,9 @@ async fn run_sync_state_after_creation_item_not_in_sync_queue<K, M>(
     // we created an object in the db
     assert_eq!(
         std::mem::discriminant(&events[0]),
-        std::mem::discriminant(&object.model().upsert_event(&object))
+        std::mem::discriminant(&M::upsert_event(
+            object.upsert_params(object.model().object_type())
+        ))
     );
     // when we got the correct response back from the server,
     // we updated the db with the server id

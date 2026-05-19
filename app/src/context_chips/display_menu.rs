@@ -8,7 +8,7 @@ use pathfinder_geometry::vector::vec2f;
 
 use crate::{
     ai::cloud_environments::CloudAmbientAgentEnvironment,
-    cloud_object::model::generic_string_model::StringModel,
+    cloud_object::{model::generic_string_model::StringModel, CloudObjectLookup as _},
     editor::{
         EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
         TextOptions,

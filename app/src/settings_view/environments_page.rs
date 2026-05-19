@@ -22,7 +22,8 @@ use crate::{
     appearance::Appearance,
     cloud_object::{
         model::persistence::{CloudModel, CloudModelEvent},
-        CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, Owner, Space,
+        CloudObjectLocation, CloudObjectLookup as _, GenericStringObjectFormat, JsonObjectType,
+        Owner, Space,
     },
     drive::CloudObjectTypeAndId,
     editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},

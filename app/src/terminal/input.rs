@@ -50,6 +50,7 @@ use crate::ai::predict::prompt_suggestions::{
 };
 use crate::ai::skills::SkillManager;
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::spacing;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;

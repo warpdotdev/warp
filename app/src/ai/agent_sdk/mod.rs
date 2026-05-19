@@ -53,6 +53,7 @@ use crate::{
     ai::ambient_agents::{task::HarnessConfig, AmbientAgentTaskId},
     ai::cloud_environments::CloudAmbientAgentEnvironment,
     auth::AuthStateProvider,
+    cloud_object::CloudObjectLookup as _,
     send_telemetry_sync_from_app_ctx,
     server::{
         ids::{ServerId, SyncId},

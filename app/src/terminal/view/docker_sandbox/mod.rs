@@ -26,6 +26,7 @@ use crate::ai::agent_sdk::driver::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::cloud_object::CloudObjectLookup as _;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 #[cfg(not(target_family = "wasm"))]

@@ -7,9 +7,9 @@ use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::{
     appearance::Appearance,
     cloud_object::{
-        CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Revision, Space,
-        UpdateCloudObjectResult,
+        CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams,
+        CreateCloudObjectResult, CreateObjectRequest, GenericCloudObject, GenericServerObject,
+        ObjectType, Revision, Space, UpdateCloudObjectResult,
     },
     persistence::ModelEvent,
     server::{
@@ -70,14 +70,14 @@ impl CloudModelType for CloudFolderModel {
         self.name.clone()
     }
 
-    fn upsert_event(&self, folder: &CloudFolder) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertFolder {
-            folder: folder.clone(),
+            folder: CloudFolder::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudFolder]) -> ModelEvent {
-        ModelEvent::UpsertFolders(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertFolders(objects.into_iter().map(CloudFolder::from).collect())
     }
 
     fn create_object_queue_item(

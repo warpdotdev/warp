@@ -91,7 +91,7 @@ use crate::{
         },
     },
     auth::AuthStateProvider,
-    cloud_object::CloudObject,
+    cloud_object::{CloudObject, CloudObjectLookup as _},
     server::{
         ids::{ServerId, SyncId},
         server_api::{

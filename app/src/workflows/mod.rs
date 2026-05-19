@@ -22,8 +22,9 @@ pub mod workflow_view;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
-    CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-    GenericCloudObject, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
+    CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams, CreateCloudObjectResult,
+    CreateObjectRequest, GenericCloudObject, GenericServerObject, ObjectType, Revision,
+    UpdateCloudObjectResult,
 };
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 
@@ -258,14 +259,14 @@ impl CloudModelType for CloudWorkflowModel {
         self.data.set_name(name);
     }
 
-    fn upsert_event(&self, workflow: &CloudWorkflow) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertWorkflow {
-            workflow: workflow.clone(),
+            workflow: CloudWorkflow::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudWorkflow]) -> ModelEvent {
-        ModelEvent::UpsertWorkflows(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertWorkflows(objects.into_iter().map(CloudWorkflow::from).collect())
     }
 
     fn create_object_queue_item(
@@ -352,18 +353,6 @@ impl CloudModelType for CloudWorkflowModel {
 
     fn can_export(&self) -> bool {
         true
-    }
-}
-
-impl PartialEq<Workflow> for CloudWorkflow {
-    fn eq(&self, other: &Workflow) -> bool {
-        self.model().data == *other
-    }
-}
-
-impl PartialEq<CloudWorkflow> for CloudWorkflow {
-    fn eq(&self, other: &CloudWorkflow) -> bool {
-        self.model().data == other.model().data && self.id == other.id
     }
 }
 

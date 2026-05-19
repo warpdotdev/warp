@@ -1178,7 +1178,12 @@ impl UpdateManager {
                 )
             });
 
-        GenericCloudObject::<K, M>::bulk_upsert_event(&objects_without_pending_changes)
+        M::bulk_upsert_event(
+            objects_without_pending_changes
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
+        )
     }
 
     /// Generic handler deleting all objects of a given model type from the server (e.g. all updated/deleted notebooks or workflows).
@@ -3590,7 +3595,10 @@ impl UpdateManager {
 
         // Update sqlite with a single bulk request
         self.save_to_db(vec![GenericStringModel::<T, S>::bulk_upsert_event(
-            &objects,
+            objects
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
         )]);
 
         // Populate sync queue with a single bulk request

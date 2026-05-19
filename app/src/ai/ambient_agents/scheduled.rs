@@ -12,8 +12,8 @@ use crate::{
             json_model::{JsonModel, JsonSerializer},
             persistence::CloudModel,
         },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Owner, Revision,
+        CloudObjectLookup as _, GenericCloudObject, GenericStringObjectFormat,
+        GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
     },
     drive::CloudObjectTypeAndId,
     server::{
@@ -57,23 +57,6 @@ pub type CloudScheduledAmbientAgent =
     GenericCloudObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
 pub type CloudScheduledAmbientAgentModel =
     GenericStringModel<ScheduledAmbientAgent, JsonSerializer>;
-
-impl CloudScheduledAmbientAgent {
-    pub fn get_all(app: &AppContext) -> Vec<CloudScheduledAmbientAgent> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudScheduledAmbientAgentModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(
-        sync_id: &'a SyncId,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudScheduledAmbientAgent> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudScheduledAmbientAgentModel>(sync_id)
-    }
-}
 
 impl ScheduledAmbientAgent {
     pub fn new(name: String, cron_schedule: String, enabled: bool, prompt: String) -> Self {

@@ -1053,18 +1053,18 @@ fn test_collapse_all_in_location() {
             let folder_1 = folder_from_cloud_model(model, folder_1_id);
             let folder_4 = folder_from_cloud_model(model, folder_4_id);
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
             // but the others are still open
             let folder_2 = folder_from_cloud_model(model, folder_2_id);
             let folder_3 = folder_from_cloud_model(model, folder_3_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(folder_2.model.is_open);
-            assert!(folder_3.model.is_open);
-            assert!(folder_6.model.is_open);
-            assert!(folder_7.model.is_open);
+            assert!(folder_2.model().is_open);
+            assert!(folder_3.model().is_open);
+            assert!(folder_6.model().is_open);
+            assert!(folder_7.model().is_open);
 
             model.collapse_all_in_location(
                 CloudObjectLocation::Space(Default::default()),
@@ -1079,13 +1079,13 @@ fn test_collapse_all_in_location() {
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_2.model.is_open);
-            assert!(!folder_3.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
-            assert!(!folder_6.model.is_open);
-            assert!(!folder_7.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_2.model().is_open);
+            assert!(!folder_3.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
+            assert!(!folder_6.model().is_open);
+            assert!(!folder_7.model().is_open);
         });
     })
 }
@@ -1150,19 +1150,19 @@ fn test_collapse_all_in_trash() {
             // folders 1, 4 should be collapsed
             let folder_1 = folder_from_cloud_model(model, folder_1_id);
             let folder_4 = folder_from_cloud_model(model, folder_4_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_4.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_4.model().is_open);
             // but the others, including folder 5, are still open
             let folder_2 = folder_from_cloud_model(model, folder_2_id);
             let folder_3 = folder_from_cloud_model(model, folder_3_id);
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(folder_2.model.is_open);
-            assert!(folder_3.model.is_open);
-            assert!(folder_5.model.is_open);
-            assert!(folder_6.model.is_open);
-            assert!(folder_7.model.is_open);
+            assert!(folder_2.model().is_open);
+            assert!(folder_3.model().is_open);
+            assert!(folder_5.model().is_open);
+            assert!(folder_6.model().is_open);
+            assert!(folder_7.model().is_open);
 
             model.collapse_all_in_location(
                 CloudObjectLocation::Space(Default::default()),
@@ -1177,13 +1177,13 @@ fn test_collapse_all_in_trash() {
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_2.model.is_open);
-            assert!(!folder_3.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
-            assert!(!folder_6.model.is_open);
-            assert!(!folder_7.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_2.model().is_open);
+            assert!(!folder_3.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
+            assert!(!folder_6.model().is_open);
+            assert!(!folder_7.model().is_open);
         });
     })
 }
