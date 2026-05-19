@@ -22,8 +22,13 @@ pub const REASONING_LEVEL_TITLE: &str = "Reasoning level";
 pub const REASONING_LEVEL_DESCRIPTION: &str = "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.";
 
 pub enum CostRow {
-    Bar { value: Option<f32> },
-    BilledToApi { manage_button: Box<dyn Element> },
+    Bar {
+        value: Option<f32>,
+    },
+    BilledToProvider {
+        label: &'static str,
+        manage_button: Box<dyn Element>,
+    },
 }
 
 pub struct ModelSpecScoresLayout {
@@ -63,10 +68,16 @@ pub fn render_model_spec_scores(
                 app,
             ));
         }
-        CostRow::BilledToApi { manage_button } => {
+        CostRow::BilledToProvider {
+            label,
+            manage_button,
+        } => {
             rows.push(render_score_row(
                 "Cost",
-                ScoreRowKind::BilledToApi { manage_button },
+                ScoreRowKind::BilledToProvider {
+                    label,
+                    manage_button,
+                },
                 layout.bg_bar_color,
                 app,
             ));
@@ -80,8 +91,13 @@ pub fn render_model_spec_scores(
 }
 
 enum ScoreRowKind {
-    Bar { value: Option<f32> },
-    BilledToApi { manage_button: Box<dyn Element> },
+    Bar {
+        value: Option<f32>,
+    },
+    BilledToProvider {
+        label: &'static str,
+        manage_button: Box<dyn Element>,
+    },
 }
 
 fn render_score_row(
@@ -184,7 +200,10 @@ fn render_score_row(
             )
             .finish()
         }
-        ScoreRowKind::BilledToApi { manage_button } => Expanded::new(
+        ScoreRowKind::BilledToProvider {
+            label,
+            manage_button,
+        } => Expanded::new(
             1.,
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
@@ -192,13 +211,9 @@ fn render_score_row(
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     Container::new(
-                        Text::new(
-                            "Billed to API".to_string(),
-                            appearance.ui_font_family(),
-                            14.,
-                        )
-                        .with_color(theme.disabled_ui_text_color().into())
-                        .finish(),
+                        Text::new(label.to_string(), appearance.ui_font_family(), 14.)
+                            .with_color(theme.disabled_ui_text_color().into())
+                            .finish(),
                     )
                     .finish(),
                 )

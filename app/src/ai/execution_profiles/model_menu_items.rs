@@ -1,5 +1,6 @@
 use crate::ai::llms::{
-    is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences,
+    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
+    LLMInfo, LLMPreferences,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 use itertools::Itertools;
@@ -84,7 +85,14 @@ fn make_item_fields<A: Action + Clone>(
     let is_custom_endpoint = LLMPreferences::as_ref(app)
         .custom_llm_info_for_id(&llm.id)
         .is_some();
-    let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+    let is_using_bedrock = !is_auto(llm) && should_show_bedrock_icon_for_model(llm, app);
+    let credential_icon = if is_using_bedrock {
+        Some(Icon::Aws)
+    } else if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
+        Some(Icon::Key)
+    } else {
+        None
+    };
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
         let position_id = position_id_fn(&llm.id);
@@ -94,9 +102,8 @@ fn make_item_fields<A: Action + Clone>(
                     Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
                 let icon_container = Container::new(
-                    ConstrainedBox::new(if is_using_api_key {
-                        Icon::Key
-                            .to_warpui_icon(appearance.theme().foreground())
+                    ConstrainedBox::new(if let Some(icon) = credential_icon {
+                        icon.to_warpui_icon(appearance.theme().foreground())
                             .finish()
                     } else {
                         Empty::new().finish()

@@ -19,8 +19,8 @@ use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
-    LLMSpec,
+    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
+    LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -242,6 +242,8 @@ struct ModelSearchItem {
     is_selected: bool,
     is_custom_endpoint: bool,
     disable_reason: Option<DisableReason>,
+    credential_icon: Option<Icon>,
+    is_using_bedrock: bool,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
@@ -263,6 +265,7 @@ impl ModelSearchItem {
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();
+        let is_using_bedrock = !is_auto(llm) && should_show_bedrock_icon_for_model(llm, app);
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
@@ -272,6 +275,14 @@ impl ModelSearchItem {
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
             disable_reason,
+            credential_icon: if is_using_bedrock {
+                Some(Icon::Aws)
+            } else if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
+                Some(Icon::Key)
+            } else {
+                None
+            },
+            is_using_bedrock,
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
             manage_api_key_mouse_state: Default::default(),
@@ -362,12 +373,11 @@ impl SearchItem for ModelSearchItem {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
 
-        if self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app) {
-            let key_icon =
-                ConstrainedBox::new(Icon::Key.to_warpui_icon(secondary_text_color).finish())
-                    .with_width(font_size)
-                    .with_height(font_size)
-                    .finish();
+        if let Some(icon) = self.credential_icon {
+            let key_icon = ConstrainedBox::new(icon.to_warpui_icon(secondary_text_color).finish())
+                .with_width(font_size)
+                .with_height(font_size)
+                .finish();
             row = row.with_child(Container::new(key_icon).with_margin_left(6.).finish());
         }
 
@@ -411,7 +421,7 @@ impl SearchItem for ModelSearchItem {
 
         if should_show_discount_chip(
             self.discount_percentage,
-            is_using_api_key_for_provider(&self.provider, app),
+            is_using_api_key_for_provider(&self.provider, app) || self.is_using_bedrock,
         ) {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
@@ -458,7 +468,13 @@ impl SearchItem for ModelSearchItem {
 
         let is_using_api_key =
             self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app);
-        let cost_row = if is_using_api_key {
+        let cost_row = if self.is_using_bedrock || is_using_api_key {
+            let search_query = if self.is_using_bedrock {
+                "bedrock"
+            } else {
+                "api"
+            }
+            .to_string();
             let manage_button = appearance
                 .ui_builder()
                 .button(
@@ -478,15 +494,19 @@ impl SearchItem for ModelSearchItem {
                 })
                 .with_cursor(Some(Cursor::PointingHand))
                 .build()
-                .on_click(|ctx, _, _| {
+                .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: "api".to_string(),
+                        search_query: search_query.clone(),
                         section: Some(SettingsSection::WarpAgent),
                     });
                 })
                 .finish();
-
-            CostRow::BilledToApi {
+            CostRow::BilledToProvider {
+                label: if self.is_using_bedrock {
+                    "Billed to Bedrock"
+                } else {
+                    "Billed to API"
+                },
                 manage_button: Container::new(manage_button).finish(),
             }
         } else {
