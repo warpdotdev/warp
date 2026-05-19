@@ -34,6 +34,16 @@ define_settings_group!(WindowSettings, settings: [
         toml_path: "appearance.window.override_opacity",
         description: "The opacity of the window background, from 1 to 100 percent.",
     },
+    background_image_overlay_opacity: BackgroundImageOverlayOpacity {
+        type: u8,
+        default: 40,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        storage_key: "BackgroundImageOverlayOpacity",
+        toml_path: "appearance.window.background_image_overlay_opacity",
+        description: "The opacity of the overlay on top of the background image, from 0 to 100 percent. Higher values make the overlay darker, improving text readability.",
+    },
     open_windows_at_custom_size: OpenWindowsAtCustomSize {
         type: bool,
         default: false,
@@ -156,6 +166,23 @@ impl BackgroundOpacity {
         } else if new_value > Self::MAX {
             log::warn!(
                 "Window background opacity should not be bigger than {}",
+                Self::MAX
+            );
+            Self::MAX
+        } else {
+            new_value
+        }
+    }
+}
+
+impl BackgroundImageOverlayOpacity {
+    pub const MIN: u8 = 0;
+    pub const MAX: u8 = 100;
+
+    fn validate(&self, new_value: u8) -> u8 {
+        if new_value > Self::MAX {
+            log::warn!(
+                "Background image overlay opacity should not be bigger than {}",
                 Self::MAX
             );
             Self::MAX

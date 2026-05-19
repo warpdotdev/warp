@@ -49,8 +49,9 @@ use crate::themes::theme::{self, RespectSystemTheme, SelectedSystemThemes, Theme
 use crate::user_config::WarpConfig;
 use crate::util::bindings;
 use crate::window_settings::{
-    BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
-    OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
+    BackgroundBlurRadius, BackgroundBlurTexture, BackgroundImageOverlayOpacity, BackgroundOpacity,
+    LeftPanelVisibilityAcrossTabs, OpenWindowsAtCustomSize, WindowSettings,
+    WindowSettingsChangedEvent, ZoomLevel,
 };
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
@@ -432,8 +433,10 @@ pub enum AppearancePageAction {
     SetLineHeight,
     SetOpacity(f32),
     SetBlur(f32),
+    SetImageOverlayOpacity(f32),
     OpacitySliderDragged(f32),
     BlurSliderDragged(f32),
+    ImageOverlaySliderDragged(f32),
     SetFontFamily(String),
     SetAIFontFamily(String),
     SetThinStrokes(ThinStrokes),
@@ -496,6 +499,8 @@ pub struct AppearanceSettingsPageView {
     valid_new_window_rows: bool,
     opacity_state: SliderStateHandle,
     blur_state: SliderStateHandle,
+    #[allow(dead_code)]
+    image_overlay_opacity_state: SliderStateHandle,
     font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
     font_weight_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     #[allow(dead_code)]
@@ -552,6 +557,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetLineHeight => self.set_line_height_ratio(ctx),
             SetOpacity(value) => self.set_opacity(*value, true, ctx),
             SetBlur(value) => self.set_blur(*value, true, ctx),
+            SetImageOverlayOpacity(value) => self.set_image_overlay_opacity(*value, true, ctx),
             SetFontFamily(name) => self.set_font_family(name, ctx),
             SetAIFontFamily(name) => {
                 self.set_ai_font_family(name, ctx);
@@ -592,6 +598,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
             BlurSliderDragged(val) => self.set_blur(*val, false, ctx),
+            ImageOverlaySliderDragged(val) => self.set_image_overlay_opacity(*val, false, ctx),
             OpenUrl(url) => {
                 ctx.open_url(url);
             }
@@ -1214,6 +1221,7 @@ impl AppearanceSettingsPageView {
             valid_new_window_rows: true,
             opacity_state: Default::default(),
             blur_state: Default::default(),
+            image_overlay_opacity_state: Default::default(),
             font_family_dropdown,
             font_weight_dropdown,
             thin_strokes_dropdown,
@@ -1285,6 +1293,12 @@ impl AppearanceSettingsPageView {
             .is_supported_on_current_platform()
         {
             window_settings_widgets.push(Box::new(WindowBlurTextureWidget::default()));
+        }
+        if window_settings
+            .background_image_overlay_opacity
+            .is_supported_on_current_platform()
+        {
+            window_settings_widgets.push(Box::new(BackgroundImageOverlayWidget::default()));
         }
 
         if FeatureFlag::UIZoom.is_enabled() {
@@ -1746,6 +1760,20 @@ impl AppearanceSettingsPageView {
                 });
             }
         }
+    }
+
+    fn set_image_overlay_opacity(
+        &mut self,
+        opacity_value: f32,
+        _should_set_defaults: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+            report_if_error!(window_settings
+                .background_image_overlay_opacity
+                .set_value(opacity_value as u8, ctx));
+        });
+        ctx.notify();
     }
 
     fn set_opacity(
@@ -3266,6 +3294,77 @@ impl SettingsWidget for WindowBlurTextureWidget {
             }
         }
         col.finish()
+    }
+}
+
+#[derive(Default)]
+struct BackgroundImageOverlayWidget {
+    slider_state: SliderStateHandle,
+}
+
+impl SettingsWidget for BackgroundImageOverlayWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "background image overlay opacity dark readability"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        // Only show the widget when the current theme has a background image.
+        if appearance.theme().background_image().is_none() {
+            return Empty::new().finish();
+        }
+
+        let window_settings = WindowSettings::as_ref(app);
+        let overlay_value = *window_settings.background_image_overlay_opacity;
+        Flex::column()
+            .with_child(render_body_item::<AppearancePageAction>(
+                format!("Background Image Overlay: {overlay_value}"),
+                None,
+                LocalOnlyIconState::for_setting(
+                    BackgroundImageOverlayOpacity::storage_key(),
+                    BackgroundImageOverlayOpacity::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                ToggleState::Enabled,
+                appearance,
+                appearance
+                    .ui_builder()
+                    .slider(self.slider_state.clone())
+                    .with_range(
+                        BackgroundImageOverlayOpacity::MIN as f32
+                            ..BackgroundImageOverlayOpacity::MAX as f32,
+                    )
+                    .with_default_value(overlay_value as f32)
+                    .with_style(UiComponentStyles {
+                        width: Some(OPACITY_SLIDER_WIDTH),
+                        margin: Some(Coords::default().top(3.).bottom(3.)),
+                        ..Default::default()
+                    })
+                    .on_drag(|ctx, _, val| {
+                        ctx.dispatch_typed_action(
+                            AppearancePageAction::ImageOverlaySliderDragged(val),
+                        )
+                    })
+                    .on_change(|ctx, _, val| {
+                        ctx.dispatch_typed_action(
+                            AppearancePageAction::SetImageOverlayOpacity(val),
+                        )
+                    })
+                    .build()
+                    .finish(),
+                Some(
+                    "Controls the darkness of the overlay on background images. Higher values improve text readability."
+                        .to_string(),
+                ),
+            ))
+            .finish()
     }
 }
 
