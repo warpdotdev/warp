@@ -38,6 +38,12 @@ pub(super) enum CliTelemetryEvent {
     MCPList,
     /// Executing `warp model list`
     ModelList,
+    /// Executing `warp memory-store list`
+    MemoryStoreList,
+    /// Executing `warp memory-store list-memories`
+    MemoryStoreListMemories,
+    /// Executing `warp memory-store create-memory`
+    MemoryStoreCreateMemory,
     /// Executing `warp task list`
     TaskList,
     /// Executing `warp task get`
@@ -153,6 +159,9 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::EnvironmentImageList => None,
             CliTelemetryEvent::MCPList => None,
             CliTelemetryEvent::ModelList => None,
+            CliTelemetryEvent::MemoryStoreList => None,
+            CliTelemetryEvent::MemoryStoreListMemories => None,
+            CliTelemetryEvent::MemoryStoreCreateMemory => None,
             CliTelemetryEvent::TaskList => None,
             CliTelemetryEvent::TaskGet => None,
             CliTelemetryEvent::ConversationGet => None,
@@ -237,6 +246,13 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MCPList => "CLI.Execute.MCP.List",
             CliTelemetryEventDiscriminants::ModelList => "CLI.Execute.Model.List",
+            CliTelemetryEventDiscriminants::MemoryStoreList => "CLI.Execute.MemoryStore.List",
+            CliTelemetryEventDiscriminants::MemoryStoreListMemories => {
+                "CLI.Execute.MemoryStore.ListMemories"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreCreateMemory => {
+                "CLI.Execute.MemoryStore.CreateMemory"
+            }
             CliTelemetryEventDiscriminants::TaskList => "CLI.Execute.Task.List",
             CliTelemetryEventDiscriminants::TaskGet => "CLI.Execute.Task.Get",
             CliTelemetryEventDiscriminants::ConversationGet => "CLI.Execute.Conversation.Get",
@@ -325,6 +341,15 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MCPList => "Listed MCP servers from the Warp CLI",
             CliTelemetryEventDiscriminants::ModelList => "Listed models from the Warp CLI",
+            CliTelemetryEventDiscriminants::MemoryStoreList => {
+                "Listed memory stores from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreListMemories => {
+                "Listed memories in a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreCreateMemory => {
+                "Created a manual memory in a memory store from the Warp CLI"
+            }
             CliTelemetryEventDiscriminants::TaskList => "Listed tasks from the Warp CLI",
             CliTelemetryEventDiscriminants::TaskGet => "Got status of task from the Warp CLI",
             CliTelemetryEventDiscriminants::ConversationGet => {
