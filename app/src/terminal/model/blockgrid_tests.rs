@@ -244,3 +244,117 @@ pub fn test_cursor_display_point_not_clipped_when_trimming_disabled() {
         Some(CursorDisplayPoint::HiddenCache(Point::new(0, 1)))
     );
 }
+
+/// Regression test for #10144: when an inline interactive command (e.g.
+/// `aws configure`) writes a series of prompts and the inferior moves the
+/// cursor back up — for example to redraw the current input line after a
+/// terminal resize, or simply because the program walked its cursor down for
+/// some intermediate operation — the block's `max_cursor_point` watermark
+/// stays at the deepest row ever reached. Without trimming, `len_displayed`
+/// returns that watermark and the block height balloons past its actual
+/// content, leaving a large blank gap above the pinned-bottom input.
+///
+/// With trim enabled, `len_displayed` must track the last row with visible
+/// content, which is what the user actually sees.
+#[test]
+pub fn test_trim_trailing_blank_rows_handles_inline_interactive_prompt_pattern() {
+    let size = SizeInfo::new_without_font_metrics(40, 80);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+
+    block_grid.start();
+    block_grid.set_trim_trailing_blank_rows(true);
+
+    // Simulate the inferior writing four `aws configure`-style prompts on
+    // successive rows, advancing the cursor as it goes.
+    for prompt in ["AWS Access Key ID [None]: ", "AWS Secret Access Key [None]: "] {
+        for c in prompt.chars() {
+            block_grid.input(c);
+        }
+        block_grid.linefeed();
+        block_grid.carriage_return();
+    }
+
+    block_grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // Sanity: two prompt rows of content, plus the (empty) cursor row.
+    let height_after_prompts = block_grid.len_displayed();
+    assert!(
+        height_after_prompts <= 3,
+        "expected displayed height to track content (<=3 rows), got {height_after_prompts}",
+    );
+
+    // Now reproduce the bug trigger: the inferior walks the cursor *down*
+    // far past the last prompt (e.g. an inline redraw routine that probes
+    // the terminal) and then comes back up to the current input row. This
+    // is exactly what a misbehaving readline prompt can do, and what bumps
+    // `max_cursor_point` past the visible content.
+    block_grid.goto(VisibleRow(20), 0);
+    block_grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // `len()` reflects the high-water mark — that's the bug surface.
+    assert_eq!(
+        block_grid.len(),
+        21,
+        "len() should track max_cursor_point and reflect the inferior's deepest cursor row",
+    );
+
+    // Return the cursor to the actual prompt row. The bug surface persists:
+    // `len()` is still anchored to the watermark.
+    block_grid.goto(VisibleRow(1), 26);
+    block_grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    assert_eq!(block_grid.len(), 21);
+
+    // With `trim_trailing_blank_rows` enabled, `len_displayed` ignores the
+    // ghost trailing rows and matches the real content height. This is the
+    // height the blocklist viewport uses to position the active block, so
+    // the visible cursor stays at the bottom of the pinned-bottom layout
+    // instead of being pushed upward by ~18 ghost rows.
+    let displayed = block_grid.len_displayed();
+    assert!(
+        displayed <= 3,
+        "trim should cap displayed height at actual content (<=3 rows), got {displayed}",
+    );
+}
+
+/// Companion to the regression test above: without trim, `len_displayed`
+/// falls through to `len()` and the watermark bug is fully observable.
+/// This guards against accidentally weakening the trim contract.
+#[test]
+pub fn test_without_trim_inline_interactive_prompt_pattern_balloons_height() {
+    let size = SizeInfo::new_without_font_metrics(40, 80);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+
+    block_grid.start();
+    // NB: trim intentionally *not* enabled — this asserts current behavior
+    // without the fix from #10144.
+
+    for c in "AWS Access Key ID [None]: ".chars() {
+        block_grid.input(c);
+    }
+    block_grid.linefeed();
+    block_grid.carriage_return();
+
+    block_grid.goto(VisibleRow(20), 0);
+    block_grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // Walk cursor back up to the actual input row.
+    block_grid.goto(VisibleRow(1), 26);
+    block_grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // Without trim, displayed height equals the high-water mark, even
+    // though only one row of visible content exists.
+    assert_eq!(block_grid.len(), 21);
+    assert_eq!(block_grid.len_displayed(), 21);
+}
