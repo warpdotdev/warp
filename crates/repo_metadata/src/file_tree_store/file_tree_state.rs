@@ -196,6 +196,12 @@ impl FileTreeMapStore {
         });
 
         entry.load(gitignores)?;
+        // Clear any stale state for this path before re-inserting. Without this,
+        // `insert_entry_at_path` only `extend`s the maps, so entries for files
+        // that were deleted on disk between loads remain in the tree. Safe for
+        // first-time-expand callers because the path's previous value is just an
+        // unloaded placeholder with no descendants in the maps.
+        self.remove(path);
         self.insert_entry_at_path(child_path, entry);
         Ok(())
     }

@@ -136,6 +136,9 @@ pub enum FileTreeAction {
     CDToDirectory {
         id: FileTreeIdentifier,
     },
+    RefreshDirectory {
+        id: FileTreeIdentifier,
+    },
     DismissEditor,
     ItemDroppedOnInput {
         id: FileTreeIdentifier,
@@ -2365,6 +2368,13 @@ impl FileTreeView {
                             .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
                             .into_item(),
                     );
+                    items.push(
+                        MenuItemFields::new("Refresh")
+                            .with_on_select_action(FileTreeAction::RefreshDirectory {
+                                id: id.clone(),
+                            })
+                            .into_item(),
+                    );
                 }
             };
 
@@ -2530,6 +2540,43 @@ impl FileTreeView {
 
         ctx.emit(FileTreeEvent::CDToDirectory { path });
     }
+
+    /// Re-reads the right-clicked directory's contents from disk and updates the tree.
+    /// Surgical: only the targeted directory is re-scanned (one level deep, matching lazy-load behavior).
+    /// Bypasses watcher staleness from dropped FSEvents or lazy-load mutation drops.
+    #[cfg(feature = "local_fs")]
+    fn refresh_directory(&mut self, id: &FileTreeIdentifier, ctx: &mut ViewContext<Self>) {
+        let Some(root_dir) = self.root_directories.get(&id.root) else {
+            return;
+        };
+        let Some(item) = root_dir.items.get(id.index) else {
+            return;
+        };
+        let FileTreeItem::DirectoryHeader { .. } = item else {
+            return;
+        };
+        let dir_path = item.path().clone();
+        let local_path = dir_path.to_local_path_lossy();
+        // The displayed file-tree root (id.root) can be a subdirectory of the
+        // indexed repository (cwd-inside-repo case), in which case it is not a
+        // valid repo_root key for load_directory and the call would return
+        // RepoNotFound. Look up the actual indexed repository root that contains
+        // dir_path, falling back to the displayed root for standalone lazy-loaded
+        // paths where they coincide.
+        let repo_root = self
+            .repository_metadata_model
+            .as_ref(ctx)
+            .find_repository_for_path(&local_path, ctx)
+            .unwrap_or_else(|| id.root.clone());
+        self.repository_metadata_model.update(ctx, |model, ctx| {
+            if let Err(err) = model.load_directory(&repo_root, &dir_path, ctx) {
+                log::warn!("Refresh failed for {dir_path:?}: {err:?}");
+            }
+        });
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn refresh_directory(&mut self, _id: &FileTreeIdentifier, _ctx: &mut ViewContext<Self>) {}
 
     fn rename_item(&mut self, id: &FileTreeIdentifier, ctx: &mut ViewContext<Self>) {
         let exists = self
@@ -3094,6 +3141,12 @@ impl TypedActionView for FileTreeView {
             FileTreeAction::CDToDirectory { id } => {
                 if !self.is_remote_item(id) {
                     self.cd_to_directory(id, ctx);
+                }
+                self.context_menu_state.take();
+            }
+            FileTreeAction::RefreshDirectory { id } => {
+                if !self.is_remote_item(id) {
+                    self.refresh_directory(id, ctx);
                 }
                 self.context_menu_state.take();
             }
