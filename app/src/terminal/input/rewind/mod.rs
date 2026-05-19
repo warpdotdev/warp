@@ -10,6 +10,7 @@ pub use view::{RewindMenuEvent, RewindMenuView};
 
 use warpui::keymap::Keystroke;
 
+use crate::localization;
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
 };
@@ -24,7 +25,10 @@ impl InlineMenuAction for SelectRewindPoint {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text("rewind"),
+            MessageItem::text(localization::text_for_app(
+                args.app,
+                "terminal.inline_menu.action.rewind",
+            )),
         ];
 
         items.extend(default_navigation_message_items(&args));

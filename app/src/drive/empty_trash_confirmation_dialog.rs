@@ -11,14 +11,9 @@ use warpui::{
 
 use crate::{
     appearance::Appearance,
+    localization,
     ui_components::dialog::{dialog_styles, Dialog},
 };
-
-const CANCEL_TEXT: &str = "Cancel";
-
-const EMPTY_TRASH_TITLE_TEXT: &str = "Are you sure you want to empty the trash?";
-const EMPTY_TRASH_BODY_TEXT: &str = "This action cannot be undone.";
-const EMPTY_TRASH_CONFIRM_TEXT: &str = "Yes, empty trash";
 
 // This follows our new design standard for confirmation dialogs (e.g. used in the session sharing dialog)
 // Design team has discouraged us from continuing to use CloudActionConfirmationDialog's current design
@@ -71,7 +66,7 @@ impl View for EmptyTrashConfirmationDialog {
         let confirm_button = appearance
             .ui_builder()
             .button(ButtonVariant::Accent, self.confirm_mouse_state.clone())
-            .with_centered_text_label(EMPTY_TRASH_CONFIRM_TEXT.into())
+            .with_centered_text_label(text(app, "drive.confirmation.empty_trash.confirm"))
             .with_style(button_style)
             .build()
             .with_cursor(Cursor::PointingHand)
@@ -83,7 +78,7 @@ impl View for EmptyTrashConfirmationDialog {
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Basic, self.cancel_mouse_state.clone())
-            .with_centered_text_label(CANCEL_TEXT.into())
+            .with_centered_text_label(text(app, "drive.confirmation.cancel"))
             .with_style(button_style)
             .build()
             .with_cursor(Cursor::PointingHand)
@@ -93,8 +88,8 @@ impl View for EmptyTrashConfirmationDialog {
             .finish();
 
         Dialog::new(
-            EMPTY_TRASH_TITLE_TEXT.into(),
-            Some(EMPTY_TRASH_BODY_TEXT.into()),
+            text(app, "drive.confirmation.empty_trash.title"),
+            Some(text(app, "drive.confirmation.empty_trash.body")),
             UiComponentStyles {
                 width: Some(460.),
                 padding: Some(Coords::uniform(24.)),
@@ -117,4 +112,8 @@ impl TypedActionView for EmptyTrashConfirmationDialog {
             EmptyTrashConfirmationAction::Cancel => ctx.emit(EmptyTrashConfirmationEvent::Cancel),
         }
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }

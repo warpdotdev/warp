@@ -27,10 +27,9 @@ use crate::{
 
 use super::{Event, OpenOverlay, PaneHeader, PaneHeaderAction};
 
-const UNSHARABLE_CONVERSATION_TOOLTIP: &str =
-    "This conversation cannot be shared because it is not \
-    stored in the cloud.\nTo sync to cloud and share, enable the setting under Settings > Privacy, \
-    and then make another request.";
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
 
 /// Pane header component for sharing the pane contents.
 pub struct SharedPaneContent {
@@ -180,16 +179,20 @@ impl<P: BackingView> PaneHeader<P> {
                 (
                     Icon::Share,
                     false,
-                    UNSHARABLE_CONVERSATION_TOOLTIP.to_string(),
+                    text(app, "pane.header.sharing.unsharable_conversation_tooltip"),
                 )
             } else if editability.can_edit() {
                 (
                     Icon::Share,
                     self.open_overlay == OpenOverlay::SharingDialog,
-                    "Share".to_string(),
+                    text(app, "pane.header.sharing.share"),
                 )
             } else {
-                (Icon::Link, false, "Copy link".to_string())
+                (
+                    Icon::Link,
+                    false,
+                    text(app, "pane.header.sharing.copy_link"),
+                )
             };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -243,10 +246,11 @@ impl<P: BackingView> PaneHeader<P> {
         element.add_child(primary_button);
 
         if !editability.can_edit() {
-            let mut tooltip_text = String::from("Read-only");
-            if matches!(editability, ContentEditability::RequiresLogin) {
-                tooltip_text.push_str(". Sign in to edit");
-            }
+            let tooltip_text = if matches!(editability, ContentEditability::RequiresLogin) {
+                text(app, "pane.header.sharing.read_only_sign_in")
+            } else {
+                text(app, "pane.header.sharing.read_only")
+            };
 
             let ui_builder = appearance.ui_builder().clone();
             let view_only_button = if let Some(icon_color) = icon_color_override {

@@ -26,6 +26,7 @@ use warpui::{
 
 use crate::{
     appearance::Appearance,
+    localization,
     menu::MenuVariant,
     ui_components::{buttons::icon_button, icons::Icon},
     view_components::{CompactDropdown, CompactDropdownEvent, CompactDropdownItem},
@@ -451,9 +452,12 @@ impl TypedActionView for Omnibar {
                 ))
             }
             OmnibarAction::OpenLinkEditor => ActionAccessibilityContent::from_debug(),
-            OmnibarAction::UnstyleLink => ActionAccessibilityContent::Custom(
-                AccessibilityContent::new_without_help("Remove link", WarpA11yRole::UserAction),
-            ),
+            OmnibarAction::UnstyleLink => {
+                ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
+                    localization::text_for_app(ctx, "notebook.editor.a11y.remove_link"),
+                    WarpA11yRole::UserAction,
+                ))
+            }
         }
     }
 }

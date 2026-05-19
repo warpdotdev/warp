@@ -37,7 +37,7 @@ use super::{
     native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
     AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
     CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    GPUSettings, InputBoxType, InputModeSettings, InputSettings, PaneSettings,
+    GPUSettings, InputBoxType, InputModeSettings, InputSettings, LanguageSettings, PaneSettings,
     SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
     VimBannerSettings, WarpDrivePrivacySettings,
 };
@@ -78,6 +78,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     ScrollSettings::register(ctx);
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
+    LanguageSettings::register(ctx);
     ThemeSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
@@ -334,11 +335,15 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
 fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+    should_migrate_settings_file(ctx, super::user_preferences_toml_file_path().exists())
+}
+
+fn should_migrate_settings_file(ctx: &AppContext, settings_file_exists: bool) -> bool {
     if !FeatureFlag::SettingsFile.is_enabled() {
         return false;
     }
 
-    if super::user_preferences_toml_file_path().exists() {
+    if settings_file_exists {
         return false;
     }
 
@@ -405,7 +410,9 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         ))));
     }
 
-    log::info!("Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed");
+    log::info!(
+        "Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed"
+    );
 
     // Record the migration so it won't re-run if the user deletes the TOML
     // file. This marker is written unconditionally — for new users the native

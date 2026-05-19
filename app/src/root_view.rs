@@ -58,6 +58,10 @@ use crate::view_components::DismissibleToast;
 use crate::window_settings::WindowSettings;
 use crate::workspace::hoa_onboarding::mark_hoa_onboarding_completed;
 use crate::workspace::WorkspaceAction;
+
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -911,7 +915,10 @@ fn create_environment(arg: &CreateEnvironmentArg, ctx: &mut AppContext) {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            &text(ctx, "settings.environment.form.create_environment"),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -944,7 +951,10 @@ fn create_environment_and_run(arg: &CreateEnvironmentArg, ctx: &mut AppContext) 
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            &text(ctx, "settings.environment.form.create_environment"),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -1069,7 +1079,10 @@ fn open_warp_drive_object(arg: &OpenWarpDriveObjectArgs, ctx: &mut AppContext) {
 
 fn display_object_missing_error_in_window(window_id: WindowId, ctx: &mut AppContext) {
     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let toast = DismissibleToast::error(String::from("Resource not found or access denied"));
+        let toast = DismissibleToast::error(text(
+            ctx,
+            "workspace.toast.resource_not_found_or_access_denied",
+        ));
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -2697,7 +2710,10 @@ impl RootView {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            &text(ctx, "settings.environment.form.create_environment"),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -2742,7 +2758,10 @@ impl RootView {
             workspace
                 .active_tab_pane_group()
                 .update(ctx, |pane_group, ctx| {
-                    pane_group.set_title("Create Environment", ctx);
+                    pane_group.set_title(
+                        &text(ctx, "settings.environment.form.create_environment"),
+                        ctx,
+                    );
 
                     if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                         terminal_view.update(ctx, |_, ctx| {

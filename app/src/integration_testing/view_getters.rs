@@ -260,6 +260,9 @@ fn singleton_view_of_type<T: View>(app: &App, window_id: WindowId) -> ViewHandle
         .views_of_type(window_id)
         .expect("there's at least one view of type");
     let num_views_of_type = views_of_type.len();
-    assert_eq!(num_views_of_type, 1, "window_id={window_id} doesn't have a single view of type T. Has {num_views_of_type} views instead");
+    assert_eq!(
+        num_views_of_type, 1,
+        "window_id={window_id} doesn't have a single view of type T. Has {num_views_of_type} views instead"
+    );
     views_of_type.first().unwrap().clone()
 }

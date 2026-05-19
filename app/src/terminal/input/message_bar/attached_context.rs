@@ -1,10 +1,11 @@
 //! Shared message producers for displaying attached blocks/text context.
 
 use warp_core::features::FeatureFlag;
-use warpui::keymap::Keystroke;
+use warpui::{keymap::Keystroke, AppContext};
 
 use crate::ai::blocklist::agent_view::{AgentMessageBarMouseStates, AgentViewController};
 use crate::ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputModel};
+use crate::localization;
 use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::message_bar::{
     truncated_command_for_block, Message, MessageItem, MessageProvider,
@@ -15,12 +16,17 @@ use crate::terminal::model::TerminalModel;
 /// Trait for message args that can provide attached context information.
 /// Exposes the required dependencies for attached context message producers.
 pub trait AttachedContextArgs {
+    fn app(&self) -> &AppContext;
     fn terminal_model(&self) -> &TerminalModel;
     fn input_buffer_model(&self) -> &InputBufferModel;
     fn input_model(&self) -> &BlocklistAIInputModel;
     fn agent_view_controller(&self) -> &AgentViewController;
     fn context_model(&self) -> &BlocklistAIContextModel;
     fn mouse_states(&self) -> &AgentMessageBarMouseStates;
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 /// Produces a message when blocks or selected text are attached as context.
@@ -58,17 +64,23 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args> for AttachedBlocksM
             .map(|cmd| truncated_command_for_block(&cmd))?;
 
         let message_text = if context_block_ids.len() == 1 {
-            format!("`{}` attached as context", block_command)
+            text(args.app(), "terminal.message_bar.context.block_attached")
+                .replace("{command}", &block_command)
         } else if context_block_ids.len() == 2 {
-            format!(
-                "`{}` and 1 other command attached as context",
-                block_command
+            text(
+                args.app(),
+                "terminal.message_bar.context.block_and_one_other_attached",
             )
+            .replace("{command}", &block_command)
         } else {
-            format!(
-                "`{}` and {} other commands attached as context",
-                block_command,
-                context_block_ids.len().saturating_sub(1)
+            text(
+                args.app(),
+                "terminal.message_bar.context.block_and_others_attached",
+            )
+            .replace("{command}", &block_command)
+            .replace(
+                "{count}",
+                &context_block_ids.len().saturating_sub(1).to_string(),
             )
         };
 
@@ -83,7 +95,7 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args> for AttachedBlocksM
                         key: "escape".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" to remove"),
+                    MessageItem::text(text(args.app(), "terminal.message_bar.context.to_remove")),
                 ],
                 |ctx| {
                     ctx.dispatch_typed_action(InputAction::ClearAttachedContext);
@@ -120,7 +132,10 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args>
 
         let _ = args.context_model().pending_context_selected_text()?;
 
-        let mut items = vec![MessageItem::text("selected text attached as context")];
+        let mut items = vec![MessageItem::text(text(
+            args.app(),
+            "terminal.message_bar.context.selected_text_attached",
+        ))];
 
         // Always show ESC hint in agent view, make it clickable
         if args.agent_view_controller().is_active() {
@@ -131,7 +146,7 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args>
                         key: "escape".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" to remove"),
+                    MessageItem::text(text(args.app(), "terminal.message_bar.context.to_remove")),
                 ],
                 |ctx| {
                     ctx.dispatch_typed_action(InputAction::ClearAttachedContext);

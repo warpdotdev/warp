@@ -125,8 +125,16 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
         "Warp plugin installed. Please run /reload-plugins to activate."
     }
 
+    fn install_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_installed_reload_plugins"
+    }
+
     fn update_success_message(&self) -> &'static str {
         "Warp plugin updated. Please run /reload-plugins to activate."
+    }
+
+    fn update_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_updated_reload_plugins"
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
@@ -163,53 +171,67 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
-        subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
-                executable: true,
-                link: None,
-            },
-        ],
-        post_install_notes: &[
-            "Restart Claude Code to activate the plugin.",
-            "There are some known issues with Claude Code's plugin system. \
+    title_key: "terminal.plugin_instructions.claude.install.title",
+    title: "Install Warp Plugin for Claude Code",
+    subtitle_key: "terminal.plugin_instructions.claude.install.subtitle",
+    subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
+    steps: &[
+        PluginInstructionStep {
+            description_key: "terminal.plugin_instructions.claude.install.step.add_marketplace",
+            description: "Add the Warp plugin marketplace repository",
+            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description_key: "terminal.plugin_instructions.claude.install.step.install_plugin",
+            description: "Install the Warp plugin",
+            command: "claude plugin install warp@claude-code-warp",
+            executable: true,
+            link: None,
+        },
+    ],
+    post_install_note_keys: &[
+        "terminal.plugin_instructions.claude.install.note.restart",
+        "terminal.plugin_instructions.claude.install.note.known_issues",
+    ],
+    post_install_notes: &[
+        "Restart Claude Code to activate the plugin.",
+        "There are some known issues with Claude Code's plugin system. \
              If the plugin is not found after step 1, you can try manually adding an \"extraKnownMarketplaces\" entry to ~/.claude/settings.json.",
-        ],
-    }
+    ],
+}
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title_key: "terminal.plugin_instructions.claude.update.title",
     title: "Update Warp Plugin for Claude Code",
+    subtitle_key: "terminal.plugin_instructions.claude.update.subtitle",
     subtitle: "Run the following commands.",
     steps: &[
         PluginInstructionStep {
+            description_key: "terminal.plugin_instructions.claude.update.step.remove_marketplace",
             description: "Remove the existing marketplace (if present)",
             command: "claude plugin marketplace remove claude-code-warp",
             executable: true,
             link: None,
         },
         PluginInstructionStep {
+            description_key: "terminal.plugin_instructions.claude.update.step.readd_marketplace",
             description: "Re-add the marketplace",
             command: "claude plugin marketplace add warpdotdev/claude-code-warp",
             executable: true,
             link: None,
         },
         PluginInstructionStep {
+            description_key: "terminal.plugin_instructions.claude.update.step.install_latest",
             description: "Install the latest plugin version",
             command: "claude plugin install warp@claude-code-warp",
             executable: true,
             link: None,
         },
     ],
+    post_install_note_keys: &["terminal.plugin_instructions.claude.update.note.restart"],
     post_install_notes: &["Restart Claude Code to activate the update."],
 });
 

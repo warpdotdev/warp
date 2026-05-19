@@ -10,6 +10,7 @@ use warpui::{AppContext, Element, SingletonEntity as _};
 
 use crate::ai::llms::LLMSpec;
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::terminal::input::inline_menu::styles as inline_styles;
 
 const CORNER_RADIUS: f32 = 4.0;
@@ -37,7 +38,7 @@ pub fn render_model_spec_scores(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let mut rows = vec![render_score_row(
-        "Intelligence",
+        localization::text_for_app(app, "terminal.input.models.spec.intelligence"),
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.quality),
         },
@@ -46,7 +47,7 @@ pub fn render_model_spec_scores(
     )];
 
     rows.push(render_score_row(
-        "Speed",
+        localization::text_for_app(app, "terminal.input.models.spec.speed"),
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.speed),
         },
@@ -57,7 +58,7 @@ pub fn render_model_spec_scores(
     match cost_row {
         CostRow::Bar { value } => {
             rows.push(render_score_row(
-                "Cost",
+                localization::text_for_app(app, "terminal.input.models.spec.cost"),
                 ScoreRowKind::Bar { value },
                 layout.bg_bar_color,
                 app,
@@ -65,7 +66,7 @@ pub fn render_model_spec_scores(
         }
         CostRow::BilledToApi { manage_button } => {
             rows.push(render_score_row(
-                "Cost",
+                localization::text_for_app(app, "terminal.input.models.spec.cost"),
                 ScoreRowKind::BilledToApi { manage_button },
                 layout.bg_bar_color,
                 app,
@@ -85,7 +86,7 @@ enum ScoreRowKind {
 }
 
 fn render_score_row(
-    name: &str,
+    name: String,
     kind: ScoreRowKind,
     bg_bar_color: ColorU,
     app: &AppContext,
@@ -193,7 +194,10 @@ fn render_score_row(
                 .with_child(
                     Container::new(
                         Text::new(
-                            "Billed to API".to_string(),
+                            localization::text_for_app(
+                                app,
+                                "terminal.input.models.spec.billed_to_api",
+                            ),
                             appearance.ui_font_family(),
                             14.,
                         )

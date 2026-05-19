@@ -1,8 +1,9 @@
 use serde::Serialize;
-use warpui::{elements::MouseStateHandle, Element};
+use warpui::{elements::MouseStateHandle, AppContext, Element};
 
 use crate::{
     appearance::Appearance,
+    localization,
     terminal::view::{InlineBannerId, TerminalAction},
 };
 
@@ -38,6 +39,7 @@ pub fn render_inline_notifications_error_banner(
     state: &NotificationsErrorBannerState,
     error: &Option<NotificationSendError>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
 
@@ -46,7 +48,10 @@ pub fn render_inline_notifications_error_banner(
     // If permissions haven't been granted or denied, add a button to set the permissions.
     if matches!(error, Some(NotificationSendError::PermissionsNotYetGranted)) {
         buttons.push(InlineBannerTextButton {
-            text: "Set permissions".to_string(),
+            text: localization::text_for_app(
+                app,
+                "terminal.inline_banner.notifications_error.set_permissions",
+            ),
             text_color: active_ui_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::NotificationsErrorBanner(
@@ -61,7 +66,7 @@ pub fn render_inline_notifications_error_banner(
     }
 
     buttons.push(InlineBannerTextButton {
-        text: "Troubleshoot".to_string(),
+        text: localization::text_for_app(app, "terminal.inline_banner.troubleshoot"),
         text_color: active_ui_text_color,
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::NotificationsErrorBanner(

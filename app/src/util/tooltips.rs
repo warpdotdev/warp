@@ -12,8 +12,8 @@ use warpui::{
 };
 
 use crate::{
-    appearance::Appearance, settings::PrivacySettings, terminal::model::secrets::SecretLevel,
-    ui_components::blended_colors,
+    appearance::Appearance, localization, settings::PrivacySettings,
+    terminal::model::secrets::SecretLevel, ui_components::blended_colors,
 };
 
 /// A link to be shown in a tooltip
@@ -203,7 +203,10 @@ where
             .with_child(
                 appearance
                     .ui_builder()
-                    .span("*Secrets are not sent to Warp's server.")
+                    .span(localization::text_for_app(
+                        app,
+                        "tooltip.secrets_not_sent_to_server",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(12.),
                         margin: Some(Coords::default().top(4.)),

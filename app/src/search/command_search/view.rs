@@ -4,6 +4,7 @@ use async_channel::Sender;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 
+use crate::localization;
 use crate::search::mixer::AddAsyncSourceOptions;
 use lazy_static::lazy_static;
 use std::{collections::HashSet, ops::Range, sync::Arc, time::Duration};
@@ -38,7 +39,9 @@ use crate::{
     search::{
         command_search::searcher::{CommandSearchItemAction, CommandSearchMixer},
         result_renderer::{QueryResultRenderer, QueryResultRendererStyles},
-        search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering},
+        search_bar::{
+            SearchBar, SearchBarEvent, SearchBarPlaceholder, SearchBarState, SearchResultOrdering,
+        },
         QueryFilter,
     },
     send_telemetry_from_ctx,
@@ -63,7 +66,6 @@ use super::{
     zero_state::{CommandSearchZeroStateEvent, CommandSearchZeroStateView},
 };
 
-const DEFAULT_PLACEHOLDER_TEXT: &str = "Search your history, workflows, and more";
 const PANEL_POSITION_ID: &str = "CommandSearchViewPanel";
 const DETAILS_PANEL_MARGIN: f32 = 4.;
 const MIN_WIDTH_RATIO: f32 = 0.25;
@@ -152,7 +154,7 @@ impl CommandSearchView {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                DEFAULT_PLACEHOLDER_TEXT,
+                SearchBarPlaceholder::localized("search.command_search.placeholder"),
                 |result_index, result| {
                     QueryResultRenderer::new(
                         result,
@@ -570,11 +572,11 @@ impl CommandSearchView {
         self.search_bar_state.as_ref(app).selected_result_renderer()
     }
 
-    fn render_loading_state(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_loading_state(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let muted_color: ColorU = appearance.theme().nonactive_ui_text_color().into();
         let text = appearance
             .ui_builder()
-            .span("Loading...")
+            .span(localization::text_for_app(app, "search.loading"))
             .with_style(UiComponentStyles {
                 font_size: Some(appearance.monospace_font_size()),
                 font_family_id: Some(appearance.ui_font_family()),
@@ -615,7 +617,13 @@ impl CommandSearchView {
                             current_user_id,
                         )
                     } else {
-                        self.render_error_header_text("Looks like you're out of credits. Contact a team admin to upgrade for more credits.".to_string(), appearance)
+                        self.render_error_header_text(
+                            localization::text_for_app(
+                                app,
+                                "search.command_search.out_of_credits_contact_admin",
+                            ),
+                            appearance,
+                        )
                     }
                 } else {
                     self.render_error_header_text(message, appearance)
@@ -680,7 +688,7 @@ impl CommandSearchView {
             appearance
                 .ui_builder()
                 .link(
-                    "Upgrade".into(),
+                    localization::text_for_app(app, "search.command_search.upgrade"),
                     None,
                     Some(Box::new(move |ctx| {
                         ctx.dispatch_typed_action(CommandSearchAction::AttemptLoginGatedUpgrade);
@@ -692,7 +700,7 @@ impl CommandSearchView {
             appearance
                 .ui_builder()
                 .link(
-                    "Upgrade".into(),
+                    localization::text_for_app(app, "search.command_search.upgrade"),
                     None,
                     Some(Box::new(move |ctx| {
                         ctx.dispatch_typed_action(CommandSearchAction::OpenUpgradeLink(
@@ -707,7 +715,10 @@ impl CommandSearchView {
         row.add_child(
             appearance
                 .ui_builder()
-                .span("Looks like you're out of credits. ")
+                .span(localization::text_for_app(
+                    app,
+                    "search.command_search.out_of_credits_prefix",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.monospace_font_size()),
                     font_family_id: Some(appearance.ui_font_family()),
@@ -729,7 +740,10 @@ impl CommandSearchView {
         row.add_child(
             appearance
                 .ui_builder()
-                .span(" for more credits.")
+                .span(localization::text_for_app(
+                    app,
+                    "search.command_search.out_of_credits_suffix",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.monospace_font_size()),
                     font_family_id: Some(appearance.ui_font_family()),
@@ -756,7 +770,7 @@ impl CommandSearchView {
                 // There are no results to display, so notify the user of that fact.
                 let text = appearance
                     .ui_builder()
-                    .span("No results found.")
+                    .span(localization::text_for_app(app, "search.no_results"))
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         font_family_id: Some(appearance.ui_font_family()),
@@ -872,7 +886,7 @@ impl CommandSearchView {
                     )
                     .finish()
             }
-            _ => self.render_loading_state(appearance),
+            _ => self.render_loading_state(appearance, app),
         }
     }
 
@@ -976,7 +990,7 @@ impl TypedActionView for CommandSearchView {
             AttemptLoginGatedUpgrade => {
                 AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                     auth_manager.attempt_login_gated_feature(
-                        "Upgrade AI Usage",
+                        "Upgrade AI usage",
                         AuthViewVariant::RequireLoginCloseable,
                         ctx,
                     )
@@ -997,10 +1011,10 @@ impl View for CommandSearchView {
         }
     }
 
-    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+    fn accessibility_contents(&self, ctx: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Command Search".to_owned(),
-            "Search your history, workflows, and more.  Use the Up and Down arrows to browse search results after typing.  Press Enter to accept a selected result, inserting it into the terminal input.  Press Escape to close.".to_owned(),
+            localization::text_for_app(ctx, "search.command_search.title"),
+            localization::text_for_app(ctx, "search.command_search.a11y.description"),
             WarpA11yRole::MenuRole,
         ))
     }
@@ -1013,7 +1027,7 @@ impl View for CommandSearchView {
         let panel_contents_body = if should_show_zero_state {
             ChildView::new(&self.zero_state_handle).finish()
         } else if mixer.is_loading() && mixer.are_results_empty() {
-            self.render_loading_state(appearance)
+            self.render_loading_state(appearance, app)
         } else {
             self.render_results(appearance, app)
         };

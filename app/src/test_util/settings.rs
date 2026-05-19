@@ -30,11 +30,11 @@ pub fn initialize_settings_for_tests_with_mode(
         settings::{
             app_icon::AppIconSettings, init_and_register_user_preferences,
             manager::SettingsManager, AISettings, AccessibilitySettings, AliasExpansionSettings,
-            AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
+            AppEditorSettings, AppLanguage, BlockVisibilitySettings, ChangelogSettings,
             CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-            FontSettings, GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings,
-            PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-            SshSettings, ThemeSettings, VimBannerSettings,
+            FontSettings, GPUSettings, InputModeSettings, InputSettings, LanguageSettings,
+            NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+            SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
         },
         terminal::{
             general_settings::GeneralSettings, keys_settings::KeysSettings,
@@ -48,6 +48,7 @@ pub fn initialize_settings_for_tests_with_mode(
         window_settings::WindowSettings,
         workspace::tab_settings::TabSettings,
     };
+    use settings::Setting as _;
     use warp_core::{execution_mode::AppExecutionMode, semantic_selection::SemanticSelection};
     app.add_singleton_model(|ctx| AppExecutionMode::new(mode, is_sandboxed, ctx));
 
@@ -79,6 +80,14 @@ pub fn initialize_settings_for_tests_with_mode(
     GPUSettings::register(app);
     InputModeSettings::register(app);
     InputSettings::register(app);
+    let language_settings = LanguageSettings::register(app);
+    language_settings.update(app, |settings, ctx| {
+        settings
+            .app_language
+            .set_value(AppLanguage::English, ctx)
+            .expect("test app language should be configurable");
+    });
+    app.update(crate::localization::register_localization_updater);
     KeysSettings::register(app);
     LigatureSettings::register(app);
 

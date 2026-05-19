@@ -1,5 +1,6 @@
 use crate::appearance::Appearance;
 use crate::drive::DriveObjectType;
+use crate::localization;
 use crate::ui_components::blended_colors;
 use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use warpui::elements::{
@@ -17,16 +18,6 @@ use warpui::{
 const BUTTON_PADDING: f32 = 12.;
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_BORDER_RADIUS: f32 = 4.;
-
-const DEFAULT_DELINQUENT_ADMIN_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access.";
-const DEFAULT_DELINQUENT_ADMIN_ENTERPRISE_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access.";
-const DEFAULT_DELINQUENT_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access.";
-const DEFAULT_ADMIN_PROSUMER_MODAL_SUBHEADER: &str = "Warp's Pro plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, upgrade to the Turbo plan.";
-const DEFAULT_PROSUMER_MODAL_SUBHEADER: &str = "Warp's Pro plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, contact a team admin to upgrade to the Turbo plan.";
-const DEFAULT_ADMIN_MODAL_SUBHEADER: &str = "Warp's free plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, upgrade to a paid plan.";
-const DEFAULT_MODAL_SUBHEADER: &str = "Warp's free plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, contact a team admin to upgrade to a paid plan.";
-const VIEW_PLANS_TEXT: &str = "Compare plans";
-const MANAGE_BILLING_BUTTON_TEXT: &str = "Manage billing";
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -50,6 +41,33 @@ pub enum SharedObjectsCreationDeniedBodyAction {
 pub enum SharedObjectsCreationDeniedBodyEvent {
     Upgrade,
     ManageBilling,
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with(app: &AppContext, key: &str, replacements: &[(&str, &str)]) -> String {
+    replacements
+        .iter()
+        .fold(text(app, key), |message, (placeholder, value)| {
+            message.replace(placeholder, value)
+        })
+}
+
+fn object_type_label(app: &AppContext, object_type: DriveObjectType) -> String {
+    let key = match object_type {
+        DriveObjectType::Notebook { .. } => "drive.object.lower.notebooks",
+        DriveObjectType::Workflow => "drive.object.lower.workflows",
+        DriveObjectType::Folder => "drive.object.lower.folders",
+        DriveObjectType::EnvVarCollection => "drive.object.lower.environment_variables",
+        DriveObjectType::AgentModeWorkflow => "drive.object.lower.agent_workflows",
+        DriveObjectType::AIFact => "drive.object.lower.ai_fact",
+        DriveObjectType::AIFactCollection => "drive.object.lower.rules",
+        DriveObjectType::MCPServer => "drive.object.lower.mcp_server",
+        DriveObjectType::MCPServerCollection => "drive.object.lower.mcp_servers",
+    };
+    text(app, key)
 }
 
 impl SharedObjectsCreationDeniedBody {
@@ -92,47 +110,109 @@ impl View for SharedObjectsCreationDeniedBody {
         let appearance = Appearance::as_ref(app);
         let is_stripe_paid_plan = BillingMetadata::is_stripe_paid_plan(self.customer_type);
 
+        let shared_object_type = self
+            .object_type
+            .map(|object_type| object_type_label(app, object_type))
+            .unwrap_or_else(|| text(app, "drive.object.lower.drive_objects"));
+
         let sub_header = match self.object_type {
             Some(object_type) => {
-                match (self.is_delinquent_due_to_payment_issue, self.has_admin_permissions, self.customer_type) {
+                let object_type = object_type_label(app, object_type);
+                match (
+                    self.is_delinquent_due_to_payment_issue,
+                    self.has_admin_permissions,
+                    self.customer_type,
+                ) {
                     (true, true, _) => {
                         if is_stripe_paid_plan {
-                            format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access.")
+                            text_with(
+                                app,
+                                "drive.shared_objects_limit.description.delinquent.admin",
+                                &[("{object_type}", &object_type)],
+                            )
                         } else {
-                            format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access.")
+                            text_with(
+                                app,
+                                "drive.shared_objects_limit.description.delinquent.enterprise_admin",
+                                &[("{object_type}", &object_type)],
+                            )
                         }
-                    },
-                    (true, false, _) => format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access."),
-                    (false, true, CustomerType::Prosumer) => {
-                        format!("Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to the Build plan.")
                     }
-                    (false, false, CustomerType::Prosumer) => {
-                        format!("Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to the Build plan.")
-                    }
-                    (false, true, _) => format!("Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to a paid plan."),
-                    (false, false, _) => format!("Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to a paid plan."),
+                    (true, false, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.delinquent.member",
+                        &[("{object_type}", &object_type)],
+                    ),
+                    (false, true, CustomerType::Prosumer) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.prosumer.admin",
+                        &[("{object_type}", &object_type)],
+                    ),
+                    (false, false, CustomerType::Prosumer) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.prosumer.member",
+                        &[("{object_type}", &object_type)],
+                    ),
+                    (false, true, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.free.admin",
+                        &[("{object_type}", &object_type)],
+                    ),
+                    (false, false, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.free.member",
+                        &[("{object_type}", &object_type)],
+                    ),
                 }
             }
-            _ => match (
-                self.is_delinquent_due_to_payment_issue,
-                self.has_admin_permissions,
-                self.customer_type,
-            ) {
-                (true, true, _) => {
-                    if is_stripe_paid_plan {
-                        DEFAULT_DELINQUENT_ADMIN_MODAL_SUBHEADER.into()
-                    } else {
-                        DEFAULT_DELINQUENT_ADMIN_ENTERPRISE_MODAL_SUBHEADER.into()
+            _ => {
+                match (
+                    self.is_delinquent_due_to_payment_issue,
+                    self.has_admin_permissions,
+                    self.customer_type,
+                ) {
+                    (true, true, _) => {
+                        if is_stripe_paid_plan {
+                            text_with(
+                                app,
+                                "drive.shared_objects_limit.description.delinquent.admin",
+                                &[("{object_type}", &shared_object_type)],
+                            )
+                        } else {
+                            text_with(
+                                app,
+                                "drive.shared_objects_limit.description.delinquent.enterprise_admin",
+                                &[("{object_type}", &shared_object_type)],
+                            )
+                        }
                     }
+                    (true, false, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.delinquent.member",
+                        &[("{object_type}", &shared_object_type)],
+                    ),
+                    (false, true, CustomerType::Prosumer) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.prosumer.admin",
+                        &[("{object_type}", &shared_object_type)],
+                    ),
+                    (false, false, CustomerType::Prosumer) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.prosumer.member",
+                        &[("{object_type}", &shared_object_type)],
+                    ),
+                    (false, true, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.free.admin",
+                        &[("{object_type}", &shared_object_type)],
+                    ),
+                    (false, false, _) => text_with(
+                        app,
+                        "drive.shared_objects_limit.description.free.member",
+                        &[("{object_type}", &shared_object_type)],
+                    ),
                 }
-                (true, false, _) => DEFAULT_DELINQUENT_MODAL_SUBHEADER.into(),
-                (false, true, CustomerType::Prosumer) => {
-                    DEFAULT_ADMIN_PROSUMER_MODAL_SUBHEADER.into()
-                }
-                (false, false, CustomerType::Prosumer) => DEFAULT_PROSUMER_MODAL_SUBHEADER.into(),
-                (false, true, _) => DEFAULT_ADMIN_MODAL_SUBHEADER.into(),
-                (false, false, _) => DEFAULT_MODAL_SUBHEADER.into(),
-            },
+            }
         };
 
         let mut body = Flex::column()
@@ -168,7 +248,7 @@ impl View for SharedObjectsCreationDeniedBody {
                                 0.5,
                                 self.render_button(
                                     appearance,
-                                    MANAGE_BILLING_BUTTON_TEXT.into(),
+                                    text(app, "drive.action.manage_billing"),
                                     self.button_mouse_states.button_mouse_state.clone(),
                                     SharedObjectsCreationDeniedBodyAction::ManageBilling,
                                 ),
@@ -190,7 +270,7 @@ impl View for SharedObjectsCreationDeniedBody {
                                 0.5,
                                 self.render_button(
                                     appearance,
-                                    VIEW_PLANS_TEXT.into(),
+                                    text(app, "drive.action.compare_plans"),
                                     self.button_mouse_states.button_mouse_state.clone(),
                                     SharedObjectsCreationDeniedBodyAction::Upgrade,
                                 ),

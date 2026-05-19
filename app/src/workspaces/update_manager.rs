@@ -446,7 +446,9 @@ impl TeamUpdateManager {
                 );
             }
             RequestState::RequestFailed(err) => {
-                log::info!("get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted.");
+                log::info!(
+                    "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
+                );
             }
         }
     }

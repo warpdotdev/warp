@@ -7,6 +7,7 @@ use crate::ai::blocklist::AIQueryHistory;
 use crate::input_suggestions::{filter_tab_suggestions, HistoryOrder};
 use crate::terminal::model::session::SessionId;
 use crate::terminal::HistoryEntry;
+use crate::test_util::settings::initialize_settings_for_tests;
 use warp_completer::completer::{
     EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
     SuggestionResults, SuggestionType, TopLevelCommandCaseSensitivity,
@@ -14,6 +15,11 @@ use warp_completer::completer::{
 use warp_completer::meta::Span;
 
 use super::{HistoryInputSuggestion, InputSuggestions, TabCompletionsPreselectOption};
+
+fn initialize_app(app: &mut App) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| Appearance::mock());
+}
 
 fn prefix_matched_suggestion(name: &str) -> MatchedSuggestion {
     let suggestion = Suggestion::with_same_display_and_replacement(
@@ -171,7 +177,7 @@ fn test_display_replacement_fuzzy() {
 #[test]
 fn test_fuzzy_substring_search_with_whitespace() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        initialize_app(&mut app);
         let (_, suggestions) = app.add_window(WindowStyle::NotStealFocus, InputSuggestions::new);
 
         let options = vec!["axbycz".to_string(), "   axbycz".to_string()];
@@ -196,7 +202,7 @@ fn test_fuzzy_substring_search_with_whitespace() {
 #[test]
 fn test_preselect_first_item() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        initialize_app(&mut app);
         let (_, suggestions) = app.add_window(WindowStyle::NotStealFocus, InputSuggestions::new);
 
         let options = vec![
@@ -227,7 +233,7 @@ fn test_preselect_first_item() {
 #[test]
 fn test_unselected_state() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        initialize_app(&mut app);
         let (_, suggestions) = app.add_window(WindowStyle::NotStealFocus, InputSuggestions::new);
 
         let options = vec![
@@ -266,7 +272,7 @@ fn test_unselected_state() {
 #[test]
 fn test_unchanged_preselect_option() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        initialize_app(&mut app);
         let (_, suggestions) = app.add_window(WindowStyle::NotStealFocus, InputSuggestions::new);
 
         let options = vec![

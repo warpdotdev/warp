@@ -8,6 +8,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_terminal::shell::ShellType;
 use warpui::ViewContext;
 
+use crate::localization;
 use crate::workspace::Workspace;
 
 use super::release_assets_directory_url;
@@ -173,6 +174,10 @@ mod package_manager {
 
     use super::*;
 
+    fn text(app: &warpui::AppContext, key: &str) -> String {
+        localization::text_for_app(app, key)
+    }
+
     pub struct AutoupdateContextBlock {
         package_manager: PackageManager,
         hyperlink: HighlightedHyperlink,
@@ -205,24 +210,30 @@ mod package_manager {
                 FormattedTextLine::Heading(FormattedTextHeader {
                     // Make this an <h3>
                     heading_size: 3,
-                    text: vec![FormattedTextFragment::bold(format!(
-                        "Run {package_manager_name} to update"
-                    ))],
+                    text: vec![FormattedTextFragment::bold(
+                        text(app, "workspace.autoupdate.package_manager.title")
+                            .replace("{package_manager}", &package_manager_name),
+                    )],
                 }),
                 FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("If you installed Warp using "),
+                    FormattedTextFragment::plain_text(text(
+                        app,
+                        "workspace.autoupdate.package_manager.description_prefix",
+                    )),
                     FormattedTextFragment::bold(package_manager_name),
-                    FormattedTextFragment::plain_text(
-                        " or a compatible tool, the pre-filled command will update Warp for you.",
-                    ),
+                    FormattedTextFragment::plain_text(text(
+                        app,
+                        "workspace.autoupdate.package_manager.description_suffix",
+                    )),
                 ]),
             ];
 
             if self.package_manager.needs_repository_configuration() {
                 lines.push(FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text(
-                        "\nThe command below includes a one-time configuration of the Warp package repository and PGP signing key.",
-                    ),
+                    FormattedTextFragment::plain_text(text(
+                        app,
+                        "workspace.autoupdate.package_manager.repository_configuration",
+                    )),
                 ]));
             }
 
@@ -231,22 +242,33 @@ mod package_manager {
                 .distribution_update_disabled_repository()
             {
                 lines.push(FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text(
-                        "\nThe ",
-                    ),
+                    FormattedTextFragment::plain_text(text(
+                        app,
+                        "workspace.autoupdate.package_manager.dist_upgrade_prefix",
+                    )),
                     FormattedTextFragment::inline_code("warp_handle_dist_upgrade"),
-                    FormattedTextFragment::plain_text(
-                        " function ensures the Warp package repository is enabled, as we've detected you recently upgraded your distribution.",
-                    ),
+                    FormattedTextFragment::plain_text(text(
+                        app,
+                        "workspace.autoupdate.package_manager.dist_upgrade_suffix",
+                    )),
                 ]));
             }
 
             lines.push(FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text("\nReview the command below, then "),
-                FormattedTextFragment::bold("press enter"),
-                FormattedTextFragment::plain_text(" to install the update and re-launch Warp.  "),
+                FormattedTextFragment::plain_text(text(
+                    app,
+                    "workspace.autoupdate.package_manager.footer_prefix",
+                )),
+                FormattedTextFragment::bold(text(
+                    app,
+                    "workspace.autoupdate.package_manager.press_enter",
+                )),
+                FormattedTextFragment::plain_text(text(
+                    app,
+                    "workspace.autoupdate.package_manager.footer_suffix",
+                )),
                 FormattedTextFragment::hyperlink(
-                    "Please report any issues",
+                    text(app, "workspace.autoupdate.package_manager.report_issues"),
                     "https://github.com/warpdotdev/Warp/issues/new/choose",
                 ),
             ]));
@@ -397,7 +419,9 @@ impl PackageManager {
                     let cache_dir_str = cache_dir.display();
                     // Back up the existing pacman.conf file just in case
                     // anything goes wrong, then add the repository config.
-                    format!("mkdir -p {cache_dir_str}{and}\\\ncp /etc/pacman.conf {cache_dir_str}{and}\\\nsudo sh -c \"echo '\n[{repo_name}]\nServer = https://releases.warp.dev/linux/pacman/\\$repo/\\$arch' >> /etc/pacman.conf\"{and}\\\n")
+                    format!(
+                        "mkdir -p {cache_dir_str}{and}\\\ncp /etc/pacman.conf {cache_dir_str}{and}\\\nsudo sh -c \"echo '\n[{repo_name}]\nServer = https://releases.warp.dev/linux/pacman/\\$repo/\\$arch' >> /etc/pacman.conf\"{and}\\\n"
+                    )
                 } else {
                     String::new()
                 };
@@ -405,7 +429,9 @@ impl PackageManager {
                     // Retrieve our key from keys.openpgp.org and locally sign
                     // it before retrieving the package repository and
                     // installing the updated package.
-                    format!("sudo pacman-key -r \"linux-maintainers@warp.dev\" --keyserver hkp://keys.openpgp.org:80{and}\\\nsudo pacman-key --lsign-key \"linux-maintainers@warp.dev\"{and}\\\n")
+                    format!(
+                        "sudo pacman-key -r \"linux-maintainers@warp.dev\" --keyserver hkp://keys.openpgp.org:80{and}\\\nsudo pacman-key --lsign-key \"linux-maintainers@warp.dev\"{and}\\\n"
+                    )
                 } else {
                     String::new()
                 };

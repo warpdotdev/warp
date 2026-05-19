@@ -8,6 +8,7 @@ use crate::{
         EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
         TextOptions,
     },
+    localization::{self, LocalizationUpdater},
     menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant},
     ui_components::icons,
 };
@@ -53,7 +54,7 @@ pub struct FilterableDropdown<A: Action + Clone> {
     selected_item: Option<MenuItem<DropdownAction<A>>>,
     items: Vec<DropdownItem<A>>,
     orientation: FilterableDropdownOrientation,
-    static_menu_header: Option<&'static str>,
+    static_menu_header: Option<String>,
     button_variant: ButtonVariant,
     style_override: Option<UiComponentStyles>,
     hovered_style_override: Option<UiComponentStyles>,
@@ -104,11 +105,25 @@ where
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(
+                localization::text_for_app(ctx, "settings.search.placeholder"),
+                ctx,
+            );
             editor
         });
         ctx.subscribe_to_view(&filter_editor, |me, _, event, ctx| {
             me.handle_filter_editor_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&LocalizationUpdater::handle(ctx), {
+            let filter_editor = filter_editor.clone();
+            move |_me, _, _, ctx| {
+                filter_editor.update(ctx, |editor, ctx| {
+                    editor.set_placeholder_text(
+                        localization::text_for_app(ctx, "settings.search.placeholder"),
+                        ctx,
+                    );
+                });
+            }
         });
 
         FilterableDropdown {
@@ -431,8 +446,8 @@ where
     }
 
     fn render_closed_top_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let (selected_item_text, font_family_id) = match self.static_menu_header {
-            Some(header) => (header.to_string(), None),
+        let (selected_item_text, font_family_id) = match &self.static_menu_header {
+            Some(header) => (header.clone(), None),
             None => match self.selected_item.clone() {
                 Some(MenuItem::Item(fields)) => {
                     let label = fields.label();
@@ -556,11 +571,14 @@ where
         .finish()
     }
 
-    fn render_empty_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_empty_menu(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let background_fill = appearance.theme().surface_2();
         let empty_text = appearance
             .ui_builder()
-            .span("No matches found.")
+            .span(crate::localization::text_for_app(
+                app,
+                "settings.search.no_matches_found",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background_fill).into()),
                 ..Default::default()
@@ -698,8 +716,8 @@ where
         });
     }
 
-    pub fn set_menu_header_to_static(&mut self, header: &'static str) {
-        self.static_menu_header = Some(header);
+    pub fn set_menu_header_to_static(&mut self, header: impl Into<String>) {
+        self.static_menu_header = Some(header.into());
     }
 }
 
@@ -749,7 +767,7 @@ where
         // inside the Menu's Dismiss (via set_pinned_footer_builder), so clicks on it
         // correctly do not trigger the dismiss handler.
         let dropdown_menu = if !self.has_pinned_footer && self.dropdown_items_len(app) == 0 {
-            self.render_empty_menu(appearance)
+            self.render_empty_menu(appearance, app)
         } else {
             ChildView::new(&self.dropdown).finish()
         };

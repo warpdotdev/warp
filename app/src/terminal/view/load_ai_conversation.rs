@@ -34,6 +34,7 @@ use crate::ai::agent::{
 };
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::localization;
 use crate::{
     ai::{
         agent::{
@@ -864,18 +865,26 @@ impl TerminalView {
 
         match &restore_context_state {
             RestorationDirState::MissingOriginalDir => {
-                items.push(MessageItem::text(
-                    "couldn't find original conversation directory ",
-                ));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.missing_original_dir_prefix",
+                )));
                 items.push(open_repo_hint.clone());
-                items.push(MessageItem::text(" change repos"));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.change_repos",
+                )));
             }
             RestorationDirState::NeedsCd { .. } => {
-                items.push(MessageItem::text(
-                    "changed directory to continue conversation ",
-                ));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.changed_directory_prefix",
+                )));
                 items.push(open_repo_hint.clone());
-                items.push(MessageItem::text(" change repos"));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.change_repos",
+                )));
             }
             RestorationDirState::Unchanged => {}
         }

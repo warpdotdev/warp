@@ -19,12 +19,17 @@ use crate::ai::blocklist::code_block::{
     render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
 };
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
 use crate::terminal::CLIAgent;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub(crate) struct PluginInstructionsBlock {
     instructions: &'static PluginInstructions,
@@ -103,7 +108,7 @@ impl PluginInstructionsBlock {
         let desc_element: Box<dyn Element> = if let Some(url) = link {
             let fragments = vec![
                 FormattedTextFragment::plain_text(format!("{description} ")),
-                FormattedTextFragment::hyperlink("Learn more", url),
+                FormattedTextFragment::hyperlink(text(app, "auth.learn_more"), url),
             ];
             let formatted = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
             FormattedTextElement::new(
@@ -189,7 +194,11 @@ impl View for PluginInstructionsBlock {
         let theme = appearance.theme();
 
         let title = Text::new(
-            self.instructions.title.to_owned(),
+            localization::text_for_app_or(
+                app,
+                self.instructions.title_key,
+                self.instructions.title,
+            ),
             appearance.ui_font_family(),
             20.,
         )
@@ -199,11 +208,20 @@ impl View for PluginInstructionsBlock {
 
         let subtitle_text = if self.is_remote_session {
             format!(
-                "{} Be sure to run these commands on your remote machine.",
-                self.instructions.subtitle
+                "{} {}",
+                localization::text_for_app_or(
+                    app,
+                    self.instructions.subtitle_key,
+                    self.instructions.subtitle,
+                ),
+                text(app, "terminal.plugin_instructions.remote_session_note")
             )
         } else {
-            self.instructions.subtitle.to_owned()
+            localization::text_for_app_or(
+                app,
+                self.instructions.subtitle_key,
+                self.instructions.subtitle,
+            )
         };
 
         let subtitle = Text::new(subtitle_text, appearance.ui_font_family(), 14.)
@@ -230,7 +248,7 @@ impl View for PluginInstructionsBlock {
                 .unwrap_or(step.command);
             content.add_child(self.render_step(
                 step_index,
-                step.description,
+                &localization::text_for_app_or(app, step.description_key, step.description),
                 command,
                 step.executable,
                 step.link,
@@ -239,10 +257,20 @@ impl View for PluginInstructionsBlock {
             ));
         }
 
-        for note in self.instructions.post_install_notes {
-            let post_note = Text::new((*note).to_owned(), appearance.ui_font_family(), 14.)
-                .with_color(theme.nonactive_ui_text_color().into_solid())
-                .finish();
+        for (note_index, note) in self.instructions.post_install_notes.iter().enumerate() {
+            let note_key = self
+                .instructions
+                .post_install_note_keys
+                .get(note_index)
+                .copied()
+                .unwrap_or("");
+            let post_note = Text::new(
+                localization::text_for_app_or(app, note_key, note),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(theme.nonactive_ui_text_color().into_solid())
+            .finish();
             content.add_child(post_note);
         }
 
@@ -290,12 +318,16 @@ impl TypedActionView for PluginInstructionsBlock {
                         .get(*index)
                         .map(|s| s.command.to_owned())
                 });
-                if let Some(text) = command {
-                    ctx.clipboard().write(ClipboardContent::plain_text(text));
+                if let Some(command_text) = command {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(command_text));
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::success("Copied to clipboard".to_owned()),
+                            DismissibleToast::success(text(
+                                ctx,
+                                "agent.block.toast.copied_to_clipboard",
+                            )),
                             window_id,
                             ctx,
                         );

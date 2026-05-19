@@ -75,6 +75,7 @@ impl ContentSectionView {
     fn render_link_button(
         &self,
         item: &ContentItem,
+        app: &AppContext,
         appearance: &Appearance,
         mouse_state_handle: MouseStateHandle,
     ) -> Box<dyn Element> {
@@ -100,7 +101,7 @@ impl ContentSectionView {
                 appearance
                     .ui_builder()
                     .link(
-                        item.button_label.to_string(),
+                        item.button_label(app),
                         Some(item.url.into()),
                         None,
                         mouse_state_handle,
@@ -119,19 +120,20 @@ impl ContentSectionView {
     fn render_content_item(
         &self,
         item: &ContentItem,
+        app: &AppContext,
         appearance: &Appearance,
         index: usize,
     ) -> Box<dyn Element> {
         let mut element = Flex::column();
         let mouse_state = self.content_button_mouse_states.item_handles[index].clone();
-        let link_button = self.render_link_button(item, appearance, mouse_state);
+        let link_button = self.render_link_button(item, app, appearance, mouse_state);
 
         // title
         element.add_child(
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.title.to_string(), true)
+                    .wrappable_text(item.title(app), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         ..Default::default()
@@ -148,7 +150,7 @@ impl ContentSectionView {
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.description.to_string(), true)
+                    .wrappable_text(item.description(app), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         font_color: Some(ColorU::from(
@@ -191,7 +193,11 @@ impl SectionView for ContentSectionView {
         None
     }
 
-    fn section_link(&self, _appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn section_link(
+        &self,
+        _appearance: &Appearance,
+        _ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         None
     }
 }
@@ -213,18 +219,15 @@ impl View for ContentSectionView {
 
         let mut section = Flex::column().with_child(header);
         if self.is_expanded {
-            let content_section =
-                Container::new(
-                    Flex::column()
-                        .with_children(
-                            self.content_section_data.items.iter().enumerate().map(
-                                |(index, item)| self.render_content_item(item, appearance, index),
-                            ),
-                        )
-                        .finish(),
-                )
-                .with_uniform_margin(SECTION_SPACING)
-                .with_margin_left(SECTION_SPACING + CHEVRON_ICON_SIZE + ICON_PADDING);
+            let content_section = Container::new(
+                Flex::column()
+                    .with_children(self.content_section_data.items.iter().enumerate().map(
+                        |(index, item)| self.render_content_item(item, app, appearance, index),
+                    ))
+                    .finish(),
+            )
+            .with_uniform_margin(SECTION_SPACING)
+            .with_margin_left(SECTION_SPACING + CHEVRON_ICON_SIZE + ICON_PADDING);
 
             section.add_child(content_section.finish());
         }

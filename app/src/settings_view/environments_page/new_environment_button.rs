@@ -14,6 +14,10 @@ use crate::editor::EditorView;
 
 use super::EnvironmentsPageAction;
 
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 pub struct NewEnvironmentButtonView {
     trigger_mouse_state: MouseStateHandle,
     search_editor: ViewHandle<EditorView>,
@@ -97,7 +101,7 @@ impl View for NewEnvironmentButtonView {
                     .with_spacing(4.)
                     .with_child(
                         Text::new(
-                            "New environment",
+                            text(app, "settings.environment.action.new_environment"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )

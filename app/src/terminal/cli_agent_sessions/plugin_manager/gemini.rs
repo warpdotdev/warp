@@ -110,8 +110,16 @@ impl CliAgentPluginManager for GeminiPluginManager {
         "Warp plugin installed. Please restart Gemini CLI to activate."
     }
 
+    fn install_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_installed_restart_gemini"
+    }
+
     fn update_success_message(&self) -> &'static str {
         "Warp plugin updated. Please restart Gemini CLI to activate."
+    }
+
+    fn update_success_message_key(&self) -> &'static str {
+        "agent.input_footer.plugin_updated_restart_gemini"
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
@@ -124,27 +132,35 @@ impl CliAgentPluginManager for GeminiPluginManager {
 }
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title_key: "terminal.plugin_instructions.gemini.install.title",
     title: "Install Warp Plugin for Gemini CLI",
+    subtitle_key: "terminal.plugin_instructions.gemini.install.subtitle",
     subtitle: "Run the following command, then restart Gemini CLI.",
     steps: &[PluginInstructionStep {
+        description_key: "terminal.plugin_instructions.gemini.install.step.install",
         description: "Install the Warp extension",
         command:
             "gemini extensions install https://github.com/warpdotdev/gemini-cli-warp --consent",
         executable: true,
         link: None,
     }],
+    post_install_note_keys: &["terminal.plugin_instructions.gemini.install.note.restart"],
     post_install_notes: &["Restart Gemini CLI to activate the plugin."],
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title_key: "terminal.plugin_instructions.gemini.update.title",
     title: "Update Warp Plugin for Gemini CLI",
+    subtitle_key: "terminal.plugin_instructions.gemini.update.subtitle",
     subtitle: "Run the following command, then restart Gemini CLI.",
     steps: &[PluginInstructionStep {
+        description_key: "terminal.plugin_instructions.gemini.update.step.update",
         description: "Update the Warp extension",
         command: "gemini extensions update gemini-warp",
         executable: true,
         link: None,
     }],
+    post_install_note_keys: &["terminal.plugin_instructions.gemini.update.note.restart"],
     post_install_notes: &["Restart Gemini CLI to activate the update."],
 });
 

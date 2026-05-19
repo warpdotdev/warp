@@ -2877,7 +2877,9 @@ impl UpdateManager {
                 let cloud_model = CloudModel::as_ref(ctx);
                 let object: Option<&CloudWorkflowEnum> = cloud_model.get_object_of_type(enum_id);
                 let Some(object) = object else {
-                    log::error!("Could not find referenced workflow enum to copy over to the new space, skipping");
+                    log::error!(
+                        "Could not find referenced workflow enum to copy over to the new space, skipping"
+                    );
                     continue;
                 };
 

@@ -419,8 +419,8 @@ impl CloudModel {
                 object.update_from_server_object(server_object);
             } else {
                 log::warn!(
-                "Unable to update server object.  Expected object to implement GenericCloudObject"
-            );
+                    "Unable to update server object.  Expected object to implement GenericCloudObject"
+                );
                 debug_assert!(false, "Unable to update server object.  Failed downcast");
             }
             None
@@ -656,7 +656,9 @@ impl CloudModel {
 
                     return true;
                 } else {
-                    log::debug!("in memory metadata ts is greater or equal to metadata ts from update, ignoring");
+                    log::debug!(
+                        "in memory metadata ts is greater or equal to metadata ts from update, ignoring"
+                    );
                 }
             }
         } else {

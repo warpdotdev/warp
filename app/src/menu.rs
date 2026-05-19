@@ -2,6 +2,7 @@ use std::cell::OnceCell;
 use std::sync::Arc;
 use std::{fmt, vec};
 
+use crate::localization;
 use crate::safe_triangle::SafeTriangle;
 use crate::themes::theme::Fill;
 use crate::util::time_format::format_approx_duration_from_now_sentence_case;
@@ -672,11 +673,11 @@ impl<A: Action + Clone> MenuItemFields<A> {
         }
     }
 
-    pub fn toggle_pane_action(is_maximized: bool) -> Self {
+    pub fn toggle_pane_action(is_maximized: bool, app: &AppContext) -> Self {
         Self::new(if is_maximized {
-            "Minimize pane"
+            localization::text_for_app(app, "terminal.menu.minimize_pane")
         } else {
-            "Maximize pane"
+            localization::text_for_app(app, "terminal.menu.maximize_pane")
         })
     }
 
@@ -2425,7 +2426,7 @@ impl<A: Action + Clone> SubMenu<A> {
     fn action_accessibility_contents(
         &mut self,
         action: &MenuAction,
-        _: &mut ViewContext<Menu<A>>,
+        ctx: &mut ViewContext<Menu<A>>,
     ) -> ActionAccessibilityContent {
         use ActionAccessibilityContent::*;
         use MenuAction::*;
@@ -2454,9 +2455,9 @@ impl<A: Action + Clone> SubMenu<A> {
 
                 let instructions = if matches!(self.selected_item(), Some(MenuItem::Submenu { .. }))
                 {
-                    "Press the up key or the down key to select a menu item. Press the right key to open the submenu"
+                    localization::text_for_app(ctx, "menu.a11y.instructions.submenu")
                 } else {
-                    "Press the up key or the down key to select a menu item"
+                    localization::text_for_app(ctx, "menu.a11y.instructions.default")
                 };
 
                 Custom(AccessibilityContent::new(
@@ -2466,23 +2467,23 @@ impl<A: Action + Clone> SubMenu<A> {
                 ))
             }
             OpenSubmenu => Custom(AccessibilityContent::new(
-                String::from("Submenu Expanded"),
-                "Press the right key to open the selected submenu",
+                localization::text_for_app(ctx, "menu.a11y.submenu_expanded"),
+                localization::text_for_app(ctx, "menu.a11y.open_submenu_help"),
                 WarpA11yRole::TextRole,
             )),
             CloseSubmenu(_) => Custom(AccessibilityContent::new(
-                String::from("Submenu Closed"),
-                "Removing focus from a submenu will close the submenu",
+                localization::text_for_app(ctx, "menu.a11y.submenu_closed"),
+                localization::text_for_app(ctx, "menu.a11y.close_submenu_help"),
                 WarpA11yRole::TextRole,
             )),
             Close(_) => Custom(AccessibilityContent::new(
-                String::from("Menu Closed"),
-                "Press the escape key to close the menu",
+                localization::text_for_app(ctx, "menu.a11y.menu_closed"),
+                localization::text_for_app(ctx, "menu.a11y.close_menu_help"),
                 WarpA11yRole::TextRole,
             )),
             Enter => Custom(AccessibilityContent::new(
-                String::from("Action Selected"),
-                "Press the enter key to execute the selected menu item action",
+                localization::text_for_app(ctx, "menu.a11y.action_selected"),
+                localization::text_for_app(ctx, "menu.a11y.action_selected_help"),
                 WarpA11yRole::TextRole,
             )),
             HoverSubmenuLeafNode { .. }

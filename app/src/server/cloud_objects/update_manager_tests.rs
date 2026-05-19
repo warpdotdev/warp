@@ -7214,11 +7214,9 @@ fn test_permissions_update_grants_access() {
         );
 
         // The object isn't in memory yet.
-        assert!(
-            CloudModel::handle(&app).read(&app, |cloud_model, _| cloud_model
-                .get_notebook(&sync_id)
-                .is_none()),
-        );
+        assert!(CloudModel::handle(&app).read(&app, |cloud_model, _| {
+            cloud_model.get_notebook(&sync_id).is_none()
+        }),);
         assert!(cloud_events(&update_manager_struct).is_empty());
 
         // The permissions change should also insert new user profiles.

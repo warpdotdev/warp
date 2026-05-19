@@ -114,7 +114,10 @@ fn replace_template_chars_with_arguments(
                 argument.into_bytes().into_iter(),
             );
         } else {
-            debug_assert!(false, "Number of arguments does not match number of template chars (%) in hardcoded subshell block bytes.");
+            debug_assert!(
+                false,
+                "Number of arguments does not match number of template chars (%) in hardcoded subshell block bytes."
+            );
         }
     }
     templated_bytes

@@ -8,7 +8,7 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     editor::{EditorView, Event, SingleLineEditorOptions, TextOptions},
-    report_if_error, send_telemetry_from_ctx,
+    localization, report_if_error, send_telemetry_from_ctx,
     server::telemetry::TelemetryEvent,
     terminal::{
         available_shells::{AvailableShell, AvailableShells},
@@ -17,6 +17,10 @@ use crate::{
     },
     view_components::{dropdown::TOP_MENU_BAR_HEIGHT, Dropdown, DropdownItem},
 };
+
+fn text(app: &warpui::AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// A view for configuring the initial shell for new sessions. This can be the
 /// user's login shell, the default installed version of zsh, bash, or fish,
@@ -98,7 +102,13 @@ impl StartupShellView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Executable path", ctx);
+            editor.set_placeholder_text(
+                text(
+                    ctx,
+                    "settings.features.default_shell.executable_placeholder",
+                ),
+                ctx,
+            );
 
             if let Some(shell) = custom_shell_text.as_ref() {
                 editor.set_buffer_text(shell, ctx);
@@ -137,7 +147,7 @@ impl StartupShellView {
     ) {
         dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![DropdownItem::new(
-                "Default",
+                text(ctx, "settings.features.default_shell.option.default"),
                 NewSessionShellAction::Set(AvailableShell::default()),
             )];
             let shell_to_index = AvailableShells::handle(ctx).read(ctx, |model, _| {
@@ -155,7 +165,7 @@ impl StartupShellView {
             });
 
             items.push(DropdownItem::new(
-                "Custom",
+                text(ctx, "settings.features.default_shell.option.custom"),
                 NewSessionShellAction::ShowCustomPathInput,
             ));
             let custom_index = items.len() - 1;

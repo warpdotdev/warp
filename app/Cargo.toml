@@ -228,6 +228,7 @@ warp_core.workspace = true
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
+warp_localization.workspace = true
 warp_server_client.workspace = true
 warp_util.workspace = true
 warpui = { workspace = true, features = ["schema_gen", "settings_value"] }
@@ -371,6 +372,7 @@ windows = { workspace = true, features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_Security",
+    "Win32_Globalization",
     "Win32_Storage",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",

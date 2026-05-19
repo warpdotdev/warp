@@ -2,8 +2,15 @@ use warp_cli::RecoveryMechanism;
 use warpui::{AppContext, SingletonEntity as _, ViewContext};
 
 use crate::crash_recovery::CrashRecovery;
+#[cfg(target_os = "linux")]
+use crate::localization;
 
 use super::{Workspace, WorkspaceBannerFields};
+
+#[cfg(target_os = "linux")]
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub fn banner_metadata(ctx: &AppContext) -> Option<WorkspaceBannerFields> {
     let crash_recovery = CrashRecovery::as_ref(ctx);
@@ -16,13 +23,10 @@ pub fn banner_metadata(ctx: &AppContext) -> Option<WorkspaceBannerFields> {
             banner_type: super::WorkspaceBanner::WaylandCrashRecovery,
             severity: super::BannerSeverity::Warning,
             heading: None,
-            description: "We detected a crash during application startup, and adjusted your \
-                settings to use Xwayland for windowing. This can result in blurry text if you \
-                are using fractional scaling."
-                .to_owned(),
+            description: text(ctx, "workspace.crash_recovery.x11.description"),
             secondary_button: None,
             button: Some(super::WorkspaceBannerButtonDetails {
-                text: "Learn More".to_owned(),
+                text: text(ctx, "workspace.crash_recovery.learn_more"),
                 action: super::WorkspaceAction::DismissWaylandCrashRecoveryBannerAndOpenLink,
                 variant: super::BannerButtonVariant::Outlined,
                 icon: None,

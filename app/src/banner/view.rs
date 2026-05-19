@@ -163,20 +163,23 @@ impl<T: Action + Clone> Banner<T> {
         Self::new_internal(content, buttons, with_close_button)
     }
 
-    /// Creates a banner with a single "Don't show me again" button
+    /// Creates a banner with a single permanent-dismissal button
     /// that will permanently dismiss the banner when clicked, as well
     /// as a close button that will temporarily dismiss it when clicked.
-    pub fn new_permanently_dismissible(content: BannerTextContent<T>) -> Self {
+    pub fn new_permanently_dismissible(
+        content: BannerTextContent<T>,
+        permanent_dismissal_label: String,
+    ) -> Self {
         Self::new_with_buttons(
             content,
-            vec![Self::permanent_dismissal_button()],
+            vec![Self::permanent_dismissal_button(permanent_dismissal_label)],
             /* with_close_button */ true,
         )
     }
 
-    fn permanent_dismissal_button() -> BannerTextButton {
+    fn permanent_dismissal_button(label: String) -> BannerTextButton {
         BannerTextButton::new(
-            String::from("Don't show me again"),
+            label,
             Rc::new(|ctx, _, _| {
                 ctx.dispatch_typed_action(BannerAction::<T>::Dismiss(DismissalType::Permanent));
             }),

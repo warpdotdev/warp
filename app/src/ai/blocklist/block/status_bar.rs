@@ -5,9 +5,9 @@ use super::{
     cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason},
     model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus},
     view_impl::common::{
-        render_switch_control_to_user_button, render_warping_indicator,
-        render_warping_indicator_base, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
-        WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
+        default_warping_message, render_switch_control_to_user_button, render_warping_indicator,
+        render_warping_indicator_base, waiting_for_user_input_message, ButtonProps,
+        ForceRefreshButtonProps, MaybeShimmeringText, WarpingIndicatorProps, WarpingProps,
     },
 };
 use crate::{
@@ -819,8 +819,8 @@ impl BlocklistAIStatusBar {
         );
         let default_warping_text = fallback_warping_text
             .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_warping_message(app));
         let secondary_element = if fallback_warping_text.is_some() {
             Some(render_fallback_explanation(model.as_ref(), app))
         } else {
@@ -1008,7 +1008,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
     let theme = appearance.theme();
 
     let tip_description = tip.description.clone();
-    let action_text = tip.action.clone().and_then(|action| action.display_text());
+    let action_text = tip
+        .action
+        .clone()
+        .and_then(|action| action.display_text(app));
 
     let mut fragments = tip.to_formatted_text(app);
 
@@ -1017,7 +1020,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
         fragments.push(FormattedTextFragment::hyperlink_action(text, action));
     } else if let Some(link_target) = tip.link.clone() {
         fragments.push(FormattedTextFragment::plain_text(" "));
-        fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+        fragments.push(FormattedTextFragment::hyperlink(
+            crate::localization::text_for_app(app, "auth.learn_more"),
+            link_target,
+        ));
     }
 
     let formatted_text =
@@ -1198,7 +1204,7 @@ impl View for BlocklistAIStatusBar {
                     WarpingIndicatorProps {
                         icon: Some(icons::gray_clock_icon(appearance).finish()),
                         warping_indicator_text: MaybeShimmeringText::Static(
-                            WAITING_FOR_USER_INPUT_MESSAGE.into(),
+                            waiting_for_user_input_message(app).into(),
                         ),
                         non_shimmering_text: None,
                         non_shimmering_suffix: None,

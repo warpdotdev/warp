@@ -43,7 +43,7 @@ use warpui::{
         Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
         SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
     },
-    keymap::{EditableBinding, FixedBinding, Keystroke},
+    keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke},
     platform::{Cursor, OperatingSystem},
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
@@ -92,6 +92,7 @@ use crate::{
         DiffResult,
     },
     code_review::telemetry_event::CodeReviewPaneEntrypoint,
+    localization,
     menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant},
     pane_group::{
         focus_state::PaneFocusHandle,
@@ -122,16 +123,6 @@ use ai::diff_validation::{
     SearchAndReplace, V4AHunk,
 };
 
-const REQUESTED_EDIT_CANCEL_LABEL: &str = "Cancel";
-const REQUESTED_EDIT_REFINE_LABEL: &str = "Refine";
-const REQUESTED_EDIT_ACCEPT_LABEL: &str = "Accept";
-const REQUESTED_EDIT_ACCEPT_AND_AUTOEXECUTE_LABEL: &str = "Auto-approve";
-const REQUESTED_EDIT_EDIT_LABEL: &str = "Edit";
-const REQUESTED_EDIT_MINIMIZE_LABEL: &str = "Done";
-const SUGGESTED_EDIT_ACCEPT_LABEL: &str = "Accept";
-const SUGGESTED_EDIT_ACCEPT_AND_CONTINUE_LABEL: &str = "Accept and continue with agent";
-const SUGGESTED_EDIT_ITERATE_WITH_AGENT_LABEL: &str = "Iterate with agent";
-const SUGGESTED_EDIT_DISMISS_LABEL: &str = "Dismiss";
 const MAX_EDITOR_HEIGHT: f32 = 500.;
 const INLINE_EDITOR_HEIGHT: f32 = 94.;
 const INLINE_EDITOR_HEIGHT_EXPANDED: f32 = 400.;
@@ -143,6 +134,14 @@ const HEADER_MARGIN: f32 = 8.;
 
 const DISPATCHED_REQUESTED_EDIT_EXPANDED: &str = "DispatchedRequestedEditExpanded";
 const SUGGESTED_EDIT_INLINE_BANNER: &str = "SuggestedEditInlineBanner";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
+    BindingDescription::new(fallback).with_dynamic_override(move |app| Some(text(app, key)))
+}
 /// Slightly smaller than other action header vertical padding to account for the 1px border on the code diff line count.
 const HEADER_VERTICAL_PADDING: f32 = 9.;
 
@@ -211,7 +210,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         EDIT_REQUESTED_EDIT_NAME,
-        "Edit Code Diff",
+        binding_description("Edit Code Diff", "agent.code_diff.edit_binding"),
         CodeDiffViewAction::Edit,
     )
     .with_context_predicate(id!(CodeDiffView::ui_name()) & !id!(DISPATCHED_REQUESTED_EDIT_EXPANDED))
@@ -530,7 +529,7 @@ impl CodeDiffView {
             self.accept_split_button_menu.update(ctx, |menu, ctx| {
                 menu.set_items(
                     vec![MenuItemFields::new_multiline(
-                        SUGGESTED_EDIT_ACCEPT_AND_CONTINUE_LABEL,
+                        text(ctx, "agent.code_diff.accept_and_continue_with_agent"),
                         2,
                     )
                     .with_on_select_action(
@@ -552,15 +551,15 @@ impl CodeDiffView {
             .unwrap_or_default();
 
             let accept_item = MenuItemFields::new_with_label(
-                REQUESTED_EDIT_ACCEPT_LABEL,
-                accept_keystroke.as_str(),
+                text(ctx, "agent.code_diff.accept"),
+                accept_keystroke,
             )
             .with_on_select_action(CodeDiffViewAction::TryAccept)
             .into_item();
 
             let auto_item = MenuItemFields::new_with_label(
-                REQUESTED_EDIT_ACCEPT_AND_AUTOEXECUTE_LABEL,
-                auto_keystroke.as_str(),
+                text(ctx, "agent.code_diff.auto_approve"),
+                auto_keystroke,
             )
             .with_on_select_action(CodeDiffViewAction::AcceptAndAutoExecute)
             .into_item();
@@ -656,7 +655,8 @@ impl CodeDiffView {
                     full: ("Failed to save file for accepted AgentMode diffs for {}: {}", file_path_clone, error)
                 );
                 let toast = DismissibleToast::error(format!(
-                    "Failed to save file {file_path_clone}"
+                    "{} {file_path_clone}",
+                    text(ctx, "agent.code_diff.toast.failed_save_file")
                 ));
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
@@ -805,12 +805,12 @@ impl CodeDiffView {
             .collect();
 
         let cancel_button_label = if is_passive {
-            SUGGESTED_EDIT_DISMISS_LABEL
+            text(ctx, "agent.code_diff.dismiss")
         } else {
-            REQUESTED_EDIT_REFINE_LABEL
+            text(ctx, "agent.code_diff.refine")
         };
         let cancel_button = CompactibleActionButton::new(
-            cancel_button_label.to_string(),
+            cancel_button_label,
             Some(KeystrokeSource::Fixed(
                 CANCEL_REQUESTED_EDIT_KEYSTROKE.clone(),
             )),
@@ -822,7 +822,7 @@ impl CodeDiffView {
         );
 
         let edit_button = CompactibleActionButton::new(
-            REQUESTED_EDIT_EDIT_LABEL.to_string(),
+            text(ctx, "agent.code_diff.edit"),
             Some(KeystrokeSource::Binding(EDIT_REQUESTED_EDIT_NAME)),
             ButtonSize::Small,
             CodeDiffViewAction::Edit,
@@ -832,7 +832,7 @@ impl CodeDiffView {
         );
 
         let minimize_button = CompactibleActionButton::new(
-            REQUESTED_EDIT_MINIMIZE_LABEL.to_string(),
+            text(ctx, "agent.code_diff.done"),
             Some(KeystrokeSource::Fixed(
                 MINIMIZE_REQUESTED_EDIT_KEYSTROKE.clone(),
             )),
@@ -844,7 +844,7 @@ impl CodeDiffView {
         );
 
         let iterate_with_agent_button = CompactibleActionButton::new(
-            SUGGESTED_EDIT_ITERATE_WITH_AGENT_LABEL.to_string(),
+            text(ctx, "agent.code_diff.iterate_with_agent"),
             Some(KeystrokeSource::Binding(SET_INPUT_MODE_AGENT_ACTION_NAME)),
             ButtonSize::Small,
             CodeDiffViewAction::IterateOnPassiveDiffWithAgent,
@@ -854,11 +854,7 @@ impl CodeDiffView {
         );
 
         let accept_and_autoexecute_split_button = CompactibleSplitActionButton::new(
-            if is_passive {
-                SUGGESTED_EDIT_ACCEPT_LABEL.to_string()
-            } else {
-                REQUESTED_EDIT_ACCEPT_LABEL.to_string()
-            },
+            text(ctx, "agent.code_diff.accept"),
             Some(accept_keystroke_source(is_passive)),
             ButtonSize::Small,
             CodeDiffViewAction::TryAccept,
@@ -889,7 +885,7 @@ impl CodeDiffView {
         let code_review_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::Diff)
-                .with_tooltip("Review changes")
+                .with_tooltip(text(ctx, "agent.code_diff.review_changes"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -901,7 +897,7 @@ impl CodeDiffView {
         let expansion_button_collapsed = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronRight)
-                .with_tooltip("Expand")
+                .with_tooltip(text(ctx, "agent.code_diff.expand"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -912,7 +908,7 @@ impl CodeDiffView {
         let expansion_button_expanded = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronDown)
-                .with_tooltip("Collapse")
+                .with_tooltip(text(ctx, "agent.code_diff.collapse"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -1159,7 +1155,10 @@ impl CodeDiffView {
                     .unwrap_or_else(|| "file".to_string());
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!("Failed to revert changes to {file_name}")),
+                        DismissibleToast::error(
+                            text(ctx, "agent.code_diff.toast.failed_revert_changes")
+                                .replace("{file_name}", &file_name),
+                        ),
                         window_id,
                         ctx,
                     );
@@ -1664,7 +1663,7 @@ impl CodeDiffView {
                 fg_overlay_6(appearance.theme())
             };
             let mcp_config_button = render_provider_icon_button(
-                "Open config",
+                &text(app, "agent.code_diff.open_config"),
                 mcp_button_handle.clone(),
                 appearance,
                 icon,
@@ -1778,9 +1777,9 @@ impl CodeDiffView {
             .finish();
             col.add_child(title);
         }
-        if let Some(subtitle) = self.display_mode().title() {
+        if let Some(subtitle) = self.display_mode().title(app) {
             let subtitle = Text::new_inline(
-                subtitle.to_string(),
+                subtitle,
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1862,10 +1861,11 @@ impl CodeDiffView {
             let diff_type = diff.diff_view.as_ref(app).diff();
             let file_name = match diff.diff_view.as_ref(app).file_name() {
                 Some(file_name) if matches!(diff_type, Some(DiffType::Create { .. })) => {
-                    format!("{file_name} (new)")
+                    text(app, "agent.code_diff.file_status.new").replace("{file_name}", &file_name)
                 }
                 Some(file_name) if matches!(diff_type, Some(DiffType::Delete { .. })) => {
-                    format!("{file_name} (deleted)")
+                    text(app, "agent.code_diff.file_status.deleted")
+                        .replace("{file_name}", &file_name)
                 }
                 Some(file_name) => {
                     // Check if this is a rename
@@ -1880,7 +1880,7 @@ impl CodeDiffView {
                         file_name
                     }
                 }
-                None => "No file name".to_string(),
+                None => text(app, "agent.code_diff.no_file_name"),
             };
 
             // Get the full path for the tooltip
@@ -2000,7 +2000,7 @@ impl CodeDiffView {
         if Self::is_rename_without_changes(diff_type) {
             let placeholder = Container::new(
                 Text::new(
-                    "File renamed without changes",
+                    text(app, "agent.code_diff.file_renamed_without_changes"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -2181,11 +2181,11 @@ impl CodeDiffView {
 
         if self.display_mode.is_embedded() {
             let label = if self.is_passive {
-                SUGGESTED_EDIT_DISMISS_LABEL
+                text(ctx, "agent.code_diff.dismiss")
             } else {
-                REQUESTED_EDIT_CANCEL_LABEL
+                text(ctx, "agent.code_diff.cancel")
             };
-            self.cancel_button.set_label(label.to_string(), ctx);
+            self.cancel_button.set_label(label, ctx);
         }
 
         for diff in &self.pending_diffs {
@@ -2540,7 +2540,10 @@ impl CodeDiffView {
 
         let checkbox_text = appearance
             .ui_builder()
-            .span("Don't show me suggested code banners again")
+            .span(text(
+                app,
+                "settings.ai.active.suggested_code_banners.hide_again",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(font_color),
                 font_size: Some(font_size),
@@ -2553,8 +2556,8 @@ impl CodeDiffView {
         let formatted_text = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(vec![
                 FormattedTextFragment::hyperlink(
-                    "Manage suggested code banner settings",
-                    "Settings > AI",
+                    text(app, "settings.ai.active.suggested_code_banners.manage"),
+                    text(app, "settings.nav.ai"),
                 ),
             ])]),
             font_size,
@@ -3140,12 +3143,12 @@ impl BackingView for CodeDiffView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> view::HeaderContent {
         // Code diffs should show "Requested Edit" as the title and hide the close button
         // since they are closed via accept/reject actions.
         view::HeaderContent::Standard(view::StandardHeader {
-            title: "Requested Edit".to_string(),
+            title: text(app, "agent.code_diff.requested_edit"),
             title_secondary: None,
             title_style: None,
             title_clip_config: warpui::text_layout::ClipConfig::start(),

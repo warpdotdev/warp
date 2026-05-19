@@ -856,7 +856,9 @@ impl Network {
                 ..
             } => {
                 if !matches!(self.stage, Stage::BeforeStarted) {
-                    log::warn!("Received unexpected SessionInitialized message when we weren't in BeforeStarted stage");
+                    log::warn!(
+                        "Received unexpected SessionInitialized message when we weren't in BeforeStarted stage"
+                    );
                     return;
                 }
                 log::info!("Successfully created shared session.");
@@ -891,7 +893,9 @@ impl Network {
                 participant_list,
             } => {
                 if !matches!(self.stage, Stage::Reconnecting { .. }) {
-                    log::warn!("Received unexpected SessionReconnected message when we weren't reconnecting");
+                    log::warn!(
+                        "Received unexpected SessionReconnected message when we weren't reconnecting"
+                    );
                     return;
                 }
                 log::info!("Successfully reconnected to shared session server as sharer.");

@@ -19,6 +19,7 @@ use warpui::{elements::Border, fonts::FamilyId, ui_components::checkbox::HOVER_B
 
 use crate::{
     appearance::Appearance,
+    localization,
     notebooks::editor::embedded_item::EmbeddedWorkflow,
     settings::{derived_notebook_font_size, FontSettings},
     themes::theme::Fill,
@@ -144,6 +145,24 @@ impl BlockType {
             BlockType::Code => "Code",
             BlockType::TaskList => "To-do list",
         }
+    }
+
+    fn localized_label(self, app: &warpui::AppContext) -> String {
+        let key = match self {
+            BlockType::Text => "notebook.block.text",
+            BlockType::Header(BlockHeaderSize::Header1) => "notebook.block.header_1",
+            BlockType::Header(BlockHeaderSize::Header2) => "notebook.block.header_2",
+            BlockType::Header(BlockHeaderSize::Header3) => "notebook.block.header_3",
+            BlockType::Header(BlockHeaderSize::Header4) => "notebook.block.header_4",
+            BlockType::Header(BlockHeaderSize::Header5) => "notebook.block.header_5",
+            BlockType::Header(BlockHeaderSize::Header6) => "notebook.block.header_6",
+            BlockType::RunnableCommand => "notebook.block.command",
+            BlockType::UnorderedList => "notebook.block.bulleted_list",
+            BlockType::OrderedList => "notebook.block.numbered_list",
+            BlockType::Code => "notebook.block.code",
+            BlockType::TaskList => "notebook.block.todo_list",
+        };
+        localization::text_for_app(app, key)
     }
 }
 

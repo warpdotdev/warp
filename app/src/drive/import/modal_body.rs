@@ -17,6 +17,7 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     cloud_object::Owner,
+    localization,
     server::{
         ids::{ClientId, SyncId},
         sync_queue::SyncQueue,
@@ -44,6 +45,10 @@ pub(super) const BASE_INDENT: f32 = 30.;
 const FILE_TYPE_DOCS_URL: &str =
     "https://docs.warp.dev/knowledge-and-collaboration/warp-drive#import-and-export";
 const SUPPORTED_FILE_TYPE_TEXT: &str = "md, yaml, yml";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[cfg(test)]
 #[path = "import_tests.rs"]
@@ -126,7 +131,9 @@ impl ImportModalBody {
                 ImportQueueEvent::FileCompleted { file_id, server_id } => {
                     let result = match server_id {
                         Some(id) => UploadResult::Success(id.clone()),
-                        None => UploadResult::Error("Failed to upload file to server".to_string()),
+                        None => {
+                            UploadResult::Error(text(ctx, "drive.import.error.failed_upload_file"))
+                        }
                     };
 
                     // Update the upstream folder status with the upload success state.
@@ -140,9 +147,10 @@ impl ImportModalBody {
                 } => {
                     let result = match server_id {
                         Some(id) => UploadResult::Success(id.clone()),
-                        None => {
-                            UploadResult::Error("Failed to upload folder to server".to_string())
-                        }
+                        None => UploadResult::Error(text(
+                            ctx,
+                            "drive.import.error.failed_upload_folder",
+                        )),
                     };
 
                     state.mark_folder_synced(result, *folder_id);
@@ -365,7 +373,7 @@ impl ImportModalBody {
         ctx.notify();
     }
 
-    fn render_upload_state(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_upload_state(&self, app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         let is_loading = matches!(self.state, ImportState::PathLoaded | ImportState::Loading);
         let base_button = appearance
             .ui_builder()
@@ -387,13 +395,13 @@ impl ImportModalBody {
 
         let file_picker_button = if is_loading {
             base_button
-                .with_centered_text_label("Preparing...".to_string())
+                .with_centered_text_label(text(app, "drive.import.preparing"))
                 .disabled()
         } else {
             base_button.with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::TextFirst,
-                    "Choose files...".to_string(),
+                    text(app, "drive.import.choose_files"),
                     Icon::Import.to_warpui_icon(
                         appearance
                             .theme()
@@ -433,7 +441,7 @@ impl ImportModalBody {
         let link_to_document = appearance
             .ui_builder()
             .link(
-                "Learn about file support and formatting".to_string(),
+                text(app, "drive.import.file_support_link"),
                 Some(FILE_TYPE_DOCS_URL.to_string()),
                 None,
                 self.link_mouse_state.clone(),
@@ -510,7 +518,7 @@ impl View for ImportModalBody {
 
         match &self.state {
             ImportState::Upload | ImportState::Loading | ImportState::PathLoaded => {
-                self.render_upload_state(appearance)
+                self.render_upload_state(app, appearance)
             }
             ImportState::PathExpanded(paths) => {
                 self.render_loaded_state(paths, sync_queue_dequeueing, appearance)

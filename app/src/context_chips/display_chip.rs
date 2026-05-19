@@ -8,13 +8,14 @@ use crate::ai::{
     document::ai_document_model::{AIDocumentId, AIDocumentVersion},
 };
 use crate::code::editor::{add_color, remove_color};
-use crate::code_review::code_review_view::CODE_REVIEW_TOOLTIP_TEXT;
+use crate::code_review::code_review_view::{code_review_text, CODE_REVIEW_TOOLTIP_KEY};
 use crate::code_review::diff_state::DiffStats;
 use crate::context_chips::git_branch_on_click::{
     is_plausible_new_branch_name, GitBranchOnClickValue,
 };
 use crate::context_chips::node_version_popup::{NodeVersionPopupEvent, NodeVersionPopupView};
 use crate::context_chips::spacing;
+use crate::localization;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -117,10 +118,10 @@ pub fn render_git_diff_stats_content(
         .finish(),
     );
 
-    // Only add bullet separator if there are changes to display
+    // Only add a separator if there are changes to display
     if has_changes {
         counts_row.add_child(
-            Text::new_inline(" • ", font_family, font_size)
+            Text::new_inline(" - ", font_family, font_size)
                 .with_color(Fill::Solid(internal_colors::neutral_6(theme)).into())
                 .with_line_height_ratio(appearance.line_height_ratio())
                 .with_style(Properties::default().weight(Weight::Semibold))
@@ -664,7 +665,7 @@ impl DisplayChip {
                     DisplayChipMenu::new(
                         Vec::<DirectoryItem>::new(),
                         Some(FixedFooter::new(Arc::new(DirectoryItem {
-                            name: ".. (Parent Directory)".to_string(),
+                            name: localization::text_for_app(ctx, "context_chips.directory.parent"),
                             directory_type: DirectoryType::NavigateToParent,
                         }))), // Show parent directory option
                         ChipMenuType::Directories,
@@ -811,9 +812,9 @@ impl DisplayChip {
             _ => DisplayChipKind::Text,
         };
 
-        let quota_reset_popup = ctx.add_typed_action_view(|_| {
+        let quota_reset_popup = ctx.add_typed_action_view(|ctx| {
             FeaturePopup::alert_icon(NewFeaturePopupLabel::FromString(
-                "Monthly AI credits reset!".to_string(),
+                localization::text_for_app(ctx, "context_chips.quota.monthly_reset"),
             ))
         });
 
@@ -1094,7 +1095,10 @@ impl DisplayChip {
             if state.is_hovered() && is_interactive && !menu_open {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("Change git branch".to_string())
+                    .tool_tip(localization::text_for_app(
+                        app,
+                        "context_chips.tooltip.change_git_branch",
+                    ))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1161,7 +1165,10 @@ impl DisplayChip {
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("View pull request".to_string())
+                    .tool_tip(localization::text_for_app(
+                        app,
+                        "context_chips.tooltip.view_pull_request",
+                    ))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1253,7 +1260,7 @@ impl DisplayChip {
                     let tool_tip = appearance
                         .ui_builder()
                         .tool_tip_with_sublabel(
-                            CODE_REVIEW_TOOLTIP_TEXT.to_string(),
+                            code_review_text(app, CODE_REVIEW_TOOLTIP_KEY),
                             code_review_keybinding.clone(),
                         )
                         .build()
@@ -1341,7 +1348,10 @@ impl DisplayChip {
                 if state.is_hovered() {
                     let tool_tip = appearance
                         .ui_builder()
-                        .tool_tip("Change working directory".to_string())
+                        .tool_tip(localization::text_for_app(
+                            app,
+                            "context_chips.tooltip.change_working_directory",
+                        ))
                         .build()
                         .finish();
 
@@ -1388,7 +1398,10 @@ impl DisplayChip {
                 if state.is_hovered() && !is_cli_agent_active {
                     let tool_tip = appearance
                         .ui_builder()
-                        .tool_tip("Working directory".to_string())
+                        .tool_tip(localization::text_for_app(
+                            app,
+                            "context_chips.tooltip.working_directory",
+                        ))
                         .build()
                         .finish();
 
