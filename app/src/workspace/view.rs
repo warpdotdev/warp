@@ -4408,6 +4408,23 @@ impl Workspace {
         });
     }
 
+    /// Copies a focus-link URL for the focused terminal pane in the given
+    /// tab. Emits the same event the per-pane menu uses, so the pane group
+    /// resolves the UUID and writes to the clipboard via the existing path.
+    fn copy_tab_focus_link(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
+        let Some(pane_group) = self.tabs.get(tab_index).map(|tab| tab.pane_group.clone()) else {
+            return;
+        };
+        let Some(terminal_view) = pane_group.as_ref(ctx).focused_session_view(ctx) else {
+            return;
+        };
+        terminal_view.update(ctx, |_view, ctx| {
+            ctx.emit(terminal::view::Event::CopyPaneFocusLink {
+                source: SharedSessionActionSource::Tab,
+            });
+        });
+    }
+
     fn subscribe_to_shared_session_manager(ctx: &mut ViewContext<Self>) {
         use terminal::shared_session::manager::{Manager, ManagerEvent};
 
@@ -24231,6 +24248,7 @@ impl TypedActionView for Workspace {
                     });
                 }
             }
+            CopyTabFocusLink { tab_index } => self.copy_tab_focus_link(*tab_index, ctx),
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());
             }
