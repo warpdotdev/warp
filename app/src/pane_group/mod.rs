@@ -17,9 +17,9 @@ use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDo
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::ai::llms::LLMId;
 use crate::ai::restored_conversations::RestoredAgentConversations;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::AuthStateProvider;
 use crate::cloud_object::Space;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
@@ -29,9 +29,9 @@ use crate::code_review::diff_state::DiffMode;
 use crate::env_vars::EnvVarCollectionType;
 use crate::notebooks::file::FileNotebookView;
 use crate::pane_group::focus_state::PaneGroupFocusEvent;
+use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::pane::get_started_pane::GetStartedPane;
 use crate::pane_group::pane::welcome_pane::WelcomePane;
-use crate::pane_group::pane::ActionOrigin;
 use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -62,7 +62,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{mpsc::SyncSender, Arc};
+use std::sync::{Arc, mpsc::SyncSender};
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -70,7 +70,7 @@ use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{
     ParticipantId, Role, RoleRequestId, RoleRequestRejectedReason, RoleRequestResponse, SessionId,
@@ -80,12 +80,12 @@ use typed_path::TypedPath;
 use url::Url;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::HostId;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
-use warp_core::HostId;
-use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
+use warp_util::path::convert_wsl_to_windows_host_path;
 use warpui::elements::{
     Clipped, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, MainAxisSize, Shrinkable,
     Stack,
@@ -95,9 +95,9 @@ use warpui::notification::NotificationSendError;
 
 use warpui::windowing::WindowManager;
 use warpui::{
-    elements::{ChildView, Element, ParentElement},
     AppContext, Entity, EntityId, ModelHandle, TypedActionView, View, ViewHandle, WeakViewHandle,
     WindowId,
+    elements::{ChildView, Element, ParentElement},
 };
 use warpui::{SingletonEntity, ViewContext};
 
@@ -121,7 +121,7 @@ use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
 use crate::persistence::ModelEvent;
 use crate::report_if_error;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
+    Tip, TipAction, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::telemetry::{
@@ -154,7 +154,7 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use settings::Setting as _;
 
 use crate::code::active_file::ActiveFileModel;
-use crate::util::bindings::{is_binding_pty_compliant, CustomAction};
+use crate::util::bindings::{CustomAction, is_binding_pty_compliant};
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 
 use crate::palette::PaletteMode;
@@ -172,7 +172,7 @@ pub mod focus_state;
 pub mod pane;
 pub mod tree;
 pub mod working_directories;
-use child_agent::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
+use child_agent::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 
 use focus_state::PaneGroupFocusState;
 
@@ -181,6 +181,8 @@ use focus_state::PaneGroupFocusState;
 mod tests;
 
 pub use crate::code_review::CodeReviewPanelArg;
+pub use pane::PaneHeaderAction;
+pub use pane::PaneHeaderCustomAction;
 pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
@@ -194,8 +196,6 @@ pub use pane::notebook_pane::NotebookPane;
 pub use pane::settings_pane::SettingsPane;
 pub use pane::terminal_pane::TerminalPane;
 pub use pane::workflow_pane::WorkflowPane;
-pub use pane::PaneHeaderAction;
-pub use pane::PaneHeaderCustomAction;
 pub use pane::{
     AnyPaneContent, BackingView, PaneConfiguration, PaneConfigurationEvent, PaneContent, PaneEvent,
     PaneId, PaneView, TerminalPaneId,
@@ -3219,15 +3219,24 @@ impl PaneGroup {
             return true;
         }
 
-        let parent_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_conversation_id)
-            .and_then(|conversation| conversation.parent_conversation_id())
-            .or_else(|| {
-                RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                    store
-                        .get_conversation(&child_conversation_id)
-                        .and_then(|conversation| conversation.parent_conversation_id())
-                })
+        let parent_conversation_id =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                history_model
+                    .conversation(&child_conversation_id)
+                    .and_then(|conversation| {
+                        history_model.resolved_parent_conversation_id_for_conversation(conversation)
+                    })
+                    .or_else(|| {
+                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                            store.get_conversation(&child_conversation_id).and_then(
+                                |conversation| {
+                                    history_model.resolved_parent_conversation_id_for_conversation(
+                                        conversation,
+                                    )
+                                },
+                            )
+                        })
+                    })
             });
 
         let Some(parent_conversation_id) = parent_conversation_id else {
@@ -6013,9 +6022,11 @@ impl PaneGroup {
                     });
 
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-                    report_if_error!(general_settings
-                        .user_default_shell_unsupported_banner_state
-                        .set_value(BannerState::Dismissed, ctx));
+                    report_if_error!(
+                        general_settings
+                            .user_default_shell_unsupported_banner_state
+                            .set_value(BannerState::Dismissed, ctx)
+                    );
                 });
             }
             BannerEvent::Action(_) => {

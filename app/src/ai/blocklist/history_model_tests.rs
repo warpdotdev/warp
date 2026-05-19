@@ -4,37 +4,41 @@ use std::time::Duration;
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use crate::{
+    GlobalResourceHandles, GlobalResourceHandlesProvider,
     ai::{
         agent::{
-            api::ServerConversationToken,
-            conversation::{AIAgentHarness, AIConversationId, ServerAIConversationMetadata},
             AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
             FinishedAIAgentOutput, Shared, UserQueryMode,
+            api::ServerConversationToken,
+            conversation::{AIAgentHarness, AIConversationId, ServerAIConversationMetadata},
         },
         ambient_agents::AmbientAgentTaskId,
-        blocklist::{controller::RequestInput, ResponseStreamId},
+        blocklist::{ResponseStreamId, controller::RequestInput},
         llms::LLMId,
     },
     cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions},
     input_suggestions::HistoryInputSuggestion,
     persistence::{
-        model::{AgentConversation, AgentConversationRecord, PersistedAutoexecuteMode},
         ModelEvent,
+        model::{
+            AgentConversation, AgentConversationData, AgentConversationRecord,
+            PersistedAutoexecuteMode,
+        },
     },
     server::ids::ServerId,
     terminal::model::session::SessionId,
     test_util::settings::{
         initialize_history_persistence_for_tests, initialize_settings_for_tests,
     },
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
 };
 
 use super::{
-    convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,
-    AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput, PersistedAIInputType,
+    AIConversationMetadata, AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput,
+    PersistedAIInputType, convert_persisted_conversation_to_ai_conversation_with_metadata,
 };
 use uuid::Uuid;
 
@@ -57,6 +61,68 @@ fn create_persisted_query(
         working_directory: None,
         model_id: LLMId::from("test-model"),
         coding_model_id: LLMId::from("test-coding-model"),
+    }
+}
+
+fn create_user_query_message(
+    id: &str,
+    task_id: &str,
+    request_id: &str,
+    query: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(warp_multi_agent_api::message::Message::UserQuery(
+            warp_multi_agent_api::message::UserQuery {
+                query: query.to_string(),
+                context: None,
+                referenced_attachments: HashMap::new(),
+                mode: None,
+                intended_agent: Default::default(),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn persisted_agent_conversation(
+    conversation_id: AIConversationId,
+    conversation_data: AgentConversationData,
+    last_modified_at: chrono::NaiveDateTime,
+    initial_query: Option<&str>,
+) -> AgentConversation {
+    let task_id = format!("task-{conversation_id}");
+    let tasks = initial_query
+        .map(|query| {
+            vec![warp_multi_agent_api::Task {
+                id: task_id.clone(),
+                messages: vec![create_user_query_message(
+                    "message-1",
+                    &task_id,
+                    "request-1",
+                    query,
+                )],
+                dependencies: None,
+                description: query.to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }]
+        })
+        .unwrap_or_default();
+
+    AgentConversation {
+        conversation: AgentConversationRecord {
+            id: 0,
+            conversation_id: conversation_id.to_string(),
+            conversation_data: serde_json::to_string(&conversation_data)
+                .expect("conversation data should serialize"),
+            last_modified_at,
+        },
+        tasks,
     }
 }
 
@@ -186,6 +252,76 @@ fn start_new_child_conversation_persists_harness_metadata() {
             assert_eq!(
                 child_b_conversation.parent_agent_id(),
                 Some("parent-agent-id")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_initialize_historical_conversations_resolves_parent_agent_id_children_via_seeded_run_ids() {
+    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+
+        let conversations = vec![
+            persisted_agent_conversation(
+                child_id,
+                AgentConversationData {
+                    server_conversation_token: Some("child-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: Some(parent_run_id.clone()),
+                    agent_name: Some("Child agent".to_string()),
+                    orchestration_harness_type: None,
+                    parent_conversation_id: None,
+                    is_remote_child: true,
+                    run_id: None,
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                },
+                now,
+                None,
+            ),
+            persisted_agent_conversation(
+                parent_id,
+                AgentConversationData {
+                    server_conversation_token: Some("parent-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: None,
+                    agent_name: None,
+                    orchestration_harness_type: None,
+                    parent_conversation_id: None,
+                    is_remote_child: false,
+                    run_id: Some(parent_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                },
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model.conversation_id_for_agent_id(&parent_run_id),
+                Some(parent_id),
+                "startup hydration should seed the run-id lookup before linking children",
+            );
+            assert_eq!(
+                model.child_conversation_ids_of(&parent_id),
+                &[child_id],
+                "parent_agent_id-only children should be indexed under their resolved parent",
             );
         });
     });
@@ -1002,6 +1138,40 @@ fn test_restore_conversations_maintains_children_by_parent() {
 
         history_model.read(&app, |model, _| {
             assert_eq!(model.child_conversation_ids_of(&parent_id), &[child_id]);
+        });
+    });
+}
+
+#[test]
+fn test_restore_conversations_indexes_child_by_parent_agent_id() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let parent_run_id = Uuid::new_v4().to_string();
+
+        let mut parent_conversation = AIConversation::new(false, false);
+        parent_conversation.set_run_id(parent_run_id.clone());
+        let parent_id = parent_conversation.id();
+
+        let mut child_conversation = AIConversation::new(false, false);
+        child_conversation.set_parent_agent_id(parent_run_id);
+        let child_id = child_conversation.id();
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![parent_conversation], ctx);
+            model.restore_conversations(terminal_view_id, vec![child_conversation], ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model.child_conversation_ids_of(&parent_id),
+                &[child_id],
+                "runtime restoration should index parent_agent_id-only children under their parent",
+            );
         });
     });
 }

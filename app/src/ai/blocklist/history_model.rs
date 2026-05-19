@@ -21,43 +21,43 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "local_fs")]
 use diesel::SqliteConnection;
 
+use crate::GlobalResourceHandlesProvider;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::conversation::{ServerAIConversationMetadata, UpdateConversationError};
-use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::CancellationReason;
+use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::AgentConversationData;
 use crate::persistence::ModelEvent;
+use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
-use crate::GlobalResourceHandlesProvider;
 use crate::{
     ai::agent::{
-        conversation::{AIConversation, AIConversationId},
         AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
         MessageId, RenderableAIError, RequestCost, Suggestions,
+        conversation::{AIConversation, AIConversationId},
     },
     persistence::model::AgentConversation,
     ui_components::icons::Icon,
 };
 
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{PersistenceScope, database_file_path_for_scope, establish_ro_connection};
 
+use super::RequestInput;
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
-use super::RequestInput;
 
 mod conversation_loader;
 pub use conversation_loader::{
-    convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
     CLIAgentConversation, CloudConversationData,
+    convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
 };
 
 pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 100;
@@ -394,6 +394,51 @@ impl BlocklistAIHistoryModel {
             .collect()
     }
 
+    fn resolved_parent_conversation_id_from_refs(
+        &self,
+        parent_conversation_id: Option<AIConversationId>,
+        parent_agent_id: Option<&str>,
+    ) -> Option<AIConversationId> {
+        parent_conversation_id.or_else(|| {
+            parent_agent_id.and_then(|agent_id| self.conversation_id_for_agent_id(agent_id))
+        })
+    }
+
+    fn resolved_parent_conversation_id_from_persisted_data(
+        &self,
+        conversation_data: &AgentConversationData,
+    ) -> Option<AIConversationId> {
+        let parent_conversation_id = conversation_data
+            .parent_conversation_id
+            .as_deref()
+            .and_then(|id| AIConversationId::try_from(id.to_owned()).ok());
+        self.resolved_parent_conversation_id_from_refs(
+            parent_conversation_id,
+            conversation_data.parent_agent_id.as_deref(),
+        )
+    }
+
+    pub fn resolved_parent_conversation_id_for_conversation(
+        &self,
+        conversation: &AIConversation,
+    ) -> Option<AIConversationId> {
+        self.resolved_parent_conversation_id_from_refs(
+            conversation.parent_conversation_id(),
+            conversation.parent_agent_id(),
+        )
+    }
+
+    fn index_child_conversation(
+        &mut self,
+        child_id: AIConversationId,
+        parent_id: AIConversationId,
+    ) {
+        let children = self.children_by_parent.entry(parent_id).or_default();
+        if !children.contains(&child_id) {
+            children.push(child_id);
+        }
+    }
+
     /// Creates a new child agent conversation.
     pub fn start_new_child_conversation(
         &mut self,
@@ -444,10 +489,7 @@ impl BlocklistAIHistoryModel {
         if let Some(conversation) = self.conversations_by_id.get_mut(&child_id) {
             conversation.set_parent_conversation_id(parent_id);
         }
-        let children = self.children_by_parent.entry(parent_id).or_default();
-        if !children.contains(&child_id) {
-            children.push(child_id);
-        }
+        self.index_child_conversation(child_id, parent_id);
     }
 
     /// Returns the child conversation IDs for a parent from the startup index.
@@ -710,11 +752,10 @@ impl BlocklistAIHistoryModel {
             }
 
             // Maintain the parent→child index for child agent conversations.
-            if let Some(parent_id) = conversation.parent_conversation_id() {
-                let children = self.children_by_parent.entry(parent_id).or_default();
-                if !children.contains(&conversation_id) {
-                    children.push(conversation_id);
-                }
+            if let Some(parent_id) =
+                self.resolved_parent_conversation_id_for_conversation(&conversation)
+            {
+                self.index_child_conversation(conversation_id, parent_id);
             }
 
             let new_status = conversation.status().clone();
@@ -1048,7 +1089,14 @@ impl BlocklistAIHistoryModel {
     /// Resolves a server-side agent identifier to a local conversation ID.
     /// The identifier may be a server conversation token (v1) or a run_id (v2).
     pub fn conversation_id_for_agent_id(&self, agent_id: &str) -> Option<AIConversationId> {
-        self.agent_id_to_conversation_id.get(agent_id).copied()
+        self.agent_id_to_conversation_id
+            .get(agent_id)
+            .copied()
+            .or_else(|| {
+                self.server_token_to_conversation_id
+                    .get(&ServerConversationToken::new(agent_id.to_owned()))
+                    .copied()
+            })
     }
 
     /// Creates a new conversation and transfers relevant exchanges from
@@ -2219,6 +2267,14 @@ impl BlocklistAIHistoryModel {
 /// conversation.
 fn agent_id_key(conversation: &AIConversation) -> Option<String> {
     conversation.orchestration_agent_id()
+}
+
+fn agent_id_key_from_persisted_data(conversation_data: &AgentConversationData) -> Option<&str> {
+    if FeatureFlag::OrchestrationV2.is_enabled() {
+        conversation_data.run_id.as_deref()
+    } else {
+        conversation_data.server_conversation_token.as_deref()
+    }
 }
 
 /// Whether an `UpdatedConversationStatus` event represents a restoration
