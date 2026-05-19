@@ -2,6 +2,7 @@ use std::{collections::HashMap, ops::Range};
 
 use super::{AIBlock, TextLocation};
 use crate::ai::agent::{AIAgentTextSection, MessageId};
+use crate::ai::blocklist::model::AIBlockModelHelper;
 use crate::terminal::find::{FindOptions, FindableRichContentView, RichContentMatchId};
 use itertools::Itertools;
 use regex::RegexBuilder;
@@ -47,9 +48,16 @@ impl FindableRichContentView for AIBlock {
         self.clear_matches(ctx);
 
         let mut new_match_ids = vec![];
+        let initial_conversation_query = self
+            .model
+            .conversation(ctx)
+            .and_then(|conversation| conversation.initial_user_query());
         for (i, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
-            if let Some(query) = input.user_query() {
-                for find_match_range in compute_find_matches(&query, options).into_iter() {
+            if let Some(displayed_query) =
+                input.display_user_query(initial_conversation_query.as_ref())
+            {
+                for find_match_range in compute_find_matches(&displayed_query, options).into_iter()
+                {
                     let id = RichContentMatchId::default();
                     new_match_ids.push(id);
                     self.find_state.matches.insert(
@@ -177,5 +185,76 @@ fn compute_find_matches(text: &str, options: &FindOptions) -> Vec<Range<usize>> 
                 start_chars..start_chars + query_len_chars
             })
             .collect_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use crate::ai::agent::{AIAgentInput, UserQueryMode};
+    use crate::terminal::find::FindOptions;
+
+    use super::compute_find_matches;
+
+    #[test]
+    fn find_matches_initial_agent_query_display_prefix() {
+        let input = AIAgentInput::UserQuery {
+            query: "hello, world!".to_string(),
+            context: Arc::new([]),
+            static_query_type: None,
+            referenced_attachments: HashMap::new(),
+            user_query_mode: UserQueryMode::Normal,
+            running_command: None,
+            intended_agent: None,
+        };
+        let initial_query = Some("hello, world!".to_string());
+        let displayed_query = input
+            .display_user_query(initial_query.as_ref())
+            .expect("user query should render");
+
+        assert_eq!(displayed_query, "/agent hello, world!");
+        assert_eq!(
+            compute_find_matches(
+                &displayed_query,
+                &FindOptions {
+                    query: Some("hel".to_string().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                }
+            ),
+            vec![7..10]
+        );
+    }
+
+    #[test]
+    fn find_matches_plan_query_display_prefix() {
+        let input = AIAgentInput::UserQuery {
+            query: "hello, world!".to_string(),
+            context: Arc::new([]),
+            static_query_type: None,
+            referenced_attachments: HashMap::new(),
+            user_query_mode: UserQueryMode::Plan,
+            running_command: None,
+            intended_agent: None,
+        };
+        let displayed_query = input
+            .display_user_query(None)
+            .expect("user query should render");
+
+        assert_eq!(displayed_query, "/plan hello, world!");
+        assert_eq!(
+            compute_find_matches(
+                &displayed_query,
+                &FindOptions {
+                    query: Some("hel".to_string().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                }
+            ),
+            vec![6..9]
+        );
     }
 }
