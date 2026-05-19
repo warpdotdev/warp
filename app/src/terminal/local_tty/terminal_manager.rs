@@ -204,7 +204,31 @@ impl TerminalManager {
             log::info!("Failed to send Shutdown {e:?}");
         }
 
+        // On Windows, poll with a timeout instead of blocking indefinitely. If the event loop hangs
+        // (e.g. due to a pipe read or mio waker failure), a stuck join would prevent
+        // on_will_terminate from returning and thus prevent std::process::exit(0) from ever being
+        // called, leaving the warp.exe process alive with no visible window. If we time out,
+        // std::process::exit(0) will still kill the thread. The ConPTY handle will be closed by the
+        // OS when the process exits, which signals OpenConsole to exit on its own.
         if let Some(join_handle) = self.event_loop_handle.take() {
+            #[cfg(windows)]
+            {
+                use std::time::{Duration, Instant};
+                const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+                const POLL_INTERVAL: Duration = Duration::from_millis(10);
+                let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+                while !join_handle.is_finished() {
+                    if Instant::now() >= deadline {
+                        log::warn!(
+                            "PTY event loop did not exit within {SHUTDOWN_TIMEOUT:?}. Proceeding \
+                            with app shutdown."
+                        );
+                        self.inactive_pty_reads_rx.close();
+                        return;
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+            }
             if let Err(e) = join_handle.join() {
                 log::error!("Failed to join event loop handle {e:?}");
             }
