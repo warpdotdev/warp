@@ -1779,6 +1779,12 @@ pub enum Event {
     OpenShareSessionModal {
         open_source: SharedSessionActionSource,
     },
+    /// Emitted from a TerminalView to request its containing PaneGroup
+    /// resolve the pane's session UUID and copy a `warp://session/{uuid}`
+    /// link to the clipboard.
+    CopyPaneFocusLink {
+        source: SharedSessionActionSource,
+    },
     OpenShareSessionDeniedModal,
     /// Used to focus and bring this session to the foreground.
     FocusSession,
@@ -25968,6 +25974,7 @@ impl TypedActionView for TerminalView {
             | OpenShareSessionModal { .. }
             | OpenSharedSessionViewerRoleMenu
             | CopySharedSessionLink { .. }
+            | CopyPaneFocusLink { .. }
             | OpenSharedSessionOnDesktop { .. }
             | MakeAllParticipantsReaders { .. }
             | AskAIAssistant { .. }
@@ -26463,6 +26470,9 @@ impl TypedActionView for TerminalView {
                 self.toggle_block_filter_on_selected_or_last_block(*source, ctx);
             }
             CopySharedSessionLink { source } => self.copy_shared_session_link(*source, ctx),
+            CopyPaneFocusLink { source } => {
+                ctx.emit(Event::CopyPaneFocusLink { source: *source });
+            }
             ToggleSnackbarInActivePane => self.toggle_snackbar_in_active_pane(ctx),
             MakeAllParticipantsReaders { reason } => {
                 self.make_all_shared_session_participants_readers(*reason, ctx)

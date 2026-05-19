@@ -689,6 +689,14 @@ impl BackingView for TerminalView {
             );
         }
 
+        if FeatureFlag::CopyPaneFocusLink.is_enabled() {
+            items.push(
+                MenuItemFields::new("Copy focus link")
+                    .with_on_select_action(TerminalAction::CopyPaneFocusLink { source })
+                    .into_item(),
+            );
+        }
+
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {
             if !items.is_empty() {

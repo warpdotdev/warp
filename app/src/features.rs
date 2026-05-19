@@ -51,6 +51,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ViewingSharedSessions,
         #[cfg(feature = "creating_shared_sessions")]
         FeatureFlag::CreatingSharedSessions,
+        #[cfg(feature = "copy_pane_focus_link")]
+        FeatureFlag::CopyPaneFocusLink,
         #[cfg(feature = "agent_mode")]
         FeatureFlag::AgentMode,
         #[cfg(feature = "shared_session_long_running_commands")]

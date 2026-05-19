@@ -307,6 +307,12 @@ pub enum TerminalAction {
     CopySharedSessionLink {
         source: SharedSessionActionSource,
     },
+    /// Copies a `warp://session/{uuid}` URL for the focused pane to the
+    /// clipboard. Used for external automation (AppleScript, Stream Deck) —
+    /// purely local, no server involvement, unrelated to session sharing.
+    CopyPaneFocusLink {
+        source: SharedSessionActionSource,
+    },
     VimModeBanner(VimModeBannerAction),
     ToggleSnackbarInActivePane,
     MakeAllParticipantsReaders {
@@ -638,6 +644,7 @@ impl fmt::Debug for TerminalAction {
             }
             OpenShareSessionModal { source } => write!(f, "OpenShareSessionModal({source:?})"),
             CopySharedSessionLink { .. } => f.write_str("CopySharedSessionLink"),
+            CopyPaneFocusLink { .. } => f.write_str("CopyPaneFocusLink"),
             VimModeBanner(action) => write!(f, "VimModeBanner({action:?})"),
             ToggleSnackbarInActivePane => write!(f, "ToggleSnackbarInActivePane"),
             MakeAllParticipantsReaders { reason } => {

@@ -54,6 +54,13 @@ pub enum FeatureFlag {
     /// killswitch for abuse prevention.
     CreatingSharedSessions,
 
+    /// Adds a "Copy focus link" item to the per-pane overflow menu that
+    /// writes a `warp://session/{uuid}` URL for the pane to the clipboard.
+    /// Used for AppleScript / Stream Deck automation to focus a specific
+    /// pane externally. Independent of session sharing — uses the pane's
+    /// local persistent UUID, no server involvement.
+    CopyPaneFocusLink,
+
     /// Enables the joining / viewing of shared sessions (_not_ creation).
     ViewingSharedSessions,
 
@@ -907,6 +914,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LogExpensiveFramesInSentry,
     FeatureFlag::ToggleBootstrapBlock,
     FeatureFlag::CreatingSharedSessions,
+    FeatureFlag::CopyPaneFocusLink,
     FeatureFlag::RemoveAutosuggestionDuringTabCompletions,
     FeatureFlag::ResizeFix,
     FeatureFlag::AgentModeWorkflows,

@@ -1171,6 +1171,9 @@ fn handle_terminal_view_event(
             Event::StopSharingCurrentSession { .. } => {
                 group.stop_transitively_shared_child_shares(pane_id, ctx);
             }
+            Event::CopyPaneFocusLink { source } => {
+                group.copy_pane_focus_link(terminal_pane_id, *source, ctx);
+            }
             Event::OpenShareSessionDeniedModal => {
                 group.open_share_session_denied_modal(terminal_pane_id, ctx);
             }

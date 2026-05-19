@@ -1638,6 +1638,20 @@ fn decode_uuid_hex(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Lowercase hex-encode a 16-byte UUID. Inverse of `decode_uuid_hex`.
+/// Returns `None` if the input isn't exactly 16 bytes.
+pub(crate) fn encode_uuid_hex(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 16 {
+        return None;
+    }
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 #[path = "uri_tests.rs"]
 mod tests;

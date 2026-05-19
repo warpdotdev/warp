@@ -496,6 +496,7 @@ crash_reporting = [
     "warp_logging/crash_reporting",
     "ai/crash_reporting",
 ]
+copy_pane_focus_link = []
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]

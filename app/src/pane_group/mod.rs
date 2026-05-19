@@ -2543,6 +2543,45 @@ impl PaneGroup {
         ctx.notify();
     }
 
+    /// Copies a `warp://session/{uuid}` URL for the given terminal pane to
+    /// the clipboard. Used by the "Copy focus link" pane menu item; the URL
+    /// can be opened later (e.g. from AppleScript) to refocus this exact
+    /// pane.
+    fn copy_pane_focus_link(
+        &self,
+        terminal_pane_id: TerminalPaneId,
+        _source: SharedSessionActionSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::view_components::DismissibleToast;
+        use warpui::clipboard::ClipboardContent;
+
+        let pane_id: PaneId = terminal_pane_id.into();
+        let Some(uuid) = self
+            .panes_of::<TerminalPane>()
+            .find(|p| p.id() == pane_id)
+            .map(|p| p.session_uuid())
+        else {
+            log::warn!("CopyPaneFocusLink: terminal pane not found");
+            return;
+        };
+        let Some(hex) = crate::uri::encode_uuid_hex(&uuid) else {
+            log::warn!("CopyPaneFocusLink: session UUID was not 16 bytes");
+            return;
+        };
+        // Use the running channel's scheme so the URL routes back to this
+        // build (warposs:// for OSS, warplocal:// for local dev, warp:// for
+        // stable, etc.) rather than to the commercial Warp install.
+        let url = format!("{}://session/{hex}", ChannelState::url_scheme());
+        ctx.clipboard().write(ClipboardContent::plain_text(url));
+
+        let window_id = ctx.window_id();
+        crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::default("Copied focus link".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
     fn open_share_session_denied_modal(
         &mut self,
         terminal_pane_id: TerminalPaneId,
