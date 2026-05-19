@@ -330,6 +330,9 @@ pub enum WorkspaceAction {
     OpenLinkOnDesktop(url::Url),
     ReopenClosedSession,
     OpenShareSessionModal(usize),
+    OpenSharedSessionDialog {
+        terminal_view_id: EntityId,
+    },
     StopSharingSessionFromTabMenu {
         terminal_view_id: EntityId,
     },
@@ -912,6 +915,7 @@ impl WorkspaceAction {
             | LogOut
             | OpenLink(_)
             | OpenShareSessionModal(_)
+            | OpenSharedSessionDialog { .. }
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }

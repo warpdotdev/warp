@@ -4216,6 +4216,28 @@ impl Workspace {
             });
         }
     }
+    fn open_shared_session_dialog(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use terminal::shared_session::manager::Manager;
+
+        if !self.focus_terminal_view_locally(terminal_view_id, ctx) {
+            self.focus_terminal_view_in_other_window(terminal_view_id, ctx);
+            return;
+        }
+
+        let manager = Manager::as_ref(ctx);
+        if let Some(terminal_view) = manager.shared_view_by_id(&terminal_view_id, ctx) {
+            terminal_view.update(ctx, |view, ctx| {
+                view.open_shared_session_sharing_dialog(
+                    SharingDialogSource::StartedSessionShare,
+                    ctx,
+                );
+            });
+        }
+    }
 
     fn copy_shared_session_link_from_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         // Get the pane group for the specified tab
@@ -4243,9 +4265,10 @@ impl Workspace {
                 ManagerEvent::StartedShare {
                     window_id,
                     session_id,
+                    view_id,
                 } => {
                     if *window_id == ctx.window_id() {
-                        me.copy_shared_session_link(session_id, ctx);
+                        me.copy_shared_session_link(session_id, *view_id, ctx);
                     }
                 }
                 #[cfg(target_family = "wasm")]
@@ -4281,6 +4304,7 @@ impl Workspace {
     fn copy_shared_session_link(
         &mut self,
         session_id: &SharedSessionId,
+        terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.clipboard().write(ClipboardContent::plain_text(
@@ -4288,7 +4312,12 @@ impl Workspace {
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string());
+            let toast = DismissibleToast::default("Remote control link copied.".to_string())
+                .with_link(
+                    ToastLink::new("View QR code".to_string()).with_onclick_action(
+                        WorkspaceAction::OpenSharedSessionDialog { terminal_view_id },
+                    ),
+                );
             toast_stack.add_ephemeral_toast(toast, ctx);
         });
     }
@@ -22263,6 +22292,9 @@ impl TypedActionView for Workspace {
             }
             OpenShareSessionModal(index) => {
                 self.open_share_session_modal(*index, ctx);
+            }
+            OpenSharedSessionDialog { terminal_view_id } => {
+                self.open_shared_session_dialog(*terminal_view_id, ctx);
             }
             StopSharingSessionFromTabMenu { terminal_view_id } => {
                 self.stop_sharing_session(terminal_view_id, SharedSessionActionSource::Tab, ctx)

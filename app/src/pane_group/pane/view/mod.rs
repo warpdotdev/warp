@@ -252,6 +252,11 @@ impl<P: BackingView> PaneView<P> {
                     header.share_pane_contents(*source, ctx);
                 });
             }
+            PaneConfigurationEvent::OpenSharingDialog(source) => {
+                self.header.update(ctx, |header, ctx| {
+                    header.open_pane_sharing_dialog(*source, ctx);
+                });
+            }
             _ => {}
         }
     }

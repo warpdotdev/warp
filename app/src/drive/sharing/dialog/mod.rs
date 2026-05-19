@@ -34,7 +34,9 @@ use crate::TelemetryEvent;
 use email_address::EmailAddress;
 use inheritance::{InheritanceDetails, InheritanceState};
 use itertools::Itertools;
+use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use qrcode::{types::Color as QrColor, QrCode};
 use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclData};
 use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::NavigationKey;
@@ -54,7 +56,7 @@ use warpui::{
     clipboard::ClipboardContent,
     elements::{
         Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex,
-        MainAxisAlignment, ParentElement, Radius,
+        MainAxisAlignment, ParentElement, Radius, Rect,
     },
     keymap::FixedBinding,
     ui_components::components::{UiComponent, UiComponentStyles},
@@ -76,6 +78,8 @@ const EMAIL_CHIP_WIDTH: f32 = 100.;
 const EMAIL_EDITOR_WIDTH: f32 = 100.;
 
 const SHARING_DIALOG_WIDTH: f32 = 425.;
+const SESSION_QR_CODE_SIZE: f32 = 240.;
+const SESSION_QR_CODE_PADDING: f32 = 16.;
 
 const NO_ACCESS_LABEL: &str = "No access";
 
@@ -727,11 +731,11 @@ impl SharingDialog {
         let Some(ShareableObject::Session {
             session_id: target_session_id,
             ..
-        }) = self.target
+        }) = self.target.as_ref()
         else {
             return;
         };
-        if session_id != target_session_id {
+        if &session_id != target_session_id {
             return;
         }
 
@@ -779,7 +783,7 @@ impl SharingDialog {
         // The permission states for shared sessions are managed differently
         // than other cloud objects. We return to avoid resetting the
         // permissions for sessions.
-        if matches!(self.target, Some(ShareableObject::Session { .. })) {
+        if matches!(self.target.as_ref(), Some(ShareableObject::Session { .. })) {
             return;
         }
 
@@ -904,7 +908,7 @@ impl SharingDialog {
     /// Copy the object's URL to the clipboard.
     pub fn copy_link(&self, ctx: &mut ViewContext<Self>) {
         if let Some(url) = self.target.as_ref().and_then(|target| target.link(ctx)) {
-            let event = match self.target {
+            let event = match self.target.as_ref() {
                 Some(ShareableObject::Session { .. }) => {
                     Some(TelemetryEvent::CopiedSharedSessionLink {
                         source: SharedSessionActionSource::SharingDialog,
@@ -949,11 +953,13 @@ impl SharingDialog {
         if let Some(guest) = self.guest_states.get(guest_index) {
             let current_access_level = guest.current_access_level;
             let inherited_access = guest.inheritance.is_some();
-            let is_ai_conversation =
-                matches!(self.target, Some(ShareableObject::AIConversation(_)));
+            let is_ai_conversation = matches!(
+                self.target.as_ref(),
+                Some(ShareableObject::AIConversation(_))
+            );
             // Check if this is a team guest - team removal is only supported for non-session targets
             let is_team_guest = matches!(guest.subject, Subject::Team(_));
-            let is_session = matches!(self.target, Some(ShareableObject::Session { .. }));
+            let is_session = matches!(self.target.as_ref(), Some(ShareableObject::Session { .. }));
 
             self.guest_menu.update(ctx, |menu, ctx| {
                 let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
@@ -1334,7 +1340,10 @@ impl SharingDialog {
 
     /// Reset the invite access level menu based on the current target.
     fn reset_invite_access_level_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_ai_conversation = matches!(self.target, Some(ShareableObject::AIConversation(_)));
+        let is_ai_conversation = matches!(
+            self.target.as_ref(),
+            Some(ShareableObject::AIConversation(_))
+        );
 
         self.invite_form.access_level_menu.update(ctx, |menu, ctx| {
             let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
@@ -1778,7 +1787,7 @@ impl SharingDialog {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        let Some(ShareableObject::Session { started_at, .. }) = self.target else {
+        let Some(ShareableObject::Session { started_at, .. }) = self.target.as_ref() else {
             return None;
         };
 
@@ -1995,7 +2004,10 @@ impl SharingDialog {
     fn reset_link_sharing_menu(&mut self, ctx: &mut ViewContext<Self>) {
         let inherited_access = self.link_sharing_state.inheritance.is_some();
         let current_access_level = self.link_sharing_state.access_level;
-        let is_ai_conversation = matches!(self.target, Some(ShareableObject::AIConversation(_)));
+        let is_ai_conversation = matches!(
+            self.target.as_ref(),
+            Some(ShareableObject::AIConversation(_))
+        );
 
         let mut items = vec![
             MenuItemFields::new("Only people invited")
@@ -2064,7 +2076,7 @@ impl SharingDialog {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         // Currently, we only allow editing the team ACL for sessions.
-        if !matches!(self.target, Some(ShareableObject::Session { .. })) {
+        if !matches!(self.target.as_ref(), Some(ShareableObject::Session { .. })) {
             return None;
         }
 
@@ -2468,6 +2480,86 @@ impl SharingDialog {
             .with_vertical_margin(style::ACL_ITEM_GAP / 2.)
             .finish()
     }
+
+    fn render_session_qr_code(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        if !matches!(self.target.as_ref(), Some(ShareableObject::Session { .. })) {
+            return None;
+        }
+
+        let url = self.target.as_ref().and_then(|target| target.link(app))?;
+        let code = QrCode::new(url.as_bytes()).ok()?;
+        let width = code.width();
+        let cell_size = SESSION_QR_CODE_SIZE / width as f32;
+        let mut rows = Flex::column();
+
+        for y in 0..width {
+            let mut row = Flex::row();
+            for x in 0..width {
+                let color = if code[(x, y)] == QrColor::Dark {
+                    ColorU::black()
+                } else {
+                    ColorU::white()
+                };
+
+                row.add_child(
+                    ConstrainedBox::new(Rect::new().with_background_color(color).finish())
+                        .with_width(cell_size)
+                        .with_height(cell_size)
+                        .finish(),
+                );
+            }
+            rows.add_child(row.finish());
+        }
+
+        let title = appearance
+            .ui_builder()
+            .span("Remote control QR code")
+            .with_style(UiComponentStyles {
+                font_color: Some(style::acl_primary_text_color(appearance)),
+                font_size: Some(style::PRIMARY_TEXT_SIZE),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let subtitle = appearance
+            .ui_builder()
+            .span("Scan to open this session on another device.")
+            .with_style(UiComponentStyles {
+                font_color: Some(style::acl_secondary_text_color(appearance)),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let qr_code = Container::new(rows.finish())
+            .with_uniform_padding(SESSION_QR_CODE_PADDING)
+            .with_background_color(ColorU::white())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_border(Border::all(1.).with_border_color(style::form_border_color(appearance)))
+            .finish();
+
+        Some(
+            Container::new(
+                Flex::column()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(8.)
+                    .with_child(title)
+                    .with_child(qr_code)
+                    .with_child(subtitle)
+                    .finish(),
+            )
+            .with_horizontal_padding(style::ACL_ITEM_PADDING)
+            .with_vertical_padding(style::ACL_ITEM_PADDING / 2.)
+            .with_vertical_margin(style::ACL_ITEM_GAP / 2.)
+            .finish(),
+        )
+    }
 }
 
 /// Render a tooltip that explains an ACL.
@@ -2521,6 +2613,7 @@ impl View for SharingDialog {
         }
 
         contents.add_child(self.render_object_link(appearance, app));
+        contents.extend(self.render_session_qr_code(appearance, app));
 
         let mut stack = Stack::new();
         stack.add_child(contents.finish());
