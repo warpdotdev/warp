@@ -545,13 +545,8 @@ impl TypedActionView for TeamsPageView {
                 );
             }
             TeamsPageAction::ShowDeleteTeamConfirmationDialog => {
-                let variant = if self.should_show_reload_credits_confirmation(ctx) {
-                    CloudActionConfirmationDialogVariant::DeleteTeamReloadCredits
-                } else {
-                    CloudActionConfirmationDialogVariant::DeleteTeam
-                };
                 self.show_team_action_confirmation(
-                    variant,
+                    CloudActionConfirmationDialogVariant::DeleteTeam,
                     TeamActionConfirmationTarget::Delete,
                     ctx,
                 );
