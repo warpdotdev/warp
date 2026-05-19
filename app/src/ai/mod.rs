@@ -34,6 +34,7 @@ pub(crate) mod local_child_harnesses;
 pub mod onboarding;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
+pub(crate) mod project_progress;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod skills;

@@ -15,6 +15,7 @@ use crate::ai::{
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use ai::project_context::model::ProjectContextModel;
+use crate::ai::project_progress::ProjectProgressContext;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -429,15 +430,20 @@ impl BlocklistAIContextModel {
                 })
         };
 
-        let project_rules = if let Some(pwd) = pwd.clone().and_then(|path| {
+        let canonical_pwd = pwd.clone().and_then(|path| {
             PathBuf::from_str(&path)
                 .ok()
                 .and_then(|s| s.canonicalize().ok())
-        }) {
-            ProjectContextModel::as_ref(app).find_applicable_rules(&pwd)
-        } else {
-            None
-        };
+        });
+
+        let project_rules = canonical_pwd
+            .as_deref()
+            .and_then(|p| ProjectContextModel::as_ref(app).find_applicable_rules(p));
+
+        // Load .ai/progress.md context when present in the working directory.
+        let project_progress = canonical_pwd
+            .as_deref()
+            .and_then(ProjectProgressContext::load);
 
         let mut context = Vec::new();
 
@@ -482,6 +488,26 @@ impl BlocklistAIContextModel {
                     })
                     .collect(),
                 additional_rule_paths: rules.additional_rule_paths,
+            });
+        }
+
+        // Inject project progress context when `.ai/progress.md` is present.
+        // The formatted block is sent as a virtual "rule file" so the AI has
+        // structured, always-current knowledge of what is being worked on —
+        // consistent across every Warp window pointing at the same project.
+        if let Some(progress) = project_progress {
+            let formatted = progress.to_formatted_string();
+            let line_count = formatted.lines().count();
+            context.push(AIAgentContext::ProjectRules {
+                root_path: progress.project_path.to_string_lossy().into(),
+                active_rules: vec![FileContext {
+                    file_name: ".ai/progress.md".to_owned(),
+                    content: AnyFileContent::StringContent(formatted),
+                    line_range: None,
+                    last_modified: None,
+                    line_count,
+                }],
+                additional_rule_paths: vec![],
             });
         }
 
