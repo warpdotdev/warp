@@ -82,7 +82,10 @@ impl FileSearchModel {
 
     /// Returns the repo root as a `LocalOrRemotePath`, supporting both local and SSH sessions.
     #[cfg(not(feature = "local_fs"))]
-    pub fn repo_root_location(&self, _app: &AppContext) -> Option<LocalOrRemotePath> {
+    pub fn repo_root_location(
+        &self,
+        _app: &AppContext,
+    ) -> Option<warp_util::local_or_remote_path::LocalOrRemotePath> {
         None
     }
 

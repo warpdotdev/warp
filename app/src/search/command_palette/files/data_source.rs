@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 use super::search_item::{CreateFileSearchItem, FileSearchItem};
-use crate::code::opened_files::OpenedFilesModel;
+use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::files::model::FileSearchModel;
@@ -147,7 +147,7 @@ impl FileDataSource {
 
                     if let Some(last_opened_timestamp) = opened_files
                         .as_ref()
-                        .and_then(|opened_files| opened_files.get(&item.path))
+                        .and_then(|of: &OpenedFilesInRepo| of.get(&item.path))
                     {
                         file_ranking = FileRanking::OpenedInWarp {
                             timestamp: *last_opened_timestamp,
@@ -257,7 +257,7 @@ impl FileDataSource {
 
                     if opened_files
                         .as_ref()
-                        .and_then(|opened_files| opened_files.get(&item.path))
+                        .and_then(|of: &OpenedFilesInRepo| of.get(&item.path))
                         .is_some()
                     {
                         // Apply a boost to opened files to rank them above non-opened files.
