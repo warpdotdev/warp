@@ -31,7 +31,9 @@ use crate::{
 };
 
 use super::{FileNotebookView, FileState, MarkdownDisplayMode};
+use crate::menu::MenuItem;
 use crate::notebooks::context_menu::MenuSource;
+use crate::pane_group::BackingView;
 use warp_editor::render::model::BlockItem;
 
 fn init_app(app: &mut App) {
@@ -276,6 +278,45 @@ fn test_file_notebook_mermaid_context_menu_does_not_show_copy_image() {
 
             let item_names = file_notebook.context_menu.item_names(ctx);
             assert!(!item_names.contains(&"Copy image"));
+        });
+    });
+}
+
+/// Regression test for GH#11256: the "Maximize pane" entry must appear in the overflow menu of
+/// the rendered Markdown pane (`FileNotebookView`), matching the Raw mode (`CodeView`) behavior.
+#[test]
+fn test_rendered_markdown_overflow_menu_includes_maximize_pane() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local("../README.md", Some(session), ctx);
+                let file_id = file_notebook
+                    .file_id
+                    .expect("File should be opened and have a file_id");
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        handle.read(&app, |view, ctx| {
+            let items = view.pane_header_overflow_menu_items(ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| match item {
+                    MenuItem::Item(fields) => Some(fields.label()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.contains(&"Maximize pane"),
+                "Rendered Markdown overflow menu should include 'Maximize pane', got: {labels:?}"
+            );
         });
     });
 }

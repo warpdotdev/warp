@@ -144,6 +144,7 @@ pub enum FileNotebookAction {
     OpenAsCode,
     ContextMenu(ContextMenuAction),
     ToggleMarkdownDisplayMode(MarkdownDisplayMode),
+    ToggleMaximized,
 }
 
 impl From<ContextMenuAction> for FileNotebookAction {
@@ -919,6 +920,12 @@ impl TypedActionView for FileNotebookView {
                     }
                 }
             }
+            FileNotebookAction::ToggleMaximized => {
+                ctx.emit(FileNotebookEvent::Pane(PaneEvent::ToggleMaximized));
+                self.pane_configuration.update(ctx, |pane_config, ctx| {
+                    pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                });
+            }
         }
     }
 }
@@ -938,14 +945,24 @@ impl BackingView for FileNotebookView {
 
     fn pane_header_overflow_menu_items(
         &self,
-        _ctx: &AppContext,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
-        let mut actions = vec![];
+        // Mirror the toggle that `CodeView` (the Raw markdown mode) exposes, so the Rendered
+        // markdown pane's overflow menu offers the same "Maximize pane" / "Minimize pane" entry.
+        let is_maximized = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|h| h.is_maximized(ctx));
+        let mut actions = vec![MenuItemFields::toggle_pane_action(is_maximized)
+            .with_on_select_action(FileNotebookAction::ToggleMaximized)
+            .into_item()];
+
         if let Some(SourceFile::Local {
             local_path: _local_path,
             ..
         }) = self.file_state.source()
         {
+            actions.push(MenuItem::Separator);
             actions.push(
                 MenuItemFields::new("Refresh file")
                     .with_on_select_action(FileNotebookAction::ReloadFile)
