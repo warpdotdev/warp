@@ -245,6 +245,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, GenericStringObjectFormat, JsonObjectType};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::context_chips::cloud_artifact_pr::apply_cloud_artifact_pr_to_prompt_snapshot;
 use crate::context_chips::prompt::Prompt;
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::ContextChipKind;
@@ -3659,6 +3660,9 @@ impl TerminalView {
                         | AgentConversationsModelEvent::ConversationUpdated { .. }
                         | AgentConversationsModelEvent::ConversationArtifactsUpdated { .. }
                 );
+                if should_refresh_details_panel {
+                    me.refresh_cloud_artifact_pr_prompt_chip(ctx);
+                }
                 // Only refresh panel if it's currently open (avoids unnecessary work)
                 if should_refresh_details_panel
                     && me.is_conversation_details_panel_open
@@ -10474,6 +10478,37 @@ impl TerminalView {
                 });
             }
         });
+    }
+
+    pub(crate) fn refresh_cloud_artifact_pr_prompt_chip(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(task_id) = self.ambient_agent_task_id_for_details_panel(ctx) else {
+            return;
+        };
+        let Some(task) = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&task_id, ctx)
+        }) else {
+            return;
+        };
+        if task.artifacts.is_empty() {
+            return;
+        }
+
+        let did_update = self.current_prompt.update(ctx, |prompt_type, ctx| {
+            let PromptType::Static { snapshot } = prompt_type else {
+                return false;
+            };
+            let did_update = apply_cloud_artifact_pr_to_prompt_snapshot(snapshot, &task.artifacts);
+            if did_update {
+                ctx.notify();
+            }
+            did_update
+        });
+
+        if did_update {
+            self.input.update(ctx, |input, ctx| {
+                input.notify_and_notify_children(ctx);
+            });
+        }
     }
 
     pub fn current_state(&self) -> TerminalViewStateChange {

@@ -1341,32 +1341,34 @@ impl TerminalManager {
         active_prompt: &ActivePrompt,
         ctx: &mut AppContext,
     ) {
-        let mut model = model.lock();
-        match active_prompt {
-            ActivePrompt::WarpPrompt(serialized_prompt_snapshot) => {
-                match serde_json::from_str::<PromptSnapshot>(serialized_prompt_snapshot) {
-                    Ok(prompt_snapshot) => {
-                        model.block_list_mut().set_honor_ps1(false);
-                        // Overwrite the static prompt with the new snapshot.
-                        prompt_type.update(ctx, |prompt_type, ctx| {
-                            if let PromptType::Static { snapshot } = prompt_type {
-                                *snapshot = prompt_snapshot;
-                                ctx.notify();
-                            } else {
-                                log::warn!("Received ActivePrompt::WarpPrompt updated but prompt type is not Static");
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to deserialize prompt snapshot from shared session server: {e}"
-                        )
+        {
+            let mut model = model.lock();
+            match active_prompt {
+                ActivePrompt::WarpPrompt(serialized_prompt_snapshot) => {
+                    match serde_json::from_str::<PromptSnapshot>(serialized_prompt_snapshot) {
+                        Ok(prompt_snapshot) => {
+                            model.block_list_mut().set_honor_ps1(false);
+                            // Overwrite the static prompt with the new snapshot.
+                            prompt_type.update(ctx, |prompt_type, ctx| {
+                                if let PromptType::Static { snapshot } = prompt_type {
+                                    *snapshot = prompt_snapshot;
+                                    ctx.notify();
+                                } else {
+                                    log::warn!("Received ActivePrompt::WarpPrompt updated but prompt type is not Static");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to deserialize prompt snapshot from shared session server: {e}"
+                            )
+                        }
                     }
                 }
-            }
-            ActivePrompt::PS1 => {
-                // The viewer already receives bytes from the pty for the PS1 prompt, so we only need to choose to render it.
-                model.block_list_mut().set_honor_ps1(true);
+                ActivePrompt::PS1 => {
+                    // The viewer already receives bytes from the pty for the PS1 prompt, so we only need to choose to render it.
+                    model.block_list_mut().set_honor_ps1(true);
+                }
             }
         }
         let Some(view) = weak_view_handle.upgrade(ctx) else {
@@ -1374,6 +1376,7 @@ impl TerminalManager {
         };
         // This is needed to re-render the input if we changed prompt types.
         view.update(ctx, |view, ctx| {
+            view.refresh_cloud_artifact_pr_prompt_chip(ctx);
             view.input().update(ctx, |input, ctx| {
                 input.notify_and_notify_children(ctx);
             })
