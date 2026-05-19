@@ -186,6 +186,7 @@ use crate::auth::AuthStateProvider;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::settings_view::SettingsSection;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::{ShellLaunchData, TerminalView};
@@ -1002,6 +1003,12 @@ pub struct AIBlock {
     resolved_blocklist_image_sources: view_impl::common::ResolvedBlocklistImageSources,
     terminal_view_handle: WeakViewHandle<TerminalView>,
 
+    /// Per-pane font-size override handle. Resolved at construction from the
+    /// owning `TerminalView` and used by `effective_monospace_font_size`. When
+    /// `None` (e.g. the pane wasn't fully wired at construction), the helper
+    /// falls back to `Appearance::monospace_font_size`.
+    focus_handle: Option<PaneFocusHandle>,
+
     ask_user_question_view: Option<ViewHandle<AskUserQuestionView>>,
 }
 
@@ -1030,6 +1037,7 @@ impl AIBlock {
         agent_view_controller: ModelHandle<AgentViewController>,
         ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         terminal_view_handle: WeakViewHandle<TerminalView>,
+        focus_handle: Option<PaneFocusHandle>,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -1060,6 +1068,17 @@ impl AIBlock {
         ctx.subscribe_to_model(&font_settings_handle, |_, _, _, ctx| {
             ctx.notify();
         });
+
+        if let Some(handle) = focus_handle.clone() {
+            let focus_state = handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
 
         ctx.subscribe_to_model(
             &AISettings::handle(ctx),
@@ -1446,6 +1465,7 @@ impl AIBlock {
             #[cfg(feature = "local_fs")]
             resolved_blocklist_image_sources: Default::default(),
             terminal_view_handle,
+            focus_handle,
             ask_user_question_view: None,
         };
         me.run_secret_redaction_on_user_query(me.client_ids.conversation_id, ctx);
@@ -2220,19 +2240,25 @@ impl AIBlock {
     ) {
         let accept_button_handle = self.state_handles.menu_accept_button_handle.clone();
         let reject_button_handle = self.state_handles.menu_reject_button_handle.clone();
+        let focus_handle_accept = self.focus_handle.clone();
+        let focus_handle_reject = self.focus_handle.clone();
         let buttons = vec![
             KeyboardNavigableButtonBuilder::new(
                 move |is_selected, app| {
                     let appearance = Appearance::handle(app).as_ref(app);
+                    let font_size = focus_handle_accept
+                        .as_ref()
+                        .map(|h| h.effective_monospace_font_size(app))
+                        .unwrap_or_else(|| appearance.monospace_font_size());
                     let mut button = appearance
                         .ui_builder()
                         .button(ButtonVariant::Secondary, accept_button_handle.clone())
                         .with_style(UiComponentStyles {
-                            font_size: Some(appearance.monospace_font_size()),
+                            font_size: Some(font_size),
                             ..UiComponentStyles::default()
                         })
                         .with_hovered_styles(UiComponentStyles {
-                            font_size: Some(appearance.monospace_font_size()),
+                            font_size: Some(font_size),
                             ..UiComponentStyles::default()
                         });
                     if is_selected {
@@ -2249,10 +2275,7 @@ impl AIBlock {
                             Icon::CornerDownLeft.to_warpui_icon(appearance.theme().foreground()),
                             MainAxisSize::Max,
                             MainAxisAlignment::SpaceBetween,
-                            vec2f(
-                                appearance.monospace_font_size(),
-                                appearance.monospace_font_size(),
-                            ),
+                            vec2f(font_size, font_size),
                         ));
                     } else {
                         button = button.with_text_label(accept_text.clone());
@@ -2266,15 +2289,19 @@ impl AIBlock {
             KeyboardNavigableButtonBuilder::new(
                 move |is_selected, app| {
                     let appearance = Appearance::handle(app).as_ref(app);
+                    let font_size = focus_handle_reject
+                        .as_ref()
+                        .map(|h| h.effective_monospace_font_size(app))
+                        .unwrap_or_else(|| appearance.monospace_font_size());
                     let mut button = appearance
                         .ui_builder()
                         .button(ButtonVariant::Secondary, reject_button_handle.clone())
                         .with_style(UiComponentStyles {
-                            font_size: Some(appearance.monospace_font_size()),
+                            font_size: Some(font_size),
                             ..UiComponentStyles::default()
                         })
                         .with_hovered_styles(UiComponentStyles {
-                            font_size: Some(appearance.monospace_font_size()),
+                            font_size: Some(font_size),
                             ..UiComponentStyles::default()
                         });
                     if is_selected {
@@ -2291,10 +2318,7 @@ impl AIBlock {
                             Icon::CornerDownLeft.to_warpui_icon(appearance.theme().foreground()),
                             MainAxisSize::Max,
                             MainAxisAlignment::SpaceBetween,
-                            vec2f(
-                                appearance.monospace_font_size(),
-                                appearance.monospace_font_size(),
-                            ),
+                            vec2f(font_size, font_size),
                         ));
                     } else {
                         button = button.with_text_label(reject_text.clone());
@@ -5641,6 +5665,17 @@ impl AIBlock {
             ctx,
         );
     }
+    /// Effective monospace font size for this block: the per-pane override if
+    /// one is set on the owning `PaneFocusHandle`, else the global
+    /// `Appearance::monospace_font_size`. Mirrors the pattern in
+    /// `TerminalView::effective_monospace_font_size`.
+    pub(crate) fn effective_monospace_font_size(&self, app: &AppContext) -> f32 {
+        self.focus_handle
+            .as_ref()
+            .map(|h| h.effective_monospace_font_size(app))
+            .unwrap_or_else(|| Appearance::as_ref(app).monospace_font_size())
+    }
+
     /// A "thread" covers all exchanges since and including the most recent user query. This
     /// method checks across all AI blocks for this conversation — not just this block — by
     /// querying the `TerminalView`, which in turn calls `has_any_imported_comments` on each

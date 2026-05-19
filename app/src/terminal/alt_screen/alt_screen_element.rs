@@ -133,7 +133,7 @@ impl AltScreenElement {
             grid_render_params: GridRenderParams {
                 warp_theme: appearance.theme().clone(),
                 font_family: appearance.monospace_font_family(),
-                font_size: appearance.monospace_font_size(),
+                font_size: terminal_view_render_context.effective_font_size,
                 font_weight: appearance.monospace_font_weight(),
                 line_height_ratio: appearance.ui_builder().line_height_ratio(),
                 enforce_minimum_contrast,

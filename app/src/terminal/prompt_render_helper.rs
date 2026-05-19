@@ -286,6 +286,7 @@ impl PromptRenderHelper {
         &self,
         model: &TerminalModel,
         appearance: &Appearance,
+        font_size: f32,
         app: &AppContext,
     ) -> Text {
         let prompt_colors: PromptColors = appearance.theme().clone().into();
@@ -293,7 +294,7 @@ impl PromptRenderHelper {
         Text::new_inline(
             prompt_message,
             appearance.monospace_font_family(),
-            appearance.monospace_font_size(),
+            font_size,
         )
         .with_color(prompt_colors.input_prompt_pwd)
         .with_style(Properties::default().weight(Weight::Bold))
@@ -311,6 +312,7 @@ impl PromptRenderHelper {
         appearance: &Appearance,
         obfuscate_secrets: ObfuscateSecrets,
         size_info: SizeInfo,
+        font_size: f32,
         app: &AppContext,
     ) -> PromptAndPadding {
         let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
@@ -320,6 +322,7 @@ impl PromptRenderHelper {
             enforce_minimum_contrast,
             obfuscate_secrets,
             size_info,
+            font_size,
         );
         if should_use_ligature_rendering(app) {
             block_grid_element = block_grid_element.with_ligature_rendering();
@@ -404,6 +407,7 @@ impl PromptRenderHelper {
         &self,
         model: &TerminalModel,
         appearance: &Appearance,
+        font_size: f32,
         app: &AppContext,
     ) -> (
         Option<PromptAndPadding>,
@@ -438,7 +442,7 @@ impl PromptRenderHelper {
                     Text::new_inline(
                         "Loading prompt...",
                         appearance.monospace_font_family(),
-                        appearance.monospace_font_size(),
+                        font_size,
                     )
                     .with_color(appearance.theme().disabled_ui_text_color().into())
                     .with_line_height_ratio(appearance.line_height_ratio())
@@ -516,6 +520,7 @@ impl PromptRenderHelper {
                     appearance,
                     obfuscate_secrets,
                     size_info,
+                    font_size,
                     app,
                 )
             });
@@ -527,6 +532,7 @@ impl PromptRenderHelper {
                     appearance,
                     obfuscate_secrets,
                     size_info,
+                    font_size,
                     app,
                 )
             });
@@ -537,6 +543,7 @@ impl PromptRenderHelper {
                 appearance,
                 obfuscate_secrets,
                 size_info,
+                font_size,
                 app,
             );
             let rprompt_val = prompt_block
@@ -552,7 +559,7 @@ impl PromptRenderHelper {
         } else if model.block_list().active_block().honor_ps1() && !is_universal_input {
             let prompt = PromptAndPadding {
                 element: PromptAndPaddingElement::Text(Box::new(
-                    self.bootstrapping_shell_text(model, appearance, app),
+                    self.bootstrapping_shell_text(model, appearance, font_size, app),
                 )),
                 padding_left: 0.,
                 padding_right,
@@ -568,7 +575,7 @@ impl PromptRenderHelper {
                     PromptAndPaddingElement::ContextChips(self.prompt_view.clone())
                 } else {
                     PromptAndPaddingElement::Text(Box::new(
-                        self.bootstrapping_shell_text(model, appearance, app),
+                        self.bootstrapping_shell_text(model, appearance, font_size, app),
                     ))
                 }
             };
@@ -670,6 +677,7 @@ impl PromptRenderHelper {
         &self,
         model: &TerminalModel,
         appearance: &Appearance,
+        font_size: f32,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let element = {
@@ -677,7 +685,7 @@ impl PromptRenderHelper {
                 PromptAndPaddingElement::ContextChips(self.prompt_view.clone())
             } else {
                 PromptAndPaddingElement::Text(Box::new(
-                    self.bootstrapping_shell_text(model, appearance, app),
+                    self.bootstrapping_shell_text(model, appearance, font_size, app),
                 ))
             }
         };
@@ -719,10 +727,11 @@ impl PromptRenderHelper {
         &self,
         model: &TerminalModel,
         appearance: &Appearance,
+        font_size: f32,
         app: &AppContext,
     ) -> PromptElements {
         let (lprompt_and_padding_option, _, rprompt_and_padding_option) =
-            self.render_prompt(model, appearance, app);
+            self.render_prompt(model, appearance, font_size, app);
         let lprompt = lprompt_and_padding_option.and_then(|lprompt_top_and_padding| {
             self.render_prompt_area_helper(
                 model,
@@ -748,13 +757,14 @@ impl PromptRenderHelper {
         &self,
         model: &TerminalModel,
         appearance: &Appearance,
+        font_size: f32,
         app: &AppContext,
     ) -> SameLinePromptElements {
         let (
             lprompt_top_and_padding_option,
             lprompt_bottom_and_padding_option,
             rprompt_and_padding_option,
-        ) = self.render_prompt(model, appearance, app);
+        ) = self.render_prompt(model, appearance, font_size, app);
         let lprompt_top = lprompt_top_and_padding_option.and_then(|lprompt_top_and_padding| {
             self.render_prompt_area_helper(
                 model,

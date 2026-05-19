@@ -19,13 +19,13 @@ impl OrchestrationAvatar {
         Self::Agent { display_name }
     }
 
-    pub(crate) fn render(&self, app: &AppContext) -> Box<dyn Element> {
+    pub(crate) fn render(&self, font_size: f32, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let size = app.font_cache().line_height(
-            appearance.monospace_font_size(),
-            appearance.line_height_ratio(),
-        ) * TRANSCRIPT_AVATAR_SCALE;
+        let size = app
+            .font_cache()
+            .line_height(font_size, appearance.line_height_ratio())
+            * TRANSCRIPT_AVATAR_SCALE;
 
         match self {
             Self::Orchestrator => render_orchestrator_avatar_disc(size, theme, appearance),

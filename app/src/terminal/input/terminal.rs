@@ -59,7 +59,12 @@ impl Input {
 
         let prompt_elements = self
             .prompt_render_helper
-            .render_universal_developer_input_prompt(&model, appearance, app);
+            .render_universal_developer_input_prompt(
+                &model,
+                appearance,
+                self.effective_monospace_font_size(app),
+                app,
+            );
 
         column.add_child(prompt_elements);
 

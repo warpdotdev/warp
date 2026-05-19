@@ -226,6 +226,7 @@ impl OnboardingPromptBlock {
                 EnforceMinimumContrast::OnlyNamedColors,
                 ObfuscateSecrets::No,
                 *size_info,
+                appearance.monospace_font_size(),
             )
             .finish(),
         )

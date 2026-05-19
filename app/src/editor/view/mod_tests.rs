@@ -4520,6 +4520,35 @@ fn test_drag_and_drop_files_applies_path_transformer() {
     });
 }
 
+#[test]
+fn test_editor_set_and_clear_font_size_override() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+
+        view.update(&mut app, |editor, ctx| {
+            assert!(
+                editor.text_options.font_size_override.is_none(),
+                "fresh editor should have no font-size override"
+            );
+
+            editor.set_font_size(18.0, ctx);
+            assert_eq!(editor.text_options.font_size_override, Some(18.0));
+
+            editor.set_font_size(22.0, ctx);
+            assert_eq!(editor.text_options.font_size_override, Some(22.0));
+
+            editor.clear_font_size(ctx);
+            assert!(
+                editor.text_options.font_size_override.is_none(),
+                "clear should drop the override"
+            );
+        });
+    });
+}
+
 #[path = "vim_handler_tests.rs"]
 mod vim_handler_tests;
 

@@ -30,8 +30,8 @@ use crate::settings::{
     app_icon::{AppIcon, AppIconSettings},
     respect_system_theme, AIFontName, AppEditorSettings, CursorBlink, CursorBlinkEnabled,
     EnforceMinimumContrast, FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, InputBoxType,
-    InputModeSettings, InputModeState, MonospaceFontName, PaneSettings, ShouldDimInactivePanes,
-    ThemeSettings, UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME,
+    InputModeSettings, InputModeState, MonospaceFontName, PaneSettings, PaneSpecificFontSize,
+    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME,
 };
 use crate::settings::{CursorDisplayType, GPUSettings, InputSettings, InputSettingsChangedEvent};
 use crate::terminal::block_list_viewport::InputMode;
@@ -468,6 +468,7 @@ pub enum AppearancePageAction {
     SetEnforceMinimumContrast(EnforceMinimumContrast),
     OpenUrl(String),
     ToggleFocusPaneOnHover,
+    TogglePaneSpecificFontSize,
     ToggleInputMode,
     UpdateAltScreenPaddingMode(AltScreenPaddingMode),
     SetTabCloseButtonPosition(TabCloseButtonPosition),
@@ -615,6 +616,25 @@ impl TypedActionView for AppearanceSettingsPageView {
                         Ok(new_val) => {
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::ToggleFocusPaneOnHover { enabled: new_val },
+                                ctx
+                            );
+                        }
+                        Err(e) => {
+                            report_error!(e);
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+            TogglePaneSpecificFontSize => {
+                PaneSettings::handle(ctx).update(ctx, |pane_settings, ctx| {
+                    match pane_settings
+                        .pane_specific_font_size
+                        .toggle_and_save_value(ctx)
+                    {
+                        Ok(new_val) => {
+                            send_telemetry_from_ctx!(
+                                TelemetryEvent::TogglePaneSpecificFontSize { enabled: new_val },
                                 ctx
                             );
                         }
@@ -1318,6 +1338,7 @@ impl AppearanceSettingsPageView {
             vec![
                 Box::new(DimInactivePanesWidget::default()),
                 Box::new(FocusFollowsMouseWidget::default()),
+                Box::new(PaneSpecificFontSizeWidget::default()),
             ],
         ));
 
@@ -3443,6 +3464,7 @@ impl SettingsWidget for PromptWidget {
                     *FontSettings::as_ref(app).enforce_minimum_contrast,
                     ObfuscateSecrets::No,
                     *size_info,
+                    appearance.monospace_font_size(),
                 )
                 .finish();
 
@@ -3578,6 +3600,49 @@ impl SettingsWidget for FocusFollowsMouseWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleFocusPaneOnHover);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct PaneSpecificFontSizeWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for PaneSpecificFontSizeWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "pane specific font size"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_body_item::<AppearancePageAction>(
+            "Pane-specific font size".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                PaneSpecificFontSize::storage_key(),
+                PaneSpecificFontSize::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*PaneSettings::as_ref(app).pane_specific_font_size)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::TogglePaneSpecificFontSize);
                 })
                 .finish(),
             None,

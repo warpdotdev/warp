@@ -48,7 +48,12 @@ impl Input {
 
         let prompt_elements = self
             .prompt_render_helper
-            .render_universal_developer_input_prompt(&model, appearance, app);
+            .render_universal_developer_input_prompt(
+                &model,
+                appearance,
+                self.effective_monospace_font_size(app),
+                app,
+            );
         prompt_row.add_child(prompt_elements);
 
         let vim_state = self.editor.as_ref(app).vim_state(app);

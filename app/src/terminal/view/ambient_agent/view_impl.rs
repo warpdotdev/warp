@@ -365,8 +365,14 @@ impl TerminalView {
                         model.block_list().block_index_for_id(block_id)
                     };
                     if let Some(block_index) = block_index {
-                        let header_view = ctx.add_typed_action_view(|_| {
-                            super::HarnessSessionHeader::new(block_id.clone(), cli_agent)
+                        let focus_handle = self.focus_handle().cloned();
+                        let header_view = ctx.add_typed_action_view(|ctx| {
+                            super::HarnessSessionHeader::new(
+                                block_id.clone(),
+                                cli_agent,
+                                focus_handle,
+                                ctx,
+                            )
                         });
                         ctx.subscribe_to_view(&header_view, |me, _, event, _| {
                             let super::HarnessSessionHeaderEvent::ToggleCommandGridVisibility(
@@ -467,11 +473,13 @@ impl TerminalView {
                     .set_did_execute_a_setup_command(true);
             });
 
+            let focus_handle = self.focus_handle().cloned();
             let setup_command_text = ctx.add_typed_action_view(|ctx| {
                 super::CloudModeSetupTextBlock::new(
                     group_id,
                     ambient_agent_view_model.clone(),
                     self.agent_view_controller.clone(),
+                    focus_handle,
                     ctx,
                 )
             });
@@ -864,16 +872,19 @@ impl TerminalView {
             return Empty::new().finish();
         };
 
+        let font_size = self.effective_monospace_font_size(app);
+
         // Show appropriate screen based on agent status
         let ui_state = &ambient_agent_model.ui_state;
         let screen = if ambient_agent_model.is_cancelled() {
             // Show cancelled screen
-            render_cloud_mode_cancelled_screen(appearance)
+            render_cloud_mode_cancelled_screen(appearance, font_size)
         } else if let Some(auth_url) = ambient_agent_model.github_auth_url() {
             // Show GitHub auth required screen
             render_cloud_mode_github_auth_required_screen(
                 auth_url,
                 appearance,
+                font_size,
                 &ui_state.auth_button_mouse_state,
                 app,
             )
@@ -882,6 +893,7 @@ impl TerminalView {
             render_cloud_mode_error_screen(
                 error_message,
                 appearance,
+                font_size,
                 &ui_state.error_selection_handle,
                 &ui_state.error_selected_text,
                 app,
@@ -893,6 +905,7 @@ impl TerminalView {
             render_cloud_mode_loading_screen(
                 message,
                 appearance,
+                font_size,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,
                 app,

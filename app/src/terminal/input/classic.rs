@@ -75,9 +75,12 @@ impl Input {
                 .finish();
             prompt_top_padding_row.add_child(prompt_top_padding_element);
         } else {
-            let prompt_elements = self
-                .prompt_render_helper
-                .render_prompt_areas(&model, appearance, app);
+            let prompt_elements = self.prompt_render_helper.render_prompt_areas(
+                &model,
+                appearance,
+                self.effective_monospace_font_size(app),
+                app,
+            );
             lprompt_top_area_option = prompt_elements.lprompt;
             rprompt_area_option = prompt_elements.rprompt;
         }

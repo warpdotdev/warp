@@ -28,16 +28,21 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 const ERROR_ICON_SIZE: f32 = 24.;
 
 /// Renders the cloud mode loading screen with shimmering warp logo and tips.
+///
+/// `font_size` is the effective monospace font size for the pane this screen
+/// renders in; derived sizes (`+ 2.`, `- 2.`) scale off it so the per-pane
+/// override applies to the loading UI too.
 pub fn render_cloud_mode_loading_screen(
     message: &str,
     appearance: &Appearance,
+    font_size: f32,
     shimmer_handle: &ShimmeringTextStateHandle,
     tip_model: &ModelHandle<AITipModel<CloudModeTip>>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     // Larger font size for the main loading text
-    let loading_font_size = appearance.monospace_font_size() + 2.;
+    let loading_font_size = font_size + 2.;
 
     // Create the shimmering warp loading text element
     let shimmer_element =
@@ -54,7 +59,7 @@ pub fn render_cloud_mode_loading_screen(
         }
 
         let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
-        let tip_font_size = appearance.monospace_font_size() - 2.;
+        let tip_font_size = font_size - 2.;
         FormattedTextElement::new(
             formatted_text,
             tip_font_size,
@@ -75,16 +80,11 @@ pub fn render_cloud_mode_loading_screen(
         .finish()
     } else {
         // Fallback if no tip is available
-        Text::new(
-            "",
-            appearance.ui_font_family(),
-            appearance.monospace_font_size() - 2.,
-        )
-        .finish()
+        Text::new("", appearance.ui_font_family(), font_size - 2.).finish()
     };
 
     // Get tier info for the concurrency limits footer
-    let tier_footer_element = render_tier_limits_footer(appearance, app);
+    let tier_footer_element = render_tier_limits_footer(appearance, font_size, app);
 
     // Vertical layout with centered main content and footer at bottom
     Flex::column()
@@ -133,10 +133,11 @@ pub fn render_cloud_mode_loading_screen(
 /// Returns None if there are no specs to display.
 fn render_tier_limits_footer(
     appearance: &Appearance,
+    font_size: f32,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let theme = appearance.theme();
-    let footer_font_size = appearance.monospace_font_size() - 2.;
+    let footer_font_size = font_size - 2.;
 
     // Get tier info and billing metadata from UserWorkspaces
     let workspace = UserWorkspaces::as_ref(app).current_workspace()?;
@@ -215,6 +216,7 @@ fn render_tier_limits_footer(
 pub fn render_cloud_mode_error_screen(
     error_message: &str,
     appearance: &Appearance,
+    font_size: f32,
     selection_handle: &SelectionHandle,
     selected_text: &std::rc::Rc<parking_lot::RwLock<Option<String>>>,
     _app: &AppContext,
@@ -236,7 +238,7 @@ pub fn render_cloud_mode_error_screen(
     let title_text = Text::new(
         "Failed to start environment",
         appearance.ui_font_family(),
-        appearance.monospace_font_size() + 2.,
+        font_size + 2.,
     )
     .with_style(Properties::default().weight(Weight::Bold))
     .with_color(error_color.into())
@@ -246,7 +248,7 @@ pub fn render_cloud_mode_error_screen(
     let error_text = Text::new(
         error_message.to_string(),
         appearance.ui_font_family(),
-        appearance.monospace_font_size(),
+        font_size,
     )
     .with_color(error_color.into())
     .with_selectable(true)
@@ -302,6 +304,7 @@ pub fn render_cloud_mode_error_screen(
 pub fn render_cloud_mode_github_auth_required_screen(
     auth_url: &str,
     appearance: &Appearance,
+    font_size: f32,
     auth_button_mouse_state: &MouseStateHandle,
     _app: &AppContext,
 ) -> Box<dyn Element> {
@@ -326,7 +329,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
     let title_text = Text::new(
         "GitHub Authentication Required",
         appearance.ui_font_family(),
-        appearance.monospace_font_size() + 2.,
+        font_size + 2.,
     )
     .with_style(Properties::default().weight(Weight::Bold))
     .with_color(title_color)
@@ -336,7 +339,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
     let message_text = Text::new(
         "Please authenticate with GitHub to continue",
         appearance.ui_font_family(),
-        appearance.monospace_font_size(),
+        font_size,
     )
     .with_color(message_color)
     .finish();
@@ -389,7 +392,10 @@ pub fn render_cloud_mode_github_auth_required_screen(
 }
 
 /// Renders the cloud mode cancelled screen.
-pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn Element> {
+pub fn render_cloud_mode_cancelled_screen(
+    appearance: &Appearance,
+    font_size: f32,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
 
     // Use main text color for the icon and title
@@ -413,7 +419,7 @@ pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn El
     let title_text = Text::new(
         "Cloud Agent Run Cancelled",
         appearance.ui_font_family(),
-        appearance.monospace_font_size() + 2.,
+        font_size + 2.,
     )
     .with_style(Properties::default().weight(Weight::Bold))
     .with_color(title_color)
@@ -423,7 +429,7 @@ pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn El
     let subtitle_text = Text::new(
         "No cloud environment was started",
         appearance.ui_font_family(),
-        appearance.monospace_font_size(),
+        font_size,
     )
     .with_color(subtitle_color)
     .finish();

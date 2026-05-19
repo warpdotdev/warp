@@ -1,16 +1,27 @@
+use std::collections::HashMap;
+
+use crate::settings::FontSettings;
+
 use super::pane::{PaneId, TerminalPaneId};
 use super::{PaneState, SplitPaneState};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use settings::Setting;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 /// Centralized focus state for a pane group.
 /// This model tracks which pane is focused, which session is active,
-/// and which panes are visible. Individual panes subscribe to this model
-/// to automatically update their split pane state.
+/// which panes are visible, and per-pane font-size overrides. Individual
+/// panes subscribe to this model to automatically update their split pane
+/// state and re-render at their effective font size.
 pub struct PaneGroupFocusState {
     focused_pane_id: PaneId,
     active_session_id: Option<TerminalPaneId>,
     in_split_pane: bool,
     is_focused_pane_maximized: bool,
+    /// Per-pane monospace font-size overrides. Absent entries fall back to
+    /// the global `FontSettings::monospace_font_size`. In-memory only:
+    /// `PaneId`s aren't stable across restarts, so persisting them isn't
+    /// meaningful.
+    pane_font_size_overrides: HashMap<PaneId, f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +36,12 @@ pub enum PaneGroupFocusEvent {
     },
     InSplitPaneChanged,
     FocusedPaneMaximizedChanged,
+    /// The per-pane monospace font-size override for `pane_id` was added,
+    /// changed, or cleared. Subscribers should re-resolve their effective
+    /// font size if they are this pane.
+    FontSizeOverrideChanged {
+        pane_id: PaneId,
+    },
 }
 
 impl Entity for PaneGroupFocusState {
@@ -42,6 +59,7 @@ impl PaneGroupFocusState {
             active_session_id,
             in_split_pane,
             is_focused_pane_maximized: false,
+            pane_font_size_overrides: HashMap::new(),
         }
     }
 
@@ -153,6 +171,50 @@ impl PaneGroupFocusState {
     ) {
         self.set_in_split_pane(in_split_pane, ctx);
     }
+
+    /// Returns the per-pane monospace font-size override for `pane_id`, if any.
+    pub fn font_size_override(&self, pane_id: PaneId) -> Option<f32> {
+        self.pane_font_size_overrides.get(&pane_id).copied()
+    }
+
+    /// Returns the effective monospace font size for `pane_id`: the per-pane
+    /// override if present, else the current global `FontSettings::monospace_font_size`.
+    pub fn effective_monospace_font_size(&self, pane_id: PaneId, app: &AppContext) -> f32 {
+        self.font_size_override(pane_id)
+            .unwrap_or_else(|| *FontSettings::as_ref(app).monospace_font_size.value())
+    }
+
+    /// Sets the per-pane monospace font-size override for `pane_id`. Emits
+    /// `FontSizeOverrideChanged` if the value actually changes.
+    pub fn set_font_size_override(
+        &mut self,
+        pane_id: PaneId,
+        new_size: f32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.pane_font_size_overrides.get(&pane_id).copied() == Some(new_size) {
+            return;
+        }
+        self.pane_font_size_overrides.insert(pane_id, new_size);
+        ctx.emit(PaneGroupFocusEvent::FontSizeOverrideChanged { pane_id });
+    }
+
+    /// Clears the per-pane monospace font-size override for `pane_id`, falling
+    /// back to the global default. Emits `FontSizeOverrideChanged` if there
+    /// was an override to clear.
+    pub fn clear_font_size_override(&mut self, pane_id: PaneId, ctx: &mut ModelContext<Self>) {
+        if self.pane_font_size_overrides.remove(&pane_id).is_some() {
+            ctx.emit(PaneGroupFocusEvent::FontSizeOverrideChanged { pane_id });
+        }
+    }
+
+    /// Drops any state associated with a pane that no longer exists. Call
+    /// this when a pane is closed/destroyed so its override entry doesn't
+    /// linger in memory. Silent on missing keys; doesn't emit because
+    /// nothing is rendering this pane anymore.
+    pub fn forget_pane(&mut self, pane_id: PaneId) {
+        self.pane_font_size_overrides.remove(&pane_id);
+    }
 }
 
 #[derive(Clone)]
@@ -217,6 +279,7 @@ impl PaneFocusHandle {
     /// * Changes in focus affect this pane if it gains or loses focus.
     /// * Changes in the active session affect this pane if it was or became active.
     /// * Changes to maximization and whether or not there are split panes *always* affect this pane.
+    /// * Changes to a per-pane font-size override only affect the pane it was changed for.
     pub fn is_affected(&self, event: &PaneGroupFocusEvent) -> bool {
         match event {
             PaneGroupFocusEvent::FocusChanged {
@@ -232,6 +295,23 @@ impl PaneFocusHandle {
             },
             PaneGroupFocusEvent::InSplitPaneChanged => true,
             PaneGroupFocusEvent::FocusedPaneMaximizedChanged => true,
+            PaneGroupFocusEvent::FontSizeOverrideChanged { pane_id } => *pane_id == self.pane_id,
         }
+    }
+
+    /// Returns the per-pane monospace font-size override for this pane, if any.
+    /// Absent means this pane follows the global `FontSettings::monospace_font_size`.
+    pub fn font_size_override(&self, app: &AppContext) -> Option<f32> {
+        self.focus_state
+            .as_ref(app)
+            .font_size_override(self.pane_id)
+    }
+
+    /// Returns the effective monospace font size for this pane: the per-pane
+    /// override if one is set, else the global `FontSettings::monospace_font_size`.
+    pub fn effective_monospace_font_size(&self, app: &AppContext) -> f32 {
+        self.focus_state
+            .as_ref(app)
+            .effective_monospace_font_size(self.pane_id, app)
     }
 }

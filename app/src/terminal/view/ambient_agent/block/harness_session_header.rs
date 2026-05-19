@@ -11,6 +11,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::{
     terminal::{view::PADDING_LEFT, CLIAgent},
     ui_components::icons::Icon,
@@ -24,6 +25,7 @@ pub struct HarnessSessionHeader {
     cli_name: String,
     is_expanded: bool,
     mouse_state: MouseStateHandle,
+    focus_handle: Option<PaneFocusHandle>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,16 +34,33 @@ pub enum HarnessSessionHeaderEvent {
 }
 
 impl HarnessSessionHeader {
-    pub fn new(block_id: BlockId, cli_agent: Option<CLIAgent>) -> Self {
+    pub fn new(
+        block_id: BlockId,
+        cli_agent: Option<CLIAgent>,
+        focus_handle: Option<PaneFocusHandle>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let cli_name = cli_agent
             .map(|agent| agent.display_name().to_owned())
             .unwrap_or_else(|| "Agent".to_owned());
+
+        if let Some(handle) = focus_handle.clone() {
+            let focus_state = handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
 
         Self {
             block_id,
             cli_name,
             is_expanded: false,
             mouse_state: Default::default(),
+            focus_handle,
         }
     }
 }
@@ -59,6 +78,11 @@ impl View for HarnessSessionHeader {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let text_color = theme.main_text_color(theme.background()).into_solid();
+        let font_size = self
+            .focus_handle
+            .as_ref()
+            .map(|h| h.effective_monospace_font_size(app))
+            .unwrap_or_else(|| appearance.monospace_font_size());
 
         let chevron_icon = if self.is_expanded {
             Icon::ChevronDown
@@ -74,15 +98,11 @@ impl View for HarnessSessionHeader {
             .with_child(
                 Shrinkable::new(
                     1.,
-                    Text::new(
-                        label,
-                        appearance.ai_font_family(),
-                        appearance.monospace_font_size(),
-                    )
-                    .with_color(text_color)
-                    .soft_wrap(false)
-                    .with_clip(ClipConfig::ellipsis())
-                    .finish(),
+                    Text::new(label, appearance.ai_font_family(), font_size)
+                        .with_color(text_color)
+                        .soft_wrap(false)
+                        .with_clip(ClipConfig::ellipsis())
+                        .finish(),
                 )
                 .finish(),
             )

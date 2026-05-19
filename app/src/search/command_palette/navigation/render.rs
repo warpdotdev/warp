@@ -228,6 +228,7 @@ fn render_prompt_ps1(
         enforce_minimum_contrast,
         obfuscate_secrets,
         size_info,
+        appearance.monospace_font_size(),
     );
     if should_use_ligature_rendering(app) {
         block_grid_element = block_grid_element.with_ligature_rendering();

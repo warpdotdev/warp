@@ -921,7 +921,7 @@ impl BlockListElement {
             snackbar_header_state: last_snackbar_header_state,
             ui_font_family: appearance.ui_font_family(),
             font_family: appearance.monospace_font_family(),
-            font_size: appearance.monospace_font_size(),
+            font_size: terminal_view_render_context.effective_font_size,
             font_weight: appearance.monospace_font_weight(),
             line_height_ratio: appearance.ui_builder().line_height_ratio(),
             warp_theme: appearance.theme().clone(),

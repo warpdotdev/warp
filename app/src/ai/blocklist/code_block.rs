@@ -105,13 +105,22 @@ pub struct CodeBlockOptions {
 pub fn render_code_block_with_warp_text(
     options: CodeBlockOptions,
     view: &ViewHandle<CodeEditorView>,
+    font_size: f32,
     app: &AppContext,
     source: Option<CodeSource>,
 ) -> Box<dyn Element> {
     let code = view.as_ref(app).text(app);
     let code_element = ChildView::new(view).finish();
 
-    render_code_block_internal(code.as_str(), code_element, options, app, source, true)
+    render_code_block_internal(
+        code.as_str(),
+        code_element,
+        options,
+        font_size,
+        app,
+        source,
+        true,
+    )
 }
 
 pub fn render_code_block_plain(
@@ -119,6 +128,7 @@ pub fn render_code_block_plain(
     find_highlight_ranges: impl Iterator<Item = HighlightedRange>,
     options: CodeBlockOptions,
     selectable: bool,
+    font_size: f32,
     app: &AppContext,
     source: Option<CodeSource>,
 ) -> Box<dyn Element> {
@@ -128,14 +138,14 @@ pub fn render_code_block_plain(
     let code_element = Text::new(
         code.to_owned(),
         appearance.monospace_font_family(),
-        appearance.monospace_font_size(),
+        font_size,
     )
     .with_color(blended_colors::text_main(theme, theme.surface_1()))
     .with_highlights(find_highlight_ranges)
     .with_selectable(selectable)
     .finish();
 
-    render_code_block_internal(code, code_element, options, app, source, false)
+    render_code_block_internal(code, code_element, options, font_size, app, source, false)
 }
 
 /// Renders a code snippet with a language label and optional buttons.
@@ -146,6 +156,7 @@ pub fn render_runnable_code_snippet(
     on_execute: Option<HandleCode>,
     on_copy: Option<HandleCode>,
     mouse_handles: Option<CodeSnippetButtonHandles>,
+    font_size: f32,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -154,7 +165,7 @@ pub fn render_runnable_code_snippet(
         Text::new_inline(
             language.display_name(),
             appearance.monospace_font_family(),
-            appearance.monospace_font_size(),
+            font_size,
         )
         .with_color(blended_colors::text_sub(theme, theme.surface_3()))
         .finish()
@@ -173,6 +184,7 @@ pub fn render_runnable_code_snippet(
             file_path: None,
         },
         true,
+        font_size,
         app,
         None,
     )
@@ -410,6 +422,7 @@ fn render_code_block_internal(
         mouse_handles,
         file_path,
     }: CodeBlockOptions,
+    font_size: f32,
     app: &AppContext,
     source: Option<CodeSource>,
     without_extra_padding_between_code_and_footer: bool,
@@ -435,7 +448,7 @@ fn render_code_block_internal(
                     }
                 ),
                 appearance.ui_font_family(),
-                appearance.monospace_font_size(),
+                font_size,
             )
             .with_color(blended_colors::text_main(theme, theme.background()))
             .finish();

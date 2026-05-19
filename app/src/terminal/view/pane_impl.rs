@@ -72,8 +72,21 @@ impl TerminalView {
             return;
         };
 
-        if focus_handle.is_affected(event) {
-            self.on_pane_state_change(ctx);
+        if !focus_handle.is_affected(event) {
+            return;
+        }
+
+        match event {
+            PaneGroupFocusEvent::FontSizeOverrideChanged { .. } => {
+                // Recompute grid metrics for this pane at the new effective
+                // font size. Mirrors the global path in
+                // `AppearanceEvent::MonospaceFontSizeChanged` (terminal/view.rs)
+                // but scoped to a single pane.
+                self.refresh_size(ctx);
+            }
+            _ => {
+                self.on_pane_state_change(ctx);
+            }
         }
     }
 
@@ -538,6 +551,7 @@ impl TerminalView {
                     self.agent_view_controller.as_ref(app),
                     self.mouse_states.parent_conversation_header_link.clone(),
                     self.mouse_states.breadcrumbs_horizontal_scroll.clone(),
+                    self.effective_monospace_font_size(app),
                     app,
                 )
                 .unwrap_or_else(|| Empty::new().finish())
@@ -764,7 +778,10 @@ impl BackingView for TerminalView {
             Self::handle_focus_state_event,
         );
         self.input.update(ctx, |input, ctx| {
-            input.set_focus_handle(focus_handle, ctx);
+            input.set_focus_handle(focus_handle.clone(), ctx);
+        });
+        self.orchestration_pill_bar.update(ctx, |pill_bar, ctx| {
+            pill_bar.set_focus_handle(focus_handle, ctx);
         });
         self.on_pane_state_change(ctx);
     }

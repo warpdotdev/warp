@@ -1095,6 +1095,10 @@ pub struct TextSectionsProps<'a, V, A: 'static> {
     pub secret_redaction_state: &'a SecretRedactionState,
     pub is_selecting_text: bool,
     pub item_spacing: f32,
+    /// Effective monospace font size for the pane rendering this block. Used
+    /// by inner code-block and table renderers so per-pane font-size overrides
+    /// flow through to AI content the same way they do for terminal text.
+    pub font_size: f32,
     #[cfg(feature = "local_fs")]
     pub resolved_code_block_paths: Option<&'a HashMap<PathBuf, Option<PathBuf>>>,
     #[cfg(feature = "local_fs")]
@@ -1243,6 +1247,7 @@ pub fn render_text_sections<V: View, A: Action>(
                         open_code_block_action_factory: props.open_code_block_action_factory,
                         copy_code_action_factory: props.copy_code_action_factory,
                         selectable: props.selectable,
+                        font_size: props.font_size,
                         #[cfg(feature = "local_fs")]
                         resolved_code_block_paths: props.resolved_code_block_paths,
                     },
@@ -2656,6 +2661,9 @@ pub struct CodeSectionProps<'a, A: 'static> {
     pub copy_code_action_factory: Option<CopyCodeActionFactory<A>>,
     /// Whether the code block text should be selectable within the parent SelectableArea.
     pub selectable: bool,
+    /// Effective monospace font size for the pane (so per-pane overrides apply
+    /// to the rendered code block).
+    pub font_size: f32,
     /// Pre-resolved code block file paths from the background detection task.
     /// Keyed by original path; value is the resolved absolute path (or None if unresolvable).
     #[cfg(feature = "local_fs")]
@@ -2789,6 +2797,7 @@ pub fn render_code_output_section<A: Action>(
                 mouse_handles: props.button_handles.cloned(),
             },
             view,
+            props.font_size,
             app,
             source,
         ),
@@ -2858,6 +2867,7 @@ pub fn render_code_output_section<A: Action>(
                     mouse_handles: props.button_handles.cloned(),
                 },
                 props.selectable,
+                props.font_size,
                 app,
                 source,
             )

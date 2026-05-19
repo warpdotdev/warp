@@ -20,5 +20,14 @@ define_settings_group!(PaneSettings, settings: [
         private: false,
         toml_path: "appearance.panes.focus_pane_on_hover",
         description: "Whether panes are focused when hovered over.",
+    },
+    pane_specific_font_size: PaneSpecificFontSize {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.panes.pane_specific_font_size",
+        description: "Whether font size adjustments apply only to the focused pane.",
     }
 ]);

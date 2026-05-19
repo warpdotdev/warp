@@ -1060,6 +1060,7 @@ impl View for AIBlock {
         );
         drop(terminal_model);
 
+        let font_size = self.effective_monospace_font_size(app);
         contents.add_child(output::render(
             output::Props {
                 model: self.model.as_ref(),
@@ -1072,6 +1073,7 @@ impl View for AIBlock {
                 shell_launch_data: self.shell_launch_data.as_ref(),
                 detected_links_state: &self.detected_links_state,
                 secret_redaction_state: &self.secret_redaction_state,
+                font_size,
                 requested_commands: &self.requested_commands,
                 requested_mcp_tools: &self.requested_mcp_tools,
                 requested_edits: &self.requested_edits,

@@ -3323,8 +3323,19 @@ impl EditorView {
     }
 
     pub fn set_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
+        if self.text_options.font_size_override == Some(new_font_size) {
+            return;
+        }
         self.text_options.font_size_override = Some(new_font_size);
         ctx.notify();
+    }
+
+    /// Clears any per-instance font-size override so the editor falls back to
+    /// the global `Appearance::monospace_font_size()`.
+    pub fn clear_font_size(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.text_options.font_size_override.take().is_some() {
+            ctx.notify();
+        }
     }
 
     pub fn set_text_colors(&mut self, text_colors: TextColors, ctx: &mut ViewContext<Self>) {

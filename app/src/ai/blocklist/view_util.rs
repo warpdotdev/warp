@@ -116,7 +116,7 @@ fn render_input_icon(icon: Icon, color: Fill, app: &AppContext) -> Box<dyn Eleme
     // Since the icon is rendered next to monospace text content, its size should scale to
     // based on the current font size -- specifically, its height must match the editor text line
     // height.
-    let icon_size = ai_indicator_height(app);
+    let icon_size = ai_indicator_height(Appearance::as_ref(app).monospace_font_size(), app);
     ConstrainedBox::new(
         Container::new(icon.to_warpui_icon(color).finish())
             .with_uniform_padding(icon_size / 8.)
@@ -133,12 +133,10 @@ fn render_input_icon(icon: Icon, color: Fill, app: &AppContext) -> Box<dyn Eleme
 /// This size is computed based on the user's current font size and line height ratio, such that the
 /// size of the icon matches the user's text line height.  This is necessary because the AI icon in
 /// the input is rendered next to text in the editor.
-pub fn ai_indicator_height(app: &AppContext) -> f32 {
+pub fn ai_indicator_height(font_size: f32, app: &AppContext) -> f32 {
     let appearance = Appearance::as_ref(app);
-    app.font_cache().line_height(
-        appearance.monospace_font_size(),
-        appearance.line_height_ratio(),
-    )
+    app.font_cache()
+        .line_height(font_size, appearance.line_height_ratio())
 }
 
 /// Returns the saved position ID of the attached blocks chip inside the [`AIBlock`] header.

@@ -195,7 +195,7 @@ fn render_transcript_row(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
-    let font_size = appearance.monospace_font_size();
+    let font_size = props.font_size;
     let metadata_color = blended_colors::text_disabled(theme, theme.surface_2());
     let body_color: ColorU = theme.main_text_color(theme.background()).into();
     let collapsible_state = if data.body.is_empty() {
@@ -299,7 +299,7 @@ fn render_transcript_row(
         }
     }
 
-    let avatar = data.participant.avatar.render(app);
+    let avatar = data.participant.avatar.render(props.font_size, app);
     let avatar_element: Box<dyn Element> = if let (Some(conversation_id), Some(mouse_state)) = (
         data.participant.conversation_id,
         props

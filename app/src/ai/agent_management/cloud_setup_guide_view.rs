@@ -413,6 +413,7 @@ impl CloudSetupGuideView {
                 file_path: None,
             },
             true,
+            Appearance::as_ref(app).monospace_font_size(),
             app,
             None,
         )

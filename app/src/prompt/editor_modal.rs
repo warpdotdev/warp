@@ -472,6 +472,7 @@ impl EditorModal {
                 *FontSettings::as_ref(app).enforce_minimum_contrast,
                 ObfuscateSecrets::No,
                 *size_info,
+                appearance.monospace_font_size(),
             )
             .finish(),
         )

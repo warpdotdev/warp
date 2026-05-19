@@ -192,6 +192,10 @@ pub(crate) struct Props<'a> {
     pub(super) is_usage_footer_expanded: bool,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
+    /// Effective monospace font size for the pane this block renders in.
+    /// Threaded down so per-pane font-size overrides apply to AI text and
+    /// code blocks the same way they apply to terminal text.
+    pub(crate) font_size: f32,
     pub(super) is_conversation_transcript_viewer: bool,
     pub(super) aws_bedrock_credentials_error_view:
         Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
@@ -351,6 +355,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                         .selection_handle
                                         .is_selecting(),
                                     item_spacing: CONTENT_ITEM_VERTICAL_MARGIN,
+                                    font_size: props.font_size,
                                     #[cfg(feature = "local_fs")]
                                     resolved_code_block_paths: Some(
                                         props.resolved_code_block_paths,
@@ -3645,6 +3650,7 @@ fn render_collapsible_text_block_section(
             secret_redaction_state: props.secret_redaction_state,
             is_selecting_text: props.state_handles.selection_handle.is_selecting(),
             item_spacing: CONTENT_ITEM_VERTICAL_MARGIN,
+            font_size: props.font_size,
             #[cfg(feature = "local_fs")]
             resolved_code_block_paths: Some(props.resolved_code_block_paths),
             #[cfg(feature = "local_fs")]

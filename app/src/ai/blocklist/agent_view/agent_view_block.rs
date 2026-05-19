@@ -20,6 +20,7 @@ use crate::{
         active_agent_views_model::ActiveAgentViewsModel, agent::conversation::AIConversationId,
         blocklist::BlocklistAIHistoryEvent,
     },
+    pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent},
     terminal::BlockListSettings,
     ui_components::{
         blended_colors,
@@ -45,6 +46,9 @@ pub struct AgentViewEntryBlockParams {
     pub is_restored: bool,
     pub origin: AgentViewEntryOrigin,
     pub agent_view_controller: ModelHandle<AgentViewController>,
+    /// Owning pane's focus handle (when available). Used to resolve the
+    /// per-pane monospace font-size override.
+    pub focus_handle: Option<PaneFocusHandle>,
 }
 
 /// Rich content block rendered in the terminal mode blocklist to represent an Agent View entry for
@@ -60,6 +64,7 @@ pub struct AgentViewEntryBlock {
     state_handles: StateHandles,
     /// UI instance anchor for positioning the entry context menu.
     view_id: EntityId,
+    focus_handle: Option<PaneFocusHandle>,
 }
 
 impl AgentViewEntryBlock {
@@ -70,6 +75,7 @@ impl AgentViewEntryBlock {
             is_restored,
             origin,
             agent_view_controller,
+            focus_handle,
         } = params;
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, |me, _, event, ctx| match event {
@@ -96,6 +102,17 @@ impl AgentViewEntryBlock {
         let active_agent_views_model = ActiveAgentViewsModel::handle(ctx);
         ctx.subscribe_to_model(&active_agent_views_model, |_, _, _, ctx| ctx.notify());
 
+        if let Some(handle) = focus_handle.clone() {
+            let focus_state = handle.focus_state_handle().clone();
+            ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
+                if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
+                    && handle.is_affected(event)
+                {
+                    ctx.notify();
+                }
+            });
+        }
+
         Self {
             conversation_id,
             agent_view_controller,
@@ -105,7 +122,15 @@ impl AgentViewEntryBlock {
             cached_title: Default::default(),
             state_handles: Default::default(),
             view_id: ctx.view_id(),
+            focus_handle,
         }
+    }
+
+    fn effective_monospace_font_size(&self, app: &AppContext) -> f32 {
+        self.focus_handle
+            .as_ref()
+            .map(|h| h.effective_monospace_font_size(app))
+            .unwrap_or_else(|| Appearance::as_ref(app).monospace_font_size())
     }
 }
 
@@ -147,22 +172,18 @@ pub fn render_block_container(
     container.finish()
 }
 
-fn render_subtext(text: String, appearance: &Appearance) -> Box<dyn Element> {
+fn render_subtext(text: String, appearance: &Appearance, font_size: f32) -> Box<dyn Element> {
     Container::new(
-        Text::new(
-            text,
-            appearance.ui_font_family(),
-            appearance.monospace_font_size() - 2.,
-        )
-        .with_color(blended_colors::text_disabled(
-            appearance.theme(),
-            appearance.theme().background(),
-        ))
-        .with_style(Properties {
-            style: Style::Italic,
-            ..Default::default()
-        })
-        .finish(),
+        Text::new(text, appearance.ui_font_family(), font_size - 2.)
+            .with_color(blended_colors::text_disabled(
+                appearance.theme(),
+                appearance.theme().background(),
+            ))
+            .with_style(Properties {
+                style: Style::Italic,
+                ..Default::default()
+            })
+            .finish(),
     )
     .with_margin_left(8.)
     .finish()
@@ -211,6 +232,7 @@ fn render_deleted_state(
     origin: AgentViewEntryOrigin,
     cached_title: Option<String>,
     appearance: &Appearance,
+    font_size: f32,
     are_block_dividers_enabled: bool,
 ) -> Box<dyn Element> {
     let disabled_color =
@@ -223,7 +245,7 @@ fn render_deleted_state(
             Text::new(
                 cached_title.unwrap_or_else(|| "Deleted conversation".to_string()),
                 appearance.ui_font_family(),
-                appearance.monospace_font_size(),
+                font_size,
             )
             .with_color(disabled_color)
             .with_style(Properties {
@@ -232,7 +254,7 @@ fn render_deleted_state(
             })
             .finish(),
         )
-        .with_child(render_subtext("Deleted".to_string(), appearance))
+        .with_child(render_subtext("Deleted".to_string(), appearance, font_size))
         .finish();
 
     render_block_container(
@@ -258,6 +280,7 @@ impl View for AgentViewEntryBlock {
         let theme = appearance.theme();
         let are_block_dividers_enabled =
             *BlockListSettings::as_ref(app).show_block_dividers.value();
+        let font_size = self.effective_monospace_font_size(app);
 
         let history_model = BlocklistAIHistoryModel::as_ref(app);
         let Some(conversation) = history_model.conversation(&self.conversation_id) else {
@@ -267,6 +290,7 @@ impl View for AgentViewEntryBlock {
                 self.origin,
                 self.cached_title.clone(),
                 appearance,
+                font_size,
                 are_block_dividers_enabled,
             );
         };
@@ -323,7 +347,7 @@ impl View for AgentViewEntryBlock {
                             .title()
                             .unwrap_or("Untitled conversation".to_string()),
                         appearance.ui_font_family(),
-                        appearance.monospace_font_size(),
+                        font_size,
                     )
                     .with_color(blended_colors::text_main(
                         appearance.theme(),
@@ -340,7 +364,7 @@ impl View for AgentViewEntryBlock {
                 .finish(),
             );
         if let Some(subtext) = subtext {
-            title_section.add_child(render_subtext(subtext.to_string(), appearance));
+            title_section.add_child(render_subtext(subtext.to_string(), appearance, font_size));
         }
 
         let conversation_id = self.conversation_id;
