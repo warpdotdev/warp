@@ -30,4 +30,13 @@ define_settings_group!(AltScreenReporting, settings: [
         toml_path: "terminal.focus_reporting_enabled",
         description: "Whether to forward focus and blur events to full-screen terminal applications.",
     },
+    smart_mouse_tmux_launchers: SmartMouseTmuxLaunchers {
+        type: Vec<String>,
+        default: vec!["tmux".to_string()],
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "terminal.smart_alt_screen_mouse_tmux_launchers",
+        description: "Commands that should be treated as tmux launchers for smart alt-screen mouse handling.",
+    },
 ]);

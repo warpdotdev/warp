@@ -489,7 +489,7 @@ use crate::terminal::model::blocks::{BlockHeight, BlockHeightItem, BlockHeightSu
 use crate::terminal::model::escape_sequences::{self, EscCodes, ToEscapeSequence, C1};
 use crate::terminal::model::grid::grid_handler::{FragmentBoundary, TermMode};
 use crate::terminal::model::index::{Point, Side};
-use crate::terminal::model::mouse::MouseState;
+use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use crate::terminal::model::selection::{SelectAction, SelectionDirection};
 use crate::terminal::model::session::{BootstrapSessionType, SessionType, Sessions, SessionsEvent};
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalInputState};
@@ -1358,6 +1358,7 @@ struct FindLinkArg {
 pub enum TerminalEditor {
     Yes,
     No,
+    SmartAltScreenMouse,
 }
 
 /// Different modes for how we consider a block to be "visible"
@@ -2435,6 +2436,17 @@ pub enum ActiveSessionState {
     Inactive,
 }
 
+enum AltScreenMouseGesture {
+    PendingLeft {
+        down_point: Point,
+        down_position: Vector2F,
+        side: Side,
+        selection_type: SelectionType,
+        mouse_state: MouseState,
+    },
+    Selecting,
+}
+
 enum SecretTooltip {
     Grid {
         is_agent_mode: bool,
@@ -2510,6 +2522,8 @@ pub struct TerminalView {
 
     /// Whether there is an active text selection.
     is_selecting: bool,
+
+    alt_screen_mouse_gesture: Option<AltScreenMouseGesture>,
 
     context_menu: ViewHandle<Menu<TerminalAction>>,
 
@@ -4202,6 +4216,7 @@ impl TerminalView {
             alt_screen_scroll_top: Lines::zero(),
             horizontal_clipped_scroll_state: Default::default(),
             is_selecting: false,
+            alt_screen_mouse_gesture: None,
             context_menu_state: None,
             context_menu,
             hovered_secret: None,
@@ -15887,6 +15902,68 @@ impl TerminalView {
             .hovered_rich_content_link()
     }
 
+    fn highlighted_grid_link_context_menu_items(
+        &self,
+        model: &TerminalModel,
+        highlighted_link: &GridHighlightedLink,
+        respect_obfuscated: RespectObfuscatedSecrets,
+    ) -> Vec<MenuItem<TerminalAction>> {
+        match highlighted_link {
+            GridHighlightedLink::Url(url) => {
+                vec![MenuItemFields::new("Copy URL")
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::CopyUrl {
+                            url_content: model.link_at_range(url, respect_obfuscated),
+                        },
+                    ))
+                    .into_item()]
+            }
+            #[cfg(feature = "local_fs")]
+            GridHighlightedLink::File(file_link) => {
+                let path = file_link.get_inner().absolute_path();
+                let show_in_file_explorer_menu_item_label = if cfg!(target_os = "macos") {
+                    "Show in Finder"
+                } else {
+                    "Show containing folder"
+                };
+                path.map(|path| {
+                    let mut items = vec![
+                        MenuItemFields::new("Copy path")
+                            .with_on_select_action(TerminalAction::ContextMenu(
+                                ContextMenuAction::CopyUrl {
+                                    url_content: path.to_string_lossy().into(),
+                                },
+                            ))
+                            .into_item(),
+                        MenuItemFields::new(show_in_file_explorer_menu_item_label)
+                            .with_on_select_action(TerminalAction::ShowInFileExplorer(path.clone()))
+                            .into_item(),
+                    ];
+
+                    if is_markdown_file(&path) {
+                        items.push(
+                            MenuItemFields::new("Open in Warp")
+                                .with_on_select_action(TerminalAction::OpenFileInWarp(path))
+                                .into_item(),
+                        );
+                        // Because the default for cmd-click is to open in Warp, we also
+                        // have an open-in-editor option.
+                        items.push(
+                            MenuItemFields::new("Open in editor")
+                                .with_on_select_action(TerminalAction::OpenGridLink(
+                                    highlighted_link.clone(),
+                                ))
+                                .into_item(),
+                        );
+                    }
+
+                    items
+                })
+                .unwrap_or_default()
+            }
+        }
+    }
+
     fn context_menu_items(
         &self,
         menu_source: &BlockListMenuSource,
@@ -15904,68 +15981,11 @@ impl TerminalView {
                 | BlockListMenuSource::RichContentBlockRightClick { .. },
                 Some(highlighted_link),
                 _,
-            ) => {
-                match highlighted_link {
-                    GridHighlightedLink::Url(url) => {
-                        let url_content =
-                            Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
-                        url_content
-                            .map(|url_content| {
-                                vec![MenuItemFields::new("Copy URL")
-                                    .with_on_select_action(TerminalAction::ContextMenu(
-                                        ContextMenuAction::CopyUrl { url_content },
-                                    ))
-                                    .into_item()]
-                            })
-                            .unwrap_or_default()
-                    }
-                    #[cfg(feature = "local_fs")]
-                    GridHighlightedLink::File(file_link) => {
-                        let path = file_link.get_inner().absolute_path();
-                        let show_in_file_explorer_menu_item_label = if cfg!(target_os = "macos") {
-                            "Show in Finder"
-                        } else {
-                            "Show containing folder"
-                        };
-                        path.map(|path| {
-                            let mut items = vec![
-                                MenuItemFields::new("Copy path")
-                                    .with_on_select_action(TerminalAction::ContextMenu(
-                                        ContextMenuAction::CopyUrl {
-                                            url_content: path.to_string_lossy().into(),
-                                        },
-                                    ))
-                                    .into_item(),
-                                MenuItemFields::new(show_in_file_explorer_menu_item_label)
-                                    .with_on_select_action(TerminalAction::ShowInFileExplorer(
-                                        path.clone(),
-                                    ))
-                                    .into_item(),
-                            ];
-
-                            if is_markdown_file(&path) {
-                                items.push(
-                                    MenuItemFields::new("Open in Warp")
-                                        .with_on_select_action(TerminalAction::OpenFileInWarp(path))
-                                        .into_item(),
-                                );
-                                // Because the default for cmd-click is to open in Warp, we also
-                                // have an open-in-editor option.
-                                items.push(
-                                    MenuItemFields::new("Open in editor")
-                                        .with_on_select_action(TerminalAction::OpenGridLink(
-                                            highlighted_link.clone(),
-                                        ))
-                                        .into_item(),
-                                );
-                            }
-
-                            items
-                        })
-                        .unwrap_or_default()
-                    }
-                }
-            }
+            ) => self.highlighted_grid_link_context_menu_items(
+                &model,
+                highlighted_link,
+                RespectObfuscatedSecrets::Yes,
+            ),
             (
                 BlockListMenuSource::RegularTextRightClick { .. }
                 | BlockListMenuSource::RichContentTextRightClick { .. },
@@ -16997,15 +17017,32 @@ impl TerminalView {
     /// Used both when opening the menu and when rebuilding it (e.g., on pane state changes).
     fn rebuild_alt_screen_context_menu_items(
         &self,
+        include_highlighted_link_actions: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Vec<MenuItem<TerminalAction>> {
-        let mut menu_items = Vec::new();
         let model = self.model.lock();
+        let mut menu_items = if include_highlighted_link_actions {
+            self.highlighted_link
+                .as_ref()
+                .map(|highlighted_link| {
+                    self.highlighted_grid_link_context_menu_items(
+                        &model,
+                        highlighted_link,
+                        RespectObfuscatedSecrets::Yes,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let semantic_selection = SemanticSelection::as_ref(ctx);
         let selection_string =
             model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
         if selection_string.is_some() {
+            if !menu_items.is_empty() {
+                menu_items.push(MenuItem::Separator);
+            }
             menu_items.push(
                 MenuItemFields::new("Copy")
                     .with_on_select_action(TerminalAction::ContextMenu(
@@ -17034,7 +17071,11 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            let session_sharing_items = self.session_sharing_context_menu_items(&model, false);
+            if !menu_items.is_empty() && !session_sharing_items.is_empty() {
+                menu_items.push(MenuItem::Separator);
+            }
+            menu_items.extend(session_sharing_items);
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
@@ -17047,8 +17088,14 @@ impl TerminalView {
         menu_items
     }
 
-    fn alt_screen_context_menu(&mut self, position: Vector2F, ctx: &mut ViewContext<Self>) {
-        let menu_items = self.rebuild_alt_screen_context_menu_items(ctx);
+    fn alt_screen_context_menu(
+        &mut self,
+        position: Vector2F,
+        include_highlighted_link_actions: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let menu_items =
+            self.rebuild_alt_screen_context_menu_items(include_highlighted_link_actions, ctx);
         self.show_context_menu(
             ContextMenuState {
                 menu_type: ContextMenuType::AltScreen { position },
@@ -17188,6 +17235,191 @@ impl TerminalView {
             .to_escape_sequence(self.model.lock().deref())
             .unwrap();
         self.write_user_bytes_to_pty(escape_sequences, ctx);
+    }
+
+    fn ensure_highlighted_link_at_position(
+        &mut self,
+        position: &WithinModel<Point>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if self
+            .highlighted_link
+            .as_ref()
+            .is_some_and(|link| link.contains(position))
+            && !self.highlighted_link.is_invalidated()
+        {
+            return true;
+        }
+
+        let url_at_position = { self.model.lock().url_at_point(position) };
+        if let Some(link) = url_at_position {
+            let mut model = self.model.lock();
+            self.highlighted_link.take(&mut model);
+            self.highlighted_link
+                .set(GridHighlightedLink::Url(link), &mut model);
+            ctx.set_cursor_shape(Cursor::PointingHand);
+            ctx.notify();
+            return true;
+        }
+
+        #[cfg(feature = "local_fs")]
+        // Smart tmux click routing must make a synchronous consume-vs-replay decision for the
+        // captured mouse event. Hover detection still uses the background scanner, but click and
+        // context-menu gestures resolve the exact path under the pointer inline so non-links can
+        // immediately replay to tmux.
+        if let Some(link) = self.file_path_link_at_position(*position, ctx) {
+            let mut model = self.model.lock();
+            self.highlighted_link.take(&mut model);
+            self.highlighted_link.set(link, &mut model);
+            ctx.set_cursor_shape(Cursor::PointingHand);
+            ctx.notify();
+            return true;
+        }
+
+        if self.highlighted_link.take(&mut self.model.lock()).is_some() {
+            ctx.reset_cursor();
+            ctx.notify();
+        }
+        false
+    }
+
+    fn smart_alt_screen_left_mouse_down(
+        &mut self,
+        point: Point,
+        position: Vector2F,
+        side: Side,
+        selection_type: SelectionType,
+        mouse_state: MouseState,
+    ) {
+        self.alt_screen_mouse_gesture = Some(AltScreenMouseGesture::PendingLeft {
+            down_point: point,
+            down_position: position,
+            side,
+            selection_type,
+            mouse_state: mouse_state.set_point(point),
+        });
+    }
+
+    fn smart_alt_screen_left_mouse_drag(
+        &mut self,
+        point: Point,
+        position: Vector2F,
+        side: Side,
+        mouse_state: &MouseState,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        const SMART_ALT_SCREEN_MOUSE_DRAG_THRESHOLD_PX: f32 = 5.;
+
+        match self.alt_screen_mouse_gesture.take() {
+            Some(AltScreenMouseGesture::PendingLeft {
+                down_point,
+                down_position,
+                side: down_side,
+                selection_type,
+                mouse_state: down_mouse_state,
+            }) => {
+                if (position - down_position).length() >= SMART_ALT_SCREEN_MOUSE_DRAG_THRESHOLD_PX {
+                    self.begin_alt_selection(down_point, down_side, selection_type, ctx);
+                    self.update_alt_selection(point, side, &Lines::zero(), ctx);
+                    self.alt_screen_mouse_gesture = Some(AltScreenMouseGesture::Selecting);
+                } else {
+                    self.alt_screen_mouse_gesture = Some(AltScreenMouseGesture::PendingLeft {
+                        down_point,
+                        down_position,
+                        side: down_side,
+                        selection_type,
+                        mouse_state: down_mouse_state,
+                    });
+                }
+            }
+            Some(AltScreenMouseGesture::Selecting) => {
+                self.update_alt_selection(point, side, &Lines::zero(), ctx);
+                self.alt_screen_mouse_gesture = Some(AltScreenMouseGesture::Selecting);
+            }
+            None => {
+                if self.is_selecting {
+                    self.update_alt_selection(point, side, &Lines::zero(), ctx);
+                } else {
+                    self.alt_mouse_action(&mouse_state.set_point(point), ctx);
+                }
+            }
+        }
+    }
+
+    fn smart_alt_screen_left_mouse_up(
+        &mut self,
+        point: Point,
+        _position: Vector2F,
+        up_mouse_state: &MouseState,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match self.alt_screen_mouse_gesture.take() {
+            Some(AltScreenMouseGesture::PendingLeft {
+                mouse_state: down_mouse_state,
+                ..
+            }) => {
+                let grid_position = WithinModel::AltScreen(point);
+                if self.ensure_highlighted_link_at_position(&grid_position, ctx) {
+                    self.click_on_grid(&grid_position, up_mouse_state.modifiers(), ctx);
+                } else {
+                    self.alt_mouse_action(&down_mouse_state, ctx);
+                    self.alt_mouse_action(
+                        &MouseState::new(
+                            MouseButton::Left,
+                            MouseAction::Released,
+                            *up_mouse_state.modifiers(),
+                        )
+                        .set_point(point),
+                        ctx,
+                    );
+                }
+            }
+            Some(AltScreenMouseGesture::Selecting) => {
+                self.end_alt_selection(ctx);
+            }
+            None => {
+                if self.is_selecting {
+                    let grid_position = WithinModel::AltScreen(point);
+                    self.click_on_grid(&grid_position, up_mouse_state.modifiers(), ctx);
+                    self.end_alt_selection(ctx);
+                } else {
+                    self.alt_mouse_action(&up_mouse_state.set_point(point), ctx);
+                }
+            }
+        }
+    }
+
+    fn smart_alt_screen_right_mouse_down(
+        &mut self,
+        point: Point,
+        position: Vector2F,
+        mouse_state: &MouseState,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let grid_position = WithinModel::AltScreen(point);
+        if self.ensure_highlighted_link_at_position(&grid_position, ctx) {
+            self.alt_screen_context_menu(position, true, ctx);
+        } else {
+            self.alt_mouse_action(&mouse_state.set_point(point), ctx);
+            self.alt_mouse_action(
+                &MouseState::new(
+                    MouseButton::Right,
+                    MouseAction::Released,
+                    *mouse_state.modifiers(),
+                )
+                .set_point(point),
+                ctx,
+            );
+        }
+    }
+
+    fn clear_smart_alt_screen_mouse_gesture(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.alt_screen_mouse_gesture.take(),
+            Some(AltScreenMouseGesture::Selecting)
+        ) {
+            self.end_alt_selection(ctx);
+        }
     }
 
     fn alt_select(&mut self, arg: &SelectAction<Point>, ctx: &mut ViewContext<Self>) {
@@ -25187,6 +25419,11 @@ impl TypedActionView for TerminalView {
             | TypedCharacters(_)
             | UserInputSequence(_)
             | ControlSequence(_)
+            | SmartAltScreenMouseLeftDown { .. }
+            | SmartAltScreenMouseLeftDrag { .. }
+            | SmartAltScreenMouseLeftUp { .. }
+            | SmartAltScreenMouseRightDown { .. }
+            | ClearSmartAltScreenMouseGesture
             | TriggerSubshellBootstrap
             | ShowSubshellBanner(_)
             | DismissWarpifyBanner(_)
@@ -25388,8 +25625,40 @@ impl TypedActionView for TerminalView {
                 }
             }
             AltSelect(select_action) => self.alt_select(select_action, ctx),
-            AltScreenContextMenu { position } => self.alt_screen_context_menu(*position, ctx),
+            AltScreenContextMenu { position } => {
+                self.alt_screen_context_menu(*position, false, ctx)
+            }
             AltMouseAction(mouse_state) => self.alt_mouse_action(mouse_state, ctx),
+            SmartAltScreenMouseLeftDown {
+                point,
+                position,
+                side,
+                selection_type,
+                mouse_state,
+            } => self.smart_alt_screen_left_mouse_down(
+                *point,
+                *position,
+                *side,
+                *selection_type,
+                *mouse_state,
+            ),
+            SmartAltScreenMouseLeftDrag {
+                point,
+                position,
+                side,
+                mouse_state,
+            } => self.smart_alt_screen_left_mouse_drag(*point, *position, *side, mouse_state, ctx),
+            SmartAltScreenMouseLeftUp {
+                point,
+                position,
+                mouse_state,
+            } => self.smart_alt_screen_left_mouse_up(*point, *position, mouse_state, ctx),
+            SmartAltScreenMouseRightDown {
+                point,
+                position,
+                mouse_state,
+            } => self.smart_alt_screen_right_mouse_down(*point, *position, mouse_state, ctx),
+            ClearSmartAltScreenMouseGesture => self.clear_smart_alt_screen_mouse_gesture(ctx),
             BlockListContextMenu(menu_state) => self.block_list_context_menu(menu_state, ctx),
             OpenAIBlockAttachedBlocksMenu {
                 exchange_id,

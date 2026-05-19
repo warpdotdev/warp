@@ -26,7 +26,7 @@ cfg_if::cfg_if! {
             util::file::{FileLink, absolute_path_if_valid, ShellPathType},
             util::openable_file_type::FileTarget,
         };
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
         use warp_util::path::CleanPathResult;
         use warp_util::path::LineAndColumnArg;
     }
@@ -441,23 +441,15 @@ impl super::TerminalView {
         from_editor: TerminalEditor,
         ctx: &mut ViewContext<Self>,
     ) {
-        // For AltScreen we scan for relative path with the current working directory.
-        // For BlockList we scan for relative path with the pwd of the hovered block.
-        let pwd_to_scan_for = match position {
-            WithinModel::AltScreen(_) => self.pwd_if_local(ctx),
-            WithinModel::BlockList(inner) => self
-                .model
-                .lock()
-                .block_list()
-                .block_at(inner.block_index)
-                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx)) // Don't scan for file links if the block is on remote sessions
-                .and_then(|block| block.pwd().map(String::from)),
-        };
-
-        match pwd_to_scan_for {
+        match self.pwd_to_scan_for_file_path(position, ctx) {
             // Check if we are hovering on any file path. Don't scan for file path
             // if user is hovering from an editor like vim or nano.
-            Some(path) if matches!(from_editor, TerminalEditor::No) => {
+            Some(path)
+                if matches!(
+                    from_editor,
+                    TerminalEditor::No | TerminalEditor::SmartAltScreenMouse
+                ) =>
+            {
                 let possible_paths = self.model.lock().possible_file_paths_at_point(position);
                 let max_columns = self.size_info.columns;
                 let shell_launch_data = self
@@ -495,6 +487,90 @@ impl super::TerminalView {
             }
             _ => (),
         };
+    }
+
+    pub(super) fn file_path_link_at_position(
+        &self,
+        position: WithinModel<Point>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<GridHighlightedLink> {
+        let pwd_to_scan_for = self.pwd_to_scan_for_file_path(position, ctx)?;
+        let possible_paths = self.model.lock().possible_file_paths_at_point(position);
+        let max_columns = self.size_info.columns;
+        let shell_launch_data = self
+            .active_block_session_id()
+            .and_then(|active_session_id| self.sessions.as_ref(ctx).get(active_session_id))
+            .and_then(|active_session| active_session.launch_data().cloned());
+
+        Self::compute_valid_paths(
+            &pwd_to_scan_for,
+            possible_paths,
+            max_columns,
+            shell_launch_data,
+        )
+    }
+
+    fn pwd_to_scan_for_file_path(
+        &self,
+        position: WithinModel<Point>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<String> {
+        // For AltScreen we scan for relative path with the current working directory.
+        // For BlockList we scan for relative path with the pwd of the hovered block.
+        match position {
+            WithinModel::AltScreen(_) => self.pwd_if_local(ctx).or_else(|| {
+                // Absolute local paths do not need a cwd, but they still require a known-local
+                // session before we synthesize "/" as the cwd. Unknown locality fails closed so
+                // untrusted remote/muxed output cannot trigger actions for local filesystem paths.
+                // Also require the text under the pointer to already look absolute; otherwise
+                // relative text like "etc/hosts" would validate as "/etc/hosts" and incorrectly
+                // consume tmux clicks.
+                (self.active_session_is_local(ctx) == Some(true)
+                    && self.possible_file_path_at_position_can_be_valid_without_pwd(position))
+                .then(|| "/".to_owned())
+            }),
+            WithinModel::BlockList(inner) => self
+                .model
+                .lock()
+                .block_list()
+                .block_at(inner.block_index)
+                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx))
+                .and_then(|block| block.pwd().map(String::from)),
+        }
+    }
+
+    fn possible_file_path_at_position_can_be_valid_without_pwd(
+        &self,
+        position: WithinModel<Point>,
+    ) -> bool {
+        self.model
+            .lock()
+            .possible_file_paths_at_point(position)
+            .any(|possible_path| {
+                Self::possible_path_can_be_valid_without_pwd(possible_path.get_inner())
+            })
+    }
+
+    fn possible_path_can_be_valid_without_pwd(possible_path: &grid_handler::PossiblePath) -> bool {
+        Self::path_can_be_valid_without_pwd(&possible_path.path.path)
+            || PREFIXES_TO_REMOVE.iter().any(|prefix| {
+                possible_path
+                    .path
+                    .path
+                    .strip_prefix(prefix)
+                    .is_some_and(Self::path_can_be_valid_without_pwd)
+            })
+            || SUFFIXES_TO_REMOVE.iter().any(|suffix| {
+                possible_path
+                    .path
+                    .path
+                    .strip_suffix(suffix)
+                    .is_some_and(Self::path_can_be_valid_without_pwd)
+            })
+    }
+
+    fn path_can_be_valid_without_pwd(path: &str) -> bool {
+        Path::new(path).is_absolute()
     }
 
     fn compute_valid_paths(

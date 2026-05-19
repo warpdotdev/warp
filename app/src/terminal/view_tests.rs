@@ -44,7 +44,11 @@ use crate::pane_group::{pane::PaneStack, BackingView, TerminalPaneId};
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
-use crate::terminal::alt_screen::should_intercept_mouse;
+use crate::terminal::alt_screen::{
+    should_continue_smart_mouse_handling, should_intercept_mouse, should_use_smart_mouse_handling,
+    should_use_smart_right_mouse_handling,
+};
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::cli_agent_sessions::event::{
@@ -59,8 +63,16 @@ use crate::terminal::cli_agent_sessions::{
 use crate::terminal::model::ansi::{self, InitShellValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
 use crate::terminal::model::block::AgentViewVisibility;
+#[cfg(feature = "local_fs")]
+use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
+use crate::terminal::model::escape_sequences::ToEscapeSequence;
+use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
+#[cfg(feature = "local_fs")]
+use crate::terminal::model::session::SessionInfo;
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
@@ -71,6 +83,8 @@ use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
 use crate::terminal::CLIAgent;
+#[cfg(feature = "local_fs")]
+use crate::util::file::FileLink;
 
 use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::add_window_with_id_and_terminal;
@@ -1996,10 +2010,119 @@ fn test_alt_screen_copy_on_select() {
     })
 }
 
+fn enter_sgr_alt_screen_for_command(
+    view: &mut TerminalView,
+    command: Option<&str>,
+    fill_grid: bool,
+    text: Option<&str>,
+) -> SizeInfo {
+    enter_alt_screen_for_command(view, command, fill_grid, text, true)
+}
+
+fn enter_alt_screen_for_command(
+    view: &mut TerminalView,
+    command: Option<&str>,
+    fill_grid: bool,
+    text: Option<&str>,
+    sgr_mouse: bool,
+) -> SizeInfo {
+    let mut model = view.model.lock();
+    if let Some(command) = command {
+        model.simulate_long_running_block(command, "");
+    }
+    model.set_mode(ansi::Mode::SwapScreen {
+        save_cursor_and_clear_screen: true,
+    });
+    if sgr_mouse {
+        model.set_mode(ansi::Mode::SgrMouse);
+    }
+    assert!(model.is_alt_screen_active());
+    model
+        .alt_screen_mut()
+        .grid_handler_mut()
+        .update_cursor(|cursor| {
+            cursor.point.row = VisibleRow(0);
+            cursor.point.col = 0;
+            cursor.input_needs_wrap = false;
+        });
+
+    if fill_grid {
+        // Write a bunch of characters into the alt screen.
+        // ABCDEFG
+        // HIJKLMN
+        // OPQRSTU
+        // VWXYZ[\
+        // ]^_`abc
+        // defghij
+        // klmnopq
+        // rstuvwx
+        // yz{|}~
+        // € ‚ƒ„…†
+        // ‡ˆ‰Š‹Œ
+        let mut ascii: u8 = 65;
+        for _ in 0..view.size_info.rows {
+            for _ in 0..view.size_info.columns {
+                model.alt_screen_mut().input(ascii as char);
+                ascii += 1;
+            }
+        }
+    }
+
+    if let Some(text) = text {
+        for ch in text.chars() {
+            model.alt_screen_mut().input(ch);
+        }
+    }
+
+    *view.size_info
+}
+
+fn enter_sgr_alt_screen_and_fill_grid(view: &mut TerminalView) -> SizeInfo {
+    enter_sgr_alt_screen_for_command(view, None, true, None)
+}
+
+fn enter_tmux_sgr_alt_screen_and_fill_grid(view: &mut TerminalView) -> SizeInfo {
+    enter_sgr_alt_screen_for_command(view, Some("tmux"), true, None)
+}
+
+fn enter_tmux_alt_screen_and_fill_grid(view: &mut TerminalView) -> SizeInfo {
+    enter_alt_screen_for_command(view, Some("tmux"), true, None, false)
+}
+
+fn enter_tmux_sgr_alt_screen_with_text(view: &mut TerminalView, text: &str) -> SizeInfo {
+    enter_sgr_alt_screen_for_command(view, Some("tmux"), false, Some(text))
+}
+
+fn alt_screen_selection_test_positions(size_info: SizeInfo) -> (Vector2F, Vector2F) {
+    // The start and end positions correspond to 'J'
+    // and 'a' in the grid, respectively.
+    //
+    // We adjust the vertical coordinates to account for padding
+    // in the alt-screen.
+    (
+        vec2f(
+            2. * size_info.cell_width_px.as_f32(),
+            2. * size_info.cell_height_px.as_f32() - 1.,
+        ),
+        vec2f(
+            5. * size_info.cell_width_px.as_f32(),
+            5. * size_info.cell_height_px.as_f32() - 1.,
+        ),
+    )
+}
+
+fn alt_screen_position_for_point(size_info: SizeInfo, point: Point) -> Vector2F {
+    vec2f(
+        point.col as f32 * size_info.cell_width_px.as_f32(),
+        (point.row as f32 + 1.) * size_info.cell_height_px.as_f32() - 1.,
+    )
+}
+
 #[test]
 fn test_alt_screen_select_with_sgr_mouse() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(false);
 
         let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
 
@@ -2014,39 +2137,14 @@ fn test_alt_screen_select_with_sgr_mouse() {
         let semantic_selection = SemanticSelection::mock(true, "");
 
         let size_info = terminal.update(&mut app, |view, ctx| {
+            let size_info = enter_sgr_alt_screen_and_fill_grid(view);
             {
-                // Enter alt screen and enable SGR Mouse
-                let mut model = view.model.lock();
-                model.set_mode(ansi::Mode::SwapScreen {
-                    save_cursor_and_clear_screen: true,
-                });
-                model.set_mode(ansi::Mode::SgrMouse);
+                let model = view.model.lock();
                 assert!(model.is_alt_screen_active());
                 assert!(!should_intercept_mouse(&model, false, ctx));
                 assert!(should_intercept_mouse(&model, true, ctx));
-
-                // Write a bunch of characters into the alt screen.
-                // ABCDEFG
-                // HIJKLMN
-                // OPQRSTU
-                // VWXYZ[\
-                // ]^_`abc
-                // defghij
-                // klmnopq
-                // rstuvwx
-                // yz{|}~
-                // € ‚ƒ„…†
-                // ‡ˆ‰Š‹Œ
-                let mut ascii: u8 = 65;
-                for _ in 0..view.size_info.rows {
-                    for _ in 0..view.size_info.columns {
-                        model.alt_screen_mut().input(ascii as char);
-                        ascii += 1;
-                    }
-                }
-
-                *view.size_info
             }
+            size_info
         });
 
         // We need to manually trigger re-renders to ensure the AltScreenElement is recreated, e.g.
@@ -2067,19 +2165,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
             }
         }
 
-        // The start and end positions corresponds to 'J'
-        // and 'a' in the grid, respectively.
-        //
-        // We adjust the vertical coordinates to account for padding
-        // in the alt-screen.
-        let start_position = vec2f(
-            2. * size_info.cell_width_px.as_f32(),
-            2. * size_info.cell_height_px.as_f32() - 1.,
-        );
-        let end_position = vec2f(
-            5. * size_info.cell_width_px.as_f32(),
-            5. * size_info.cell_height_px.as_f32() - 1.,
-        );
+        let (start_position, end_position) = alt_screen_selection_test_positions(size_info);
 
         // Simulate a mouse drag from the "J" to the "a" cell.
         rerender!(app, presenter, invalidation, size_info);
@@ -2181,6 +2267,1007 @@ fn test_alt_screen_select_with_sgr_mouse() {
                     .selection_to_string(&semantic_selection, false, ctx);
             assert_eq!(selected_text.as_ref().unwrap(), "JKLMNOPQRSTUVWXYZ[\\]^_`a");
         });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_select_with_sgr_mouse() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let semantic_selection = SemanticSelection::mock(true, "");
+
+        let size_info = terminal.update(&mut app, |view, ctx| {
+            let size_info = enter_tmux_sgr_alt_screen_and_fill_grid(view);
+            let model = view.model.lock();
+            assert!(!should_intercept_mouse(&model, false, ctx));
+            size_info
+        });
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        let start_position = alt_screen_position_for_point(size_info, Point::new(0, 0));
+        let end_position = alt_screen_position_for_point(size_info, Point::new(4, 5));
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: start_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDragged {
+                    position: end_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: end_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        terminal.read(&app, |view, ctx| {
+            let selected_text =
+                view.model
+                    .lock()
+                    .selection_to_string(&semantic_selection, false, ctx);
+            assert_eq!(
+                selected_text.as_ref().unwrap(),
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`a"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_shift_force_warp_with_sgr_mouse() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let semantic_selection = SemanticSelection::mock(true, "");
+
+        let size_info = terminal.update(&mut app, |view, ctx| {
+            let size_info = enter_tmux_sgr_alt_screen_and_fill_grid(view);
+            let model = view.model.lock();
+            assert!(!should_use_smart_mouse_handling(&model, true, ctx));
+            assert!(should_continue_smart_mouse_handling(&model, ctx));
+            assert!(should_intercept_mouse(&model, true, ctx));
+            size_info
+        });
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        let (shift_start_position, shift_end_position) =
+            alt_screen_selection_test_positions(size_info);
+        let smart_start_position = alt_screen_position_for_point(size_info, Point::new(0, 0));
+        let smart_end_position = alt_screen_position_for_point(size_info, Point::new(4, 5));
+        let shift = ModifiersState {
+            shift: true,
+            ..Default::default()
+        };
+
+        // Holding Shift from mouse-down remains the legacy force-Warp path even though smart mouse
+        // handling is enabled for tmux SGR mouse mode.
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: shift_start_position,
+                    modifiers: shift,
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDragged {
+                    position: shift_end_position,
+                    modifiers: shift,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: shift_end_position,
+                    modifiers: shift,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        terminal.read(&app, |view, ctx| {
+            let selected_text =
+                view.model
+                    .lock()
+                    .selection_to_string(&semantic_selection, false, ctx);
+            assert_eq!(selected_text.as_ref().unwrap(), "JKLMNOPQRSTUVWXYZ[\\]^_`a");
+        });
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Shift force-Warp drag should not write mouse bytes to tmux"
+        );
+        pty_writes.borrow_mut().clear();
+
+        // Start in smart mode, then press Shift before dragging. The in-flight smart gesture should
+        // stay on the stable TerminalView path and become a Warp selection, not a stale pending
+        // click or a tmux passthrough.
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: smart_start_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDragged {
+                    position: smart_end_position,
+                    modifiers: shift,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: smart_end_position,
+                    modifiers: shift,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        terminal.read(&app, |view, ctx| {
+            let selected_text =
+                view.model
+                    .lock()
+                    .selection_to_string(&semantic_selection, false, ctx);
+            assert_eq!(
+                selected_text.as_ref().unwrap(),
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`a"
+            );
+        });
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Shift force-Warp gesture should not write mouse bytes to tmux"
+        );
+
+        pty_writes.borrow_mut().clear();
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position: smart_start_position,
+                    cmd: false,
+                    shift: true,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Shift right-click should remain a Warp context menu"
+        );
+        terminal.read(&app, |view, _ctx| assert!(view.is_context_menu_open()));
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_requires_tmux_context() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let semantic_selection = SemanticSelection::mock(true, "");
+
+        let size_info = terminal.update(&mut app, |view, ctx| {
+            let size_info = enter_sgr_alt_screen_for_command(view, Some("vim"), true, None);
+            let model = view.model.lock();
+            assert!(!should_intercept_mouse(&model, false, ctx));
+            size_info
+        });
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        let (start_position, end_position) = alt_screen_selection_test_positions(size_info);
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: start_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDragged {
+                    position: end_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: end_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        terminal.read(&app, |view, ctx| {
+            let selected_text =
+                view.model
+                    .lock()
+                    .selection_to_string(&semantic_selection, false, ctx);
+            assert_eq!(selected_text, None);
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_allows_configured_tmux_launcher() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            AltScreenReporting::handle(ctx).update(ctx, |reporting, ctx| {
+                let _ = reporting
+                    .smart_mouse_tmux_launchers
+                    .set_value(vec!["tmux".to_string(), "omx".to_string()], ctx);
+            });
+            enter_sgr_alt_screen_for_command(view, Some("omx team"), true, None);
+            let model = view.model.lock();
+            assert!(should_use_smart_mouse_handling(&model, false, ctx));
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_allows_wrapper_options_before_tmux_launcher() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            enter_sgr_alt_screen_for_command(view, Some("env -u FOO sudo -E tmux"), true, None);
+            let model = view.model.lock();
+            assert!(should_use_smart_mouse_handling(&model, false, ctx));
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_does_not_hardcode_omx_launcher() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            enter_sgr_alt_screen_for_command(view, Some("omx team"), true, None);
+            let model = view.model.lock();
+            assert!(!should_use_smart_mouse_handling(&model, false, ctx));
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_click_passthrough_with_sgr_mouse() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.update(&mut app, |view, _ctx| {
+            enter_tmux_sgr_alt_screen_and_fill_grid(view)
+        });
+        let (start_position, _) = alt_screen_selection_test_positions(size_info);
+        let click_point = Point::new(1, 2);
+        let expected_writes = terminal.read(&app, |view, _ctx| {
+            let model = view.model.lock();
+            vec![
+                MouseState::new(MouseButton::Left, MouseAction::Pressed, Default::default())
+                    .set_point(click_point)
+                    .to_escape_sequence(&*model)
+                    .unwrap(),
+                MouseState::new(MouseButton::Left, MouseAction::Released, Default::default())
+                    .set_point(click_point)
+                    .to_escape_sequence(&*model)
+                    .unwrap(),
+            ]
+        });
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: start_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDragged {
+                    position: start_position + vec2f(1., 1.),
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: start_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert_eq!(*pty_writes.borrow(), expected_writes);
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_link_click_uses_warp_actions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.update(&mut app, |view, _ctx| {
+            enter_tmux_sgr_alt_screen_with_text(view, "https://example.com")
+        });
+        let link_position = alt_screen_position_for_point(size_info, Point::new(0, 0));
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: link_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseUp {
+                    position: link_position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "link click should be handled by Warp instead of replayed to tmux"
+        );
+        terminal.read(&app, |view, _ctx| {
+            assert!(view.open_grid_link_tool_tip.is_some());
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_right_click_routing_with_sgr_mouse() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.update(&mut app, |view, _ctx| {
+            enter_tmux_sgr_alt_screen_and_fill_grid(view)
+        });
+        let (start_position, _) = alt_screen_selection_test_positions(size_info);
+        let click_point = Point::new(1, 2);
+        let expected_passthrough = terminal.read(&app, |view, _ctx| {
+            let model = view.model.lock();
+            vec![
+                MouseState::new(MouseButton::Right, MouseAction::Pressed, Default::default())
+                    .set_point(click_point)
+                    .to_escape_sequence(&*model)
+                    .unwrap(),
+                MouseState::new(
+                    MouseButton::Right,
+                    MouseAction::Released,
+                    Default::default(),
+                )
+                .set_point(click_point)
+                .to_escape_sequence(&*model)
+                .unwrap(),
+            ]
+        });
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position: start_position,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        assert_eq!(*pty_writes.borrow(), expected_passthrough);
+
+        pty_writes.borrow_mut().clear();
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            view.highlighted_link.set(
+                GridHighlightedLink::Url(WithinModel::AltScreen(Link {
+                    range: Point::new(1, 2)..=Point::new(1, 4),
+                    is_empty: false,
+                })),
+                &mut model,
+            );
+        });
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position: start_position,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "link right-click should open Warp menu instead of writing to PTY"
+        );
+        terminal.read(&app, |view, _ctx| assert!(view.is_context_menu_open()));
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_right_click_uses_warp_menu_before_sgr_mouse_observed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.update(&mut app, |view, ctx| {
+            let size_info = enter_tmux_alt_screen_and_fill_grid(view);
+            let model = view.model.lock();
+            assert!(!should_use_smart_mouse_handling(&model, false, ctx));
+            assert!(!should_use_smart_right_mouse_handling(&model, false, ctx));
+            assert!(!should_use_smart_right_mouse_handling(&model, true, ctx));
+            size_info
+        });
+        let (start_position, _) = alt_screen_selection_test_positions(size_info);
+
+        macro_rules! rerender {
+            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        rerender!(app, presenter, invalidation, size_info);
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position: start_position,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "right-click before observed SGR mouse tracking should keep Warp's context menu"
+        );
+        terminal.read(&app, |view, _ctx| assert!(view.is_context_menu_open()));
+    })
+}
+
+#[test]
+fn test_alt_screen_smart_mouse_right_click_detects_url_without_hover() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smart_mouse = FeatureFlag::SmartAltScreenMouseHandling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.update(&mut app, |view, _ctx| {
+            enter_tmux_sgr_alt_screen_with_text(view, "https://example.com")
+        });
+        let link_position = alt_screen_position_for_point(size_info, Point::new(0, 0));
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(view.highlighted_link.as_ref().is_none());
+        });
+
+        app.update(enclose!((presenter, invalidation) move |ctx| {
+            presenter.borrow_mut().invalidate(invalidation, ctx);
+            presenter.borrow_mut().build_scene(
+                vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                1.,
+                None,
+                ctx,
+            );
+        }));
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position: link_position,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "right-click should discover the URL and open Warp's context menu"
+        );
+        terminal.read(&app, |view, _ctx| {
+            assert!(matches!(
+                view.highlighted_link.as_ref(),
+                Some(GridHighlightedLink::Url(_))
+            ));
+            assert!(view.is_context_menu_open());
+        });
+    })
+}
+
+#[test]
+fn test_alt_screen_context_menu_reuses_highlighted_link_actions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            view.highlighted_link.set(
+                GridHighlightedLink::Url(WithinModel::AltScreen(Link {
+                    range: Point::new(0, 0)..=Point::new(0, 4),
+                    is_empty: false,
+                })),
+                &mut model,
+            );
+            drop(model);
+
+            let items = view.rebuild_alt_screen_context_menu_items(true, ctx);
+            assert_eq!(items[0].fields().unwrap().label(), "Copy URL");
+        });
+    })
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_alt_screen_smart_mouse_direct_path_detection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let path = std::env::temp_dir().join(format!(
+            "warp-alt-screen-direct-path-{}-{}.md",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, "# test").expect("write path target");
+        let path_text = path.to_string_lossy().to_string();
+
+        terminal.update(&mut app, |view, ctx| {
+            let size_update = SizeUpdateBuilder::after_layout(*view.size_info, vec2f(4000., 10.5))
+                .build(view, ctx);
+            view.resize_internal(size_update, ctx);
+            let session_info = SessionInfo::new_for_test();
+            let session_id = session_info.session_id;
+            view.sessions_model().update(ctx, |sessions, _| {
+                sessions.register_session_for_test(session_info);
+            });
+            view.active_block_metadata =
+                Some(BlockMetadata::new(Some(session_id), Some("/".to_owned())));
+            enter_tmux_sgr_alt_screen_with_text(view, &path_text);
+            assert!(view.ensure_highlighted_link_at_position(
+                &WithinModel::AltScreen(Point::new(0, 0)),
+                ctx
+            ));
+            assert!(matches!(
+                view.highlighted_link.as_ref(),
+                Some(GridHighlightedLink::File(_))
+            ));
+        });
+
+        let _ = std::fs::remove_file(path);
+    })
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_alt_screen_smart_mouse_absolute_path_requires_known_local_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let path = std::env::temp_dir().join(format!(
+            "warp-alt-screen-unknown-locality-path-{}-{}.md",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, "# test").expect("write path target");
+        let path_text = path.to_string_lossy().to_string();
+
+        terminal.update(&mut app, |view, ctx| {
+            let size_update = SizeUpdateBuilder::after_layout(*view.size_info, vec2f(4000., 10.5))
+                .build(view, ctx);
+            view.resize_internal(size_update, ctx);
+            enter_tmux_sgr_alt_screen_with_text(view, &path_text);
+            assert!(!view.ensure_highlighted_link_at_position(
+                &WithinModel::AltScreen(Point::new(0, 0)),
+                ctx
+            ));
+            assert!(view.highlighted_link.as_ref().is_none());
+        });
+
+        let _ = std::fs::remove_file(path);
+    })
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_alt_screen_smart_mouse_relative_path_requires_known_pwd() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let size_update = SizeUpdateBuilder::after_layout(*view.size_info, vec2f(4000., 10.5))
+                .build(view, ctx);
+            view.resize_internal(size_update, ctx);
+            enter_tmux_sgr_alt_screen_with_text(view, "etc/hosts");
+            assert!(!view.ensure_highlighted_link_at_position(
+                &WithinModel::AltScreen(Point::new(0, 0)),
+                ctx
+            ));
+            assert!(view.highlighted_link.as_ref().is_none());
+        });
+    })
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_alt_screen_context_menu_reuses_highlighted_file_actions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let markdown_path = std::env::temp_dir().join(format!(
+            "warp-alt-screen-context-menu-{}.md",
+            std::process::id()
+        ));
+        std::fs::write(&markdown_path, "# test").expect("write markdown file");
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            view.highlighted_link.set(
+                GridHighlightedLink::File(WithinModel::AltScreen(FileLink {
+                    link: Link {
+                        range: Point::new(0, 0)..=Point::new(0, 4),
+                        is_empty: false,
+                    },
+                    absolute_path: markdown_path.clone(),
+                    line_and_column_num: None,
+                })),
+                &mut model,
+            );
+            drop(model);
+
+            let labels = view
+                .rebuild_alt_screen_context_menu_items(true, ctx)
+                .into_iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label().to_owned()))
+                .collect::<Vec<_>>();
+            assert!(labels.contains(&"Copy path".to_owned()));
+            assert!(labels.contains(&"Open in Warp".to_owned()));
+            assert!(labels.contains(&"Open in editor".to_owned()));
+        });
+
+        let _ = std::fs::remove_file(markdown_path);
     })
 }
 

@@ -35,7 +35,7 @@ use crate::{
         },
         block_list_viewport::OverhangingBlock,
         model::{
-            index::Point,
+            index::{Point, Side},
             mouse::MouseState,
             selection::{SelectAction, SelectionDirection},
             terminal_model::{BlockIndex, WithinModel},
@@ -53,6 +53,7 @@ use super::{
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, RichContentLink,
     SSHBannerAction, TerminalEditor,
 };
+use warpui::text::SelectionType;
 
 pub use onboarding::OnboardingIntention;
 
@@ -160,6 +161,30 @@ pub enum TerminalAction {
     AltSelect(SelectAction<Point>),
     MaybeClearAltSelect,
     AltMouseAction(MouseState),
+    SmartAltScreenMouseLeftDown {
+        point: Point,
+        position: Vector2F,
+        side: Side,
+        selection_type: SelectionType,
+        mouse_state: MouseState,
+    },
+    SmartAltScreenMouseLeftDrag {
+        point: Point,
+        position: Vector2F,
+        side: Side,
+        mouse_state: MouseState,
+    },
+    SmartAltScreenMouseLeftUp {
+        point: Point,
+        position: Vector2F,
+        mouse_state: MouseState,
+    },
+    SmartAltScreenMouseRightDown {
+        point: Point,
+        position: Vector2F,
+        mouse_state: MouseState,
+    },
+    ClearSmartAltScreenMouseGesture,
     InsertCommandCorrection {
         correction: Correction,
     },
@@ -523,6 +548,42 @@ impl fmt::Debug for TerminalAction {
             AltSelect(action) => write!(f, "AltSelect({action:?})"),
             MaybeClearAltSelect => f.write_str("MaybeClearAltSelect"),
             AltMouseAction(action) => write!(f, "AltMouseAction({action:?})"),
+            SmartAltScreenMouseLeftDown {
+                point,
+                position,
+                side,
+                selection_type,
+                mouse_state,
+            } => write!(
+                f,
+                "SmartAltScreenMouseLeftDown {{ point: {point:?}, position: {position:?}, side: {side:?}, selection_type: {selection_type:?}, mouse_state: {mouse_state:?} }}"
+            ),
+            SmartAltScreenMouseLeftDrag {
+                point,
+                position,
+                side,
+                mouse_state,
+            } => write!(
+                f,
+                "SmartAltScreenMouseLeftDrag {{ point: {point:?}, position: {position:?}, side: {side:?}, mouse_state: {mouse_state:?} }}"
+            ),
+            SmartAltScreenMouseLeftUp {
+                point,
+                position,
+                mouse_state,
+            } => write!(
+                f,
+                "SmartAltScreenMouseLeftUp {{ point: {point:?}, position: {position:?}, mouse_state: {mouse_state:?} }}"
+            ),
+            SmartAltScreenMouseRightDown {
+                point,
+                position,
+                mouse_state,
+            } => write!(
+                f,
+                "SmartAltScreenMouseRightDown {{ point: {point:?}, position: {position:?}, mouse_state: {mouse_state:?} }}"
+            ),
+            ClearSmartAltScreenMouseGesture => f.write_str("ClearSmartAltScreenMouseGesture"),
             AltScreenContextMenu { position } => {
                 write!(f, "AltScreenContextMenu {{ position: {position:?} }}")
             }

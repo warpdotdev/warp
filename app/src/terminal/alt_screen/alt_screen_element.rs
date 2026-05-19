@@ -35,7 +35,10 @@ use warpui::event::{KeyState, ModifiersState};
 use warpui::platform::keyboard::KeyCode;
 use warpui::text::SelectionType;
 
-use super::{should_intercept_mouse, should_intercept_scroll};
+use super::{
+    should_continue_smart_mouse_handling, should_intercept_mouse, should_intercept_scroll,
+    should_use_smart_mouse_handling, should_use_smart_right_mouse_handling,
+};
 use std::ops::{Deref as _, Range};
 use std::sync::Arc;
 use warpui::elements::{Axis, Point as UiPoint, ScrollData, ScrollableElement};
@@ -254,6 +257,7 @@ impl AltScreenElement {
         app: &AppContext,
     ) -> bool {
         if !self.pane_state.is_focused() {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
             return false;
         }
 
@@ -274,6 +278,18 @@ impl AltScreenElement {
         } else {
             SelectionType::from_click_count(click_count)
         };
+
+        if should_use_smart_mouse_handling(&self.model.lock(), mouse_state.modifiers().shift, app) {
+            ctx.dispatch_typed_action(TerminalAction::MaybeClearAltSelect);
+            ctx.dispatch_typed_action(TerminalAction::SmartAltScreenMouseLeftDown {
+                point,
+                position: local_position,
+                side,
+                selection_type,
+                mouse_state,
+            });
+            return true;
+        }
 
         if should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
             ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::Begin {
@@ -297,10 +313,24 @@ impl AltScreenElement {
         app: &AppContext,
     ) -> bool {
         if self.active_session_state != ActiveSessionState::Active {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
             return false;
         }
 
         let point = self.coord_to_point(local_position);
+
+        if should_use_smart_right_mouse_handling(
+            &self.model.lock(),
+            mouse_state.modifiers().shift,
+            app,
+        ) {
+            ctx.dispatch_typed_action(TerminalAction::SmartAltScreenMouseRightDown {
+                point,
+                position: local_position,
+                mouse_state,
+            });
+            return true;
+        }
 
         if should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
             ctx.dispatch_typed_action(TerminalAction::AltScreenContextMenu {
@@ -320,15 +350,24 @@ impl AltScreenElement {
         ctx: &mut EventContext,
     ) -> bool {
         if self.active_session_state != ActiveSessionState::Active {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
             return false;
         }
 
         let point = self.coord_to_point(local_position);
 
-        // If SGR_MOUSE is set -- we consider user to be in an editor like vim or nano.
-        let from_editor = match self.model.lock().is_term_mode_set(TermMode::SGR_MOUSE) {
-            true => TerminalEditor::Yes,
-            false => TerminalEditor::No,
+        // If SGR_MOUSE is set -- we usually consider user to be in an editor like vim or nano.
+        // Smart mouse handling is the narrow exception where file/path actions are useful in
+        // tmux alt-screen output and non-link mouse clicks still pass through to the PTY.
+        let from_editor = {
+            let model = self.model.lock();
+            if should_use_smart_mouse_handling(&model, false, app) {
+                TerminalEditor::SmartAltScreenMouse
+            } else if model.is_term_mode_set(TermMode::SGR_MOUSE) {
+                TerminalEditor::Yes
+            } else {
+                TerminalEditor::No
+            }
         };
 
         let grid_point = WithinModel::AltScreen(Point {
@@ -372,6 +411,7 @@ impl AltScreenElement {
             position: None,
             from_editor: TerminalEditor::No,
         });
+        ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
         true
     }
 
@@ -383,10 +423,24 @@ impl AltScreenElement {
         app: &AppContext,
     ) -> bool {
         if self.active_session_state != ActiveSessionState::Active {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
             return false;
         }
 
         let point = self.coord_to_point(local_position);
+
+        if should_continue_smart_mouse_handling(&self.model.lock(), app) {
+            ctx.dispatch_typed_action(TerminalAction::SmartAltScreenMouseLeftUp {
+                point,
+                position: local_position,
+                mouse_state,
+            });
+            return true;
+        }
+
+        if FeatureFlag::SmartAltScreenMouseHandling.is_enabled() {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
+        }
 
         ctx.dispatch_typed_action(TerminalAction::ClickOnGrid {
             position: WithinModel::AltScreen(Point {
@@ -415,11 +469,30 @@ impl AltScreenElement {
         app: &AppContext,
     ) -> bool {
         if self.active_session_state != ActiveSessionState::Active {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
             return false;
         }
 
         let mut is_mouse_dragged = false;
         let point = self.coord_to_point(local_position);
+
+        if should_continue_smart_mouse_handling(&self.model.lock(), app) {
+            let side = self
+                .grid_render_params
+                .size_info
+                .get_mouse_side(local_position);
+            ctx.dispatch_typed_action(TerminalAction::SmartAltScreenMouseLeftDrag {
+                point,
+                position: local_position,
+                side,
+                mouse_state,
+            });
+            return true;
+        }
+
+        if FeatureFlag::SmartAltScreenMouseHandling.is_enabled() {
+            ctx.dispatch_typed_action(TerminalAction::ClearSmartAltScreenMouseGesture);
+        }
 
         if self.is_terminal_selecting && self.bounds.is_some() {
             let side = self

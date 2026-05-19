@@ -780,6 +780,7 @@ settings_file = []
 sequential_storage = []
 session_sharing = []
 session_sharing_acls = []
+smart_alt_screen_mouse_handling = []
 skip_login = []
 # This feature should only be enabled when building a self-contained binary with the bundle script.
 standalone = []
