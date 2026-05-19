@@ -455,21 +455,26 @@ pub fn convert_wsl_to_windows_host_path(
     }
     let components = unix_path.components();
     let prefix = components.take(3).collect::<Vec<_>>();
-    let windows_path = match prefix.as_slice() {
+    let mut windows_path = TypedPathBuf::new(PathType::Windows);
+    match prefix.as_slice() {
         // Check if the prefix is "/mnt/c/" or similar, which is how WSL refers to Windows drive
         // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
         [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(b"mnt")), TypedComponent::Unix(UnixComponent::Normal(bytes))]
             if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
         {
-            let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(3) {
                 windows_path.push(component.as_bytes());
             }
-            windows_path
+            let pathbuf = PathBuf::try_from(windows_path)
+                .map_err(WSLPathConversionError::CouldNotConvertToPath)?;
+            // Many directories are symlinks into the underlying file-system location in Windows.
+            match std::fs::read_link(&pathbuf) {
+                Ok(linked_file) => Ok(linked_file),
+                Err(_) => Ok(pathbuf),
+            }
         }
         _ => {
-            let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push(format!(r"\\WSL$\{distro_name}"));
             for component in unix_path
                 .with_windows_encoding()
@@ -478,15 +483,8 @@ pub fn convert_wsl_to_windows_host_path(
             {
                 windows_path.push(component.as_bytes());
             }
-            windows_path
+            PathBuf::try_from(windows_path).map_err(WSLPathConversionError::CouldNotConvertToPath)
         }
-    };
-    let pathbuf =
-        PathBuf::try_from(windows_path).map_err(WSLPathConversionError::CouldNotConvertToPath)?;
-    // Many directories are symlinks into the underlying file-system location in Windows.
-    match std::fs::read_link(&pathbuf) {
-        Ok(linked_file) => Ok(linked_file),
-        Err(_) => Ok(pathbuf),
     }
 }
 
