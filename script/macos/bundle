@@ -296,6 +296,11 @@ elif [[ $RELEASE_CHANNEL = "preview" ]]; then
     BUNDLE_ID="dev.warp.Warp-Preview"
     WARP_APP_NAME="WarpPreview"
     WARP_SCHEME_NAME="warppreview"
+    # Also register the canonical `warp://` scheme as an Alternate handler so
+    # a Preview-only install can open public app.warp.dev deeplinks. When
+    # Stable is also installed it keeps its primary claim on `warp://` (see
+    # update_plist for the LSHandlerRank=Alternate registration). #10473
+    WARP_ADDITIONAL_SCHEMES="warp"
     FEATURES="$FEATURES,preview_channel"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
@@ -408,6 +413,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
 
   export WARP_SCHEME_NAME
+  export WARP_ADDITIONAL_SCHEMES
   export WARP_PLIST_PATH="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
   ./script/update_plist
 

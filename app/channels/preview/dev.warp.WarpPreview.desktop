@@ -19,5 +19,9 @@ Categories=System;TerminalEmulator;
 # Don't run this application within a terminal.
 Terminal=false
 
-# Register ourselves as the handler for warppreview:// URLs.
-MimeType=x-scheme-handler/warppreview;
+# Register ourselves as a handler for both the channel-specific warppreview://
+# scheme and the canonical warp:// scheme used by public app.warp.dev deeplinks
+# (shared sessions, conversations, etc.). Registering the canonical scheme lets
+# a Preview-only install handle web deeplinks; when both Stable and Preview are
+# installed, the user's xdg-mime default decides which one wins.
+MimeType=x-scheme-handler/warppreview;x-scheme-handler/warp;

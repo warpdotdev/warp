@@ -388,6 +388,24 @@ impl ChannelState {
             Channel::Oss => "warposs",
         }
     }
+
+    /// URL schemes the current channel will accept on incoming custom URIs.
+    ///
+    /// All channels accept their own channel-specific scheme (matching
+    /// [`Self::url_scheme`]). Preview additionally accepts the canonical
+    /// `warp://` scheme so a Preview-only install can handle public
+    /// app.warp.dev deeplinks (shared sessions, conversations) when Stable
+    /// is not installed — see #10473.
+    pub fn accepted_url_schemes() -> &'static [&'static str] {
+        match Self::channel() {
+            Channel::Preview => &["warppreview", "warp"],
+            Channel::Stable => &["warp"],
+            Channel::Dev => &["warpdev"],
+            Channel::Integration => &["warpintegration"],
+            Channel::Local => &["warplocal"],
+            Channel::Oss => &["warposs"],
+        }
+    }
 }
 
 /// Derives an HTTP(S) origin URL from a WebSocket URL by rewriting the scheme

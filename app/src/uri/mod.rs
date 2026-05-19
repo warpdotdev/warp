@@ -1453,9 +1453,11 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
 
 /// Validates an incoming custom URI for security and returns the host.
 fn validate_custom_uri(url: &Url) -> Result<UriHost> {
-    // For now the only scheme we support is `[scheme_name]://[host_str]/...
-    // Ignore all other urls that don't match this scheme for security purposes.
-    if url.scheme() != ChannelState::url_scheme() {
+    // Accept the channel-specific scheme plus, for non-Stable channels that
+    // opt in via `ChannelState::accepted_url_schemes`, the canonical `warp://`
+    // scheme used by public app.warp.dev deeplinks. Anything else is rejected
+    // for security purposes.
+    if !ChannelState::accepted_url_schemes().contains(&url.scheme()) {
         return Err(anyhow!(
             "Received url with unexpected scheme: {} ",
             url.scheme()
