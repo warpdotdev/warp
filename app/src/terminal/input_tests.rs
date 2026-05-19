@@ -5460,7 +5460,7 @@ fn test_input_type_button_explicit_lock() {
         );
         let after_click_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_decision_source()
+                ai_input.nld_decision_source()
             })
         });
         assert_eq!(after_click_source, Some(InputDecisionSource::ManualToggle));
@@ -5486,7 +5486,7 @@ fn test_input_type_button_explicit_lock() {
         );
         let final_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_decision_source()
+                ai_input.nld_decision_source()
             })
         });
         assert_eq!(final_source, Some(InputDecisionSource::ManualToggle));
@@ -6162,7 +6162,7 @@ fn test_terminal_prefix_sets_shell_prefix_decision_source() {
                 assert_eq!(input_model.input_type(), InputType::Shell);
                 assert!(input_model.is_input_type_locked());
                 assert_eq!(
-                    input_model.input_decision_source(),
+                    input_model.nld_decision_source(),
                     Some(InputDecisionSource::ShellPrefix)
                 );
             });
@@ -6195,7 +6195,7 @@ fn test_source_less_locked_config_clears_decision_source() {
 
         input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |input_model, _| {
-                assert_eq!(input_model.input_decision_source(), None);
+                assert_eq!(input_model.nld_decision_source(), None);
             });
         });
     });
@@ -6247,7 +6247,7 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let locked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_decision_source()
+                ai_input.nld_decision_source()
             })
         });
         assert_eq!(locked_source, Some(InputDecisionSource::AttachmentForcedAi));
@@ -6287,7 +6287,7 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let unlocked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_decision_source()
+                ai_input.nld_decision_source()
             })
         });
         assert_eq!(

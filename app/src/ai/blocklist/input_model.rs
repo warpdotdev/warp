@@ -141,7 +141,7 @@ pub struct BlocklistAIInputModel {
     /// it was autodetected. Else, `None`.
     last_ai_autodetection_ts: Option<Instant>,
     /// The source of the final input decision that is currently reflected in `input_config`.
-    input_decision_source: Option<InputDecisionSource>,
+    nld_decision_source: Option<InputDecisionSource>,
 
     /// Timestamp of the last time the input type was explicitly set.
     last_explicit_input_type_set_at: Option<Instant>,
@@ -347,7 +347,7 @@ impl BlocklistAIInputModel {
         } else {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         };
-        let initial_input_decision_source =
+        let initial_nld_decision_source =
             (!is_autodetection_enabled).then_some(InputDecisionSource::SettingDisabled);
         Self {
             input_config: InputConfig {
@@ -358,7 +358,7 @@ impl BlocklistAIInputModel {
             ai_context_model,
             terminal_view_id,
             last_ai_autodetection_ts: None,
-            input_decision_source: initial_input_decision_source,
+            nld_decision_source: initial_nld_decision_source,
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
             autodetect_abort_handle: None,
@@ -389,8 +389,8 @@ impl BlocklistAIInputModel {
     pub fn input_config(&self) -> InputConfig {
         self.input_config
     }
-    pub fn input_decision_source(&self) -> Option<InputDecisionSource> {
-        self.input_decision_source
+    pub fn nld_decision_source(&self) -> Option<InputDecisionSource> {
+        self.nld_decision_source
     }
 
     pub fn last_ai_autodetection_ts(&self) -> Option<Instant> {
@@ -452,7 +452,7 @@ impl BlocklistAIInputModel {
         }
 
         if self.input_config == new_config {
-            self.input_decision_source = decision_source;
+            self.nld_decision_source = decision_source;
             return false;
         }
 
@@ -474,7 +474,7 @@ impl BlocklistAIInputModel {
         }
 
         self.input_config = new_config;
-        self.input_decision_source = decision_source;
+        self.nld_decision_source = decision_source;
 
         // Emit specific events for what actually changed
         if old_config.input_type != new_config.input_type {

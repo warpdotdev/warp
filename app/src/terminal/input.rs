@@ -476,10 +476,10 @@ fn get_agent_mode_new_conversation_hint_text() -> &'static str {
     let index = HINT_INDEX.fetch_add(1, Ordering::Relaxed) % AGENT_MODE_HINT_OPTIONS.len();
     AGENT_MODE_HINT_OPTIONS[index]
 }
-fn submitted_input_decision_source(
+fn submitted_nld_decision_source(
     input_model: &BlocklistAIInputModel,
 ) -> Option<InputDecisionSource> {
-    let decision_source = input_model.input_decision_source();
+    let decision_source = input_model.nld_decision_source();
     if !input_model.is_input_type_locked() {
         return decision_source;
     }
@@ -12718,19 +12718,13 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let input = should_collect_ai_ugc_telemetry(
-                ctx,
-                PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-            )
-            .then_some(command.clone());
-            let decision_source = submitted_input_decision_source(input_model);
+            let nld_decision_source = submitted_nld_decision_source(input_model);
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
-                    input,
                     input_type,
                     is_locked,
-                    decision_source,
+                    nld_decision_source,
                     was_lock_set_with_empty_buffer,
                 },
                 ctx
@@ -12843,19 +12837,13 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let input = should_collect_ai_ugc_telemetry(
-                ctx,
-                PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-            )
-            .then_some(command.clone());
-            let decision_source = submitted_input_decision_source(input_model);
+            let nld_decision_source = submitted_nld_decision_source(input_model);
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
-                    input,
                     input_type,
                     is_locked,
-                    decision_source,
+                    nld_decision_source,
                     was_lock_set_with_empty_buffer,
                 },
                 ctx
