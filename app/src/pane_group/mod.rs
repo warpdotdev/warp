@@ -6160,6 +6160,7 @@ impl PaneGroup {
     pub fn reset_pane_sizes(&mut self, border_id: EntityId, ctx: &mut ViewContext<Self>) {
         self.dragged_border = None;
         if self.panes.reset_pane_sizes(border_id) {
+            self.clear_hidden_closed_panes(ctx);
             ctx.notify();
             ctx.emit(Event::AppStateChanged);
         }
