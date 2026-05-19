@@ -3201,8 +3201,6 @@ impl AIBlock {
             );
 
             code_diff_view.update(ctx, |diff_view, ctx| {
-                diff_view.set_candidate_diffs(file_diffs, ctx);
-
                 // For restored conversations that include a passive code diff, we assume the diff
                 // is no longer live, so we display it as embedded instead of inline.
                 if self.model.request_type(ctx).is_passive_code_diff() {
@@ -3237,6 +3235,18 @@ impl AIBlock {
                         }
                     }
                 };
+
+                // Use deferred loading for restored diffs that are in a terminal
+                // state. This avoids allocating full CodeEditorView + InlineDiffView
+                // + text buffers for every file in every restored exchange, which is
+                // the dominant source of memory pressure during conversation
+                // restoration on startup.
+                if state.is_complete() {
+                    diff_view.set_candidate_diffs_deferred(file_diffs, ctx);
+                } else {
+                    diff_view.set_candidate_diffs(file_diffs, ctx);
+                }
+
                 diff_view.set_state(state, ctx);
             });
         }
