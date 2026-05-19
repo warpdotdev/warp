@@ -439,6 +439,23 @@ impl BlockGrid {
         )
     }
 
+    /// Converts the grid into GitHub-flavored markdown, with OSC 8 hyperlink
+    /// spans rendered as `[visible](URI)` (subject to the OSC 8 scheme
+    /// allow-list — disallowed-scheme spans render as plain visible text).
+    /// Visible text is markdown-escaped and the URI is URL-encoded so the
+    /// link can't break out of its anchor.
+    /// See `specs/GH6393/product.md` invariant 13.
+    pub fn contents_to_markdown_string(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        self.grid_handler.bounds_to_markdown_string(
+            self.start_point(),
+            self.end_point(),
+            RespectObfuscatedSecrets::Yes,
+        )
+    }
+
     /// Returns a string containing a summary of the block's contents.
     ///
     /// The summary is guaranteed to contain the first `start_rows` rows and
@@ -721,6 +738,12 @@ impl ansi::Handler for BlockGrid {
 
     fn input(&mut self, c: char) {
         self.ansi_handler().input(c);
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        // Delegate to the inner `GridHandler` — that's where the active id
+        // is stored and where `input(c)` reads it. See `specs/GH6393/tech.md` §3c.
+        self.ansi_handler().set_hyperlink(hyperlink);
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {

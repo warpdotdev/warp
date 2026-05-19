@@ -10,6 +10,7 @@ use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
+use warp_terminal::model::grid::HyperlinkId;
 
 use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
@@ -19,7 +20,10 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use std::cmp::Ordering;
 use std::ops::Range;
-use std::{collections::HashMap, ops::RangeInclusive};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::RangeInclusive,
+};
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -521,6 +525,11 @@ fn render_grid_without_ligatures<'a>(
         .flat_map(|match_vec| match_vec.iter().rev());
     let mut current_filter_match = None;
 
+    // Tracks OSC 8 hyperlink ids whose first visible cell has already been
+    // position-cached this render, so integration tests can click on a
+    // stable per-id position without us caching the same id repeatedly.
+    let mut seen_hyperlink_ids: HashSet<HyperlinkId> = HashSet::new();
+
     let visible_url = highlighted_url
         .as_ref()
         .filter(|url| is_url_visible(url, start_row, end_row));
@@ -798,6 +807,13 @@ fn render_grid_without_ligatures<'a>(
                 && grid.cursor_point() == Point::new(offset_row, col)
                 && visible_cursor_shape == Some(CursorShape::Block))
             .then(|| theme.cursor().into_solid());
+            cache_osc8_hyperlink_position(
+                cell.hyperlink_id(),
+                &mut seen_hyperlink_ids,
+                grid_origin + cell_size * vec2f(col as f32, offset_row as f32),
+                cell_size,
+                ctx,
+            );
             cached_background_color = render_cell(
                 grid,
                 offset_row,
@@ -1019,6 +1035,11 @@ fn render_grid_with_ligatures<'a>(
         .iter()
         .flat_map(|match_vec| match_vec.iter().rev());
     let mut current_filter_match = None;
+
+    // Tracks OSC 8 hyperlink ids whose first visible cell has already been
+    // position-cached this render, so integration tests can click on a
+    // stable per-id position without us caching the same id repeatedly.
+    let mut seen_hyperlink_ids: HashSet<HyperlinkId> = HashSet::new();
 
     let visible_url = highlighted_url
         .as_ref()
@@ -1369,6 +1390,13 @@ fn render_grid_with_ligatures<'a>(
                     RectF::new(cell_origin, cell_size),
                 );
             }
+            cache_osc8_hyperlink_position(
+                cell.hyperlink_id(),
+                &mut seen_hyperlink_ids,
+                grid_origin + glyph_offset,
+                cell_size,
+                ctx,
+            );
             cell_decorations.extend(calculate_cell_decorations(
                 cell,
                 &cell_type,
@@ -2005,6 +2033,28 @@ fn handle_secret_redaction<'a>(
     } else {
         None
     }
+}
+
+/// Cache the position of the first visible cell of each OSC 8 hyperlink
+/// span under a stable id (`terminal_view:first_cell_in_osc8_hyperlink_<n>`).
+/// Integration tests use the cached position to dispatch synthetic clicks
+/// at the cell. No-op when the cell has no hyperlink id, or when this
+/// hyperlink has already been cached this render.
+fn cache_osc8_hyperlink_position(
+    hyperlink_id: Option<HyperlinkId>,
+    seen: &mut HashSet<HyperlinkId>,
+    cell_origin: Vector2F,
+    cell_size: Vector2F,
+    ctx: &mut PaintContext,
+) {
+    let Some(id) = hyperlink_id else { return };
+    if !seen.insert(id) {
+        return;
+    }
+    ctx.position_cache.cache_position_indefinitely(
+        format!("terminal_view:first_cell_in_osc8_hyperlink_{}", id.get()),
+        RectF::new(cell_origin, cell_size),
+    );
 }
 
 /// Renders a native glyph.

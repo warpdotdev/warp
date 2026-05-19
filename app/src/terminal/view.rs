@@ -26,6 +26,7 @@ use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuer
 use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 pub(crate) mod docker_sandbox;
 mod link_detection;
+pub(crate) mod link_security;
 mod open_in_warp;
 mod pane_impl;
 mod passive_suggestions;
@@ -1378,6 +1379,10 @@ pub enum ContextMenuAction {
         url_content: String,
     },
     CopyBlocks,
+    /// Copy command + output as GitHub-flavored markdown, with OSC 8
+    /// hyperlink spans reified as `[visible](URI)`. Disallowed-scheme
+    /// spans render as plain text. See `specs/GH6393/product.md` invariant 13.
+    CopyBlocksAsMarkdown,
     CopyBlockCommands,
     CopyBlockOutputs,
     CopyBlockFilteredOutputs,
@@ -1511,6 +1516,7 @@ impl fmt::Debug for ContextMenuAction {
             InsertSelectedText => f.write_str("InsertSelectedText"),
             CopySelectedText => f.write_str("CopySelectedText"),
             CopyBlocks => f.write_str("CopyBlocks"),
+            CopyBlocksAsMarkdown => f.write_str("CopyBlocksAsMarkdown"),
             CopyBlockCommands => f.write_str("CopyBlockCommands"),
             CopyBlockOutputs => f.write_str("CopyBlockOutputs"),
             OpenShareBlockModal { block_index } => {
@@ -2196,6 +2202,10 @@ pub enum BlockEntity {
     Output,
     FilteredOutput,
     CommandAndOutput,
+    /// Command + output rendered as GitHub-flavored markdown, with OSC 8
+    /// hyperlinks reified as `[visible](URI)`. See `specs/GH6393/product.md`
+    /// invariant 13.
+    CommandAndOutputAsMarkdown,
 }
 
 impl BlockEntity {
@@ -2205,6 +2215,7 @@ impl BlockEntity {
             BlockEntity::Output => "Output",
             BlockEntity::CommandAndOutput => "Both",
             BlockEntity::FilteredOutput => "FilteredOutput",
+            BlockEntity::CommandAndOutputAsMarkdown => "BothAsMarkdown",
         }
     }
 }
@@ -15964,6 +15975,28 @@ impl TerminalView {
                         })
                         .unwrap_or_default()
                     }
+                    GridHighlightedLink::Hyperlink { uri, .. } => {
+                        // OSC 8 hyperlink right-click. "Copy link" copies the
+                        // URI verbatim regardless of scheme — copying isn't
+                        // navigating, so the allow-list does not gate it
+                        // (product invariant 13). "Open link" dispatches
+                        // through `OpenGridLink`, which routes through
+                        // `link_security` for scheme validation.
+                        vec![
+                            MenuItemFields::new("Open link")
+                                .with_on_select_action(TerminalAction::OpenGridLink(
+                                    highlighted_link.clone(),
+                                ))
+                                .into_item(),
+                            MenuItemFields::new("Copy link")
+                                .with_on_select_action(TerminalAction::ContextMenu(
+                                    ContextMenuAction::CopyUrl {
+                                        url_content: uri.clone(),
+                                    },
+                                ))
+                                .into_item(),
+                        ]
+                    }
                 }
             }
             (
@@ -16098,6 +16131,16 @@ impl TerminalView {
                             ctx,
                         ))
                         .with_disabled(is_copy_commands_disabled)
+                        .into_item(),
+                    // "Copy as markdown" sits after the Copy/Copy commands items
+                    // (rather than between them) so existing integration tests
+                    // that arrow-down to "Copy commands" still land on the
+                    // right item. See `specs/GH6393/product.md` invariant 13.
+                    MenuItemFields::new("Copy as markdown")
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::CopyBlocksAsMarkdown,
+                        ))
+                        .with_disabled(is_copy_both_disabled)
                         .into_item(),
                     MenuItemFields::new(share_block_label)
                         .with_on_select_action(TerminalAction::ContextMenu(
@@ -17729,9 +17772,33 @@ impl TerminalView {
                 }
             }
             GridHighlightedLink::Url(url) if url.contains(position) => {
-                let model = self.model.lock();
+                let uri = self
+                    .model
+                    .lock()
+                    .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.notify();
-                ctx.open_url(&model.link_at_range(url, RespectObfuscatedSecrets::No));
+                // Route through the centralized scheme allow-list (Layer 5a).
+                if matches!(
+                    crate::terminal::view::link_security::check_open_scheme(
+                        &uri,
+                        crate::terminal::view::link_security::LinkSource::AutoDetected,
+                    ),
+                    crate::terminal::view::link_security::SchemeCheck::Allowed
+                ) {
+                    ctx.open_url(&uri);
+                }
+            }
+            GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
+                ctx.notify();
+                if matches!(
+                    crate::terminal::view::link_security::check_open_scheme(
+                        uri,
+                        crate::terminal::view::link_security::LinkSource::OscHyperlink,
+                    ),
+                    crate::terminal::view::link_security::SchemeCheck::Allowed
+                ) {
+                    ctx.open_url(uri);
+                }
             }
             _ => (),
         }
@@ -20149,6 +20216,10 @@ impl TerminalView {
         self.copy_blocks(BlockEntity::CommandAndOutput, ctx);
     }
 
+    fn context_menu_copy_blocks_as_markdown(&mut self, ctx: &mut ViewContext<Self>) {
+        self.copy_blocks(BlockEntity::CommandAndOutputAsMarkdown, ctx);
+    }
+
     fn context_menu_copy_block_commands(&mut self, ctx: &mut ViewContext<Self>) {
         self.copy_blocks(BlockEntity::Command, ctx);
     }
@@ -20259,6 +20330,11 @@ impl TerminalView {
                         block.output_to_string(),
                     ),
                     BlockEntity::FilteredOutput => block.output_to_string(),
+                    BlockEntity::CommandAndOutputAsMarkdown => format!(
+                        "```\n{}\n```\n\n{}",
+                        block.command_to_string().trim_end(),
+                        block.output_to_markdown_string(),
+                    ),
                 };
 
                 if !block_str.trim().is_empty() {
@@ -23592,6 +23668,7 @@ impl TerminalView {
             CopySelectedText => self.context_menu_copy_selected_text(ctx),
             CopyUrl { url_content } => self.context_menu_copy_url(url_content, ctx),
             CopyBlocks => self.context_menu_copy_blocks(ctx),
+            CopyBlocksAsMarkdown => self.context_menu_copy_blocks_as_markdown(ctx),
             CopyBlockCommands => self.context_menu_copy_block_commands(ctx),
             CopyBlockOutputs => self.context_menu_copy_block_outputs(ctx),
             OpenShareBlockModal { block_index } => {

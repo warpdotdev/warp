@@ -341,6 +341,15 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_secret_case_sensitivity);
     register_test!(test_secrets_are_always_redacted_in_ai_inputs);
 
+    // OSC 8 hyperlink tests (GH6393)
+    register_test!(test_osc8_open_close_renders_visible_text);
+    register_test!(test_osc8_cmd_click_opens_url);
+    register_test!(test_osc8_plain_click_does_not_open_url);
+    register_test!(test_osc8_disallowed_scheme_inert);
+    register_test!(test_osc8_copy_block_yields_visible_text_only);
+    register_test!(test_osc8_block_output_as_markdown);
+    register_test!(test_osc8_no_regression_on_url_autodetect);
+
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_active_session_follows_focus);

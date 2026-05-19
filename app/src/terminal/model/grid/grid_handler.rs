@@ -361,6 +361,20 @@ pub struct GridHandler {
 
     ansi_handler_state: ansi_handler::State,
 
+    /// Per-grid OSC 8 hyperlink registry. Owns the URI strings; cells store
+    /// `HyperlinkId` handles into this registry. No reclamation: entries
+    /// are appended on intern and live until this `GridHandler` is dropped.
+    /// See `specs/GH6393/tech.md` §3e.
+    hyperlink_registry: warp_terminal::model::grid::HyperlinkRegistry,
+
+    /// Active OSC 8 hyperlink, set by `set_hyperlink` and consumed by
+    /// `write_at_cursor` when stamping new cells. `None` means subsequent
+    /// `input(c)` writes plain (non-clickable) cells. Single-owner per
+    /// `specs/GH6393/tech.md` §3c — `BlockGrid` and `Block` delegate
+    /// `set_hyperlink` to this `GridHandler` rather than carrying their
+    /// own copies.
+    active_hyperlink_id: Option<warp_terminal::model::grid::HyperlinkId>,
+
     /// Info about the subset of rows we want to show to the user. If None, we
     /// show the entire blockgrid to the user.
     displayed_output: Option<DisplayedOutput>,
@@ -436,6 +450,8 @@ impl GridHandler {
             flat_storage: FlatStorage::new(size_info.columns(), Some(max_scroll_limit), None),
             finished: false,
             ansi_handler_state,
+            hyperlink_registry: Default::default(),
+            active_hyperlink_id: None,
             displayed_output: None,
             filter_state: None,
             secrets: Default::default(),
@@ -566,6 +582,12 @@ impl GridHandler {
             flat_storage: FlatStorage::new(self.columns(), self.flat_storage.max_rows(), None),
             finished: self.finished,
             ansi_handler_state,
+            // Cloning the source registry preserves any URIs already
+            // referenced by the cells we're about to copy over (the cells'
+            // `HyperlinkId`s remain valid handles into the cloned registry).
+            // Active state resets — splitting is not a continuation of input.
+            hyperlink_registry: self.hyperlink_registry.clone(),
+            active_hyperlink_id: None,
             displayed_output: None,
             filter_state: None,
             secrets: Default::default(),
@@ -822,6 +844,204 @@ impl GridHandler {
         }
     }
 
+    /// Returns the contiguous OSC 8 hyperlink span at `displayed_point`, if
+    /// the cell there is part of one. The returned range is contiguous —
+    /// cross-run grouping by `id` is intentionally out of scope (see
+    /// `specs/GH6393/tech.md` Follow-ups).
+    ///
+    /// Mirrors the shape of [`Self::url_at_point`] but skips
+    /// `urlocator`: the URI doesn't live in the visible cell text, so
+    /// detection reduces to "walk left/right while the next adjacent cell
+    /// carries the same `HyperlinkId`."
+    pub fn hyperlink_at_point(&self, displayed_point: Point) -> Option<Link> {
+        let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
+        let row_idx = original_point.row;
+
+        let grid_line = self.row(row_idx)?;
+        if original_point.col >= grid_line.line_length() {
+            return None;
+        }
+        let target_id = grid_line.get(original_point.col)?.hyperlink_id()?;
+
+        // Walk backward across cells while the same hyperlink_id is present.
+        let mut start_point = original_point;
+        let mut back_cursor =
+            self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        back_cursor.move_backward();
+        while let Some(item) = back_cursor.current_item() {
+            if item.cell().hyperlink_id() != Some(target_id) {
+                break;
+            }
+            start_point = item.point();
+            back_cursor.move_backward();
+        }
+
+        // Walk forward across cells while the same hyperlink_id is present.
+        let mut end_point = original_point;
+        let mut fwd_cursor = self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        fwd_cursor.move_forward();
+        while let Some(item) = fwd_cursor.current_item() {
+            if item.cell().hyperlink_id() != Some(target_id) {
+                break;
+            }
+            end_point = item.point();
+            fwd_cursor.move_forward();
+        }
+
+        let displayed_start = self.maybe_translate_point_from_original_to_displayed(start_point);
+        let displayed_end = self.maybe_translate_point_from_original_to_displayed(end_point);
+        Some(Link {
+            range: displayed_start..=displayed_end,
+            is_empty: false,
+        })
+    }
+
+    /// Returns the URI of the OSC 8 hyperlink covering `displayed_point`, if
+    /// any. Cheaper than `hyperlink_at_point` when the caller only needs the
+    /// destination (e.g. tooltip text or click-open).
+    pub fn hyperlink_uri_at_point(&self, displayed_point: Point) -> Option<&str> {
+        let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
+        let grid_line = self.row(original_point.row)?;
+        if original_point.col >= grid_line.line_length() {
+            return None;
+        }
+        let id = grid_line.get(original_point.col)?.hyperlink_id()?;
+        Some(self.hyperlink_registry.get(id)?.uri.as_str())
+    }
+
+    /// Resolve a `HyperlinkId` to its URI via the registry. Used by the byte
+    /// serializer (Layer 7) to reconstruct OSC 8 wrappers.
+    pub fn hyperlink_uri_for_id(
+        &self,
+        id: warp_terminal::model::grid::HyperlinkId,
+    ) -> Option<&str> {
+        self.hyperlink_registry.get(id).map(|h| h.uri.as_str())
+    }
+
+    /// Convert the cells in `[start, end]` to GitHub-flavored markdown,
+    /// with OSC 8 hyperlink spans rendered as `[visible](URI)` (subject to
+    /// the OSC 8 scheme allow-list — disallowed/unparseable URIs render as
+    /// plain visible text). See `specs/GH6393/product.md` invariant 13.
+    ///
+    /// Visible text inside `[...]` is markdown-escaped (`\` before `]`,
+    /// `\`, `<`, `>`, `*`, `_`, backtick) and the URI is URL-encoded for
+    /// `)`, whitespace, and control characters so the link can't break
+    /// out of its anchor.
+    ///
+    /// This is the model-level helper. The context-menu wiring that
+    /// invokes it is intentionally not in this PR — see the PR description
+    /// for the follow-up.
+    pub fn bounds_to_markdown_string(
+        &self,
+        start: Point,
+        end: Point,
+        respect_obfuscated_secrets: RespectObfuscatedSecrets,
+    ) -> String {
+        let mut out = String::new();
+        let total_rows = self.total_rows();
+        if total_rows == 0 || self.columns() == 0 {
+            return out;
+        }
+        let start_row = start.row.min(total_rows.saturating_sub(1));
+        let end_row = end.row.min(total_rows.saturating_sub(1));
+
+        let mut active_uri: Option<String> = None;
+        let mut active_visible: String = String::new();
+
+        let flush_active =
+            |out: &mut String, active_uri: &mut Option<String>, active_visible: &mut String| {
+                if let Some(uri) = active_uri.take() {
+                    out.push('[');
+                    for ch in active_visible.chars() {
+                        markdown_escape_char(ch, out);
+                    }
+                    out.push_str("](");
+                    url_encode_for_markdown(&uri, out);
+                    out.push(')');
+                    active_visible.clear();
+                }
+            };
+
+        for row in start_row..=end_row {
+            let Some(grid_row) = self.row(row) else {
+                continue;
+            };
+            let row_length = grid_row.line_length();
+            let cols = if row == start_row && row == end_row {
+                start.col..end.col.saturating_add(1).min(row_length)
+            } else if row == start_row {
+                start.col..row_length
+            } else if row == end_row {
+                0..end.col.saturating_add(1).min(row_length)
+            } else {
+                0..row_length
+            };
+
+            for col in cols {
+                let Some(cell) = grid_row.get(col) else {
+                    continue;
+                };
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+
+                let cell_uri = cell.hyperlink_id().and_then(|id| {
+                    let uri = self.hyperlink_uri_for_id(id)?;
+                    match crate::terminal::view::link_security::check_open_scheme(
+                        uri,
+                        crate::terminal::view::link_security::LinkSource::OscHyperlink,
+                    ) {
+                        crate::terminal::view::link_security::SchemeCheck::Allowed => {
+                            Some(uri.to_owned())
+                        }
+                        _ => None,
+                    }
+                });
+
+                // If the active span ends or the URI changes, flush it.
+                if cell_uri.as_deref() != active_uri.as_deref() {
+                    flush_active(&mut out, &mut active_uri, &mut active_visible);
+                    active_uri = cell_uri;
+                }
+
+                // Determine the visible text for this cell.
+                let mut should_show_secrets = false;
+                if respect_obfuscated_secrets == RespectObfuscatedSecrets::Yes
+                    && self.get_secret_obfuscation().is_visually_obfuscated()
+                    && self
+                        .secret_at_original_point(Point::new(row, col))
+                        .is_some()
+                {
+                    should_show_secrets = true;
+                }
+
+                let cell_text = if should_show_secrets {
+                    "*".to_string()
+                } else {
+                    cell.content_for_display().to_string()
+                };
+
+                if active_uri.is_some() {
+                    active_visible.push_str(&cell_text);
+                } else {
+                    for ch in cell_text.chars() {
+                        markdown_escape_char(ch, &mut out);
+                    }
+                }
+            }
+            // End-of-row: flush any active span and add a newline. Spans
+            // that wrap across rows in the grid emit as one markdown link
+            // per row — the receiver still gets clickable links to the
+            // same URI on each row.
+            flush_active(&mut out, &mut active_uri, &mut active_visible);
+            out.push('\n');
+        }
+        out
+    }
+
     /// Converts a cell to a string, with ansi escape sequences
     fn cell_to_string(cell: &Cell) -> String {
         let cell_content = cell.content_for_display();
@@ -939,6 +1159,14 @@ impl GridHandler {
         let should_show_secrets = force_secrets_obfuscated
             || (respect_obfuscated_secrets == RespectObfuscatedSecrets::Yes
                 && self.get_secret_obfuscation().is_visually_obfuscated());
+
+        // OSC 8 reconstruction state: tracks the URI of the currently-open
+        // hyperlink span so we know when to emit an opening / closing wrapper.
+        // Only relevant when emitting escape sequences AND when the URI
+        // passes the OSC 8 scheme allow-list — disallowed-scheme spans are
+        // emitted without the OSC 8 wrapper (visible text only). See
+        // `specs/GH6393/product.md` invariant 13.
+        let mut osc8_open_uri: Option<String> = None;
         for col in IndexRange::from(cols.start..row_length) {
             let cell = grid_row.get(col);
             let Some(cell) = cell else {
@@ -981,12 +1209,49 @@ impl GridHandler {
                 // If it's not obfuscated, push cell's primary character.
                 if !obfuscated_char {
                     if include_esc_sequences {
+                        // OSC 8 wrapper open/close transitions: emit before
+                        // the cell's own bytes so the wrapper covers the
+                        // visible text. Per invariant 13, only emit the
+                        // wrapper when the URI passes the OSC 8 scheme
+                        // allow-list; disallowed/unparseable spans render
+                        // as plain visible text on copy-as-bytes.
+                        let cell_uri = cell.hyperlink_id().and_then(|id| {
+                            let uri = self.hyperlink_uri_for_id(id)?;
+                            match crate::terminal::view::link_security::check_open_scheme(
+                                uri,
+                                crate::terminal::view::link_security::LinkSource::OscHyperlink,
+                            ) {
+                                crate::terminal::view::link_security::SchemeCheck::Allowed => {
+                                    Some(uri.to_owned())
+                                }
+                                _ => None,
+                            }
+                        });
+                        if cell_uri != osc8_open_uri {
+                            // Close previous span, if any.
+                            if osc8_open_uri.is_some() {
+                                text.push_str("\x1b]8;;\x1b\\");
+                            }
+                            // Open new span, if any.
+                            if let Some(ref uri) = cell_uri {
+                                text.push_str("\x1b]8;;");
+                                text.push_str(uri);
+                                text.push_str("\x1b\\");
+                            }
+                            osc8_open_uri = cell_uri;
+                        }
                         text.push_str(&Self::cell_to_string(cell));
                     } else {
                         text.push_char_or_str(cell.content_for_display());
                     }
                 }
             }
+        }
+        // Close any still-open OSC 8 wrapper at end of line. The next row's
+        // reconstruction (if part of the same span) will reopen — the receiver
+        // sees a fresh open at row start, which is fine.
+        if include_esc_sequences && osc8_open_uri.is_some() {
+            text.push_str("\x1b]8;;\x1b\\");
         }
 
         if cols.end >= self.columns() - 1
@@ -2728,6 +2993,41 @@ impl Iterator for RegexIter<'_> {
         }
 
         Some(regex_match)
+    }
+}
+
+/// Markdown-escape a single char into `out`, pushing a `\\` before any
+/// character that would break out of a `[…]` anchor or be re-interpreted
+/// as markdown formatting. Used by [`GridHandler::bounds_to_markdown_string`]
+/// to keep recipients safe from untrusted output (product invariant 13).
+fn markdown_escape_char(ch: char, out: &mut String) {
+    match ch {
+        '\\' | '`' | '*' | '_' | '[' | ']' | '(' | ')' | '<' | '>' | '#' | '+' | '-' | '!'
+        | '|' => {
+            out.push('\\');
+            out.push(ch);
+        }
+        _ => out.push(ch),
+    }
+}
+
+/// URL-encode characters that would terminate or mis-parse a markdown
+/// link target (`)`, whitespace, control chars). Other characters pass
+/// through unchanged.
+fn url_encode_for_markdown(uri: &str, out: &mut String) {
+    for ch in uri.chars() {
+        match ch {
+            ')' => out.push_str("%29"),
+            '(' => out.push_str("%28"),
+            ' ' => out.push_str("%20"),
+            c if c.is_control() => {
+                let mut buf = [0u8; 4];
+                for byte in c.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            c => out.push(c),
+        }
     }
 }
 

@@ -26,6 +26,10 @@ fn main() -> Result<()> {
     if cfg!(debug_assertions) {
         state = state.with_additional_features(warp_core::features::DEBUG_FLAGS);
     }
+    // Features that should be enabled for OSS builds. The OSS channel has
+    // its own (small) flag-set rather than inheriting from dogfood/preview,
+    // so additions live here when they're ready for OSS users.
+    state = state.with_additional_features(&[warp_core::features::FeatureFlag::OscHyperlinks]);
     ChannelState::set(state);
 
     warp::run()

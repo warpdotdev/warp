@@ -242,6 +242,14 @@ pub trait Handler {
     /// Process a prompt marker control sequence.
     fn prompt_marker(&mut self, _marker: PromptMarker) {}
 
+    /// Set or clear the active OSC 8 hyperlink. Subsequent characters
+    /// written via [`Handler::input`] should carry this hyperlink (or none,
+    /// if `hyperlink` is `None`) until this is called again. The implementer
+    /// owns the active state — see `specs/GH6393/tech.md` §3c for the
+    /// single-owner delegation rule that prevents `BlockGrid`/`Block` from
+    /// keeping a stale shadow copy.
+    fn set_hyperlink(&mut self, _hyperlink: Option<Hyperlink>) {}
+
     /// Callback for the Warp precmd hook.
     fn precmd(&mut self, _data: PrecmdValue) {}
 

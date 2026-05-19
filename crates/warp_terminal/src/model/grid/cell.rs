@@ -117,6 +117,12 @@ struct CellExtra {
     /// base character and zerowidth characters).
     cell_with_zero_width: Option<String>,
     end_of_prompt: Option<EndOfPromptMarker>,
+    /// OSC 8 hyperlink id. Resolves to a `Hyperlink { id, uri }` via the
+    /// owning grid's `HyperlinkRegistry`. Defaults to `None` (cell is not
+    /// part of a hyperlink span). `#[serde(default)]` so older payloads
+    /// without this field deserialize cleanly into `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hyperlink_id: Option<super::HyperlinkId>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -276,7 +282,31 @@ impl Cell {
         });
     }
 
-    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker if present.
+    /// Returns this cell's OSC 8 hyperlink id, if any. Resolve through the
+    /// owning grid's `HyperlinkRegistry` to recover the URI.
+    #[inline]
+    pub fn hyperlink_id(&self) -> Option<super::HyperlinkId> {
+        self.extra.as_ref()?.hyperlink_id
+    }
+
+    /// Set or clear the OSC 8 hyperlink id on this cell. Allocates `extra`
+    /// only when setting a non-`None` id; clearing an unset cell is free.
+    #[inline]
+    pub fn set_hyperlink_id(&mut self, id: Option<super::HyperlinkId>) {
+        match (id, self.extra.as_deref_mut()) {
+            (Some(id), Some(extra)) => extra.hyperlink_id = Some(id),
+            (Some(id), None) => {
+                self.extra.get_or_insert_with(Default::default).hyperlink_id = Some(id);
+            }
+            (None, Some(extra)) => extra.hyperlink_id = None,
+            (None, None) => {} // already cleared, no allocation
+        }
+    }
+
+    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker
+    /// if present. NOTE: this does NOT preserve `hyperlink_id` — that field is
+    /// content-bound and per the §3d table in `specs/GH6393/tech.md` is
+    /// cleared whenever the cell's content is reset (erase/clear/reset_state).
     #[inline]
     pub fn drop_extra(&mut self) {
         if let Some(extra) = self.extra.take() {

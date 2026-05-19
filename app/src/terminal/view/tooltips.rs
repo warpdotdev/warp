@@ -216,6 +216,19 @@ impl TerminalView {
             let mut show_in_file_explorer = None;
             let modifier = directly_open_link_keybinding_string();
             let mut detail = Some(format!("[{modifier} Click]"));
+            // For OSC 8 hyperlinks whose URI fails the scheme allow-list or
+            // doesn't parse, drop the "[Cmd Click]" hint — the click is a
+            // no-op and showing the keybinding would be misleading.
+            // See `specs/GH6393/product.md` invariant 16.
+            if let GridHighlightedLink::Hyperlink { uri, .. } = link {
+                use super::link_security::{check_open_scheme, LinkSource, SchemeCheck};
+                if !matches!(
+                    check_open_scheme(uri, LinkSource::OscHyperlink),
+                    SchemeCheck::Allowed
+                ) {
+                    detail = None;
+                }
+            }
             #[cfg(feature = "local_fs")]
             {
                 if let GridHighlightedLink::File(file_link) = link {

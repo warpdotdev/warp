@@ -3,6 +3,7 @@ use warp_core::command::ExitCode;
 use warpui::color::ColorU;
 
 use super::*;
+use crate::features::FeatureFlag;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::{ansi::InputBufferValue, selection::ScrollDelta};
@@ -19,6 +20,7 @@ struct MockHandler {
     identity_reported: bool,
     d_proto_hooks: Vec<DProtoHook>,
     pluggable_notifications: Vec<(Option<String>, String)>,
+    hyperlink_events: Vec<Option<Hyperlink>>,
 }
 
 impl Handler for MockHandler {
@@ -221,6 +223,10 @@ impl Handler for MockHandler {
         self.pluggable_notifications.push((title, body));
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
+        self.hyperlink_events.push(hyperlink);
+    }
+
     fn set_keyboard_enhancement_flags(
         &mut self,
         _mode: KeyboardModes,
@@ -244,6 +250,7 @@ impl Default for MockHandler {
             identity_reported: false,
             d_proto_hooks: Vec::new(),
             pluggable_notifications: Vec::new(),
+            hyperlink_events: Vec::new(),
         }
     }
 }
@@ -737,6 +744,89 @@ fn parse_sourced_rc_file_hook_with_uname() {
         ),
         _ => panic!("incorrect dcs value"),
     }
+}
+
+#[test]
+fn parse_osc8_hyperlink_open() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // ESC ] 8 ; ; https://example.com ESC \
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id, None);
+    assert_eq!(hyperlink.uri, "https://example.com");
+}
+
+#[test]
+fn parse_osc8_hyperlink_open_with_id() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    let bytes: &[u8] = b"\x1b]8;id=link-1;https://example.com\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id.as_deref(), Some("link-1"));
+    assert_eq!(hyperlink.uri, "https://example.com");
+}
+
+#[test]
+fn parse_osc8_hyperlink_close_canonical() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Canonical close: ESC ] 8 ; ; ESC \
+    let bytes: &[u8] = b"\x1b]8;;\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    assert!(handler.hyperlink_events[0].is_none());
+}
+
+#[test]
+fn parse_osc8_open_then_close_bell_terminator() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Open with bell terminator, write some bytes (irrelevant to the dispatch
+    // mock), then close. Both terminator forms must dispatch.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com/report\x07Click me\x1b]8;;\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 2);
+    let opened = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(opened.uri, "https://example.com/report");
+    assert!(handler.hyperlink_events[1].is_none());
+}
+
+#[test]
+fn parse_osc8_uri_with_semicolons_dispatches_full_uri() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Anti-regression for the rejoin contract — the dispatcher must hand the
+    // full URI (including embedded `;`) to set_hyperlink.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com/a?x=1;y=2\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.uri, "https://example.com/a?x=1;y=2");
+}
+
+#[test]
+fn parse_osc8_malformed_param_drops_event() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // A param without `=` is malformed; no set_hyperlink event should fire.
+    let bytes: &[u8] = b"\x1b]8;notavalidparam;https://example.com\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 0);
+}
+
+#[test]
+fn parse_osc8_dropped_when_feature_flag_disabled() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(false);
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    // Flag off -> dispatch falls through to `unhandled`, no event fires.
+    assert_eq!(handler.hyperlink_events.len(), 0);
 }
 
 #[test]

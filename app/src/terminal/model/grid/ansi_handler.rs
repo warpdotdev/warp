@@ -161,6 +161,15 @@ impl ansi::Handler for GridHandler {
         log::error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        // `and_then` is intentional: if `intern` returns None (registry cap
+        // hit), `active_hyperlink_id` stays None and subsequent `input(c)`
+        // writes plain non-clickable cells. Per `specs/GH6393/tech.md` §3c
+        // there must never be a path where a cell's `hyperlink_id` references
+        // an entry the registry doesn't hold.
+        self.active_hyperlink_id = hyperlink.and_then(|h| self.hyperlink_registry.intern(h));
+    }
+
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
         self.ansi_handler_state.cursor_style = style.unwrap_or_default();
 
@@ -1588,6 +1597,7 @@ impl GridHandler {
         let fg = self.grid.cursor().template.fg;
         let bg = self.grid.cursor().template.bg;
         let flags = self.grid.cursor().template.flags;
+        let hyperlink_id = self.active_hyperlink_id;
 
         let cursor_cell = self.grid.cursor_cell();
 
@@ -1597,6 +1607,10 @@ impl GridHandler {
         cursor_cell.fg = fg;
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
+        // Stamp the active OSC 8 hyperlink id (if any) onto the freshly-written
+        // cell. `set_hyperlink_id(None)` is a no-op when extra is None, so this
+        // only allocates `extra` when a hyperlink is actually active.
+        cursor_cell.set_hyperlink_id(hyperlink_id);
 
         cursor_cell
     }

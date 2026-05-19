@@ -214,6 +214,10 @@ pub enum IntegrationTestEvent {
 
 pub enum MouseEvent {
     ClickOnce,
+    /// Like `ClickOnce`, but with the Command (Cmd) modifier held during
+    /// both mouse-down and mouse-up. Used to test Cmd-click affordances
+    /// like opening hyperlinks.
+    CmdClickOnce,
     RightClickOnce,
     Hover,
 }
@@ -499,6 +503,18 @@ impl TestStep {
         self
     }
 
+    /// Dispatch a Cmd-click (LeftMouse{Down,Up} with the Cmd modifier set)
+    /// at a previously cached position. Useful for testing affordances
+    /// like opening a hyperlink.
+    pub fn with_cmd_click_on_saved_position<S: Into<String>>(mut self, position_id: S) -> Self {
+        self.events
+            .push_back(IntegrationTestEvent::WithSavedPosition(
+                position_id.into(),
+                MouseEvent::CmdClickOnce,
+            ));
+        self
+    }
+
     pub fn with_right_click_on_saved_position_fn<F>(mut self, position_fn: F) -> Self
     where
         F: Fn(&mut App, WindowId) -> String + 'static,
@@ -734,6 +750,49 @@ pub(super) async fn run_step(
                         let mouse_up = Event::LeftMouseUp {
                             position: center,
                             modifiers: Default::default(),
+                        };
+                        for event in [mouse_down, mouse_up] {
+                            app.update(|ctx| (window.callbacks().event_callback)(event, ctx));
+                        }
+                        record_overlay_kind(
+                            overlay::OverlayKind::MouseUp {
+                                x: center.x(),
+                                y: center.y(),
+                            },
+                            step_data_map,
+                        );
+                    }
+                    MouseEvent::CmdClickOnce => {
+                        record_overlay_kind(
+                            overlay::OverlayKind::MouseDown {
+                                x: center.x(),
+                                y: center.y(),
+                            },
+                            step_data_map,
+                        );
+                        // Match `should_directly_open_link`: Cmd on macOS,
+                        // Ctrl on Linux/Windows so the synthetic click
+                        // exercises the platform-correct direct-open shortcut.
+                        let modifiers = if OperatingSystem::get().is_mac() {
+                            crate::event::ModifiersState {
+                                cmd: true,
+                                ..Default::default()
+                            }
+                        } else {
+                            crate::event::ModifiersState {
+                                ctrl: true,
+                                ..Default::default()
+                            }
+                        };
+                        let mouse_down = Event::LeftMouseDown {
+                            position: center,
+                            modifiers,
+                            click_count: 1,
+                            is_first_mouse: false,
+                        };
+                        let mouse_up = Event::LeftMouseUp {
+                            position: center,
+                            modifiers,
                         };
                         for event in [mouse_down, mouse_up] {
                             app.update(|ctx| (window.callbacks().event_callback)(event, ctx));

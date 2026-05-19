@@ -48,6 +48,7 @@ impl Iterator for RowIterator<'_> {
 
         let mut fg_color_iter = self.storage.fg_color_map.iter_from(start_offset);
         let mut bg_and_style_iter = self.storage.bg_and_style_map.iter_from(start_offset);
+        let mut hyperlink_id_iter = self.storage.hyperlink_id_map.iter_from(start_offset);
 
         let row = Rc::make_mut(&mut self.row);
         row.reset(&self.template);
@@ -77,6 +78,7 @@ impl Iterator for RowIterator<'_> {
             // `Iterator` and should provide its own `next(&Grapheme)` function.
             let fg = next_attribute(&mut fg_color_iter, &grapheme);
             let BgAndStyle { bg, flags } = next_attribute(&mut bg_and_style_iter, &grapheme);
+            let hyperlink_id = next_attribute(&mut hyperlink_id_iter, &grapheme);
 
             let cell_width = grapheme.cell_width();
             if cell_width == 0 {
@@ -115,6 +117,7 @@ impl Iterator for RowIterator<'_> {
             cell.fg = fg;
             cell.bg = bg;
             cell.flags = flags;
+            cell.set_hyperlink_id(hyperlink_id);
 
             match self.storage.end_of_prompt_marker {
                 Some(EndOfPromptMarker {

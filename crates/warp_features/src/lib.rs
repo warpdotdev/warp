@@ -186,6 +186,10 @@ pub enum FeatureFlag {
     /// Maximizes data in flat storage to reduce memory usage.
     MaximizeFlatStorage,
 
+    /// Recognizes the OSC 8 hyperlink escape sequence and makes the
+    /// linked text Cmd+click-able. See `specs/GH6393/`.
+    OscHyperlinks,
+
     ImeMarkedText,
 
     /// Enables partial next command suggestions with a prefix.
@@ -911,6 +915,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
     FeatureFlag::MultiWorkspace,
+    FeatureFlag::OscHyperlinks,
     FeatureFlag::ImeMarkedText,
     FeatureFlag::MSYS2Shells,
     FeatureFlag::RetryTruncatedCodeResponses,
@@ -953,6 +958,7 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::MarkdownTables,
     FeatureFlag::GitOperationsInCodeReview,
     FeatureFlag::GitCredentialRefresh,
+    FeatureFlag::OscHyperlinks,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
