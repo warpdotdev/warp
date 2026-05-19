@@ -110,8 +110,6 @@ pub(super) const AMBIENT_CREDITS_DOT_COLOR: ColorU = ColorU {
     b: 241,
     a: 255,
 };
-/// Neutral gray for the synthetic `Aggregate` cost type, distinct from the
-/// four chromatic cost-type colors above.
 pub(super) const AGGREGATE_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 140,
     g: 140,

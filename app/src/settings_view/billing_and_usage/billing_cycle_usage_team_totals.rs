@@ -335,10 +335,9 @@ fn render_team_totals_section(
     row.finish()
 }
 
-/// Team-totals block (subheader + cards) for visibilities that surface team-
-/// level usage. Skipped for `OwnOnly`; callers should gate on visibility
-/// before invoking. `PerUserTotals` gets a "Team totals" subheader above
-/// the cards to match the admin panel; `TeamAggregate` shows just the cards.
+/// Team-totals block ("Team" subheader + cards). Callers must gate on
+/// whether the viewer actually gets team-level data (visibility + team
+/// size); this function unconditionally emits the subheader.
 pub fn render_team_totals_block(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
@@ -346,13 +345,11 @@ pub fn render_team_totals_block(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    if visibility.granularity == UsageVisibilityGranularity::PerUserTotals {
-        column.add_child(
-            Container::new(render_section_subheader("Team totals", appearance))
-                .with_margin_bottom(8.)
-                .finish(),
-        );
-    }
+    column.add_child(
+        Container::new(render_section_subheader("Team", appearance))
+            .with_margin_bottom(8.)
+            .finish(),
+    );
     column.add_child(render_team_totals_section(
         entries,
         visibility,
@@ -361,3 +358,7 @@ pub fn render_team_totals_block(
     ));
     column.finish()
 }
+
+#[cfg(test)]
+#[path = "billing_cycle_usage_team_totals_tests.rs"]
+mod tests;

@@ -593,11 +593,14 @@ fn build_viewer_own_usage_row(
 
 /// Top-level row dispatcher. Caller is expected to have already filtered
 /// legacy buckets via `filter_legacy_buckets` and rendered the team-totals
-/// block (if any) above.
+/// block (if any) above. `shows_team_section` mirrors the caller's decision
+/// to render the "Team" block — when false, we skip the "Member" subheader
+/// and elide the synthetic "Other members" row so single-member teams (or
+/// `OwnOnly` viewers) just see their own bar with no orphan scaffolding.
 ///
 /// Thin orchestrator over three siblings:
 ///   - [`build_rows`] derives the row data (including `bar_max_credits`),
-///   - [`render_member_header`] optionally emits the "Member usage" subheader
+///   - [`render_member_header`] optionally emits the "Member" subheader
 ///     (and source-filter toggle for `FullBreakdown`),
 ///   - [`render_member_row_list`] blindly renders the row vec.
 #[allow(clippy::too_many_arguments)]
@@ -605,19 +608,28 @@ pub fn render_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
+    shows_team_section: bool,
     source_filter: SourceFilter,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(
+        workspace,
+        entries,
+        visibility,
+        shows_team_section,
+        source_filter,
+        app,
+    );
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(8.);
     if let Some(header) = render_member_header(
         visibility,
+        shows_team_section,
         entries,
         source_filter,
         mouse_states,
@@ -635,11 +647,14 @@ pub fn render_rows(
 /// `OwnOnly` / `TeamAggregate` give each row its own 100% denominator so the
 /// rows read as parallel summaries. `PerUserTotals` / `FullBreakdown` share
 /// a single top-member denominator so heaviest user fills the bar and the
-/// rest scale proportionally.
+/// rest scale proportionally. When `shows_team_section` is false (single-
+/// member team or `OwnOnly`), the `TeamAggregate` branch skips the synthetic
+/// "Other members" row so the viewer just sees their own bar.
 fn build_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
+    shows_team_section: bool,
     source_filter: SourceFilter,
     app: &AppContext,
 ) -> Vec<MemberUsageRow> {
@@ -658,11 +673,7 @@ fn build_rows(
                 app,
                 SourceFilter::All,
             )];
-            if workspace.members.len() > 1
-                || entries
-                    .iter()
-                    .any(|e| e.subject_type == AiCreditsUsageAndCostSubjectType::Team)
-            {
+            if shows_team_section {
                 rows.push(build_other_members_usage_row(entries));
             }
             rows
@@ -694,48 +705,47 @@ fn build_rows(
     rows
 }
 
-/// "Member usage" subheader + optional source-filter toggle.
+/// "Member" subheader + optional source-filter toggle.
 ///
-/// `None` for `OwnOnly` (single row tells its own story). The toggle is only
+/// `None` when the caller isn't rendering a team-totals block above (single
+/// row tells its own story, no need for a subheader). The toggle is only
 /// surfaced for `FullBreakdown` and only when there's any cloud usage to
 /// filter to.
 fn render_member_header(
     visibility: &UsageVisibility,
+    shows_team_section: bool,
     entries: &[BillingCycleUsageEntry],
     source_filter: SourceFilter,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     on_filter_change: FilterChangeFn,
 ) -> Option<Box<dyn Element>> {
-    match visibility.granularity {
-        UsageVisibilityGranularity::OwnOnly => None,
-        UsageVisibilityGranularity::TeamAggregate
-        | UsageVisibilityGranularity::PerUserTotals
-        | UsageVisibilityGranularity::FullBreakdown => {
-            let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
-                && has_cloud_usage(entries);
-
-            let subheader = render_section_subheader("Member usage", appearance);
-            let header = if show_toggle {
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(subheader)
-                    .with_child(render_source_filter_toggle(
-                        source_filter,
-                        mouse_states,
-                        appearance,
-                        on_filter_change,
-                    ))
-                    .finish()
-            } else {
-                subheader
-            };
-
-            Some(Container::new(header).with_margin_bottom(8.).finish())
-        }
+    if !shows_team_section {
+        return None;
     }
+
+    let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
+        && has_cloud_usage(entries);
+
+    let subheader = render_section_subheader("Member", appearance);
+    let header = if show_toggle {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(subheader)
+            .with_child(render_source_filter_toggle(
+                source_filter,
+                mouse_states,
+                appearance,
+                on_filter_change,
+            ))
+            .finish()
+    } else {
+        subheader
+    };
+
+    Some(Container::new(header).with_margin_bottom(8.).finish())
 }
 
 /// Dumb iteration over the row vec. Each row carries its own
@@ -759,3 +769,7 @@ fn render_member_row_list(
     }
     column.finish()
 }
+
+#[cfg(test)]
+#[path = "billing_cycle_usage_rows_tests.rs"]
+mod tests;

@@ -22,7 +22,9 @@ use crate::{
     settings_view::{
         admin_actions::AdminActions,
         billing_and_usage::{
-            billing_cycle_usage_common::{filter_legacy_buckets, BillingUsageMouseStates},
+            billing_cycle_usage_common::{
+                filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
+            },
             billing_cycle_usage_rows::{render_rows, SourceFilter},
             billing_cycle_usage_team_totals::render_team_totals_block,
         },
@@ -255,7 +257,22 @@ impl View for BillingCycleUsageSectionView {
                 .unwrap_or_default(),
         );
 
-        if visibility.granularity != UsageVisibilityGranularity::OwnOnly {
+        // Only show the "Team" block + "Member" subheader when the viewer
+        // actually gets data about other people. `members.len() > 1` covers
+        // the common multi-member case; `has_non_viewer_data` catches the
+        // edge case where the roster shrank to one after a teammate left
+        // mid-cycle but their usage is still attributed against this cycle.
+        // Together they keep solo teams from showing orphan scaffolding
+        // without dropping legitimate team data on departure.
+        let viewer_uid = AuthStateProvider::as_ref(app)
+            .get()
+            .user_id()
+            .map(|uid| uid.as_string());
+        let shows_team_section = visibility.granularity != UsageVisibilityGranularity::OwnOnly
+            && (workspace.members.len() > 1
+                || has_non_viewer_data(&entries, viewer_uid.as_deref()));
+
+        if shows_team_section {
             column.add_child(
                 Container::new(render_team_totals_block(
                     &entries,
@@ -279,6 +296,7 @@ impl View for BillingCycleUsageSectionView {
                 &workspace,
                 &entries,
                 &visibility,
+                shows_team_section,
                 self.source_filter,
                 &self.row_mouse_states,
                 appearance,

@@ -22,7 +22,8 @@ use crate::{
     },
     ui_components::blended_colors,
     workspaces::workspace::{
-        AiCreditsUsageAndCostType, AiCreditsUsageBucket, BillingCycleUsageEntry,
+        AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
+        BillingCycleUsageEntry,
     },
 };
 
@@ -198,6 +199,25 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         })
         .cloned()
         .collect()
+}
+
+/// True when any entry is attributable to someone other than the current
+/// viewer — either a Team-aggregate row (the shape `TeamAggregate`
+/// visibility uses for everyone else's usage) or a non-viewer subject row
+/// (the shape `PerUserTotals` / `FullBreakdown` use). Used to decide whether
+/// to render the "Team" / "Member" subheaders: a workspace whose only data
+/// belongs to the viewer (e.g. a solo team) should skip them, but a
+/// workspace whose roster shrank to one after a teammate left — with their
+/// usage still attributed against the current cycle — should keep them.
+pub fn has_non_viewer_data(entries: &[BillingCycleUsageEntry], viewer_uid: Option<&str>) -> bool {
+    entries.iter().any(|e| match &e.subject_type {
+        AiCreditsUsageAndCostSubjectType::Team => true,
+        _ => match (e.subject_uid.as_deref(), viewer_uid) {
+            (Some(uid), Some(viewer)) => uid != viewer,
+            // Unknown subject — conservatively treat as non-viewer.
+            _ => true,
+        },
+    })
 }
 
 pub fn format_credits(credits: i64) -> String {
@@ -380,3 +400,7 @@ fn render_tooltip_row(
         .with_child(right)
         .finish()
 }
+
+#[cfg(test)]
+#[path = "billing_cycle_usage_common_tests.rs"]
+mod tests;
