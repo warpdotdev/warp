@@ -1,4 +1,5 @@
 use super::*;
+use crate::NotebookKeybindings;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
@@ -6,28 +7,27 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
+use crate::code_review::GlobalCodeReviewModel;
 use crate::code_review::comments::{
-    attach_pending_imported_comments, AttachedReviewComment, AttachedReviewCommentTarget,
-    CommentId, CommentOrigin, LineDiffContent, PendingImportedReviewComment,
-    PendingImportedReviewCommentTarget,
+    AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin, LineDiffContent,
+    PendingImportedReviewComment, PendingImportedReviewCommentTarget,
+    attach_pending_imported_comments,
 };
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
-use crate::code_review::GlobalCodeReviewModel;
 use crate::pane_group::WorkingDirectoriesModel;
 use crate::server::server_api::{
-    team::MockTeamClient, workspace::MockWorkspaceClient, ServerApiProvider,
+    ServerApiProvider, team::MockTeamClient, workspace::MockWorkspaceClient,
 };
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::local_shell::LocalShellState;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::NotebookKeybindings;
 use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
@@ -321,6 +321,7 @@ fn create_loaded_state_with_editors(
                 },
                 editor_state: Some(CodeReviewEditorState::new_loaded(editor)),
                 is_expanded: true,
+                deferred_content_at_head: None,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
                 chevron_button,
