@@ -42,7 +42,7 @@ pub struct ManagedSecretConfigs {
     pub team_secrets: HashMap<String, ManagedSecretConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SecretOwner {
     CurrentUser,
     Team { team_uid: String },

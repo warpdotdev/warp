@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
@@ -5,6 +6,7 @@ use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
@@ -29,6 +31,8 @@ use crate::terminal::view::ambient_agent::host_selector::NakedHeaderButtonTheme;
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 
@@ -65,6 +69,7 @@ pub enum AuthSecretSelectorAction {
     ClearSecret,
     OpenNewTypeSidecar,
     SelectNewType(usize),
+    DeleteSecret { name: String, owner: SecretOwner },
 }
 
 pub enum AuthSecretSelectorEvent {
@@ -80,6 +85,10 @@ pub struct AuthSecretSelector {
     is_new_type_sidecar_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
     ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
+    /// Secrets with an in-flight delete request, keyed by name. Used to
+    /// disable the X affordance so duplicate clicks while a delete is
+    /// pending don't fire a second request.
+    pending_deletes: HashSet<String>,
 }
 
 impl AuthSecretSelector {
@@ -153,6 +162,21 @@ impl AuthSecretSelector {
                     me.refresh_menu(ctx);
                     me.refresh_button(ctx);
                 }
+                HarnessAvailabilityEvent::AuthSecretDeleted { harness, name } => {
+                    me.handle_secret_deleted(*harness, name.clone(), ctx);
+                }
+                HarnessAvailabilityEvent::AuthSecretDeletionFailed {
+                    harness,
+                    name,
+                    error,
+                } => {
+                    me.handle_secret_deletion_failed(
+                        *harness,
+                        name.clone(),
+                        error.clone(),
+                        ctx,
+                    );
+                }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
             },
@@ -171,6 +195,7 @@ impl AuthSecretSelector {
             is_new_type_sidecar_open: false,
             menu_positioning_provider,
             ambient_agent_model,
+            pending_deletes: HashSet::new(),
         };
         me.maybe_restore_auth_secret_from_settings(ctx);
         me.refresh_button(ctx);
@@ -305,6 +330,7 @@ impl AuthSecretSelector {
         let availability = HarnessAvailabilityModel::as_ref(ctx);
         let items = build_main_menu_items(
             availability.auth_secrets_for(harness),
+            &self.pending_deletes,
             hover_background,
             header_text_color,
         );
@@ -313,6 +339,79 @@ impl AuthSecretSelector {
             menu.set_border(Some(border));
             menu.set_items(items, ctx);
         });
+    }
+
+    fn handle_secret_deleted(
+        &mut self,
+        harness: Harness,
+        name: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let active_harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+        let removed_pending = self.pending_deletes.remove(&name);
+
+        if harness == active_harness {
+            // Drop the selection if it pointed at the just-deleted secret
+            // so the chip falls back to the inherit label. Persistence is
+            // cleared as well so the next session doesn't try to restore
+            // a non-existent secret.
+            let selected = self
+                .ambient_agent_model
+                .as_ref(ctx)
+                .selected_harness_auth_secret_name()
+                .map(|s| s.to_string());
+            if selected.as_deref() == Some(name.as_str()) {
+                self.ambient_agent_model.update(ctx, |model, ctx| {
+                    model.set_harness_auth_secret_name(None, ctx);
+                });
+            }
+            CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let mut map = settings.last_selected_auth_secret.value().clone();
+                if map.get(harness.config_name()) == Some(&name) {
+                    map.remove(harness.config_name());
+                    report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
+                }
+            });
+
+            self.refresh_menu(ctx);
+            self.refresh_button(ctx);
+        }
+
+        // Only surface a toast for a deletion *this* selector initiated.
+        // A deletion fired from a different surface (or a different
+        // window) shouldn't pop a duplicate confirmation here.
+        if removed_pending {
+            let window_id = ctx.window_id();
+            let message = format!("API key '{name}' deleted.");
+            ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                ts.add_ephemeral_toast(DismissibleToast::success(message), window_id, ctx);
+            });
+        }
+        ctx.notify();
+    }
+
+    fn handle_secret_deletion_failed(
+        &mut self,
+        harness: Harness,
+        name: String,
+        error: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let removed_pending = self.pending_deletes.remove(&name);
+        let active_harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+        if harness == active_harness {
+            self.refresh_menu(ctx);
+        }
+        // Show a toast only when the failed delete was ours; avoids
+        // double-toasting if another surface also tried to delete.
+        if removed_pending {
+            let window_id = ctx.window_id();
+            let message = format!("Failed to delete API key '{name}': {error}");
+            ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                ts.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+            });
+        }
+        ctx.notify();
     }
 
     fn refresh_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
@@ -388,6 +487,7 @@ impl AuthSecretSelector {
 
 fn build_main_menu_items(
     fetch_state: &AuthSecretFetchState,
+    pending_deletes: &HashSet<String>,
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
@@ -414,13 +514,21 @@ fn build_main_menu_items(
     match fetch_state {
         AuthSecretFetchState::Loaded(secrets) => {
             for secret in secrets {
+                let is_pending_delete = pending_deletes.contains(&secret.name);
                 let fields = MenuItemFields::new(secret.name.clone())
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_override_hover_background_color(hover_background)
                     .with_on_select_action(AuthSecretSelectorAction::SelectSecret(
                         secret.name.clone(),
-                    ));
+                    ))
+                    .with_right_side_icon(Icon::X)
+                    .with_right_side_icon_action(AuthSecretSelectorAction::DeleteSecret {
+                        name: secret.name.clone(),
+                        owner: secret.owner.clone(),
+                    })
+                    .with_right_side_icon_a11y_label(format!("Delete API key {}", secret.name))
+                    .with_right_side_icon_disabled(is_pending_delete);
                 items.push(MenuItem::Item(fields));
             }
         }
@@ -541,6 +649,22 @@ impl TypedActionView for AuthSecretSelector {
                     harness,
                     type_index,
                 });
+            }
+            AuthSecretSelectorAction::DeleteSecret { name, owner } => {
+                // Drop duplicate dispatches while a delete for this same
+                // secret is still in flight (PRODUCT behavior 7).
+                if !self.pending_deletes.insert(name.clone()) {
+                    return;
+                }
+                let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+                let name = name.clone();
+                let owner = owner.clone();
+                HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.delete_auth_secret(harness, name, owner, ctx);
+                });
+                // Re-render so the X for the pending row becomes
+                // disabled.
+                self.refresh_menu(ctx);
             }
         }
     }
