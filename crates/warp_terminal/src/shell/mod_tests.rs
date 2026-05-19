@@ -270,3 +270,60 @@ fn test_should_add_command_to_history() {
         assert!(fish_shell.should_add_command_to_history(" asdf"));
     }
 }
+
+/// Ensures UTF-8 PowerShell executable output preserves localized and ASCII entries together.
+#[test]
+fn test_powershell_executables_from_utf8_output() {
+    let localized_entry = "测试.exe";
+    let ascii_entry = b"git.exe";
+    let output = CommandOutput {
+        stdout: [
+            localized_entry.as_bytes(),
+            b"\n".as_slice(),
+            ascii_entry.as_slice(),
+        ]
+        .concat(),
+        stderr: Vec::new(),
+        status: CommandExitStatus::Success,
+        exit_code: Some(0.into()),
+    };
+
+    let executables =
+        ShellType::PowerShell.executables_from_shell_command_output(Ok(output), false);
+
+    assert!(
+        executables.iter().any(|name| name == localized_entry),
+        "expected localized executable name to be preserved"
+    );
+
+    assert!(
+        executables.iter().any(|name| name == "git.exe"),
+        "expected ASCII executable entries after localized output to survive"
+    );
+
+    if cfg!(windows) {
+        assert!(
+            executables.iter().any(|name| name == "测试"),
+            "expected Windows executable suffix trimming to remain intact"
+        );
+        assert!(
+            executables.iter().any(|name| name == "git"),
+            "expected Windows suffix trimming to preserve later ASCII executables"
+        );
+    }
+}
+
+/// Ensures the PowerShell executable discovery script writes UTF-8 bytes to stdout.
+#[test]
+fn test_powershell_shell_command_to_get_executables_writes_utf8() {
+    let command = ShellType::PowerShell.shell_command_to_get_executables();
+
+    assert!(
+        command.contains("System.Text.UTF8Encoding"),
+        "expected PowerShell executable discovery to encode stdout as UTF-8"
+    );
+    assert!(
+        command.contains("OpenStandardOutput().Write"),
+        "expected PowerShell executable discovery to write bytes directly to stdout"
+    );
+}
