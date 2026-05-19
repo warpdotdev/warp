@@ -1282,7 +1282,8 @@ impl CurrentPrompt {
             if let BlockType::User(UserBlockCompleted { command, .. }) =
                 &after_block_completed.block_type
             {
-                if let Some(cmd) = command.split_whitespace().next() {
+                let mut tokens = command.split_whitespace();
+                if let Some(cmd) = tokens.next() {
                     // Resolve aliases so that e.g. `alias g=git` followed by `g push`
                     // still triggers invalidation for chips watching "git".
                     let resolved = self
@@ -1291,16 +1292,20 @@ impl CurrentPrompt {
                         .and_then(|context| context.active_block_metadata.session_id())
                         .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
                         .and_then(|session| session.alias_value(cmd).map(String::from));
-                    let effective_cmd = resolved.as_deref().unwrap_or(cmd);
+                    let effective_argv0 = resolved.as_deref().unwrap_or(cmd);
+                    let effective_command_line =
+                        std::iter::once(effective_argv0).chain(tokens).join(" ");
 
                     for (chip_kind, state) in &mut self.states {
                         if let Some(chip) = chip_kind.to_chip() {
-                            if chip
-                                .runtime_policy()
-                                .invalidate_on_commands()
-                                .iter()
-                                .any(|c| c == effective_cmd)
-                            {
+                            if chip.runtime_policy().invalidate_on_commands().iter().any(
+                                |pattern| {
+                                    command_matches_invalidation_pattern(
+                                        &effective_command_line,
+                                        pattern,
+                                    )
+                                },
+                            ) {
                                 state.invalidating_command_count += 1;
                             }
                         }
@@ -1641,4 +1646,82 @@ impl CurrentPrompt {
 
 impl Entity for CurrentPrompt {
     type Event = ();
+}
+
+/// Returns true when `pattern` is a whitespace-tokenized prefix of `command_line`.
+///
+/// A single-token pattern like `"git"` matches any command starting with `git`
+/// (e.g. `git status`, `git push origin main`). A multi-token pattern like
+/// `"gh pr create"` matches `gh pr create ...` but not `gh pr view` or `gh`.
+/// This lets chips invalidate only on specific subcommands without falsely
+/// matching every invocation of the top-level program.
+fn command_matches_invalidation_pattern(command_line: &str, pattern: &str) -> bool {
+    let mut cmd_tokens = command_line.split_whitespace();
+    let mut pattern_tokens = pattern.split_whitespace().peekable();
+    if pattern_tokens.peek().is_none() {
+        return false;
+    }
+    for pat in pattern_tokens {
+        match cmd_tokens.next() {
+            Some(tok) if tok == pat => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod invalidation_pattern_tests {
+    use super::command_matches_invalidation_pattern;
+
+    #[test]
+    fn single_token_pattern_matches_any_subcommand() {
+        assert!(command_matches_invalidation_pattern("git", "git"));
+        assert!(command_matches_invalidation_pattern("git status", "git"));
+        assert!(command_matches_invalidation_pattern(
+            "git push origin main",
+            "git"
+        ));
+    }
+
+    #[test]
+    fn multi_token_pattern_requires_exact_prefix() {
+        assert!(command_matches_invalidation_pattern(
+            "gh pr create --title x",
+            "gh pr create"
+        ));
+        assert!(command_matches_invalidation_pattern(
+            "gh pr create",
+            "gh pr create"
+        ));
+        assert!(!command_matches_invalidation_pattern(
+            "gh pr view",
+            "gh pr create"
+        ));
+        assert!(!command_matches_invalidation_pattern("gh", "gh pr create"));
+        assert!(!command_matches_invalidation_pattern(
+            "git pr create",
+            "gh pr create"
+        ));
+    }
+
+    #[test]
+    fn pattern_must_align_on_token_boundary() {
+        assert!(!command_matches_invalidation_pattern("github", "git"));
+        assert!(!command_matches_invalidation_pattern("ghost pr", "gh pr"));
+    }
+
+    #[test]
+    fn empty_pattern_never_matches() {
+        assert!(!command_matches_invalidation_pattern("git status", ""));
+        assert!(!command_matches_invalidation_pattern("", ""));
+    }
+
+    #[test]
+    fn extra_whitespace_is_tolerated() {
+        assert!(command_matches_invalidation_pattern(
+            "  gh   pr   create   --title x",
+            "gh pr create"
+        ));
+    }
 }
