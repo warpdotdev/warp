@@ -157,6 +157,60 @@ fn parse_legacy_color(color: &[u8]) -> Option<ColorU> {
     ))
 }
 
+/// Parse the payload of an OSC 7 sequence (`file://<host>/<percent-encoded-path>`).
+///
+/// Returns the decoded absolute path only when the host portion explicitly
+/// matches the local machine's hostname. Empty and `localhost` hosts are
+/// rejected because OSC 7 is terminal-controlled — a remote shell streamed
+/// through a legacy SSH session can emit either form, and we cannot
+/// distinguish that from a real local shell. Shells that want OSC 7 honored
+/// must include the hostname (the de-facto convention; see wezterm/iTerm2).
+fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
+    let raw = str::from_utf8(payload).ok()?;
+    let after_scheme = raw.strip_prefix("file://")?;
+    let path_start = after_scheme.find('/')?;
+    let host = &after_scheme[..path_start];
+    let encoded_path = &after_scheme[path_start..];
+
+    if !osc_7_host_is_local(host) {
+        debug!("Ignoring OSC 7 from non-local host {host:?}");
+        return None;
+    }
+
+    percent_decode_utf8(encoded_path)
+}
+
+fn osc_7_host_is_local(host: &str) -> bool {
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    crate::terminal::model::session::get_local_hostname()
+        .map(|local| local.eq_ignore_ascii_case(host))
+        .unwrap_or(false)
+}
+
+/// Percent-decode an ASCII URI path segment into a UTF-8 String. Returns `None`
+/// if the input contains a malformed `%xx` escape (including `%` not followed
+/// by two hex digits, e.g. truncated at the end of the string) or the decoded
+/// bytes are not UTF-8.
+fn percent_decode_utf8(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = (*bytes.get(i + 1)? as char).to_digit(16)?;
+            let lo = (*bytes.get(i + 2)? as char).to_digit(16)?;
+            decoded.push(((hi << 4) | lo) as u8);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 fn parse_number(input: &[u8]) -> Option<u8> {
     if input.is_empty() {
         return None;
@@ -850,6 +904,27 @@ where
                         .to_owned();
                     self.handler.set_title(Some(title));
                     return;
+                }
+                unhandled(params);
+            }
+
+            // OSC 7: Current working directory.
+            // Format: OSC 7 ; file://<host>/<percent-encoded-path> ST
+            // Lets external tools (worktree managers, project launchers, etc.)
+            // notify the terminal of CWD changes outside the shell prompt
+            // cycle, so the tab CWD/git-branch display can update mid-command.
+            // Reference: https://wezterm.org/shell-integration.html#osc-7-escape-sequence-to-set-the-working-directory
+            b"7" => {
+                if params.len() >= 2 {
+                    // OSC parameters are split on `;`, but URI paths can
+                    // contain unescaped semicolons. Rejoin params[1..] before
+                    // decoding so we don't silently truncate the payload
+                    // (matching the OSC 2 title handler above).
+                    let payload: Vec<u8> = params[1..].join(&b';');
+                    if let Some(path) = parse_osc_7_cwd(&payload) {
+                        self.handler.set_current_working_directory(path);
+                        return;
+                    }
                 }
                 unhandled(params);
             }

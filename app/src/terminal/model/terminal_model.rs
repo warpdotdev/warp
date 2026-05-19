@@ -2825,6 +2825,25 @@ impl ansi::Handler for TerminalModel {
         });
     }
 
+    fn set_current_working_directory(&mut self, path: String) {
+        // OSC 7 is honor-system: the parser only accepts payloads whose host
+        // matches our local hostname, but a legacy SSH session streams the
+        // remote shell's bytes through this same Performer, so a remote box
+        // with a coincident hostname could still slip through. Drop the
+        // update entirely while we know we're inside an SSH-launching block.
+        if self.is_ssh_block() || self.is_warpified_ssh() {
+            log::debug!("Ignoring OSC 7 CWD update inside SSH session: {path:?}");
+            return;
+        }
+        // Always route OSC 7 to the block list, not through `delegate!` —
+        // the alt-screen handler has no `set_current_working_directory`
+        // override, so a TUI program running on the alt screen (vim, htop,
+        // etc.) would silently swallow updates emitted by tools it
+        // launches. The shell's CWD belongs on the block list regardless
+        // of what's currently rendered on screen.
+        self.block_list.set_current_working_directory(path);
+    }
+
     fn precmd(&mut self, data: PrecmdValue) {
         self.ignore_bootstrapping_messages = false;
         let session_id = data.session_id;
