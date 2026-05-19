@@ -63,7 +63,7 @@ use warpui::{windowing::WindowManager, ModelContext, SingletonEntity};
 
 use super::{
     oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap},
-    utils::{query_resources_for, query_tools_for},
+    utils::{query_prompts_for, query_resources_for, query_tools_for},
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
@@ -1963,12 +1963,15 @@ async fn spawn_server(
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
     let tools = query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
+    let prompts =
+        query_prompts_for(capabilities, &server_name, || service.list_all_prompts()).await;
 
     Ok(TemplatableMCPServerInfo {
         name: server_name,
         service,
         resources,
         tools,
+        prompts,
         installation_id: uuid,
         description,
         is_authenticated_transport,

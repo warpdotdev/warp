@@ -107,6 +107,12 @@ pub struct TemplatableMCPServerInfo {
     >,
     resources: Vec<rmcp::model::Resource>,
     tools: Vec<rmcp::model::Tool>,
+    /// Prompt templates the server advertised. Populated only if the server
+    /// declared the `prompts` capability during initialization (#9456). UI
+    /// consumer (slash-command dispatch) is a separate ticket; suppress
+    /// dead_code until then.
+    #[allow(dead_code)]
+    prompts: Vec<rmcp::model::Prompt>,
     installation_id: Uuid,
     description: Option<String>,
     /// Whether the underlying transport uses authentication.
@@ -128,6 +134,11 @@ impl TemplatableMCPServerInfo {
 
     pub fn tools(&self) -> &Vec<rmcp::model::Tool> {
         &self.tools
+    }
+
+    #[allow(dead_code)]
+    pub fn prompts(&self) -> &Vec<rmcp::model::Prompt> {
+        &self.prompts
     }
 
     pub fn installation_id(&self) -> Uuid {
