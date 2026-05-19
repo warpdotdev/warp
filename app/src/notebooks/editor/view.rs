@@ -1435,7 +1435,9 @@ impl RichTextEditorView {
         event: &windowing::StateEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        let windowing::StateEvent::ValueChanged { current, previous } = event;
+        let windowing::StateEvent::ValueChanged { current, previous } = event else {
+            return;
+        };
         let focused = ctx.is_self_or_child_focused();
         let previously_focused = focused && previous.active_window == Some(ctx.window_id());
         let currently_focused = focused && current.active_window == Some(ctx.window_id());

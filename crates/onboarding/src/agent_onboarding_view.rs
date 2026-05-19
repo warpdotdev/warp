@@ -216,7 +216,9 @@ impl AgentOnboardingView {
         // browser), notify the parent to refresh models and workspace/billing metadata.
         // Debounced to avoid excessive API calls from rapid alt-tabbing.
         ctx.subscribe_to_model(&WindowManager::handle(ctx), |me, _wm, event, ctx| {
-            let StateEvent::ValueChanged { current, previous } = event;
+            let StateEvent::ValueChanged { current, previous } = event else {
+                return;
+            };
             if previous.stage != ApplicationStage::Active
                 && current.stage == ApplicationStage::Active
             {

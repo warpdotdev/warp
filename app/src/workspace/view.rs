@@ -1089,6 +1089,32 @@ pub struct Workspace {
     create_auth_secret_modal: Option<ViewHandle<Modal<AuthSecretFtuxView>>>,
 }
 
+/// Returns the next zoom percentage from `ZoomLevel::VALUES` relative to
+/// `current_percent`, stepping from the nearest VALUES entry in the chosen
+/// direction even when `current_percent` itself is not a VALUES entry.
+/// Stays at the boundary if there is no further step in that direction.
+fn next_zoom_step(current_percent: u16, increase: bool) -> u16 {
+    use crate::window_settings::ZoomLevel;
+    let values = ZoomLevel::VALUES;
+
+    if increase {
+        let Some(current_or_previous_index) =
+            values.iter().rposition(|&value| value <= current_percent)
+        else {
+            return values[0];
+        };
+        let next_index = (current_or_previous_index + 1).min(values.len() - 1);
+        values[next_index]
+    } else {
+        let Some(current_or_next_index) = values.iter().position(|&value| value >= current_percent)
+        else {
+            return values[values.len() - 1];
+        };
+        let next_index = current_or_next_index.saturating_sub(1);
+        values[next_index]
+    }
+}
+
 impl Workspace {
     pub fn is_tab_drag_preview(&self) -> bool {
         self.is_tab_drag_preview
@@ -3645,6 +3671,21 @@ impl Workspace {
                 }
 
                 self.activate_tab_internal(active_tab_index, ctx);
+
+                // Restore the per-window zoom override only when
+                // `appearance.window.zoom_per_window` is currently enabled.
+                // If the user has the setting off at restart, the override
+                // stays in the snapshot row but is dormant — re-enabling
+                // the setting on a subsequent launch is an explicit opt-in
+                // and will pick the value back up. `None` means the window
+                // had no override at save time.
+                if let Some(zoom_override) = window_snapshot.zoom_factor_override {
+                    if *WindowSettings::as_ref(ctx).zoom_per_window {
+                        let window_id = self.window_id;
+                        ctx.set_window_zoom_factor(window_id, zoom_override);
+                    }
+                }
+
                 self.check_and_trigger_onboarding(ctx);
                 self.maybe_auto_open_conversation_list(ctx);
             }
@@ -10090,6 +10131,10 @@ impl Workspace {
                 .read(app, |view, _| view.get_filters()),
         );
 
+        let zoom_factor_override = app
+            .window_zoom_factor_override(self.window_id)
+            .map(|z| z.as_f32());
+
         WindowSnapshot {
             tabs,
             active_tab_index,
@@ -10105,6 +10150,7 @@ impl Workspace {
             left_panel_width,
             right_panel_width,
             agent_management_filters,
+            zoom_factor_override,
         }
     }
 
@@ -12292,7 +12338,7 @@ impl Workspace {
 
     /// Updates the titlebar height to match the scaled tab bar height.
     pub fn update_titlebar_height(&self, ctx: &mut ViewContext<Self>) {
-        let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
+        let zoom_factor = ctx.window_zoom_factor(ctx.window_id()).as_f32();
         let scaled_tab_bar_height = (TOTAL_TAB_BAR_HEIGHT * zoom_factor) as f64;
 
         if let Some(platform_window) = ctx.windows().platform_window(ctx.window_id()) {
@@ -16052,6 +16098,17 @@ impl Workspace {
             WindowSettingsChangedEvent::ZoomLevel { .. } => {
                 self.update_titlebar_height(ctx);
             }
+            WindowSettingsChangedEvent::ZoomPerWindow { .. } => {
+                // When the user disables `zoom_per_window`, the
+                // "across-all-windows" semantics demand that this window
+                // stop honouring any leftover per-window override and fall
+                // back to the app-wide default. Clearing the override here
+                // also drops it from the next persistence snapshot.
+                if !*WindowSettings::as_ref(ctx).zoom_per_window {
+                    let window_id = ctx.window_id();
+                    ctx.reset_window_zoom_factor(window_id);
+                }
+            }
             _ => {}
         }
     }
@@ -16642,33 +16699,32 @@ impl Workspace {
     }
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
-        WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(ZoomLevel::default_value(), ctx));
-        });
+        if *WindowSettings::as_ref(ctx).zoom_per_window {
+            let window_id = ctx.window_id();
+            ctx.reset_window_zoom_factor(window_id);
+        } else {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                report_if_error!(window_settings
+                    .zoom_level
+                    .set_value(ZoomLevel::default_value(), ctx));
+            });
+        }
     }
 
     fn adjust_zoom(&mut self, increase: bool, ctx: &mut ViewContext<Self>) {
-        let current_zoom = *WindowSettings::as_ref(ctx).zoom_level.value();
-        let Some(current_index) = crate::window_settings::ZoomLevel::VALUES
-            .iter()
-            .position(|zoom| *zoom == current_zoom)
-        else {
-            return;
-        };
+        let window_id = ctx.window_id();
+        let current_factor = ctx.window_zoom_factor(window_id);
+        let current_percent = (current_factor.as_f32() * 100.0).round() as u16;
+        let next_percent = next_zoom_step(current_percent, increase);
 
-        let next_index = if increase {
-            (current_index + 1).min(crate::window_settings::ZoomLevel::VALUES.len() - 1)
+        if *WindowSettings::as_ref(ctx).zoom_per_window {
+            let next_factor = next_percent as f32 / 100.0;
+            ctx.set_window_zoom_factor(window_id, next_factor);
         } else {
-            current_index.saturating_sub(1)
-        };
-
-        WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
-        });
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                report_if_error!(window_settings.zoom_level.set_value(next_percent, ctx));
+            });
+        }
     }
 
     fn adjust_terminal_font_size(&mut self, font_size_delta: f32, ctx: &mut ViewContext<Self>) {
@@ -16838,6 +16894,11 @@ impl Workspace {
                     // Re-render if the app's focus state has changed (Active/Inactive)
                     // This ensures dimming updates properly when the app gains/loses focus
                     ctx.notify();
+                }
+            }
+            StateEvent::WindowZoomFactorChanged { window_id } => {
+                if *window_id == self.window_id {
+                    self.update_titlebar_height(ctx);
                 }
             }
         };
@@ -18627,7 +18688,7 @@ impl Workspace {
             }
         }
 
-        let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
+        let zoom_factor = ctx.window_zoom_factor(self.window_id).as_f32();
         let traffic_light_data = traffic_light_data(ctx, self.window_id);
         if let Some(traffic_light_data) = traffic_light_data.as_ref() {
             if should_reserve_traffic_light_space_in_tab_bar(traffic_light_data.side) {
@@ -18641,7 +18702,7 @@ impl Workspace {
     }
 
     fn compute_tab_bar_left_padding(&self, ctx: &AppContext) -> f32 {
-        let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
+        let zoom_factor = ctx.window_zoom_factor(self.window_id).as_f32();
         let traffic_light_data = traffic_light_data(ctx, self.window_id);
         let is_window_fullscreen = ctx
             .windows()

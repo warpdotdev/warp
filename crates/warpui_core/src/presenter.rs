@@ -343,8 +343,9 @@ impl Presenter {
         // is proportionally smaller based on the current zoom factor. Once we build up a scene
         // with the fake window bounds, we then adjust the scale factor to include the zoom level
         // so every item in the scene is blown up to fit in the actual window bounds.
-        let zoomed_window_size = window_size.scale_down(ctx.zoom_factor());
-        let zoomed_scale_factor = scale_factor.scale_up(ctx.zoom_factor());
+        let zoom = ctx.window_zoom_factor(self.window_id);
+        let zoomed_window_size = window_size.scale_down(zoom);
+        let zoomed_scale_factor = scale_factor.scale_up(zoom);
 
         self.layout(zoomed_window_size, ctx);
         // In theory, after_layout would be a good place for Elements to update app state with the
@@ -517,7 +518,7 @@ impl Presenter {
     pub fn dispatch_event(&mut self, event: Event, app: &AppContext) -> DispatchResult {
         // Translate all events to be in the coordinate space after factoring in the
         // zoom factor.
-        let event = event.scale_down(app.zoom_factor());
+        let event = event.scale_down(app.window_zoom_factor(self.window_id));
         let window_id = self.window_id;
         let mut event_ctx = self.create_event_context(app.font_cache());
         let handled = app.root_view_id(window_id).is_some_and(|root_view_id| {

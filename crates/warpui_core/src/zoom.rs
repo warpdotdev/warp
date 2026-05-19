@@ -10,6 +10,10 @@ impl ZoomFactor {
     pub fn new(zoom_level: f32) -> Self {
         Self(zoom_level)
     }
+
+    pub fn as_f32(&self) -> f32 {
+        self.0
+    }
 }
 
 impl Default for ZoomFactor {

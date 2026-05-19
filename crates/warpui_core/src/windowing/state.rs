@@ -306,6 +306,15 @@ impl WindowManager {
         self.platform.windowing_system()
     }
 
+    pub(crate) fn emit_window_zoom_factor_changed(
+        &mut self,
+        window_id: WindowId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(StateEvent::WindowZoomFactorChanged { window_id });
+        ctx.notify();
+    }
+
     /// Helper function used to ensure that updates to [`State`] end up triggering the proper event
     /// updates.
     fn update(&mut self, update_fn: impl FnOnce(&mut State), ctx: &mut ModelContext<Self>) {
@@ -323,6 +332,8 @@ impl WindowManager {
 pub enum StateEvent {
     /// The state changed from `previous` to `current`.
     ValueChanged { current: State, previous: State },
+    /// The effective zoom factor for a window changed.
+    WindowZoomFactorChanged { window_id: WindowId },
 }
 
 impl Entity for WindowManager {

@@ -934,6 +934,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     .agent_management_filters
                     .as_ref()
                     .and_then(|f| serde_json::to_string(f).ok()),
+                zoom_factor_override: window.zoom_factor_override,
             };
             diesel::insert_into(schema::windows::dsl::windows)
                 .values(new_window)
@@ -2865,6 +2866,7 @@ fn read_sqlite_data(
                 agent_management_filters: window
                     .agent_management_filters
                     .and_then(|s| serde_json::from_str(&s).ok()),
+                zoom_factor_override: window.zoom_factor_override,
             }
         })
         .collect();

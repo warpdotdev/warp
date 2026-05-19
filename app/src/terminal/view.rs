@@ -3942,6 +3942,7 @@ impl TerminalView {
             windowing::StateEvent::ValueChanged { current, previous } => {
                 me.handle_windowing_state_update((current, previous), ctx);
             }
+            windowing::StateEvent::WindowZoomFactorChanged { .. } => {}
         });
 
         let ligature_handle = LigatureSettings::handle(ctx);

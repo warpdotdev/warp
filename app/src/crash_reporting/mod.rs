@@ -193,6 +193,7 @@ pub(crate) fn init(ctx: &mut AppContext) -> bool {
                 set_lifecycle_stage(current.stage);
             }
         }
+        StateEvent::WindowZoomFactorChanged { .. } => {}
     });
 
     let antivirus_info = AntivirusInfo::handle(ctx);

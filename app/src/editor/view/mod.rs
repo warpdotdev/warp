@@ -2984,6 +2984,7 @@ impl EditorView {
                 windowing::StateEvent::ValueChanged { current, previous } => {
                     editor.handle_windowing_state_event((current, previous), ctx);
                 }
+                windowing::StateEvent::WindowZoomFactorChanged { .. } => {}
             },
         );
 

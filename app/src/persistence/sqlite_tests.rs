@@ -291,7 +291,45 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
         left_panel_width: None,
         right_panel_width: None,
         agent_management_filters: None,
+        zoom_factor_override: None,
     }
+}
+
+#[test]
+fn test_sqlite_round_trips_zoom_factor_override() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    // The two helper-built windows must use different vertical_tabs_panel_open
+    // values so their terminal_panes get distinct UUIDs (helper derives the
+    // pane UUID from the boolean), avoiding a UNIQUE-constraint conflict.
+    let mut window_no_override = test_terminal_window_snapshot(false);
+    window_no_override.zoom_factor_override = None;
+    let mut window_with_override = test_terminal_window_snapshot(true);
+    window_with_override.zoom_factor_override = Some(1.5);
+
+    let app_state = AppState {
+        windows: vec![window_no_override, window_with_override],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert_eq!(
+        restored
+            .windows
+            .iter()
+            .map(|window| window.zoom_factor_override)
+            .collect::<Vec<_>>(),
+        vec![None, Some(1.5)]
+    );
 }
 
 #[test]
@@ -374,6 +412,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            zoom_factor_override: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -448,6 +487,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            zoom_factor_override: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),

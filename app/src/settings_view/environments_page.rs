@@ -468,7 +468,9 @@ impl EnvironmentsPageView {
         // Refetch GitHub repos when the app regains focus, in case the user
         // just completed the OAuth flow in the browser.
         ctx.subscribe_to_model(&WindowManager::handle(ctx), |me, _, evt, ctx| {
-            let windowing::StateEvent::ValueChanged { current, previous } = evt;
+            let windowing::StateEvent::ValueChanged { current, previous } = evt else {
+                return;
+            };
             if previous.stage == ApplicationStage::Inactive
                 && current.stage == ApplicationStage::Active
                 && me

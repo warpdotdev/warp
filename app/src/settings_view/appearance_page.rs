@@ -50,7 +50,7 @@ use crate::user_config::WarpConfig;
 use crate::util::bindings;
 use crate::window_settings::{
     BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
-    OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
+    OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel, ZoomPerWindow,
 };
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
@@ -473,6 +473,7 @@ pub enum AppearancePageAction {
     SetTabCloseButtonPosition(TabCloseButtonPosition),
     SetZoomLevel(u16),
     ResetZoomLevel,
+    SetZoomPerWindow(bool),
     SetDefaultDirectoryTabColor {
         path: PathBuf,
         color: DirectoryTabColor,
@@ -507,6 +508,7 @@ pub struct AppearanceSettingsPageView {
     workspace_decorations_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     tab_close_button_position_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     zoom_level_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    zoom_per_window_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     zoom_reset_button_mouse_state: MouseStateHandle,
     available_families: HashMap<String, (Option<FamilyId>, FontType)>,
     view_font_type: FontType,
@@ -654,6 +656,12 @@ impl TypedActionView for AppearanceSettingsPageView {
             ResetZoomLevel => {
                 WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
                     report_if_error!(window_settings.zoom_level.clear_value(ctx));
+                });
+                ctx.notify();
+            }
+            SetZoomPerWindow(value) => {
+                WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                    report_if_error!(window_settings.zoom_per_window.set_value(*value, ctx));
                 });
                 ctx.notify();
             }
@@ -923,6 +931,16 @@ impl AppearanceSettingsPageView {
 
                     let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
                     ctx.set_zoom_factor(zoom_factor);
+                }
+                WindowSettingsChangedEvent::ZoomPerWindow { .. } => {
+                    let zoom_per_window = *WindowSettings::as_ref(ctx).zoom_per_window;
+
+                    me.zoom_per_window_dropdown.update(ctx, |dropdown, ctx| {
+                        dropdown.set_selected_by_action(
+                            AppearancePageAction::SetZoomPerWindow(zoom_per_window),
+                            ctx,
+                        );
+                    });
                 }
                 _ => {}
             };
@@ -1226,6 +1244,7 @@ impl AppearanceSettingsPageView {
             ),
             tab_close_button_position_dropdown: Self::build_tab_close_button_position_dropdown(ctx),
             zoom_level_dropdown: Self::build_zoom_level_dropdown(ctx),
+            zoom_per_window_dropdown: Self::build_zoom_per_window_dropdown(ctx),
             zoom_reset_button_mouse_state: MouseStateHandle::default(),
             available_families: Default::default(),
             view_font_type: Default::default(),
@@ -1289,6 +1308,7 @@ impl AppearanceSettingsPageView {
 
         if FeatureFlag::UIZoom.is_enabled() {
             window_settings_widgets.push(Box::new(ZoomLevelWidget));
+            window_settings_widgets.push(Box::new(ZoomCommandsScopeWidget));
         }
 
         if window_settings
@@ -2455,6 +2475,31 @@ impl AppearanceSettingsPageView {
 
             let current_value = *WindowSettings::as_ref(ctx).zoom_level.value();
             dropdown.set_selected_by_action(AppearancePageAction::SetZoomLevel(current_value), ctx);
+
+            dropdown
+        })
+    }
+
+    fn build_zoom_per_window_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Dropdown<AppearancePageAction>> {
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            let values = [(false, "Across all windows"), (true, "Active window only")];
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|(value, label)| {
+                        DropdownItem::new(label, AppearancePageAction::SetZoomPerWindow(value))
+                    })
+                    .collect(),
+                ctx,
+            );
+
+            let current_value = *WindowSettings::as_ref(ctx).zoom_per_window;
+            dropdown
+                .set_selected_by_action(AppearancePageAction::SetZoomPerWindow(current_value), ctx);
 
             dropdown
         })
@@ -5149,6 +5194,38 @@ impl SettingsWidget for ZoomLevelWidget {
             ),
             None,
             &view.zoom_level_dropdown,
+        )
+    }
+}
+
+struct ZoomCommandsScopeWidget;
+
+impl SettingsWidget for ZoomCommandsScopeWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "zoom commands per window active window all windows"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Zoom commands",
+            Some("Controls whether Zoom In, Zoom Out, and Reset Zoom affect every window or only the active window"),
+            None,
+            LocalOnlyIconState::for_setting(
+                ZoomPerWindow::storage_key(),
+                ZoomPerWindow::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            None,
+            &view.zoom_per_window_dropdown,
         )
     }
 }

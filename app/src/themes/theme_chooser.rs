@@ -36,7 +36,6 @@ use crate::{
     themes::theme::SelectedSystemThemes,
     user_config::{load_theme_configs, themes_dir, WarpConfig, WarpConfigUpdateEvent},
     util::traffic_lights::{TrafficLightData, TrafficLightSide},
-    window_settings::WindowSettings,
 };
 use crate::{appearance::AppearanceManager, send_telemetry_from_ctx};
 use crate::{editor::EditorView, resource_center::TipsCompleted};
@@ -242,6 +241,7 @@ impl ThemeChooser {
                         ctx.notify();
                     }
                 }
+                StateEvent::WindowZoomFactorChanged { .. } => {}
             }
         });
 
@@ -590,7 +590,7 @@ impl ThemeChooser {
     ) -> Box<dyn Element> {
         let mut margin_left = 16.;
 
-        let zoom_factor = WindowSettings::as_ref(app).zoom_level.as_zoom_factor();
+        let zoom_factor = app.window_zoom_factor(self.window_id).as_f32();
         // Since this panel is always on the left, only account for left-side traffic lights.
         if let Some(width) = traffic_light_data
             .filter(|data| data.side == TrafficLightSide::Left)

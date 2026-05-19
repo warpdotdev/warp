@@ -6,7 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{core::view::AnyViewHandle, AnyView, EntityId};
+use crate::{core::view::AnyViewHandle, AnyView, EntityId, ZoomFactor};
 
 /// A unique identifier for a window.
 ///
@@ -47,4 +47,8 @@ pub(super) struct Window {
 
     /// The ID of the currently focused view, if any.
     pub focused_view: Option<EntityId>,
+
+    /// Per-window zoom factor override. `None` means the window follows the
+    /// app-wide default returned by [`AppContext::zoom_factor`].
+    pub zoom_factor_override: Option<ZoomFactor>,
 }
