@@ -1591,7 +1591,7 @@ impl RightPanelView {
         ai_enabled: bool,
         ctx: &AppContext,
     ) -> Option<ViewHandle<TerminalView>> {
-        let terminal_views = pane_group.read(ctx, |pg, ctx| pg.terminal_views(ctx));
+        let terminal_views = pane_group.read(ctx, |pg, ctx| pg.visible_terminal_views(ctx));
         let focused_terminal = pane_group.read(ctx, |pg, ctx| pg.focused_session_view(ctx));
         let pane_group_id = pane_group.id();
         let preferred_terminal_id = self
