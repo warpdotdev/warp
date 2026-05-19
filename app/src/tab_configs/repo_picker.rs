@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use warp_util::path::user_friendly_path;
 use warpui::{
-    elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text},
+    elements::{Border, ChildView, Container, Flex, Hoverable, MainAxisSize, MouseStateHandle, Text},
     platform::Cursor,
     text_layout::ClipConfig,
     ui_components::components::UiComponentStyles,
@@ -95,6 +95,9 @@ impl RepoPicker {
         // (via FilterableDropdown::set_footer → Menu::set_pinned_footer_builder).
         // Being inside the Dismiss means clicks on it do not trigger the dismiss
         // handler, so the standard on_click / LeftMouseUp path works correctly.
+        //
+        // When the footer is hovered, we dispatch ClearHover to the menu so that
+        // repo list items stop showing a hover highlight (issue #9453).
         let mouse_state = picker.add_repo_mouse_state.clone();
         picker.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_footer(
@@ -113,19 +116,36 @@ impl RepoPicker {
                     let border_fill = theme.outline();
                     let mouse_state_clone = mouse_state.clone();
                     Hoverable::new(mouse_state_clone, move |_| {
-                        Container::new(
-                            Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
-                                .with_color(text_color.into())
+                        // Use Flex::row with MainAxisSize::Max to make the footer
+                        // extend the full width of the dropdown (fixes issue #9453).
+                        Flex::row()
+                            .with_main_axis_size(MainAxisSize::Max)
+                            .with_child(
+                                Container::new(
+                                    Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
+                                        .with_color(text_color.into())
+                                        .finish(),
+                                )
+                                .with_horizontal_padding(8.)
+                                .with_vertical_padding(6.)
+                                .with_background(bg)
                                 .finish(),
-                        )
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(6.)
-                        .with_background(bg)
-                        .with_border(Border::top(1.).with_border_fill(border_fill))
-                        .finish()
+                            )
+                            .with_background(bg)
+                            .with_border(Border::top(1.).with_border_fill(border_fill))
+                            .finish()
                     })
                     .on_click(|ctx, _, _| {
                         ctx.dispatch_typed_action(RepoPickerAction::AddNewRepo);
+                    })
+                    .on_hover(|is_hovering, ctx, _, _| {
+                        if is_hovering {
+                            // Clear the menu's hovered row so repo list items
+                            // don't show hover state while footer is hovered.
+                            ctx.dispatch_typed_action(MenuAction::ClearHover(0))
+                        } else {
+                            ctx.dispatch_typed_action(MenuAction::ClearHoverDone(0))
+                        }
                     })
                     .with_cursor(Cursor::PointingHand)
                     .finish()

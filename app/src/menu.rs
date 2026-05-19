@@ -71,6 +71,9 @@ pub struct SubMenu<A: Action + Clone = ()> {
     /// Tracks whether the most recent selection movement came from pointer
     /// hover or from a keyboard/programmatic path.
     last_selection_source: Option<MenuSelectionSource>,
+    /// When true, suppresses hover highlighting of menu items.
+    /// Set when the pinned footer/header is hovered, cleared when it's not.
+    suppress_item_hover: bool,
     /// Contains variant specific state.
     menu_variant: MenuVariant,
 }
@@ -1074,6 +1077,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
         ignore_hover_when_covered: bool,
         safe_zone_suppresses_hover: bool,
         submenu_being_shown_for_item: bool,
+        suppress_item_hover: bool,
         appearance: &Appearance,
         vertical_padding: f32,
         horizontal_padding: f32,
@@ -1086,7 +1090,8 @@ impl<A: Action + Clone> MenuItemFields<A> {
             .horizontal_padding_override
             .unwrap_or(horizontal_padding);
         let mut ret = Hoverable::new(self.mouse_state.clone(), |state| {
-            let is_hovered = state.is_hovered() && !safe_zone_suppresses_hover;
+            let is_hovered = state.is_hovered() && !safe_zone_suppresses_hover
+                && !suppress_item_hover;
             let is_hovered_or_selected = is_hovered || is_selected;
             let default_hover_background = if self.highlight_on_hover {
                 theme.accent_button_color()
@@ -1433,6 +1438,7 @@ impl<A: Action + Clone> MenuItem<A> {
         ignore_hover_when_covered: bool,
         safe_zone_suppresses_hover: bool,
         submenu_being_shown_for_item: bool,
+        suppress_item_hover: bool,
         appearance: &Appearance,
         menu_width: f32,
         app: &AppContext,
@@ -1448,6 +1454,7 @@ impl<A: Action + Clone> MenuItem<A> {
                 ignore_hover_when_covered,
                 safe_zone_suppresses_hover,
                 submenu_being_shown_for_item,
+                suppress_item_hover,
                 appearance,
                 MENU_ITEM_VERTICAL_PADDING,
                 MENU_ITEM_HORIZONTAL_PADDING,
@@ -1458,7 +1465,7 @@ impl<A: Action + Clone> MenuItem<A> {
                 let horizontal_padding = ((menu_width - (MENU_ITEM_HORIZONTAL_PADDING * 2.))
                     / (items.len() as f32)
                     / 5.)
-                    .round();
+                .round();
                 let items_row = Flex::row()
                     .with_children(items.iter().enumerate().map(|(item_idx, fields)| {
                         fields.render(
@@ -1471,6 +1478,7 @@ impl<A: Action + Clone> MenuItem<A> {
                             ignore_hover_when_covered,
                             safe_zone_suppresses_hover,
                             submenu_being_shown_for_item,
+                            suppress_item_hover,
                             appearance,
                             MENU_ITEM_VERTICAL_PADDING,
                             horizontal_padding,
@@ -1631,6 +1639,11 @@ pub enum MenuAction {
     CloseSubmenu(usize),
     Close(bool),
     Enter,
+    /// Clears the hovered row index, used when hovering over a pinned footer/header
+    /// to prevent repo list items from showing hover state.
+    ClearHover(usize),
+    /// Clears the suppress_item_hover flag when the pointer leaves the footer/header.
+    ClearHoverDone(usize),
 }
 
 pub fn init(app: &mut AppContext) {
@@ -2009,6 +2022,7 @@ impl<A: Action + Clone> SubMenu<A> {
         ignore_hover_when_covered: bool,
         safe_zone_anchor_row: Option<usize>,
         submenu_being_shown_for_item_index: Option<usize>,
+        suppress_item_hover: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Vec<Box<dyn Element>> {
@@ -2038,6 +2052,7 @@ impl<A: Action + Clone> SubMenu<A> {
                                 ignore_hover_when_covered,
                                 safe_zone_suppresses_hover,
                                 submenu_being_shown_for_item,
+                                suppress_item_hover,
                                 appearance,
                                 submenu_width,
                                 app,
@@ -2068,6 +2083,7 @@ impl<A: Action + Clone> SubMenu<A> {
                     ignore_hover_when_covered,
                     None,
                     None,
+                    suppress_item_hover,
                     appearance,
                     app,
                 ));
@@ -2480,7 +2496,9 @@ impl<A: Action + Clone> SubMenu<A> {
             )),
             HoverSubmenuLeafNode { .. }
             | UnhoverSubmenuParent(_)
-            | HoverSubmenuWithChildren(_, _) => ActionAccessibilityContent::Empty,
+            | HoverSubmenuWithChildren(_, _)
+            | ClearHover(_)
+            | ClearHoverDone(_) => ActionAccessibilityContent::Empty,
         }
     }
 
@@ -2541,6 +2559,20 @@ impl<A: Action + Clone> SubMenu<A> {
                         via_select_item: true,
                     });
                 }
+            }
+            MenuAction::ClearHover(depth) => {
+                if *depth != self.depth {
+                    return;
+                }
+                self.hovered_row_index = None;
+                self.suppress_item_hover = true;
+                ctx.emit(Event::ItemHovered);
+            }
+            MenuAction::ClearHoverDone(depth) => {
+                if *depth != self.depth {
+                    return;
+                }
+                self.suppress_item_hover = false;
             }
         }
     }
@@ -2632,6 +2664,7 @@ impl<A: Action + Clone> SubMenu<A> {
             ignore_hover_when_covered,
             safe_zone_anchor_row,
             submenu_being_shown_for_item_index,
+            self.suppress_item_hover,
             appearance,
             app,
         );
