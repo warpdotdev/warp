@@ -1252,7 +1252,9 @@ async fn read_binary_file_context(
 
     let content = match read_file_as_binary(path).await {
         Ok(content) => content,
-        Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::Missing),
+        Err(FileLoadError::DoesNotExist | FileLoadError::FileTooLarge { .. }) => {
+            return Ok(BinaryFileReadResult::Missing)
+        }
         Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
     };
 
