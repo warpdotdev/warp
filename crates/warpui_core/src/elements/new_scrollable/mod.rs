@@ -1085,6 +1085,10 @@ pub struct NewScrollable {
 
     // If true, always handle scroll wheel events even if the scrollable is not scrolled to the edge.
     always_handle_events_first: bool,
+
+    // If true, remap a single-axis scrollable's cross-axis wheel deltas
+    // onto its main axis before dispatching them. Opt-in.
+    remap_cross_axis_wheel_to_main_axis: bool,
 }
 
 impl NewScrollable {
@@ -1106,6 +1110,7 @@ impl NewScrollable {
             child_max_z_index: None,
             propagate_mousewheel_if_not_handled: false,
             always_handle_events_first,
+            remap_cross_axis_wheel_to_main_axis: false,
         }
     }
 
@@ -1299,6 +1304,16 @@ impl NewScrollable {
         self
     }
 
+    /// On a single-axis scrollable, remap a scroll-wheel event whose delta
+    /// lies only on the cross axis onto the scrollable's own axis. Lets a
+    /// vertical mouse wheel drive a horizontal-only scrollable (and vice
+    /// versa) without a modifier or horizontal trackpad swipe. No-op for
+    /// dual-axis scrollables.
+    pub fn with_remap_cross_axis_wheel_to_main_axis(mut self, remap: bool) -> Self {
+        self.remap_cross_axis_wheel_to_main_axis = remap;
+        self
+    }
+
     fn handle_event(
         &mut self,
         z_index: ZIndex,
@@ -1347,8 +1362,29 @@ impl NewScrollable {
                 if !in_bound || is_covered {
                     false
                 } else {
+                    // When opted in on a single-axis scrollable, swap a
+                    // pure cross-axis wheel delta onto the main axis so
+                    // the existing mousewheel path can consume it. Exact
+                    // `== 0.0` is intentional: discrete mouse wheels emit
+                    // 0 on the cross axis, trackpads always carry a tiny
+                    // drift on both axes and shouldn't be remapped.
+                    let delta = if self.remap_cross_axis_wheel_to_main_axis {
+                        if let ScrollableState::SingleAxis { axis, .. } = &self.state {
+                            let main = delta.along(*axis);
+                            let cross = delta.along(axis.invert());
+                            if main == 0.0 && cross != 0.0 {
+                                cross.along(*axis)
+                            } else {
+                                *delta
+                            }
+                        } else {
+                            *delta
+                        }
+                    } else {
+                        *delta
+                    };
                     self.state.mousewheel(
-                        *delta,
+                        delta,
                         *precise,
                         self.scrollable_size.expect("Size should exist"),
                         self.propagate_mousewheel_if_not_handled,

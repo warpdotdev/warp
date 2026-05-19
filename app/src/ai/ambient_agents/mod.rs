@@ -8,6 +8,7 @@ use std::str::FromStr;
 use uuid::{NonNilUuid, Uuid};
 
 pub mod github_auth_notifier;
+pub mod github_auth_url;
 pub mod scheduled;
 pub mod spawn;
 pub mod task;
@@ -15,7 +16,7 @@ pub mod telemetry;
 
 pub use task::{
     cancel_task_silently, cancel_task_with_toast, AgentConfigSnapshot, AgentSource,
-    AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
 };
 pub const OUT_OF_CREDITS_TASK_FAILURE_MESSAGE: &str =
     "Out of credits. Upgrade your Warp plan to continue running cloud agents.";
@@ -78,19 +79,33 @@ pub fn conversation_output_status_from_conversation(
             blocked_action: blocked_action.clone(),
         });
     }
+    if let ConversationStatus::Error = conversation.status() {
+        if let Some(error_message) = conversation.status_error_message() {
+            return Some(AmbientConversationStatus::Error {
+                error: RenderableAIError::Other {
+                    error_message: error_message.to_string(),
+                    will_attempt_resume: false,
+                    waiting_for_network: false,
+                },
+            });
+        }
+    }
 
-    let last_exchange = conversation.root_task_exchanges().last()?;
-    if let AIAgentOutputStatus::Finished { finished_output } = &last_exchange.output_status {
-        let status = match finished_output {
-            FinishedAIAgentOutput::Cancelled { output: _, reason } => {
-                AmbientConversationStatus::Cancelled { reason: *reason }
-            }
-            FinishedAIAgentOutput::Error { output: _, error } => AmbientConversationStatus::Error {
-                error: error.clone(),
-            },
-            FinishedAIAgentOutput::Success { output: _ } => AmbientConversationStatus::Success,
-        };
-        return Some(status);
+    if let Some(last_exchange) = conversation.root_task_exchanges().last() {
+        if let AIAgentOutputStatus::Finished { finished_output } = &last_exchange.output_status {
+            let status = match finished_output {
+                FinishedAIAgentOutput::Cancelled { output: _, reason } => {
+                    AmbientConversationStatus::Cancelled { reason: *reason }
+                }
+                FinishedAIAgentOutput::Error { output: _, error } => {
+                    AmbientConversationStatus::Error {
+                        error: error.clone(),
+                    }
+                }
+                FinishedAIAgentOutput::Success { output: _ } => AmbientConversationStatus::Success,
+            };
+            return Some(status);
+        }
     }
 
     None

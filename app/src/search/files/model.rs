@@ -20,6 +20,7 @@ cfg_if::cfg_if! {
         use repo_metadata::repositories::DetectedRepositories;
         use std::cell::RefCell;
         use std::collections::HashMap;
+        use warp_util::local_or_remote_path::LocalOrRemotePath;
     }
 }
 
@@ -89,7 +90,9 @@ impl FileSearchModel {
         let current_dir = active_window_id
             .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))?;
 
-        DetectedRepositories::as_ref(app).get_root_for_path(current_dir)
+        DetectedRepositories::as_ref(app)
+            .get_root_for_path(&LocalOrRemotePath::Local(current_dir.to_path_buf()))
+            .and_then(|r| PathBuf::try_from(r).ok())
     }
 
     #[cfg(not(feature = "local_fs"))]

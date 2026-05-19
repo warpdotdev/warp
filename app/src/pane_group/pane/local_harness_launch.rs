@@ -1,5 +1,6 @@
 use std::{collections::HashMap, ffi::OsString, path::PathBuf, sync::Arc};
 
+use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
 use crate::ai::{
     agent_sdk::{
         driver::{
@@ -11,7 +12,10 @@ use crate::ai::{
         },
         task_env_vars, validate_cli_installed,
     },
-    ambient_agents::{task::HarnessConfig, AgentConfigSnapshot, AmbientAgentTaskId},
+    ambient_agents::{
+        task::{normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig},
+        AgentConfigSnapshot, AmbientAgentTaskId,
+    },
 };
 use crate::server::server_api::ai::AIClient;
 use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
@@ -65,11 +69,18 @@ pub(super) fn build_local_codex_child_command(prompt: &str) -> String {
     format!("codex --dangerously-bypass-approvals-and-sandbox {quoted_prompt}")
 }
 
-fn local_child_task_config(harness: Harness) -> Option<AgentConfigSnapshot> {
+pub(super) fn local_child_task_config(
+    harness: Harness,
+    agent_name: Option<String>,
+) -> Option<AgentConfigSnapshot> {
+    let agent_name = agent_name
+        .as_deref()
+        .and_then(normalize_orchestrator_agent_name);
     match harness {
         Harness::Oz | Harness::Unknown => None,
         Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Codex => {
             Some(AgentConfigSnapshot {
+                name: agent_name,
                 harness: Some(HarnessConfig::from_harness_type(harness)),
                 ..Default::default()
             })
@@ -77,15 +88,24 @@ fn local_child_task_config(harness: Harness) -> Option<AgentConfigSnapshot> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn prepare_local_harness_child_launch(
     prompt: String,
     harness_type: String,
     model_id: Option<String>,
     parent_run_id: Option<String>,
+    agent_name: Option<String>,
     shell_type: Option<ShellType>,
     startup_directory: Option<PathBuf>,
     ai_client: Arc<dyn AIClient>,
 ) -> Result<PreparedLocalHarnessLaunch, String> {
+    let harness_model_config =
+        model_id
+            .filter(|id| !id.is_empty())
+            .map(|model_id| HarnessModelConfig {
+                model_id,
+                reasoning_level: None,
+            });
     let Some(harness) = normalize_local_child_harness(&harness_type) else {
         let harness_name = harness_type.trim();
         return Err(if harness_name.is_empty() {
@@ -94,6 +114,9 @@ pub(super) async fn prepare_local_harness_child_launch(
             format!("Unsupported local child harness '{harness_name}'.")
         });
     };
+    if let Some(message) = local_child_harness_disabled_message(harness) {
+        return Err(message.to_string());
+    }
     validate_local_harness_shell(shell_type)?;
     let command = match harness {
         Harness::Oz => unreachable!("normalize_local_child_harness filters out Oz"),
@@ -163,7 +186,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             prompt.clone(),
             None,
             parent_run_id.clone(),
-            local_child_task_config(harness),
+            local_child_task_config(harness, agent_name),
         )
         .await
         .map_err(|error| {
@@ -177,7 +200,10 @@ pub(super) async fn prepare_local_harness_child_launch(
     // Propagate the selected model to Claude Code via ANTHROPIC_MODEL.
     // Codex local children never receive a model override — the UI
     // ensures model_id is empty for local Codex.
-    env_vars.extend(harness_model_env_vars(harness, model_id.as_deref()));
+    env_vars.extend(harness_model_env_vars(
+        harness,
+        harness_model_config.as_ref(),
+    ));
 
     Ok(PreparedLocalHarnessLaunch {
         command,

@@ -154,10 +154,18 @@ pub enum DeserializationError {
     Transport(reqwest::Error),
 }
 
+#[derive(Deserialize, Debug)]
+struct OutOfCreditsResponse {
+    #[serde(default, rename = "userDisplayMessage")]
+    user_display_message: Option<String>,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum AIApiError {
     #[error("Request failed due to lack of AI quota.")]
-    QuotaLimit,
+    QuotaLimit {
+        user_display_message: Option<String>,
+    },
 
     #[error("Warp is currently overloaded. Please try again later.")]
     ServerOverloaded,
@@ -187,7 +195,12 @@ pub enum AIApiError {
 
 impl From<http_client::ResponseError> for AIApiError {
     fn from(err: http_client::ResponseError) -> Self {
-        Self::from_response_error(err.source, &err.headers)
+        let http_client::ResponseError {
+            source,
+            headers,
+            body,
+        } = err;
+        Self::from_response_error(source, &headers, body)
     }
 }
 
@@ -206,11 +219,15 @@ impl From<serde_json::Error> for AIApiError {
 impl AIApiError {
     /// Converts a reqwest error to an AIApiError, using response headers to distinguish
     /// between different types of 429 errors.
-    fn from_response_error(err: reqwest::Error, headers: &::http::HeaderMap) -> Self {
+    fn from_response_error(
+        err: reqwest::Error,
+        headers: &::http::HeaderMap,
+        body: Option<String>,
+    ) -> Self {
         // For HTTP 429 errors, check the X-Warp-Error-Code header to distinguish
         // between out-of-credits and server-overload.
         if err.status() == Some(http::StatusCode::TOO_MANY_REQUESTS) {
-            return Self::error_for_429(headers);
+            return Self::error_for_429(headers, body);
         }
 
         Self::from_transport_error(err)
@@ -246,13 +263,18 @@ impl AIApiError {
     }
 
     /// Returns the appropriate error for a 429 response by checking the X-Warp-Error-Code header.
-    fn error_for_429(headers: &::http::HeaderMap) -> Self {
+    fn error_for_429(headers: &::http::HeaderMap, body: Option<String>) -> Self {
         if headers
             .get(WARP_ERROR_CODE_HEADER)
             .and_then(|v| v.to_str().ok())
             == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
         {
-            AIApiError::QuotaLimit
+            let user_display_message = body
+                .and_then(|body| serde_json::from_str::<OutOfCreditsResponse>(&body).ok())
+                .and_then(|r| r.user_display_message);
+            AIApiError::QuotaLimit {
+                user_display_message,
+            }
         } else {
             AIApiError::ServerOverloaded
         }
@@ -264,8 +286,12 @@ impl AIApiError {
         match err {
             reqwest_eventsource::Error::InvalidStatusCode(
                 http::StatusCode::TOO_MANY_REQUESTS,
-                ref res,
-            ) => Self::error_for_429(res.headers()),
+                res,
+            ) => {
+                let headers = res.headers().clone();
+                let body = res.text().await.ok();
+                Self::error_for_429(&headers, body)
+            }
             reqwest_eventsource::Error::InvalidStatusCode(status, res) => Self::ErrorStatus(
                 status,
                 res.text()
@@ -316,9 +342,9 @@ impl ErrorExt for AIApiError {
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
             AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::QuotaLimit | AIApiError::ServerOverloaded | AIApiError::NoContextFound => {
-                false
-            }
+            AIApiError::QuotaLimit { .. }
+            | AIApiError::ServerOverloaded
+            | AIApiError::NoContextFound => false,
         }
     }
 }
@@ -872,7 +898,13 @@ impl ServerApi {
             }
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
-            return AIApiError::QuotaLimit.into();
+            let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
+                .ok()
+                .and_then(|r| r.user_display_message);
+            return AIApiError::QuotaLimit {
+                user_display_message,
+            }
+            .into();
         }
 
         // Try to deserialize error response as { "error": "message" }
@@ -1044,7 +1076,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1068,7 +1101,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
 
@@ -1105,7 +1139,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1128,7 +1163,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)

@@ -93,6 +93,61 @@ fn add_mock_config_with_name(name: &str, configs: &mut Vec<LaunchConfig>) {
 }
 
 #[test]
+fn test_find_matching_tab_config() {
+    let configs = vec![
+        make_mock_tab_config("my tab", Some("/tab_configs/my_tab.toml")),
+        make_mock_tab_config("Deploy", Some("/tab_configs/Deploy.yaml")),
+        make_mock_tab_config("dotted", Some("/tab_configs/foo.bar.toml")),
+        make_mock_tab_config("orphan", None),
+    ];
+
+    // Stem match without extension.
+    assert_eq!(
+        find_matching_tab_config("my_tab", configs.clone()).map(|c| c.name),
+        Some(String::from("my tab")),
+    );
+
+    // Stem match with extension.
+    assert_eq!(
+        find_matching_tab_config("my_tab.toml", configs.clone()).map(|c| c.name),
+        Some(String::from("my tab")),
+    );
+
+    // Case-insensitive match.
+    assert_eq!(
+        find_matching_tab_config("deploy", configs.clone()).map(|c| c.name),
+        Some(String::from("Deploy")),
+    );
+
+    // Dotted stem resolves both with and without `.toml`.
+    assert_eq!(
+        find_matching_tab_config("foo.bar", configs.clone()).map(|c| c.name),
+        Some(String::from("dotted")),
+    );
+    assert_eq!(
+        find_matching_tab_config("foo.bar.toml", configs.clone()).map(|c| c.name),
+        Some(String::from("dotted")),
+    );
+
+    // Miss returns None.
+    assert!(find_matching_tab_config("unknown", configs.clone()).is_none());
+
+    // Configs without a `source_path` never match.
+    assert!(find_matching_tab_config("orphan", configs).is_none());
+}
+
+fn make_mock_tab_config(name: &str, source_path: Option<&str>) -> TabConfig {
+    TabConfig {
+        name: name.to_string(),
+        title: None,
+        color: None,
+        panes: vec![],
+        params: HashMap::new(),
+        source_path: source_path.map(PathBuf::from),
+    }
+}
+
+#[test]
 fn test_get_launch_config_path() {
     assert_eq!(
         get_launch_config_path("/path/to/a/config"),
@@ -263,6 +318,56 @@ fn test_action_cloud_agent_setup_parse() {
 
     let action = Action::parse(&url).unwrap();
     assert!(matches!(action, Action::CloudAgentSetup));
+}
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_default_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_alias_path() {
+    let url = Url::parse(&format!(
+        "{}://action/auto-handoff-to-cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_sleep_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud?trigger=sleep",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::MacOsSleep,
+        }
+    ));
 }
 
 #[test]

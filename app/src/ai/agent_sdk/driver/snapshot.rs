@@ -1388,6 +1388,7 @@ fn merge_content_type(target: &UploadTarget, mime_type: &str) -> UploadTarget {
         url: target.url.clone(),
         method: target.method.clone(),
         headers,
+        fields: target.fields.clone(),
     }
 }
 

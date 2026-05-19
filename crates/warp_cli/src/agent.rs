@@ -328,8 +328,24 @@ pub struct RunAgentArgs {
     #[arg(long = "sandboxed", hide = true)]
     pub sandboxed: bool,
     /// IAM role ARN to use for federated AWS Bedrock credentials for this run.
-    #[arg(long = "bedrock-inference-role", value_name = "ROLE_ARN", hide = true)]
+    #[arg(
+        long = "bedrock-inference-role",
+        value_name = "ROLE_ARN",
+        requires = "bedrock_role_region",
+        hide = true
+    )]
     pub bedrock_inference_role: Option<String>,
+
+    /// AWS region to use for the STS `AssumeRoleWithWebIdentity` call that
+    /// mints federated Bedrock credentials. Required together with
+    /// `--bedrock-inference-role`.
+    #[arg(
+        long = "bedrock-role-region",
+        value_name = "REGION",
+        requires = "bedrock_inference_role",
+        hide = true
+    )]
+    pub bedrock_role_region: Option<String>,
 
     #[command(flatten)]
     pub computer_use: HiddenComputerUseArgs,

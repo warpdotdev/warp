@@ -13,17 +13,20 @@ use crate::{
     workspace::sync_inputs::SyncedInputState,
     workspaces::user_workspaces::UserWorkspaces,
 };
+use pathfinder_geometry::vector::Vector2F;
 use std::sync::Arc;
 use unindent::Unindent;
 use vim::vim::{MotionType, VimMode};
 use warp_core::{features::FeatureFlag, settings::Setting, ui::appearance::Appearance};
 use warp_editor::model::CoreEditorModel;
+use warp_editor::render::model::viewport::SizeInfo;
 use warp_editor::{
     content::buffer::{InitialBufferState, ToBufferCharOffset, ToBufferPoint},
     render::element::VerticalExpansionBehavior,
 };
 use warp_util::user_input::UserInput;
 use warpui::text::point::Point;
+use warpui::units::IntoPixels;
 use warpui::{
     keymap::Keystroke, platform::WindowStyle, App, SingletonEntity, TypedActionView, UpdateModel,
     ViewHandle,
@@ -141,6 +144,37 @@ fn set_cursor_position(editor: &ViewHandle<CodeEditorView>, row: usize, col: usi
                 .update(ctx, |sel, ctx| sel.set_cursor(offset, ctx));
         });
     });
+}
+
+/// Set the viewport to exactly `lines` rows tall. Returns the line height in pixels.
+fn set_viewport_lines(editor: &ViewHandle<CodeEditorView>, lines: usize, app: &mut App) -> f32 {
+    let (line_height, render_state) = editor.read(app, |view, ctx| {
+        let model = view.model.as_ref(ctx);
+        (model.line_height(ctx), model.render_state().clone())
+    });
+    render_state.update(app, |render_state, ctx| {
+        render_state.set_viewport_size(
+            SizeInfo {
+                viewport_size: Vector2F::new(800.0, line_height * lines as f32),
+                needs_layout: false,
+            },
+            ctx,
+        );
+    });
+    line_height
+}
+
+/// Read the current vertical scroll position.
+fn scroll_top(editor: &ViewHandle<CodeEditorView>, app: &App) -> f32 {
+    editor.read(app, |view, ctx| {
+        view.model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .viewport()
+            .scroll_top()
+            .as_f32()
+    })
 }
 
 #[test]
@@ -1525,5 +1559,177 @@ fn test_vim_z_followed_by_non_z_clears_pending() {
 
         vim_user_insert(&editor, "j", &mut app);
         assert_eq!(cursor_position(&editor, &app), (2, 0));
+    });
+}
+
+#[test]
+fn test_vim_ctrl_d_scrolls_half_page_down() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let buffer: String = (1..=200).map(|i| format!("line {}\n", i)).collect();
+        let editor = add_code_editor(buffer.as_str(), &mut app);
+
+        layout_editor_view(&mut app, &editor).await;
+
+        // 20 visible lines → half page = 10 lines.
+        let line_height = set_viewport_lines(&editor, 20, &mut app);
+        let half_page = 10;
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        let (start_row, _) = cursor_position(&editor, &app);
+        let start_scroll = scroll_top(&editor, &app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("ctrl-d").unwrap(), ctx);
+        });
+
+        let (after_row, _) = cursor_position(&editor, &app);
+        let after_scroll = scroll_top(&editor, &app);
+        assert_eq!(after_row, start_row + half_page);
+        assert!(
+            (after_scroll - start_scroll - half_page as f32 * line_height).abs() < 0.5,
+            "scroll_top should advance by half_page * line_height \
+             (start={start_scroll}, after={after_scroll}, line_height={line_height})",
+        );
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_ctrl_u_scrolls_half_page_up() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let buffer: String = (1..=200).map(|i| format!("line {}\n", i)).collect();
+        let editor = add_code_editor(buffer.as_str(), &mut app);
+
+        layout_editor_view(&mut app, &editor).await;
+
+        // 20 visible lines → half page = 10 lines.
+        let line_height = set_viewport_lines(&editor, 20, &mut app);
+        let half_page = 10;
+
+        // Start near the bottom and scroll down so we have room to scroll up.
+        set_cursor_position(&editor, 100, 0, &mut app);
+        let render_state = editor.read(&app, |view, ctx| {
+            view.model.as_ref(ctx).render_state().clone()
+        });
+        render_state.update(&mut app, |render_state, ctx| {
+            render_state.scroll(-(50.0 * line_height).into_pixels(), ctx);
+        });
+
+        let (start_row, _) = cursor_position(&editor, &app);
+        let start_scroll = scroll_top(&editor, &app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("ctrl-u").unwrap(), ctx);
+        });
+
+        let (after_row, _) = cursor_position(&editor, &app);
+        let after_scroll = scroll_top(&editor, &app);
+        assert_eq!(after_row, start_row - half_page);
+        assert!(
+            (start_scroll - after_scroll - half_page as f32 * line_height).abs() < 0.5,
+            "scroll_top should retreat by half_page * line_height \
+             (start={start_scroll}, after={after_scroll}, line_height={line_height})",
+        );
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_ctrl_d_with_count_scrolls_n_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let buffer: String = (1..=200).map(|i| format!("line {}\n", i)).collect();
+        let editor = add_code_editor(buffer.as_str(), &mut app);
+
+        layout_editor_view(&mut app, &editor).await;
+
+        // Viewport half page would be 10, but `5<C-d>` should scroll by 5 lines,
+        // not 5 * half_page.
+        set_viewport_lines(&editor, 20, &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        let (start_row, _) = cursor_position(&editor, &app);
+
+        vim_user_insert(&editor, "5", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("ctrl-d").unwrap(), ctx);
+        });
+
+        let (after_row, _) = cursor_position(&editor, &app);
+        assert_eq!(after_row, start_row + 5);
+    });
+}
+
+#[test]
+fn test_vim_ctrl_d_consumes_pending_count() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        // Use a buffer big enough that scrolling won't max the cursor at the bottom.
+        let buffer: String = (1..=200)
+            .map(|i| format!("line {}\n", i))
+            .collect::<String>();
+        let editor = add_code_editor(buffer.as_str(), &mut app);
+
+        layout_editor_view(&mut app, &editor).await;
+
+        // After `2<C-d>`, the pending count of 2 must be consumed by ctrl-d. A
+        // following `j` should move the cursor down exactly 1 line, not 2.
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "2", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("ctrl-d").unwrap(), ctx);
+        });
+        let (after_scroll_row, _) = cursor_position(&editor, &app);
+        vim_user_insert(&editor, "j", &mut app);
+        let (after_j_row, _) = cursor_position(&editor, &app);
+        assert_eq!(
+            after_j_row,
+            after_scroll_row + 1,
+            "j after `2<C-d>` should move down 1, not 2 (after_scroll_row={}, after_j_row={})",
+            after_scroll_row,
+            after_j_row
+        );
+    });
+}
+
+#[test]
+fn test_vim_ctrl_d_clears_pending_operator() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor(
+            "alpha bravo charlie
+            delta echo foxtrot
+            golf hotel india",
+            &mut app,
+        );
+
+        layout_editor_view(&mut app, &editor).await;
+
+        // After `d<C-d>`, the pending `d` operator must be cleared. A following
+        // `w` should move forward by word, not delete a word.
+        set_cursor_position(&editor, 1, 0, &mut app);
+        let original = buffer_text(&editor, &app);
+        vim_user_insert(&editor, "d", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("ctrl-d").unwrap(), ctx);
+        });
+        vim_user_insert(&editor, "w", &mut app);
+        assert_eq!(
+            buffer_text(&editor, &app),
+            original,
+            "w after `d<C-d>` should not delete (pending d should be cleared)"
+        );
     });
 }

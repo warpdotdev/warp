@@ -406,8 +406,13 @@ fn test_emit_child_killed_enqueues_cancelled_event_for_parent() {
 
         let (parent_conversation_id, child_conversation_id) =
             history_model.update(&mut app, |history_model, ctx| {
-                let parent_conversation_id =
-                    history_model.start_new_conversation(terminal_view_id, false, false, ctx);
+                let parent_conversation_id = history_model.start_new_conversation(
+                    terminal_view_id,
+                    false,
+                    false,
+                    false,
+                    ctx,
+                );
                 history_model.assign_run_id_for_conversation(
                     parent_conversation_id,
                     parent_run_id,
@@ -471,7 +476,8 @@ fn test_emit_child_killed_drops_when_no_parent() {
 
         // Create a standalone conversation (no parent) with a run_id.
         let orphan_conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            let id = history_model.start_new_conversation(terminal_view_id, false, false, ctx);
+            let id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
             history_model.assign_run_id_for_conversation(
                 id,
                 child_run_id,
@@ -509,8 +515,13 @@ fn test_emit_child_killed_drops_when_child_already_terminal() {
 
         let (parent_conversation_id, child_conversation_id) =
             history_model.update(&mut app, |history_model, ctx| {
-                let parent_conversation_id =
-                    history_model.start_new_conversation(terminal_view_id, false, false, ctx);
+                let parent_conversation_id = history_model.start_new_conversation(
+                    terminal_view_id,
+                    false,
+                    false,
+                    false,
+                    ctx,
+                );
                 history_model.assign_run_id_for_conversation(
                     parent_conversation_id,
                     parent_run_id,
@@ -561,8 +572,13 @@ fn test_restored_v1_child_reregisters_lifecycle_subscription() {
 
         let (_parent_conversation_id, child_conversation_id) =
             history_model.update(&mut app, |history_model, ctx| {
-                let parent_conversation_id =
-                    history_model.start_new_conversation(terminal_view_id, false, false, ctx);
+                let parent_conversation_id = history_model.start_new_conversation(
+                    terminal_view_id,
+                    false,
+                    false,
+                    false,
+                    ctx,
+                );
                 history_model.set_server_conversation_token_for_conversation(
                     parent_conversation_id,
                     "parent-token".to_string(),

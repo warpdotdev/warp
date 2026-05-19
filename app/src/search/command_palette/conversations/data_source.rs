@@ -75,13 +75,6 @@ impl DataSource {
         }
     }
 
-    pub fn historical() -> Self {
-        Self {
-            searcher: FuzzyConversationSearcher::historical(),
-            add_conversation_actions: false,
-        }
-    }
-
     /// Returns a [`QueryResult`] for a conversation identified by `conversation_id`. `None` if no result was
     /// found with the given ID.
     pub fn query_result(

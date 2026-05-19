@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,12 +13,20 @@ use crate::client::ClientEvent;
 use crate::client::InitializeParams;
 use crate::client::RemoteServerClient;
 use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
-use crate::proto::{DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot};
+use crate::proto::{
+    diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
+    DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
+    FileStatusInfo, GetDiffStateResponse, TextEdit,
+};
+use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
 use crate::setup::PreinstallCheckResult;
+#[cfg(not(target_family = "wasm"))]
+use crate::setup::PreinstallStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::setup::RemoteOs;
 use crate::setup::RemotePlatform;
 use crate::setup::RemoteServerSetupState;
+#[cfg(not(target_family = "wasm"))]
 use crate::setup::UnsupportedReason;
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::Connection;
@@ -28,13 +37,14 @@ use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
+use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
+use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::FutureExt as _;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
-#[cfg(not(target_family = "wasm"))]
-const MAX_RECONNECT_ATTEMPTS: u32 = 2;
+pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;
 /// Delay between reconnection attempts.
 #[cfg(not(target_family = "wasm"))]
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -52,6 +62,7 @@ struct ReconnectParams {
     exit_status: Option<RemoteServerExitStatus>,
     transport: Arc<dyn RemoteTransport>,
     auth_context: Arc<RemoteServerAuthContext>,
+    codebase_index_limits: Option<CodebaseIndexLimits>,
     control_path: Option<PathBuf>,
     identity_key: String,
 }
@@ -59,6 +70,7 @@ struct ReconnectParams {
 struct InitializeHandshake {
     host_id: HostId,
     event_rx: async_channel::Receiver<ClientEvent>,
+    failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
 }
 
 /// Error from [`RemoteServerManager::run_connect_and_handshake`] that
@@ -102,19 +114,41 @@ pub enum RemoteServerOperation {
     NavigateToDirectory,
     LoadRepoMetadataDirectory,
     IndexCodebase,
+    ResyncCodebase,
     DropCodebaseIndex,
+    OpenBuffer,
+    SaveBuffer,
+    WriteFile,
+    ReadFileContext,
+    DeleteFile,
+    RunCommand,
+    GetFragmentMetadataFromHash,
+    GetDiffState,
+    DiscardFiles,
+    GetBranches,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum RemoteCodebaseIndexMutation {
-    Index,
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCodebaseIndexUpdateOperation {
+    IndexNewRepo { is_auto_index: bool },
+    Sync { is_full_sync: bool },
     Drop,
 }
 
-impl RemoteCodebaseIndexMutation {
+impl RemoteCodebaseIndexUpdateOperation {
     fn operation(self) -> RemoteServerOperation {
         match self {
-            Self::Index => RemoteServerOperation::IndexCodebase,
+            Self::IndexNewRepo {
+                is_auto_index: true,
+            }
+            | Self::IndexNewRepo {
+                is_auto_index: false,
+            } => RemoteServerOperation::IndexCodebase,
+            Self::Sync { is_full_sync: true }
+            | Self::Sync {
+                is_full_sync: false,
+            } => RemoteServerOperation::ResyncCodebase,
             Self::Drop => RemoteServerOperation::DropCodebaseIndex,
         }
     }
@@ -126,7 +160,22 @@ impl RemoteCodebaseIndexMutation {
         auth_token: String,
     ) -> Result<RemoteCodebaseIndexStatus, crate::client::ClientError> {
         match self {
-            Self::Index => client.index_codebase(repo_path, auth_token).await,
+            Self::IndexNewRepo {
+                is_auto_index: true,
+            }
+            | Self::IndexNewRepo {
+                is_auto_index: false,
+            } => client.index_codebase(repo_path, auth_token).await,
+            Self::Sync {
+                is_full_sync: false,
+            } => {
+                client
+                    .trigger_codebase_incremental_sync(repo_path, auth_token)
+                    .await
+            }
+            Self::Sync { is_full_sync: true } => {
+                client.resync_codebase(repo_path, auth_token).await
+            }
             Self::Drop => client.drop_codebase_index(repo_path, auth_token).await,
         }
     }
@@ -162,7 +211,9 @@ impl RemoteServerErrorKind {
             ClientError::ServerError { .. } => Self::ServerError,
             ClientError::Protocol(_)
             | ClientError::UnexpectedResponse
-            | ClientError::FileOperationFailed(_) => Self::Other,
+            | ClientError::FileOperationFailed(_)
+            | ClientError::FragmentMetadataLookup { .. }
+            | ClientError::DiscardFailed(_) => Self::Other,
         }
     }
 }
@@ -216,6 +267,21 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
     }
 }
 
+fn remote_path_for_status(
+    host_id: &HostId,
+    status: &RemoteCodebaseIndexStatus,
+) -> Option<RemotePath> {
+    StandardizedPath::try_new(&status.repo_path)
+        .ok()
+        .map(|path| RemotePath::new(host_id.clone(), path))
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteCodebaseIndexStatusWithPath {
+    pub remote_path: RemotePath,
+    pub status: RemoteCodebaseIndexStatus,
+}
+
 /// Per-session connection state. Encodes which data is available at each
 /// lifecycle stage so the compiler prevents invalid combinations.
 ///
@@ -249,6 +315,9 @@ pub enum RemoteSessionState {
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
         control_path: Option<PathBuf>,
+        /// Tail buffer of the last N stderr lines from the proxy subprocess.
+        #[cfg(not(target_family = "wasm"))]
+        stderr_tail: crate::client::RemoteServerLog,
     },
     /// Initialize handshake succeeded. Client is ready for requests.
     Connected {
@@ -309,6 +378,9 @@ pub enum RemoteServerManagerEvent {
         /// Exit status of the SSH subprocess, if available.
         /// Used by telemetry to distinguish proxy crashes from other failures.
         exit_status: Option<RemoteServerExitStatus>,
+        /// Last lines from the proxy's stderr, if available.
+        /// Provides server-side context for why the proxy exited.
+        proxy_stderr: Option<String>,
         /// `true` when the failure is attributed to a user-initiated
         /// cancellation (session deregistered or transport-level
         /// disconnect) rather than a server-side error. Subscribers
@@ -336,6 +408,11 @@ pub enum RemoteServerManagerEvent {
         /// `None` when the session was explicitly deregistered or when
         /// the exit status could not be determined.
         exit_status: Option<RemoteServerExitStatus>,
+        /// `true` when this disconnect follows exhausted reconnection
+        /// attempts. `false` for first-time disconnects and explicit
+        /// deregistrations. Used by the view layer to distinguish
+        /// reconnect-exhausted telemetry from regular disconnections.
+        was_reconnect_attempt: bool,
     },
     /// A reconnection attempt succeeded. Downstream owners (e.g.
     /// `RemoteServerCommandExecutor`) should swap their client reference
@@ -368,8 +445,7 @@ pub enum RemoteServerManagerEvent {
     /// Response to a `navigate_to_directory` request.
     NavigatedToDirectory {
         session_id: SessionId,
-        host_id: HostId,
-        indexed_path: String,
+        remote_path: RemotePath,
         is_git: bool,
     },
     /// A full or lazy-loaded repo metadata snapshot was pushed by the server.
@@ -389,15 +465,16 @@ pub enum RemoteServerManagerEvent {
     },
     /// A full remote codebase-index status snapshot was pushed or requested.
     CodebaseIndexStatusesSnapshot {
-        remote_identity_key: String,
         host_id: HostId,
-        statuses: Vec<RemoteCodebaseIndexStatus>,
+        statuses: Vec<RemoteCodebaseIndexStatusWithPath>,
     },
-    /// A single remote codebase-index status update was pushed by the daemon.
+    /// A single remote codebase-index status update was pushed by the daemon
+    /// or returned by an index mutation request.
     CodebaseIndexStatusUpdated {
-        remote_identity_key: String,
-        host_id: HostId,
+        session_id: Option<SessionId>,
+        remote_path: RemotePath,
         status: RemoteCodebaseIndexStatus,
+        mutation_kind: Option<RemoteCodebaseIndexUpdateOperation>,
     },
     /// A buffer was updated on the remote host (file changed on disk).
     /// The app layer should forward this to `GlobalBufferModel::handle_buffer_updated_push`.
@@ -406,7 +483,7 @@ pub enum RemoteServerManagerEvent {
         path: String,
         new_server_version: u64,
         expected_client_version: u64,
-        edits: Vec<crate::proto::TextEdit>,
+        edits: Vec<TextEdit>,
     },
     /// The file changed on disk while the client had unsaved edits.
     /// The server did NOT apply the change; the client should show a
@@ -414,20 +491,36 @@ pub enum RemoteServerManagerEvent {
     BufferConflictDetected { host_id: HostId, path: String },
 
     // --- Diff state events (forwarded from ClientEvent push channel) ---
-    /// A full diff state snapshot was pushed by the server (NewDiffsComputed).
+    /// A full diff state snapshot was pushed by the server (or returned
+    /// from the initial `GetDiffState` request).
     DiffStateSnapshotReceived {
         host_id: HostId,
+        repo_path: StandardizedPath,
+        mode: DiffMode,
         snapshot: DiffStateSnapshot,
     },
     /// A metadata-only diff state update was pushed by the server.
     DiffStateMetadataUpdateReceived {
         host_id: HostId,
+        repo_path: StandardizedPath,
+        mode: DiffMode,
         update: DiffStateMetadataUpdate,
     },
     /// A single-file diff delta was pushed by the server.
     DiffStateFileDeltaReceived {
         host_id: HostId,
+        repo_path: StandardizedPath,
+        mode: DiffMode,
         delta: DiffStateFileDelta,
+    },
+
+    // --- Branch listing ---
+    /// Response to a `GetBranches` request.
+    GetBranchesResponse {
+        session_id: SessionId,
+        repo_path: StandardizedPath,
+        /// Branch list on success, error message on failure.
+        result: Result<Vec<crate::proto::BranchInfo>, String>,
     },
 
     // --- Setup events ---
@@ -438,7 +531,8 @@ pub enum RemoteServerManagerEvent {
     },
     /// Result of [`RemoteServerManager::check_binary`]. Returns a result where:
     /// - `Ok(true)` means the binary is installed and executable,
-    /// - `Ok(false)` means it is definitively not installed, and
+    /// - `Ok(false)` means it is not installed, or the preinstall gate
+    ///   classified the host as unsupported, and
     /// - `Err(_)` means the check itself failed (e.g. SSH error or timeout).
     BinaryCheckComplete {
         session_id: SessionId,
@@ -479,6 +573,12 @@ pub enum RemoteServerManagerEvent {
         operation: RemoteServerOperation,
         error_kind: RemoteServerErrorKind,
     },
+    /// A remote codebase-index mutation failed before yielding a status update.
+    CodebaseIndexMutationFailed {
+        session_id: SessionId,
+        mutation_kind: RemoteCodebaseIndexUpdateOperation,
+        error_kind: RemoteServerErrorKind,
+    },
     /// A server message could not be decoded (no parseable request_id).
     ServerMessageDecodingError { session_id: SessionId },
 }
@@ -499,23 +599,40 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::BinaryCheckComplete { session_id, .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { session_id, .. }
             | RemoteServerManagerEvent::ClientRequestFailed { session_id, .. }
-            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id } => {
-                Some(*session_id)
-            }
+            | RemoteServerManagerEvent::CodebaseIndexMutationFailed { session_id, .. }
+            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id }
+            | RemoteServerManagerEvent::GetBranchesResponse { session_id, .. } => Some(*session_id),
             RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
-            | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+            | RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
+                session_id: None, ..
+            }
             | RemoteServerManagerEvent::BufferUpdated { .. }
             | RemoteServerManagerEvent::BufferConflictDetected { .. }
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
             | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. } => None,
+            RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
+                session_id: Some(session_id),
+                ..
+            } => Some(*session_id),
         }
     }
+}
+
+/// Cached navigation state per session. Stores the last requested path
+/// (for dedup) and the result from the last successful response (so dedup
+/// returns a meaningful value instead of `None`).
+struct NavigationCache {
+    /// The path string last sent to `navigate_to_directory`.
+    path: String,
+    /// Populated by the spawner callback when the server responds
+    /// successfully. `None` until the first successful response.
+    result: Option<RemoteNavigationResult>,
 }
 
 /// Shell info recorded by [`RemoteServerManager::notify_session_bootstrapped`].
@@ -543,12 +660,16 @@ pub struct RemoteServerManager {
     sessions: HashMap<SessionId, RemoteSessionState>,
     /// Reverse index: host → sessions for O(1) lookup by `HostId`.
     host_to_sessions: HashMap<HostId, HashSet<SessionId>>,
+    /// User-facing connection labels by session, applied after the initialize
+    /// handshake returns a host ID.
+    session_labels: HashMap<SessionId, String>,
     /// Spawner for running closures back on the main thread.
     spawner: ModelSpawner<Self>,
-    /// Last path requested per session for dedup. Avoids redundant
+    /// Per-session navigation cache for dedup. Avoids redundant
     /// `navigate_to_directory` calls when `update_active_session` fires
-    /// repeatedly for the same CWD.
-    last_navigated_path: HashMap<SessionId, String>,
+    /// repeatedly for the same CWD, and returns the cached result on
+    /// dedup so callers don't misinterpret the skip as "not a git repo".
+    last_navigation: HashMap<SessionId, NavigationCache>,
     /// Per-session shell info recorded at bootstrap time and re-sent to the
     /// remote server daemon on every (re)connect. Persists until
     /// `deregister_session`.
@@ -560,6 +681,8 @@ pub struct RemoteServerManager {
     /// Detected remote platform per session, populated during the binary check
     /// phase via `detect_platform()`. Used for telemetry.
     session_platforms: HashMap<SessionId, RemotePlatform>,
+    /// Last client-resolved codebase index limits sent to remote daemons.
+    codebase_index_limits: Option<CodebaseIndexLimits>,
 }
 
 impl Entity for RemoteServerManager {
@@ -573,28 +696,67 @@ impl RemoteServerManager {
         Self {
             sessions: HashMap::new(),
             host_to_sessions: HashMap::new(),
+            session_labels: HashMap::new(),
             spawner: ctx.spawner(),
-            last_navigated_path: HashMap::new(),
+            last_navigation: HashMap::new(),
             session_bootstrap_info: HashMap::new(),
             auth_context: None,
             session_platforms: HashMap::new(),
+            codebase_index_limits: None,
         }
+    }
+
+    pub fn update_codebase_index_limits(
+        &mut self,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
+    ) {
+        self.codebase_index_limits = codebase_index_limits;
     }
 
     /// Returns a connected client for the given host by picking an arbitrary
     /// session from the host's session pool.
     pub fn client_for_host(&self, host_id: &HostId) -> Option<&Arc<RemoteServerClient>> {
+        self.any_connected_session_for_host(host_id)
+            .map(|(_, client)| client)
+    }
+
+    /// Returns the [`SessionId`] of an arbitrary currently-connected session
+    /// for the given host, if any.
+    pub fn find_connected_session(&self, host_id: &HostId) -> Option<SessionId> {
+        self.any_connected_session_for_host(host_id)
+            .map(|(session_id, _)| session_id)
+    }
+
+    /// Returns an arbitrary connected `(session_id, client)` pair for the
+    /// given host. Backs both [`Self::client_for_host`] and
+    /// [`Self::find_connected_session`] so they share a single source of
+    /// truth for iteration order and connection-state filtering.
+    fn any_connected_session_for_host(
+        &self,
+        host_id: &HostId,
+    ) -> Option<(SessionId, &Arc<RemoteServerClient>)> {
         let sessions = self.host_to_sessions.get(host_id)?;
         sessions
             .iter()
-            .find_map(|session_id| self.client_for_session(*session_id))
+            .copied()
+            .find_map(|sid| self.client_for_session(sid).map(|client| (sid, client)))
+    }
+
+    /// Returns the user-facing connection label for a connected host, if one
+    /// has been recorded on any active session for that host.
+    pub fn host_label(&self, host_id: &HostId) -> Option<&str> {
+        self.host_to_sessions
+            .get(host_id)?
+            .iter()
+            .find_map(|session_id| self.session_labels.get(session_id).map(String::as_str))
     }
 
     /// Checks if the remote server binary is installed and executable.
     /// Emits `BinaryCheckComplete { result }`.
     ///
     /// Returns Ok(true) if the binary is installed and executable,
-    /// Ok(false) if it is definitively not installed, and
+    /// Ok(false) if it is definitively not installed or unsupported setup
+    /// should skip install decisions, and
     /// Err(_) if the check failed (e.g. SSH timeout/unreachable).
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn check_binary<T>(
@@ -619,31 +781,33 @@ impl RemoteServerManager {
             let spawner = self.spawner.clone();
             ctx.background_executor()
                 .spawn(async move {
-                    // Run platform detection, binary check, and old-binary
-                    // check sequentially so that each step reuses the
-                    // same SSH ControlMaster connection instead of
-                    // opening parallel channels. The old-binary check
-                    // lets the controller distinguish fresh install (no
-                    // prior versioned binary) from update (prior
-                    // versioned binary present), so it can skip the
-                    // install prompt in the update case.
+                    // Run platform detection and the preinstall gate before
+                    // any binary, update, prompt, or install decision. The
+                    // later binary and old-binary checks run sequentially on
+                    // supported hosts so each step reuses the same SSH
+                    // ControlMaster connection instead of opening parallel
+                    // channels.
                     let platform_result = transport.detect_platform().await;
-                    let check_result = transport.check_binary().await;
-                    let old_binary_result = transport.check_has_old_binary().await;
                     let platform = match platform_result {
                         Ok(p) => Some(p),
                         Err(e) => {
-                            log::warn!("Remote server platform detection failed: session={session_id:?} error={e}");
-                            None
-                        }
-                    };
-                    let has_old_binary = match old_binary_result {
-                        Ok(has) => has,
-                        Err(e) => {
+                            if let Some(reason) = UnsupportedReason::from_transport_error(&e) {
+                                log::info!(
+                                    "Remote server platform is unsupported, falling back to legacy SSH: session={session_id:?}"
+                                );
+                                Self::emit_unsupported_preinstall_check(
+                                    &spawner,
+                                    session_id,
+                                    None,
+                                    PreinstallCheckResult::unsupported(reason),
+                                )
+                                .await;
+                                return;
+                            }
                             log::warn!(
-                                "Remote server old-binary detection failed, treating as fresh install: session={session_id:?} error={e}"
+                                "Remote server platform detection failed: session={session_id:?} error={e}"
                             );
-                            false
+                            None
                         }
                     };
                     // Run the preinstall check after platform detection
@@ -665,64 +829,110 @@ impl RemoteServerManager {
                         }
                         _ => None,
                     };
-                    let _ = spawner
-                        .spawn(move |me, ctx| {
-                            if let Some(p) = &platform {
-                                me.session_platforms.insert(session_id, p.clone());
-                            }
-                            if let Err(error) = &check_result {
-                                ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
-                                    session_id,
-                                    state: RemoteServerSetupState::Failed {
-                                        error: error.to_string(),
-                                    },
-                                });
-                            }
-                            ctx.emit(RemoteServerManagerEvent::BinaryCheckComplete {
-                                session_id,
-                                result: check_result.map_err(Arc::new),
-                                remote_platform: platform,
-                                preinstall_check: preinstall,
-                                has_old_binary,
-                            });
-                        })
-                        .await;
+                    match preinstall {
+                        Some(
+                            preinstall @ PreinstallCheckResult {
+                                status: PreinstallStatus::Unsupported { .. },
+                                ..
+                            },
+                        ) => {
+                            log::info!(
+                                "Remote server preinstall check classified as unsupported, falling back to legacy SSH: session={session_id:?}"
+                            );
+                            Self::emit_unsupported_preinstall_check(
+                                &spawner, session_id, platform, preinstall,
+                            )
+                            .await;
+                        }
+                        preinstall => {
+                            Self::check_if_binary_is_installed(
+                                &spawner, session_id, transport, platform, preinstall,
+                            )
+                            .await;
+                        }
+                    }
                 })
                 .detach();
         }
     }
 
-    /// Marks a session as unsupported by the prebuilt remote-server
-    /// binary, based on a positive classification from the preinstall
-    /// check. The setup state transitions to `Unsupported`, which the
-    /// downstream UI treats as a clean fall-back to the legacy SSH flow.
-    ///
-    /// No-op on WASM (remote server connections use a different transport).
-    #[cfg(target_family = "wasm")]
-    pub fn mark_setup_unsupported(
-        &mut self,
-        _session_id: SessionId,
-        _reason: UnsupportedReason,
-        _ctx: &mut ModelContext<Self>,
-    ) {
-        log::warn!("Remote server mark_setup_unsupported is a no-op on WASM");
-    }
-
-    /// Marks a session as unsupported by the prebuilt remote-server
-    /// binary, based on a positive classification from the preinstall
-    /// check. The setup state transitions to `Unsupported`, which the
-    /// downstream UI treats as a clean fall-back to the legacy SSH flow.
+    /// Checks whether the remote server binary is already installed on a host
+    /// that has passed the support gate. Callers must only invoke this after
+    /// platform detection and the preinstall check have ruled out unsupported
+    /// OS, architecture, and libc cases.
     #[cfg(not(target_family = "wasm"))]
-    pub fn mark_setup_unsupported(
-        &mut self,
+    async fn check_if_binary_is_installed<T>(
+        spawner: &ModelSpawner<Self>,
         session_id: SessionId,
-        reason: UnsupportedReason,
-        ctx: &mut ModelContext<Self>,
+        transport: T,
+        platform: Option<RemotePlatform>,
+        preinstall: Option<PreinstallCheckResult>,
+    ) where
+        T: RemoteTransport,
+    {
+        let check_result = transport.check_binary().await;
+        let old_binary_result = transport.check_has_old_binary().await;
+        let has_old_binary = match old_binary_result {
+            Ok(has) => has,
+            Err(e) => {
+                log::warn!(
+                    "Remote server old-binary detection failed, treating as fresh install: session={session_id:?} error={e}"
+                );
+                false
+            }
+        };
+        let _ = spawner
+            .spawn(move |me, ctx| {
+                if let Some(p) = &platform {
+                    me.session_platforms.insert(session_id, p.clone());
+                }
+                if let Err(error) = &check_result {
+                    ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
+                        session_id,
+                        state: RemoteServerSetupState::from(error),
+                    });
+                }
+                ctx.emit(RemoteServerManagerEvent::BinaryCheckComplete {
+                    session_id,
+                    result: check_result.map_err(Arc::new),
+                    remote_platform: platform,
+                    preinstall_check: preinstall,
+                    has_old_binary,
+                });
+            })
+            .await;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    async fn emit_unsupported_preinstall_check(
+        spawner: &ModelSpawner<Self>,
+        session_id: SessionId,
+        platform: Option<RemotePlatform>,
+        preinstall: PreinstallCheckResult,
     ) {
-        ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
-            session_id,
-            state: RemoteServerSetupState::Unsupported { reason },
-        });
+        let PreinstallStatus::Unsupported { reason } = &preinstall.status else {
+            return;
+        };
+        let reason = reason.clone();
+        let _ = spawner
+            .spawn(move |me, ctx| {
+                if let Some(p) = &platform {
+                    me.session_platforms.insert(session_id, p.clone());
+                }
+                ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
+                    session_id,
+                    state: RemoteServerSetupState::Unsupported {
+                        reason: reason.clone(),
+                    },
+                });
+                ctx.emit(RemoteServerManagerEvent::BinaryCheckComplete {
+                    session_id,
+                    result: Ok(false),
+                    remote_platform: platform,
+                    preinstall_check: Some(preinstall),
+                    has_old_binary: false,
+                });
+            })
+            .await;
     }
 
     /// Installs the remote server binary.
@@ -767,9 +977,7 @@ impl RemoteServerManager {
                             if let Err(error) = &outcome.result {
                                 ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
                                     session_id,
-                                    state: RemoteServerSetupState::Failed {
-                                        error: error.to_string(),
-                                    },
+                                    state: RemoteServerSetupState::from(error),
                                 });
                             }
                             ctx.emit(RemoteServerManagerEvent::BinaryInstallComplete {
@@ -801,6 +1009,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         transport: T,
         auth_context: Arc<RemoteServerAuthContext>,
+        connection_label: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) where
         T: RemoteTransport + 'static,
@@ -822,6 +1031,9 @@ impl RemoteServerManager {
 
             self.sessions
                 .insert(session_id, RemoteSessionState::Connecting);
+            if let Some(connection_label) = connection_label {
+                self.session_labels.insert(session_id, connection_label);
+            }
             self.auth_context = Some(Arc::clone(&auth_context));
             ctx.emit(RemoteServerManagerEvent::SessionConnecting { session_id });
 
@@ -831,6 +1043,7 @@ impl RemoteServerManager {
             // for reconnection after a spontaneous disconnect.
             let transport: Arc<dyn RemoteTransport> = Arc::new(transport);
             let auth_context_for_task = Arc::clone(&auth_context);
+            let codebase_index_limits = self.codebase_index_limits;
             // Capture the identity key synchronously so it travels with the
             // session and can be used to filter token-rotation notifications.
             let identity_key = auth_context.remote_server_identity_key();
@@ -841,6 +1054,7 @@ impl RemoteServerManager {
                         session_id,
                         &*transport,
                         &auth_context_for_task,
+                        codebase_index_limits,
                         &spawner,
                         &executor,
                     )
@@ -872,12 +1086,13 @@ impl RemoteServerManager {
                             // to Disconnected while we wait so the session slot
                             // is not empty (an empty slot would be misread as
                             // "user deregistered" by the is_cancelled check).
-                            let maybe_child = spawner
+                            let maybe_child_and_stderr = spawner
                                 .spawn(move |me, _ctx| {
                                     match me.sessions.remove(&session_id) {
                                         Some(RemoteSessionState::Initializing {
                                             _child,
                                             control_path,
+                                            stderr_tail,
                                             ..
                                         }) => {
                                             me.sessions.insert(
@@ -886,7 +1101,7 @@ impl RemoteServerManager {
                                                     control_path,
                                                 },
                                             );
-                                            Some(_child)
+                                            Some((_child, stderr_tail))
                                         }
                                         other => {
                                             // Put back whatever was there
@@ -908,9 +1123,13 @@ impl RemoteServerManager {
                             // which is critical for ResponseChannelClosed
                             // errors where the non-blocking try_status()
                             // previously returned None due to a timing race.
-                            let exit_status = match maybe_child {
-                                Some(child) => Self::await_exit_status(child, session_id).await,
-                                None => None,
+                            let (exit_status, proxy_stderr) = match maybe_child_and_stderr {
+                                Some((child, stderr_tail)) => {
+                                    let status = Self::await_exit_status(child, session_id).await;
+                                    let stderr = stderr_tail.drain();
+                                    (status, stderr)
+                                }
+                                None => (None, None),
                             };
 
                             let _ = spawner
@@ -942,6 +1161,7 @@ impl RemoteServerManager {
                                         phase,
                                         error,
                                         exit_status,
+                                        proxy_stderr,
                                         is_cancelled,
                                     });
                                     me.mark_session_disconnected(session_id, ctx);
@@ -967,6 +1187,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         transport: &dyn RemoteTransport,
         auth_context: &RemoteServerAuthContext,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
         spawner: &ModelSpawner<Self>,
         executor: &Arc<warpui::r#async::executor::Background>,
     ) -> Result<InitializeHandshake, ConnectAndHandshakeError> {
@@ -974,8 +1195,10 @@ impl RemoteServerManager {
         let Connection {
             client,
             event_rx,
+            failure_rx,
             child,
             control_path,
+            stderr_tail,
         } = transport
             .connect(executor.clone())
             .await
@@ -998,6 +1221,7 @@ impl RemoteServerManager {
                         client: client_for_init,
                         _child: child,
                         control_path,
+                        stderr_tail,
                     },
                 );
                 true
@@ -1020,6 +1244,7 @@ impl RemoteServerManager {
                     user_id: auth_context.user_id().to_owned(),
                     user_email: auth_context.user_email().to_owned(),
                     crash_reporting_enabled: auth_context.crash_reporting_enabled(),
+                    codebase_index_limits,
                 },
             )
             .await
@@ -1072,6 +1297,7 @@ impl RemoteServerManager {
         Ok(InitializeHandshake {
             host_id: HostId::new(resp.host_id),
             event_rx,
+            failure_rx,
         })
     }
 
@@ -1113,9 +1339,10 @@ impl RemoteServerManager {
     ///   outright. Unlike `SessionDisconnected`, this one never fires for
     ///   spontaneous drops -- only for explicit teardown.
     pub fn deregister_session(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
-        self.last_navigated_path.remove(&session_id);
+        self.last_navigation.remove(&session_id);
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
+        self.session_labels.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
         // here drops the transport's owned `Child` (if any), which
@@ -1151,6 +1378,7 @@ impl RemoteServerManager {
                 session_id,
                 host_id: host_id.clone(),
                 exit_status: None,
+                was_reconnect_attempt: false,
             });
             if !self.host_to_sessions.contains_key(&host_id) {
                 ctx.emit(RemoteServerManagerEvent::HostDisconnected { host_id });
@@ -1290,41 +1518,61 @@ impl RemoteServerManager {
         })
     }
 
-    /// Sends an `IndexCodebase` request to a connected daemon for this host.
-    pub fn index_codebase(
+    /// Ensures a codebase index exists for this remote path without resyncing an existing index.
+    pub fn ensure_codebase_indexed(
         &mut self,
-        host_id: HostId,
-        repo_path: String,
+        remote_path: RemotePath,
+        mutation_kind: RemoteCodebaseIndexUpdateOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.mutate_codebase_index(host_id, repo_path, RemoteCodebaseIndexMutation::Index, ctx);
+        self.mutate_codebase_index(remote_path, mutation_kind, ctx);
     }
 
-    /// Sends a `DropCodebaseIndex` request to a connected daemon for this host.
-    pub fn drop_codebase_index(
+    /// Sends a `ResyncCodebase` request to a connected daemon for this remote path.
+    pub fn resync_codebase(&mut self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        self.mutate_codebase_index(
+            remote_path,
+            RemoteCodebaseIndexUpdateOperation::Sync { is_full_sync: true },
+            ctx,
+        );
+    }
+
+    /// Sends a `ResyncCodebase` request in incremental mode to a connected daemon for this remote path.
+    pub fn trigger_codebase_incremental_sync(
         &mut self,
-        host_id: HostId,
-        repo_path: String,
+        remote_path: RemotePath,
         ctx: &mut ModelContext<Self>,
-    ) {
-        self.mutate_codebase_index(host_id, repo_path, RemoteCodebaseIndexMutation::Drop, ctx);
+    ) -> bool {
+        self.mutate_codebase_index(
+            remote_path,
+            RemoteCodebaseIndexUpdateOperation::Sync {
+                is_full_sync: false,
+            },
+            ctx,
+        )
+    }
+
+    /// Sends a `DropCodebaseIndex` request to a connected daemon for this remote path.
+    pub fn drop_codebase_index(&mut self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        self.mutate_codebase_index(remote_path, RemoteCodebaseIndexUpdateOperation::Drop, ctx);
     }
 
     fn mutate_codebase_index(
         &mut self,
-        host_id: HostId,
-        repo_path: String,
-        mutation: RemoteCodebaseIndexMutation,
+        remote_path: RemotePath,
+        mutation_kind: RemoteCodebaseIndexUpdateOperation,
         ctx: &mut ModelContext<Self>,
-    ) {
-        let operation = mutation.operation();
+    ) -> bool {
+        let operation = mutation_kind.operation();
+        let host_id = remote_path.host_id.clone();
+        let repo_path = remote_path.path.as_str().to_string();
 
         let Some(auth_context) = self.auth_context.clone() else {
             log::warn!(
                 "Remote server codebase index mutation: no auth context \
                  operation={operation:?} host={host_id} repo_path={repo_path}"
             );
-            return;
+            return false;
         };
         let current_identity_key = auth_context.remote_server_identity_key();
         let Some((session_id, client, remote_identity_key)) =
@@ -1334,7 +1582,7 @@ impl RemoteServerManager {
                 "Remote server codebase index mutation: no connected client for current identity \
                  operation={operation:?} host={host_id} repo_path={repo_path}"
             );
-            return;
+            return false;
         };
         log::info!(
             "[Remote codebase indexing] Manager requesting codebase index mutation: \
@@ -1359,26 +1607,35 @@ impl RemoteServerManager {
                                 operation,
                                 error_kind: RemoteServerErrorKind::Other,
                             });
+                            ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
+                                session_id,
+                                mutation_kind,
+                                error_kind: RemoteServerErrorKind::Other,
+                            });
                         })
                         .await;
                     return;
                 };
 
-                match mutation.send(client, repo_path, auth_token).await {
+                match mutation_kind.send(client, repo_path, auth_token).await {
                     Ok(status) => {
                         log::info!(
                             "[Remote codebase indexing] Manager received codebase index mutation response: \
                              operation={operation:?} host={host_id} session={session_id:?} \
-                             remote_identity_key={remote_identity_key} repo_path={} state={:?}",
+                             remote_identity_key={remote_identity_key} repo_path={} state={:?} \
+                             failure_message={:?}",
                             status.repo_path,
-                            status.state
+                            status.state,
+                            status.failure_message
                         );
+                        let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
                         let _ = spawner
                             .spawn(move |_me, ctx| {
                                 ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
-                                    remote_identity_key,
-                                    host_id,
+                                    session_id: Some(session_id),
+                                    remote_path,
                                     status,
+                                    mutation_kind: Some(mutation_kind),
                                 });
                             })
                             .await;
@@ -1392,61 +1649,117 @@ impl RemoteServerManager {
                         let error_kind = RemoteServerErrorKind::from_client_error(&e);
                         let _ = spawner
                             .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::ClientRequestFailed {
+                                ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
                                     session_id,
-                                    operation,
+                                    mutation_kind,
                                     error_kind,
                                 });
                             })
                             .await;
+                        // Transport-level telemetry is emitted automatically
+                        // by send_tracked_request via ClientEvent::RequestFailed.
                     }
                 }
             })
             .detach();
+        true
     }
 
     /// Sends a `NavigatedToDirectory` request to the remote server for
-    /// the given session and emits the response as a manager event.
+    /// the given session and returns a future that resolves with the
+    /// navigation result on success, or `None` on failure. The
+    /// `NavigatedToDirectory` event is still emitted for other
+    /// subscribers (file tree, etc.).
     ///
     /// Deduplicates: if the same `(session_id, path)` was already requested,
-    /// the call is a no-op.
+    /// returns the cached result from the last successful navigation instead
+    /// of re-issuing the request.
+    ///
+    /// Callers that don't need the result can simply drop the future.
     pub fn navigate_to_directory(
         &mut self,
         session_id: SessionId,
         path: String,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> impl Future<Output = Option<RemoteNavigationResult>> {
+        use futures::future::ready;
+
+        match self.navigate_to_directory_impl(session_id, path, ctx) {
+            Some(rx) => futures::future::Either::Left(async move { rx.await.ok().flatten() }),
+            None => {
+                // Dedup skip or missing client — return the cached result
+                // from the last successful navigation so callers don't
+                // misinterpret the skip as "not a git repo".
+                let cached = self
+                    .last_navigation
+                    .get(&session_id)
+                    .and_then(|c| c.result.clone());
+                futures::future::Either::Right(ready(cached))
+            }
+        }
+    }
+
+    /// Returns `Some(receiver)` when a request was dispatched, `None` when
+    /// skipped (dedup or missing client).
+    fn navigate_to_directory_impl(
+        &mut self,
+        session_id: SessionId,
+        path: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<futures::channel::oneshot::Receiver<Option<RemoteNavigationResult>>> {
         // Dedup: skip if this session already navigated to the same path.
-        if self.last_navigated_path.get(&session_id) == Some(&path) {
-            return;
+        if self
+            .last_navigation
+            .get(&session_id)
+            .is_some_and(|c| c.path == path)
+        {
+            return None;
         }
 
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!(
-                "Remote server navigate_to_directory: no connected client session={session_id:?}"
-            );
-            return;
-        };
-        let Some(host_id) = self.host_id_for_session(session_id).cloned() else {
-            log::warn!("Remote server navigate_to_directory: no host_id session={session_id:?}");
-            return;
-        };
+        let client = self.client_for_session(session_id).cloned()?;
+        let host_id = self.host_id_for_session(session_id).cloned()?;
 
         // Record only after confirming the client is connected, so that a
         // retry after SessionConnected is not incorrectly deduplicated.
-        self.last_navigated_path.insert(session_id, path.clone());
+        self.last_navigation.insert(
+            session_id,
+            NavigationCache {
+                path: path.clone(),
+                result: None,
+            },
+        );
 
+        let (tx, rx) = futures::channel::oneshot::channel();
         let spawner = self.spawner.clone();
         ctx.background_executor()
             .spawn(async move {
                 match client.navigate_to_directory(path).await {
                     Ok(resp) => {
                         let _ = spawner
-                            .spawn(move |_me, ctx| {
+                            .spawn(move |me, ctx| {
+                                let Some(remote_path) = StandardizedPath::try_new(&resp.indexed_path)
+                                    .ok()
+                                    .map(|path| RemotePath::new(host_id, path))
+                                else {
+                                    log::warn!(
+                                        "Remote server dropped navigation event with invalid indexed path: \
+                                         session={session_id:?} indexed_path={}",
+                                        resp.indexed_path
+                                    );
+                                    let _ = tx.send(None);
+                                    return;
+                                };
+                                let result = RemoteNavigationResult {
+                                    remote_path: remote_path.clone(),
+                                    is_git: resp.is_git,
+                                };
+                                if let Some(cache) = me.last_navigation.get_mut(&session_id) {
+                                    cache.result = Some(result.clone());
+                                }
+                                let _ = tx.send(Some(result));
                                 ctx.emit(RemoteServerManagerEvent::NavigatedToDirectory {
                                     session_id,
-                                    host_id,
-                                    indexed_path: resp.indexed_path,
+                                    remote_path,
                                     is_git: resp.is_git,
                                 });
                             })
@@ -1454,20 +1767,13 @@ impl RemoteServerManager {
                     }
                     Err(e) => {
                         log::warn!("Remote server navigate_to_directory failed: session={session_id:?} error={e}");
-                        let error_kind = RemoteServerErrorKind::from_client_error(&e);
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::ClientRequestFailed {
-                                    session_id,
-                                    operation: RemoteServerOperation::NavigateToDirectory,
-                                    error_kind,
-                                });
-                            })
-                            .await;
+                        let _ = tx.send(None);
                     }
                 }
             })
             .detach();
+
+        Some(rx)
     }
 
     /// Sends a `SessionBootstrapped` notification to the remote server.
@@ -1498,6 +1804,191 @@ impl RemoteServerManager {
                  will send on connect"
             );
         }
+    }
+
+    /// Sends a `GetDiffState` request to the remote server for the given
+    /// session and emits the snapshot response as a manager event.
+    pub fn get_diff_state(
+        &mut self,
+        session_id: SessionId,
+        remote_path: RemotePath,
+        mode: DiffMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(client) = self.client_for_session(session_id).cloned() else {
+            log::warn!("Remote server get_diff_state: no connected client session={session_id:?}");
+            return;
+        };
+
+        let RemotePath {
+            host_id,
+            path: repo_path,
+        } = remote_path;
+        let mode_for_event = mode.clone();
+        let repo_path_for_event = repo_path.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = client.get_diff_state(&repo_path, mode).await;
+                match result {
+                    Ok(GetDiffStateResponse {
+                        result: Some(get_diff_state_response::Result::Snapshot(snapshot)),
+                    }) => {
+                        let _ = spawner
+                            .spawn(move |_me, ctx| {
+                                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
+                                    host_id,
+                                    repo_path: repo_path_for_event,
+                                    mode: mode_for_event,
+                                    snapshot,
+                                });
+                            })
+                            .await;
+                    }
+                    other => {
+                        let error_message = match other {
+                            Ok(GetDiffStateResponse {
+                                result: Some(get_diff_state_response::Result::Error(e)),
+                            }) => {
+                                log::warn!("Remote server get_diff_state error: {}", e.message);
+                                e.message
+                            }
+                            Ok(_) => {
+                                let message = "Remote server returned an empty \
+                                                GetDiffStateResponse"
+                                    .to_string();
+                                log::warn!("{message}");
+                                message
+                            }
+                            Err(e) => {
+                                // Transport-level telemetry is emitted automatically
+                                // by send_request via RequestFailedEvent.
+                                log::warn!(
+                                    "Remote server get_diff_state failed: \
+                                     session={session_id:?} error={e}"
+                                );
+                                e.to_string()
+                            }
+                        };
+                        let error_snapshot = DiffStateSnapshot {
+                            repo_path: repo_path_for_event.to_string(),
+                            mode: Some(mode_for_event.clone()),
+                            metadata: None,
+                            state: Some(DiffState {
+                                state: Some(diff_state::State::Error(DiffStateErrorValue {
+                                    message: error_message,
+                                })),
+                            }),
+                            diffs: None,
+                        };
+                        let _ = spawner
+                            .spawn(move |_me, ctx| {
+                                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
+                                    host_id,
+                                    repo_path: repo_path_for_event,
+                                    mode: mode_for_event,
+                                    snapshot: error_snapshot,
+                                });
+                            })
+                            .await;
+                    }
+                }
+            })
+            .detach();
+    }
+
+    /// Sends a `GetBranches` request to the remote server for the given
+    /// session and emits the result as a manager event.
+    pub fn get_branches(
+        &mut self,
+        session_id: SessionId,
+        remote_path: RemotePath,
+        max_branch_count: Option<u32>,
+        include_remotes: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(client) = self.client_for_session(session_id).cloned() else {
+            log::warn!("Remote server get_branches: no connected client session={session_id:?}");
+            return;
+        };
+
+        let repo_path = remote_path.path;
+        let repo_path_for_event = repo_path.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = client
+                    .get_branches(&repo_path, max_branch_count, include_remotes)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GetBranchesResponse {
+                            session_id,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Sends an `UnsubscribeDiffState` notification (fire-and-forget) to the
+    /// remote server for the given session.
+    pub fn unsubscribe_diff_state(
+        &self,
+        session_id: SessionId,
+        remote_path: &RemotePath,
+        mode: DiffMode,
+    ) {
+        if let Some(client) = self.client_for_session(session_id) {
+            client.unsubscribe_diff_state(&remote_path.path, mode);
+        } else {
+            log::debug!(
+                "Remote server unsubscribe_diff_state: no client for session={session_id:?}"
+            );
+        }
+    }
+
+    /// Sends a `DiscardFiles` request to the remote server. On success the
+    /// server's watcher will push updated diff snapshots.
+    #[allow(clippy::too_many_arguments)]
+    pub fn discard_files(
+        &mut self,
+        session_id: SessionId,
+        remote_path: RemotePath,
+        files: Vec<FileStatusInfo>,
+        should_stash: bool,
+        branch_name: Option<String>,
+        mode: DiffMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(client) = self.client_for_session(session_id).cloned() else {
+            log::warn!("Remote server discard_files: no connected client session={session_id:?}");
+            return;
+        };
+
+        let repo_path = remote_path.path;
+        ctx.background_executor()
+            .spawn(async move {
+                match client
+                    .discard_files(&repo_path, files, should_stash, branch_name, mode)
+                    .await
+                {
+                    Ok(()) => {
+                        log::info!("Remote server discard_files succeeded");
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Remote server discard_files failed: session={session_id:?} error={e}"
+                        );
+                        // Transport-level telemetry is emitted automatically
+                        // by send_request via RequestFailedEvent.
+                    }
+                }
+            })
+            .detach();
     }
 
     /// Sends a `LoadRepoMetadataDirectory` request to the remote server for
@@ -1531,7 +2022,7 @@ impl RemoteServerManager {
                 {
                     Ok(resp) => {
                         if let Some(update) =
-                            crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update(&resp)
+                            proto_load_repo_metadata_directory_response_to_update(&resp)
                         {
                             let _ = spawner
                                 .spawn(move |_me, ctx| {
@@ -1549,16 +2040,8 @@ impl RemoteServerManager {
                         log::warn!(
                             "Remote server load_repo_metadata_directory failed: session={session_id:?} error={e}"
                         );
-                        let error_kind = RemoteServerErrorKind::from_client_error(&e);
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::ClientRequestFailed {
-                                    session_id,
-                                    operation: RemoteServerOperation::LoadRepoMetadataDirectory,
-                                    error_kind,
-                                });
-                            })
-                            .await;
+                        // Transport-level telemetry is emitted automatically
+                        // by send_tracked_request via ClientEvent::RequestFailed.
                     }
                 }
             })
@@ -1574,11 +2057,7 @@ impl RemoteServerManager {
         event: ClientEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(RemoteSessionState::Connected {
-            host_id,
-            identity_key,
-            ..
-        }) = self.sessions.get(&session_id)
+        let Some(RemoteSessionState::Connected { host_id, .. }) = self.sessions.get(&session_id)
         else {
             let event_kind = client_event_kind(&event);
             log::info!(
@@ -1588,7 +2067,6 @@ impl RemoteServerManager {
             return;
         };
         let host_id = host_id.clone();
-        let remote_identity_key = identity_key.clone();
 
         match event {
             ClientEvent::RepoMetadataSnapshotReceived { update } => {
@@ -1598,28 +2076,42 @@ impl RemoteServerManager {
                 ctx.emit(RemoteServerManagerEvent::RepoMetadataUpdated { host_id, update });
             }
             ClientEvent::CodebaseIndexStatusesSnapshotReceived { statuses } => {
-                log::info!(
-                    "[Remote codebase indexing] Remote server received codebase index statuses snapshot: \
-                     session={session_id:?} host={host_id} status_count={}",
-                    statuses.len()
-                );
+                let statuses = statuses
+                    .into_iter()
+                    .filter_map(|status| {
+                        let Some(remote_path) = remote_path_for_status(&host_id, &status) else {
+                            log::warn!(
+                                "Remote server dropped codebase index snapshot status with invalid repo path: \
+                                 host={host_id} repo_path={}",
+                                status.repo_path
+                            );
+                            return None;
+                        };
+                        Some(RemoteCodebaseIndexStatusWithPath {
+                            remote_path,
+                            status,
+                        })
+                    })
+                    .collect();
                 ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot {
-                    remote_identity_key,
                     host_id,
                     statuses,
                 });
             }
             ClientEvent::CodebaseIndexStatusUpdated { status } => {
-                log::info!(
-                    "[Remote codebase indexing] Remote server received codebase index status update: \
-                     session={session_id:?} host={host_id} repo_path={} state={:?}",
-                    status.repo_path,
-                    status.state,
-                );
+                let Some(remote_path) = remote_path_for_status(&host_id, &status) else {
+                    log::warn!(
+                        "Remote server dropped codebase index status update with invalid repo path: \
+                         host={host_id} repo_path={}",
+                        status.repo_path
+                    );
+                    return;
+                };
                 ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
-                    remote_identity_key,
-                    host_id,
+                    session_id: Some(session_id),
+                    remote_path,
                     status,
+                    mutation_kind: None,
                 });
             }
             ClientEvent::MessageDecodingError => {
@@ -1642,17 +2134,41 @@ impl RemoteServerManager {
             ClientEvent::BufferConflictDetected { path } => {
                 ctx.emit(RemoteServerManagerEvent::BufferConflictDetected { host_id, path });
             }
-            ClientEvent::DiffStateSnapshotReceived { snapshot } => {
-                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived { host_id, snapshot });
+            ClientEvent::DiffStateSnapshotReceived {
+                repo_path,
+                mode,
+                snapshot,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
+                    host_id,
+                    repo_path,
+                    mode,
+                    snapshot,
+                });
             }
-            ClientEvent::DiffStateMetadataUpdateReceived { update } => {
+            ClientEvent::DiffStateMetadataUpdateReceived {
+                repo_path,
+                mode,
+                update,
+            } => {
                 ctx.emit(RemoteServerManagerEvent::DiffStateMetadataUpdateReceived {
                     host_id,
+                    repo_path,
+                    mode,
                     update,
                 });
             }
-            ClientEvent::DiffStateFileDeltaReceived { delta } => {
-                ctx.emit(RemoteServerManagerEvent::DiffStateFileDeltaReceived { host_id, delta });
+            ClientEvent::DiffStateFileDeltaReceived {
+                repo_path,
+                mode,
+                delta,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::DiffStateFileDeltaReceived {
+                    host_id,
+                    repo_path,
+                    mode,
+                    delta,
+                });
             }
             ClientEvent::Disconnected => {
                 // Handled by the drain loop's completion callback.
@@ -1671,7 +2187,11 @@ impl RemoteServerManager {
         transport: Arc<dyn RemoteTransport>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let InitializeHandshake { host_id, event_rx } = handshake;
+        let InitializeHandshake {
+            host_id,
+            event_rx,
+            failure_rx,
+        } = handshake;
         log::info!("Remote server connected: session={session_id:?} host={host_id}");
 
         // Only transition if the session is still in Initializing state.
@@ -1679,6 +2199,7 @@ impl RemoteServerManager {
             client,
             _child,
             control_path,
+            ..
         }) = self.sessions.remove(&session_id)
         else {
             return;
@@ -1708,6 +2229,20 @@ impl RemoteServerManager {
             move |me, ctx| {
                 me.mark_session_disconnected(session_id, ctx);
             },
+        );
+        // Drain the separate failure channel for request-failed telemetry.
+        // This stream is independent of the lifecycle stream above, so
+        // holding its sender on the client does not block disconnect.
+        ctx.spawn_stream_local(
+            failure_rx,
+            move |_me, event, ctx| {
+                ctx.emit(RemoteServerManagerEvent::ClientRequestFailed {
+                    session_id,
+                    operation: event.operation,
+                    error_kind: event.error_kind,
+                });
+            },
+            |_, _| {}, // no-op on done
         );
         if is_first_session {
             ctx.emit(RemoteServerManagerEvent::HostConnected {
@@ -1885,11 +2420,10 @@ impl RemoteServerManager {
                 });
             }
 
-            // Clear last navigated path so navigate_to_directory
-            // re-fires after reconnect.
-            // We need to do this on disconnect because the cached
-            // navigated path is only deduping for the current _remote server session.
-            self.last_navigated_path.remove(&session_id);
+            // Clear navigation cache so navigate_to_directory re-fires
+            // after reconnect. The cached path only dedupes for the
+            // current remote server session.
+            self.last_navigation.remove(&session_id);
 
             self.attempt_reconnect(
                 session_id,
@@ -1899,6 +2433,7 @@ impl RemoteServerManager {
                     exit_status,
                     transport,
                     auth_context,
+                    codebase_index_limits: self.codebase_index_limits,
                     control_path,
                     identity_key,
                 },
@@ -1927,6 +2462,7 @@ impl RemoteServerManager {
             exit_status,
             transport,
             auth_context,
+            codebase_index_limits,
             control_path,
             identity_key,
         } = params;
@@ -1948,6 +2484,7 @@ impl RemoteServerManager {
         let executor = ctx.background_executor().clone();
         let transport_clone = Arc::clone(&transport);
         let auth_context_for_task = Arc::clone(&auth_context);
+        let codebase_index_limits_for_task = codebase_index_limits;
 
         ctx.background_executor()
             .spawn(async move {
@@ -1968,6 +2505,7 @@ impl RemoteServerManager {
                     session_id,
                     &*transport_clone,
                     &auth_context_for_task,
+                    codebase_index_limits_for_task,
                     &spawner,
                     &executor,
                 )
@@ -2025,6 +2563,7 @@ impl RemoteServerManager {
                                         exit_status,
                                         transport,
                                         auth_context,
+                                        codebase_index_limits,
                                         control_path,
                                         identity_key,
                                     },
@@ -2066,6 +2605,7 @@ impl RemoteServerManager {
                 session_id,
                 host_id: params.host_id,
                 exit_status: params.exit_status,
+                was_reconnect_attempt: true,
             });
             // Note: HostDisconnected was already emitted by
             // mark_session_disconnected when entering the reconnect flow.
@@ -2095,6 +2635,7 @@ impl RemoteServerManager {
             session_id,
             host_id: host_id.clone(),
             exit_status,
+            was_reconnect_attempt: false,
         });
         if !self.host_to_sessions.contains_key(&host_id) {
             ctx.emit(RemoteServerManagerEvent::HostDisconnected { host_id });

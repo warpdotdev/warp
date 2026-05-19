@@ -2,6 +2,7 @@ mod convert;
 
 use std::{fmt::Display, ops::Range, time::SystemTime};
 
+use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
@@ -180,6 +181,8 @@ pub enum RequestCommandOutputResult {
         command: String,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     LongRunningCommandSnapshot {
         block_id: BlockId,
@@ -261,6 +264,8 @@ pub enum WriteToLongRunningShellCommandResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -550,6 +555,8 @@ pub enum ReadShellCommandOutputResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     LongRunningCommandSnapshot {
         command: String,
@@ -1351,6 +1358,8 @@ pub enum TransferShellCommandControlToUserResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     Cancelled,
     Error(ShellCommandError),

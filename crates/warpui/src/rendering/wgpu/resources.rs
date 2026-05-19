@@ -535,6 +535,20 @@ pub fn adapter_has_rendering_offset_bug(adapter_info: &wgpu::AdapterInfo) -> boo
         .any(|model| adapter_info.name.contains(model))
 }
 
+/// Returns whether the adapter is the Broadcom V3D Vulkan driver (V3DV).
+///
+/// The V3D Vulkan driver on Raspberry Pi and similar ARM SBCs have panics and flickering issues.
+/// The logs have warnings about these drivers missing the `FULL_DRAW_INDEX_UINT32` downlevel flag
+/// but if it's unclear if that is the actual cause. See:
+/// https://github.com/warpdotdev/warp/issues/10618
+/// https://github.com/warpdotdev/warp/issues/4879
+fn is_v3d_vulkan_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+    cfg!(target_os = "linux")
+        && adapter_info.backend == wgpu::Backend::Vulkan
+        && adapter_info.driver.contains("V3DV")
+        && adapter_info.name.starts_with("V3D 4.2.14.")
+}
+
 /// Checks whether the provided adapter info describes a lavapipe
 /// (Vulkan llvmpipe) adapter that may not work properly with warpui.
 fn is_older_lavapipe_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
@@ -712,6 +726,11 @@ fn adapter_stability_sort_func(
         && !is_vulkan_nvidia_adapter(&adapter_info)
     {
         log::info!("Deprioritizing non-NVIDIA Vulkan adapter (the PRIME performance profile is likely enabled)");
+        return AdapterSupport::Unsupported;
+    }
+
+    if is_v3d_vulkan_adapter(&adapter_info) {
+        log::warn!("Deprioritizing Vulkan-backed V3D adapter");
         return AdapterSupport::Unsupported;
     }
 

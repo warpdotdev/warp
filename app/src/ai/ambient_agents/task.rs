@@ -3,6 +3,8 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use session_sharing_protocol::common::SessionId;
+use url::Url;
 use warp_cli::agent::Harness;
 use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
@@ -77,6 +79,16 @@ pub struct HarnessConfig {
     /// The model to use with this harness. None means use the harness default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Optional reasoning level for harnesses that support it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessModelConfig {
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<String>,
 }
 
 impl HarnessConfig {
@@ -85,8 +97,36 @@ impl HarnessConfig {
         Self {
             harness_type,
             model_id: None,
+            reasoning_level: None,
         }
     }
+
+    pub fn model_config(&self) -> Option<HarnessModelConfig> {
+        self.model_id
+            .as_ref()
+            .filter(|id| !id.is_empty())
+            .map(|model_id| HarnessModelConfig {
+                model_id: model_id.clone(),
+                reasoning_level: self.reasoning_level.clone(),
+            })
+    }
+}
+
+fn parse_session_id_from_link(session_link: &str) -> Option<SessionId> {
+    Url::parse(session_link).ok().and_then(|url| {
+        url.path_segments()
+            .into_iter()
+            .flatten()
+            .last()
+            .and_then(|segment| segment.parse().ok())
+    })
+}
+
+fn parse_execution_session_id(execution: RunExecution<'_>) -> Option<SessionId> {
+    execution
+        .session_id
+        .and_then(|id| id.parse().ok())
+        .or_else(|| execution.session_link.and_then(parse_session_id_from_link))
 }
 
 fn serialize_harness<S: Serializer>(harness: &Harness, serializer: S) -> Result<S::Ok, S::Error> {
@@ -107,6 +147,9 @@ pub struct HarnessAuthSecretsConfig {
     /// Name of a managed secret for Claude Code harness authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_auth_secret_name: Option<String>,
+    /// Name of a managed secret for Codex harness authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_auth_secret_name: Option<String>,
 }
 
 impl AgentConfigSnapshot {
@@ -279,6 +322,17 @@ pub struct RunExecution<'a> {
     pub is_sandbox_running: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmbientAgentLiveSessionState {
+    /// The task does not currently have a running execution with a joinable session signal.
+    Inactive,
+    /// The task has a running execution, but this client does not have a parsed
+    /// shared-session id it can attach to.
+    ActiveUnattachable,
+    /// The task has a running execution and this client can attach to its shared session.
+    Attachable { session_id: SessionId },
+}
+
 impl RunExecution<'_> {
     pub fn has_joinable_session(&self) -> bool {
         self.session_id.is_some() || self.session_link.is_some()
@@ -306,9 +360,35 @@ pub struct TaskAttachment {
     pub mime_type: String,
 }
 
+/// Returns the trimmed orchestrator agent name, or `None` when empty / whitespace-only.
+pub fn normalize_orchestrator_agent_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 impl AmbientAgentTask {
     pub fn run_id(&self) -> AmbientAgentTaskId {
         self.task_id
+    }
+
+    /// Returns the short label for this task: trimmed `agent_config_snapshot.name`,
+    /// trimmed `title`, or `"Agent"`.
+    pub fn display_name(&self) -> &str {
+        if let Some(name) = self
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|c| c.name.as_deref())
+        {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+        let trimmed_title = self.title.trim();
+        if !trimmed_title.is_empty() {
+            return trimmed_title;
+        }
+        "Agent"
     }
 
     pub fn conversation_id(&self) -> Option<&str> {
@@ -330,6 +410,23 @@ impl AmbientAgentTask {
             execution.session_id
         } else {
             None
+        }
+    }
+
+    /// Returns the canonical live-session state for this task from the client's perspective.
+    ///
+    /// This separates task liveness from attachability: an in-progress task can have an active
+    /// execution without a usable shared-session id, and callers should not treat that as a
+    /// completed transcript/follow-up state.
+    pub fn active_live_session_state(&self) -> AmbientAgentLiveSessionState {
+        let execution = self.active_run_execution();
+        if self.state != AmbientAgentTaskState::InProgress || !execution.is_active() {
+            return AmbientAgentLiveSessionState::Inactive;
+        }
+
+        match parse_execution_session_id(execution) {
+            Some(session_id) => AmbientAgentLiveSessionState::Attachable { session_id },
+            None => AmbientAgentLiveSessionState::ActiveUnattachable,
         }
     }
 
@@ -517,6 +614,31 @@ pub struct TaskPrincipalInfo {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct TaskStatusMessage {
     pub message: String,
+    #[serde(default, alias = "errorCode")]
+    pub error_code: Option<TaskStatusErrorCode>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatusErrorCode {
+    #[serde(alias = "ENVIRONMENT_SETUP_FAILED")]
+    EnvironmentSetupFailed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl TaskStatusErrorCode {
+    pub fn is_environment_setup_failure(&self) -> bool {
+        matches!(self, TaskStatusErrorCode::EnvironmentSetupFailed)
+    }
+}
+
+impl TaskStatusMessage {
+    pub fn is_environment_setup_failure(&self) -> bool {
+        self.error_code
+            .as_ref()
+            .is_some_and(TaskStatusErrorCode::is_environment_setup_failure)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -560,3 +682,7 @@ pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut View
         },
     );
 }
+
+#[cfg(test)]
+#[path = "task_tests.rs"]
+mod tests;

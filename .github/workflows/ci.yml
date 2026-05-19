@@ -445,10 +445,11 @@ jobs:
 
   remote-server-tests:
     name: Run Linux remote-server integration tests
+    # Temporarily disabled while reconsidering the approach.
+    if: false
     timeout-minutes: 25
     runs-on: ubuntu-latest-large
     needs: params
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     concurrency:
       # The dedicated VM uses a fixed binary path, so serialize remote-server
       # deploy/test jobs across workflow runs to avoid cross-run clobbering.

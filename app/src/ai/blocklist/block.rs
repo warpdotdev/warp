@@ -35,6 +35,7 @@ use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::ai::blocklist::SuggestionDismissButtonTheme;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
@@ -78,6 +79,10 @@ use crate::ai::agent::AIIdentifiers;
 use crate::ai::agent::MessageId;
 use crate::ai::agent::RequestFileEditsResult;
 use crate::ai::agent::SearchCodebaseResult;
+use crate::ai::agent::SubagentCall;
+use crate::ai::agent::SubagentType;
+use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::NewConversationDecision;
 use crate::ai::blocklist::block::keyboard_navigable_buttons::KeyboardNavigableButtonBuilder;
 use crate::ai::blocklist::block::keyboard_navigable_buttons::KeyboardNavigableButtons;
@@ -121,7 +126,9 @@ use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::{cell::OnceCell, sync::Arc};
 use warp_util::path::ShellFamily;
@@ -171,6 +178,7 @@ use crate::ai::blocklist::permissions::{
 };
 use crate::ai::blocklist::suggestion_chip_view::{SuggestedChipViewEvent, SuggestionChipView};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::get_relevant_files::controller::{
     GetRelevantFilesController, GetRelevantFilesControllerEvent,
 };
@@ -401,6 +409,9 @@ pub(super) struct AIBlockStateHandles {
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,
     orchestration_navigation_card_handles: HashMap<AIAgentActionId, MouseStateHandle>,
+    /// Persistent mouse-state handles per received-message transcript row,
+    /// used by the clickable sender avatar.
+    pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
 
     references_section_collapsible_handle: MouseStateHandle,
 
@@ -408,6 +419,8 @@ pub(super) struct AIBlockStateHandles {
     codebase_search_speedbump_option_handles: Vec<MouseStateHandle>,
     codebase_search_speedbump_radio_button_handle: RadioButtonStateHandle,
     manage_autonomy_settings_link_handle: MouseStateHandle,
+
+    ask_user_question_speedbump_settings_link_handle: MouseStateHandle,
 
     /// Mouse state handles for rating the AI block.
     thumbs_up_handle: MouseStateHandle,
@@ -507,6 +520,15 @@ pub enum AutonomySettingSpeedbump {
         /// Set at render-time.
         shown: Arc<Mutex<bool>>,
     },
+    /// Show a one-shot dropdown-based speedbump for ask-user-question permission.
+    ShouldShowForAskUserQuestion {
+        /// Which action this corresponds to.
+        action_id: AIAgentActionId,
+        /// Whether or not the speedbump is actually shown.
+        ///
+        /// Set at render-time.
+        shown: Arc<Mutex<bool>>,
+    },
 }
 
 /// State for the todo list preview element in the AI block.
@@ -594,7 +616,7 @@ impl ImportedCommentElementState {
 }
 
 pub(super) struct ImportedCommentGroup {
-    repo_path: PathBuf,
+    repo_path: LocalOrRemotePath,
     base_branch: Option<String>,
     cards: Vec<CommentViewCard>,
     element_states: Vec<ImportedCommentElementState>,
@@ -602,7 +624,7 @@ pub(super) struct ImportedCommentGroup {
 
 impl ImportedCommentGroup {
     fn new(
-        repo_path: PathBuf,
+        repo_path: LocalOrRemotePath,
         base_branch: Option<String>,
         cards: Vec<CommentViewCard>,
         element_states: Vec<ImportedCommentElementState>,
@@ -701,6 +723,12 @@ impl Default for CollapsibleElementState {
 }
 
 impl CollapsibleElementState {
+    fn collapsed() -> Self {
+        Self {
+            expansion_state: CollapsibleExpansionState::Collapsed,
+            ..Default::default()
+        }
+    }
     fn expand(&mut self) {
         self.expansion_state = CollapsibleExpansionState::Expanded {
             is_finished: self.last_known_is_finished,
@@ -787,6 +815,16 @@ pub(crate) fn received_message_collapsible_id(message_id: &str) -> MessageId {
     MessageId::new(format!(
         "{RECEIVED_MESSAGE_COLLAPSIBLE_ID_PREFIX}{message_id}"
     ))
+}
+
+fn default_collapsible_state_for_orchestration_action(
+    action: &AIAgentActionType,
+) -> Option<CollapsibleElementState> {
+    match action {
+        AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
+        AIAgentActionType::SendMessageToAgent { .. } => Some(CollapsibleElementState::collapsed()),
+        _ => None,
+    }
 }
 
 pub struct AIBlock {
@@ -1069,9 +1107,25 @@ impl AIBlock {
             },
         );
 
+        ctx.subscribe_to_model(
+            &AgentConversationsModel::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_agent_conversations_model_event(event, ctx);
+            },
+        );
+
         let safe_mode_settings = SafeModeSettings::handle(ctx);
         ctx.subscribe_to_model(&safe_mode_settings, |me, _, event, ctx| {
             me.handle_safe_mode_settings_changed_event(event, ctx)
+        });
+
+        ctx.subscribe_to_model(&AIExecutionProfilesModel::handle(ctx), |me, _, _, ctx| {
+            let terminal_view_id = me.terminal_view_id;
+            if let Some(view) = me.ask_user_question_view.clone() {
+                view.update(ctx, |v, ctx| {
+                    v.refresh_speedbump_dropdown_selection(terminal_view_id, ctx);
+                });
+            }
         });
 
         let detected_links_state: DetectedLinksState = Default::default();
@@ -1228,7 +1282,7 @@ impl AIBlock {
                 AmbientAgentViewModelEvent::DispatchedAgent
                 | AmbientAgentViewModelEvent::FollowupDispatched
                 | AmbientAgentViewModelEvent::SessionReady { .. }
-                | AmbientAgentViewModelEvent::FollowupSessionReady { .. }
+                | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
                 | AmbientAgentViewModelEvent::Failed { .. }
                 | AmbientAgentViewModelEvent::NeedsGithubAuth
                 | AmbientAgentViewModelEvent::Cancelled
@@ -1819,6 +1873,8 @@ impl AIBlock {
             self.handle_web_fetch_messages(&output.messages, ctx);
         }
 
+        self.fetch_conversation_search_agent_run_titles(output, ctx);
+
         for action in output.actions() {
             let new_action_ids: HashSet<AIAgentActionId> =
                 output.actions().map(|action| action.id.clone()).collect();
@@ -2055,31 +2111,31 @@ impl AIBlock {
             ) {
                 self.collapsible_block_states
                     .entry(message.id.clone())
-                    .or_insert_with(|| CollapsibleElementState {
-                        expansion_state: CollapsibleExpansionState::Collapsed,
-                        ..Default::default()
-                    });
+                    .or_insert_with(CollapsibleElementState::collapsed);
             }
 
             // Register collapsible state for orchestration action messages.
-            if FeatureFlag::Orchestration.is_enabled() {
+            if FeatureFlag::OrchestrationV2.is_enabled() {
                 match &message.message {
-                    AIAgentOutputMessageType::Action(AIAgentAction {
-                        action:
-                            AIAgentActionType::StartAgent { .. }
-                            | AIAgentActionType::SendMessageToAgent { .. },
-                        ..
-                    }) => {
-                        self.collapsible_block_states
-                            .entry(message.id.clone())
-                            .or_default();
+                    AIAgentOutputMessageType::Action(AIAgentAction { action, .. }) => {
+                        if let Some(state) =
+                            default_collapsible_state_for_orchestration_action(action)
+                        {
+                            self.collapsible_block_states
+                                .entry(message.id.clone())
+                                .or_insert(state);
+                        }
                     }
                     AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
                         for received_message in messages {
+                            let collapsible_id =
+                                received_message_collapsible_id(&received_message.message_id);
                             self.collapsible_block_states
-                                .entry(received_message_collapsible_id(
-                                    &received_message.message_id,
-                                ))
+                                .entry(collapsible_id.clone())
+                                .or_insert_with(CollapsibleElementState::collapsed);
+                            self.state_handles
+                                .transcript_avatar_handles
+                                .entry(collapsible_id)
                                 .or_default();
                         }
                     }
@@ -2095,6 +2151,63 @@ impl AIBlock {
                     get_secret_obfuscation_mode(ctx).is_visually_obfuscated(),
                 );
         }
+    }
+
+    fn fetch_conversation_search_agent_run_titles(
+        &self,
+        output: &AIAgentOutput,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for task_id in Self::conversation_search_agent_run_ids(output) {
+            AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.get_or_async_fetch_task_data(&task_id, ctx);
+            });
+        }
+    }
+
+    fn handle_agent_conversations_model_event(
+        &mut self,
+        event: &AgentConversationsModelEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Conversation-search labels may render with an agent-run fallback before the
+        // async task title fetch completes. `TasksUpdated` is the signal that the real
+        // title may now be cached, so only notify blocks that render those labels.
+        if matches!(event, AgentConversationsModelEvent::TasksUpdated)
+            && self.output_references_agent_run_for_conversation_search(ctx)
+        {
+            ctx.notify();
+        }
+    }
+
+    fn output_references_agent_run_for_conversation_search(&self, app: &AppContext) -> bool {
+        self.model
+            .status(app)
+            .output_to_render()
+            .is_some_and(|output| {
+                !Self::conversation_search_agent_run_ids(&output.get()).is_empty()
+            })
+    }
+
+    fn conversation_search_agent_run_ids(output: &AIAgentOutput) -> Vec<AmbientAgentTaskId> {
+        let mut task_ids = HashSet::new();
+        for message in &output.messages {
+            let AIAgentOutputMessageType::Subagent(SubagentCall {
+                subagent_type:
+                    SubagentType::ConversationSearch {
+                        agent_run_id: Some(agent_run_id),
+                        ..
+                    },
+                ..
+            }) = &message.message
+            else {
+                continue;
+            };
+            if let Ok(task_id) = agent_run_id.parse() {
+                task_ids.insert(task_id);
+            }
+        }
+        task_ids.into_iter().collect()
     }
 
     fn set_keyboard_navigable_buttons(
@@ -2356,9 +2469,10 @@ impl AIBlock {
         // Now that streaming is complete and all RunAgents requests are
         // fully populated, re-evaluate auto-launch for any card that
         // was created during streaming with an empty agent_run_configs.
+        let conversation_id_for_auto_launch = self.client_ids.conversation_id;
         for view in self.run_agents_card_views.values() {
             view.update(ctx, |card, ctx| {
-                card.try_auto_launch_on_stream_complete(ctx);
+                card.try_auto_launch_on_stream_complete(conversation_id_for_auto_launch, ctx);
             });
         }
 
@@ -2536,31 +2650,49 @@ impl AIBlock {
             }
         }
 
-        for action_id in output.actions().filter_map(|action| {
-            let should_show_file_access_speedbump =
+        // One-shot flag is consumed only after the footer is attached, so restored
+        // blocks and views that haven't arrived yet don't burn the flag.
+        for action in output.actions() {
+            let is_file_access =
                 action.is_get_specific_files() || action.is_grep() || action.is_file_glob();
-            should_show_file_access_speedbump.then_some(&action.id)
-        }) {
-            if is_agent_mode_autonomy_allowed(ctx)
-                && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
+            if is_file_access {
+                if is_agent_mode_autonomy_allowed(ctx)
+                    && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
+                {
+                    // Try to show the speedbump for autoread files setting
+                    // if we haven't shown it enough before.
+                    self.autonomy_setting_speedbump =
+                        AutonomySettingSpeedbump::ShouldShowForFileAccess {
+                            action_id: action.id.clone(),
+                            checked: true,
+                            shown: Arc::new(Mutex::new(false)),
+                        };
+                    // Mark the speedbump as shown in settings so that we do not render it again.
+                    AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                        if let Err(err) = ai_settings
+                            .should_show_agent_mode_autoread_files_speedbump
+                            .set_value(false, ctx)
+                        {
+                            log::warn!(
+                                "Error with marking autoread files speedbump as shown {err}"
+                            );
+                        }
+                    })
+                }
+            } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
+                && !self.model.is_restored()
+                && FeatureFlag::AskUserQuestion.is_enabled()
+                && is_agent_mode_autonomy_allowed(ctx)
+                && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {
-                // Try to show the speedbump for autoread files setting
-                // if we haven't shown it enough before.
                 self.autonomy_setting_speedbump =
-                    AutonomySettingSpeedbump::ShouldShowForFileAccess {
-                        action_id: action_id.clone(),
-                        checked: true,
+                    AutonomySettingSpeedbump::ShouldShowForAskUserQuestion {
+                        action_id: action.id.clone(),
                         shown: Arc::new(Mutex::new(false)),
                     };
-                // Mark the speedbump as shown in settings so that we do not render it again.
-                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    if let Err(err) = ai_settings
-                        .should_show_agent_mode_autoread_files_speedbump
-                        .set_value(false, ctx)
-                    {
-                        log::warn!("Error with marking autoread files speedbump as shown {err}");
-                    }
-                })
+                if self.sync_ask_user_question_speedbump_footer(ctx) {
+                    Self::mark_ask_user_question_speedbump_as_shown(ctx);
+                }
             }
         }
 
@@ -2667,9 +2799,8 @@ impl AIBlock {
                             .and_then(|language| language.to_extension())
                         {
                             // Since this is a code snippet, construct a fake path name for looking up the language.
-                            let fake_path_string = format!("snippet.{extension}");
-                            let fake_path = std::path::Path::new(&fake_path_string);
-                            view.set_language_with_path(fake_path, ctx);
+                            let fake_path = format!("/snippet.{extension}");
+                            view.set_language_with_local_path(Path::new(&fake_path), ctx);
                         }
                     }
                     let starting_line_number = source.as_ref().and_then(|s| {
@@ -2729,9 +2860,8 @@ impl AIBlock {
 
                     // Apply language immediately on initial creation so restored blocks get syntax highlighting.
                     if let Some(ext) = language.as_ref().and_then(|lang| lang.to_extension()) {
-                        let fake_path_string = format!("snippet.{ext}");
-                        let fake_path = std::path::Path::new(&fake_path_string);
-                        view.set_language_with_path(fake_path, ctx);
+                        let fake_path = format!("/snippet.{ext}");
+                        view.set_language_with_local_path(Path::new(&fake_path), ctx);
                     }
 
                     ctx.notify();
@@ -2789,6 +2919,17 @@ impl AIBlock {
                 );
             });
         }
+    }
+
+    fn mark_ask_user_question_speedbump_as_shown(ctx: &mut ViewContext<Self>) {
+        AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+            if let Err(err) = ai_settings
+                .should_show_agent_mode_ask_user_question_speedbump
+                .set_value(false, ctx)
+            {
+                log::warn!("Could not mark ask-user-question speedbump as shown: {err}");
+            }
+        });
     }
 
     fn handle_requested_edit_complete(
@@ -3181,7 +3322,16 @@ impl AIBlock {
                 // We only care about expansion state updates when the command
                 // is running or finished (i.e. when it has a block).
                 let action_status = self.action_model.as_ref(ctx).get_action_status(action_id);
-                if !action_status.is_some_and(|a| a.is_running() || a.is_done()) {
+                let has_finished_command_block = {
+                    let terminal_model = self.terminal_model.lock();
+                    terminal_model
+                        .block_list()
+                        .block_for_ai_action_id(action_id)
+                        .is_some_and(|block| block.finished())
+                };
+                if !has_finished_command_block
+                    && !action_status.is_some_and(|a| a.is_running() || a.is_done())
+                {
                     return;
                 }
 
@@ -3369,7 +3519,45 @@ impl AIBlock {
         {
             ctx.focus(&view);
         }
+        if self.sync_ask_user_question_speedbump_footer(ctx)
+            && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
+        {
+            Self::mark_ask_user_question_speedbump_as_shown(ctx);
+        }
         ctx.notify();
+    }
+
+    /// Attaches the footer to the view if the speedbump variant matches. Called from
+    /// both the variant-seeding and view-creation paths.
+    fn sync_ask_user_question_speedbump_footer(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(view) = self.ask_user_question_view.clone() else {
+            return false;
+        };
+        let speedbump_matches = matches!(
+            &self.autonomy_setting_speedbump,
+            AutonomySettingSpeedbump::ShouldShowForAskUserQuestion { action_id, .. }
+                if action_id == view.as_ref(ctx).action_id()
+        );
+        if speedbump_matches {
+            let settings_link_handle = self
+                .state_handles
+                .ask_user_question_speedbump_settings_link_handle
+                .clone();
+            if let AutonomySettingSpeedbump::ShouldShowForAskUserQuestion { shown, .. } =
+                &self.autonomy_setting_speedbump
+            {
+                *shown.lock() = true;
+            }
+            let terminal_view_id = self.terminal_view_id;
+            view.update(ctx, |view, ctx| {
+                view.set_speedbump_settings_link(Some(settings_link_handle), ctx);
+                view.init_speedbump_dropdown(ctx);
+                view.refresh_speedbump_dropdown_selection(terminal_view_id, ctx);
+            });
+            true
+        } else {
+            false
+        }
     }
 
     fn handle_ask_user_question_view_event(
@@ -3388,6 +3576,25 @@ impl AIBlock {
 
         match event {
             AskUserQuestionViewEvent::Updated => {
+                ctx.notify();
+            }
+            AskUserQuestionViewEvent::SpeedbumpPermissionChanged(permission) => {
+                let permission = *permission;
+                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                    .active_profile(Some(self.terminal_view_id), ctx)
+                    .id();
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_ask_user_question(profile_id, permission, ctx);
+                });
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::ChangedAgentModeAskUserQuestionPermission {
+                        src: AutonomySettingToggleSource::Speedbump,
+                        new: permission,
+                    },
+                    ctx
+                );
+                Self::mark_ask_user_question_speedbump_as_shown(ctx);
+                self.autonomy_setting_speedbump = AutonomySettingSpeedbump::None;
                 ctx.notify();
             }
         }
@@ -4342,24 +4549,27 @@ impl AIBlock {
     fn handle_insert_code_review_comments(
         &mut self,
         action_id: AIAgentActionId,
-        repo_path: &Path,
+        repo_path: &Path, // TODO: this should be migrated to str
         comments: &[InsertReviewComment],
         base_branch: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Canonicalize the repo_path to resolve case differences on case-insensitive
-        // filesystems (e.g. macOS). The action's repo_path comes from the terminal CWD
-        // which may have non-canonical casing, while the CodeReviewView's repo_path
-        // comes from git detection which canonicalizes. Without this, comment file paths
-        // won't match editor paths in relocate_comments, marking all comments as outdated.
-        let canonical_repo_path =
-            dunce::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
-        let repo_path = canonical_repo_path.as_path();
+        let Some(repo_location) = self
+            .active_session
+            .as_ref(ctx)
+            .location_for_path(repo_path.to_string_lossy().as_ref(), ctx)
+        else {
+            log::warn!(
+                "Cannot import review comments for repo path without an active session location: {}",
+                repo_path.display()
+            );
+            return;
+        };
 
         let raw_count = comments.len();
         let pending = convert_insert_review_comments(comments);
         let converted_count = pending.len();
-        let flattened = attach_pending_imported_comments(pending, repo_path);
+        let flattened = attach_pending_imported_comments(pending, &repo_location);
         let thread_count = flattened.len();
 
         if !self.model.is_restored() {
@@ -4375,7 +4585,9 @@ impl AIBlock {
 
         let cards: Vec<CommentViewCard> = flattened
             .into_iter()
-            .map(|comment| CommentViewCard::new(comment, true, true, None, Some(repo_path), ctx))
+            .map(|comment| {
+                CommentViewCard::new(comment, true, true, None, Some(&repo_location), ctx)
+            })
             .collect();
 
         let element_states = cards
@@ -4398,7 +4610,7 @@ impl AIBlock {
 
         self.imported_comments.insert(
             action_id,
-            ImportedCommentGroup::new(canonical_repo_path, base_branch, cards, element_states),
+            ImportedCommentGroup::new(repo_location, base_branch, cards, element_states),
         );
 
         self.update_imported_comments_disabled_state(ctx);
@@ -5325,12 +5537,12 @@ impl AIBlock {
         self.has_imported_comments
     }
 
-    /// Returns `true` if the canonicalized CWD is within any of this block's
+    /// Returns `true` if the current working directory is within any of this block's
     /// imported comment group repo roots.
-    fn cwd_matches_any_imported_comment_repo(&self, canonical_cwd: &Path) -> bool {
+    fn cwd_matches_any_imported_comment_repo(&self, cwd: &LocalOrRemotePath) -> bool {
         self.imported_comments
             .values()
-            .any(|group| canonical_cwd.starts_with(&group.repo_path))
+            .any(|group| group.repo_path.strip_repo_prefix(cwd).is_some())
     }
 
     /// Returns the repo path associated with this block's imported comments, if any.
@@ -5338,31 +5550,36 @@ impl AIBlock {
     /// All imported comment groups in a single block share the same repo
     /// (they were fetched in the same terminal context), so any group's
     /// path is representative.
-    pub(crate) fn imported_comment_repo_path(&self) -> Option<&Path> {
+    pub(crate) fn imported_comment_repo_path(&self) -> Option<&LocalOrRemotePath> {
         self.imported_comments
             .values()
             .next()
-            .map(|group| group.repo_path.as_path())
+            .map(|group| &group.repo_path)
+    }
+
+    fn current_working_directory_location(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<LocalOrRemotePath> {
+        self.active_session
+            .as_ref(ctx)
+            .current_working_directory_location(ctx)
     }
 
     /// Disables or enables the per-comment "Open in code review" buttons and the
     /// bulk "Open all in code review" button based on whether the current working
     /// directory is still within the imported comments' repository.
     fn update_imported_comments_disabled_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let canonical_cwd = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory()
-            .and_then(|cwd| dunce::canonicalize(cwd).ok());
+        let cwd_location = self.current_working_directory_location(ctx);
 
         if self.has_imported_comments {
-            self.update_own_imported_comments_disabled_state(canonical_cwd.as_deref(), ctx);
+            self.update_own_imported_comments_disabled_state(cwd_location.as_ref(), ctx);
         } else if self.model.is_latest_visible_exchange_in_root_task(ctx) {
             // The "Open all" button is rendered by the latest visible exchange when the
             // current thread has imported comments but this block does not own them directly.
             // Update that block's button state from its CWD so the button disables when the
             // user navigates outside the imported comments' repository.
-            self.update_open_all_button_disabled_state(canonical_cwd.as_deref(), ctx);
+            self.update_open_all_button_disabled_state(cwd_location.as_ref(), ctx);
         } else {
             return;
         }
@@ -5374,11 +5591,11 @@ impl AIBlock {
     /// imported comments. We assume all comment groups share the same repo.
     fn update_own_imported_comments_disabled_state(
         &mut self,
-        canonical_cwd: Option<&Path>,
+        cwd_location: Option<&LocalOrRemotePath>,
         ctx: &mut ViewContext<Self>,
     ) {
         let cwd_matches_repo =
-            canonical_cwd.is_some_and(|cwd| self.cwd_matches_any_imported_comment_repo(cwd));
+            cwd_location.is_some_and(|cwd| self.cwd_matches_any_imported_comment_repo(cwd));
         let should_disable = !cwd_matches_repo;
 
         for group in self.imported_comments.values() {
@@ -5386,14 +5603,14 @@ impl AIBlock {
         }
 
         let repo_path = if should_disable {
-            self.imported_comment_repo_path().map(Path::to_owned)
+            self.imported_comment_repo_path().cloned()
         } else {
             None
         };
         set_imported_comment_button_disabled(
             &self.open_all_comments_button,
             should_disable,
-            repo_path.as_deref(),
+            repo_path.as_ref(),
             ctx,
         );
     }
@@ -5403,26 +5620,24 @@ impl AIBlock {
     /// Derives the repo root from the block's CWD via `DetectedRepositories`.
     fn update_open_all_button_disabled_state(
         &self,
-        canonical_cwd: Option<&Path>,
+        cwd_location: Option<&LocalOrRemotePath>,
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(not(target_family = "wasm"))]
-        let repo_path = self
-            .current_working_directory
-            .as_ref()
-            .and_then(|cwd| DetectedRepositories::as_ref(ctx).get_root_for_path(Path::new(cwd)));
+        let repo_path =
+            cwd_location.and_then(|cwd| DetectedRepositories::as_ref(ctx).get_root_for_path(cwd));
         #[cfg(target_family = "wasm")]
-        let repo_path = self.current_working_directory.as_ref().map(PathBuf::from);
+        let repo_path = cwd_location.cloned();
 
-        let cwd_matches_repo = match (canonical_cwd, repo_path.as_deref()) {
-            (Some(cwd), Some(rp)) => cwd.starts_with(rp),
+        let cwd_matches_repo = match (cwd_location, repo_path.as_ref()) {
+            (Some(cwd), Some(rp)) => rp.strip_repo_prefix(cwd).is_some(),
             _ => false,
         };
 
         set_imported_comment_button_disabled(
             &self.open_all_comments_button,
             !cwd_matches_repo,
-            repo_path.as_deref(),
+            repo_path.as_ref(),
             ctx,
         );
     }
@@ -5449,14 +5664,14 @@ pub(crate) struct ImportedBlockComments {
 fn set_imported_comment_button_disabled(
     handle: &ViewHandle<ActionButton>,
     should_disable: bool,
-    repo_path: Option<&Path>,
+    repo_path: Option<&LocalOrRemotePath>,
     ctx: &mut ViewContext<AIBlock>,
 ) {
     handle.update(ctx, |button, ctx| {
         button.set_disabled(should_disable, ctx);
         if should_disable {
             let tooltip = repo_path
-                .map(|path| format!("Navigate to {} to open these comments", path.display()));
+                .map(|path| format!("Navigate to {} to open these comments", path.display_path()));
             button.set_tooltip(tooltip, ctx);
         } else {
             button.set_tooltip(None::<String>, ctx);
@@ -5631,7 +5846,7 @@ pub enum AIBlockEvent {
     /// after the initial output completes.
     PassiveCodeDiffLoaded,
     OpenImportedCommentInCodeReview {
-        repo_path: PathBuf,
+        repo_path: LocalOrRemotePath,
         comment: Box<AttachedReviewComment>,
         base_branch: Option<String>,
     },
@@ -5743,8 +5958,6 @@ pub enum AIBlockAction {
     /// Copy all AI output from the previous user query to the next user query.
     /// Note that this contains more than just this block, since from the user perspective everything after the user query appears like one block.
     CopyOutput,
-    /// Copy complete conversation history
-    CopyConversation,
     /// Copy the ai block's command
     CopyCommand,
     /// Store a command that was right-clicked for later copying
@@ -6218,34 +6431,6 @@ impl TypedActionView for AIBlock {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(combined_text));
             }
-            AIBlockAction::CopyConversation => {
-                let conversation_text = {
-                    let history = BlocklistAIHistoryModel::handle(ctx);
-                    let Some(conversation) = history
-                        .as_ref(ctx)
-                        .conversation(&self.client_ids.conversation_id)
-                    else {
-                        log::warn!(
-                            "No conversation found for conversation ID {}",
-                            self.client_ids.conversation_id
-                        );
-                        return;
-                    };
-
-                    let mut result = Vec::new();
-                    for exchange in conversation.root_task_exchanges() {
-                        let formatted_exchange =
-                            exchange.format_for_copy(Some(self.action_model.as_ref(ctx)));
-                        if !formatted_exchange.is_empty() {
-                            result.push(formatted_exchange);
-                        }
-                    }
-
-                    result.join("\n\n")
-                };
-                ctx.clipboard()
-                    .write(ClipboardContent::plain_text(conversation_text));
-            }
             AIBlockAction::CopyCommand => {
                 let command_text = if let Some(stored_command) = &self.last_right_clicked_command {
                     // Use the specific command that was right-clicked
@@ -6501,11 +6686,14 @@ impl AIBlock {
         let active_config = {
             let history = crate::BlocklistAIHistoryModel::as_ref(ctx);
             let conv = history.conversation(&self.client_ids.conversation_id);
-            let result = conv.and_then(|conv| {
-                conv.orchestration_config()
-                    .cloned()
-                    .map(|config| (config, conv.orchestration_status()))
-            });
+            let result = if !request.plan_id.is_empty() {
+                conv.and_then(|conv| {
+                    conv.orchestration_config_for_plan(&request.plan_id)
+                        .map(|(config, status)| (config.clone(), status))
+                })
+            } else {
+                None
+            };
             result
         };
 

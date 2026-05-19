@@ -226,7 +226,7 @@ fn is_development_text_extension(extension: &str) -> bool {
         "svelte" | "astro" | "blade" | "twig" | "mustache" | "hbs" |
         "handlebars" | "ejs" | "pug" | "jade" | "erb" | "haml" |
         // Configuration and data formats
-        "toml" | "yaml" | "yml" | "json" | "jsonc" | "json5" |
+        "toml" | "yaml" | "yml" | "json" | "jsonc" | "json5" | "jq" |
         "xml" | "ini" | "cfg" | "conf" | "config" | "properties" |
         "env" | "dotenv" | "editorconfig" | "gitignore" | "gitattributes" |
         // Documentation

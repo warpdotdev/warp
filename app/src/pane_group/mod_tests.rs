@@ -66,7 +66,8 @@ use crate::{
         keys::TerminalKeybindings,
         local_tty::{spawner::PtySpawner, TerminalManager},
         shared_session::{
-            SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
+            IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
+            SharedSessionStatus,
         },
     },
     test_util::settings::initialize_settings_for_tests,
@@ -154,6 +155,14 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // Pill bar model subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(|ctx| {
+        crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel::new(
+            Default::default(),
+            ctx,
+        )
+    });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(TaskStatusSyncModel::new);
@@ -342,7 +351,7 @@ fn test_server_conversation_metadata(
 }
 
 fn cloud_conversation_with_ambient_task(task_id: AmbientAgentTaskId) -> CloudConversationData {
-    let mut conversation = AIConversation::new(false);
+    let mut conversation = AIConversation::new(false, false);
     conversation.set_task_id(task_id);
     conversation.set_server_metadata(test_server_conversation_metadata(Some(task_id)));
     CloudConversationData::Oz(Box::new(conversation))
@@ -365,7 +374,7 @@ fn start_parent_conversation_for_terminal_view(
     ctx: &mut ViewContext<PaneGroup>,
 ) -> AIConversationId {
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-        history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     })
 }
 
@@ -374,7 +383,7 @@ fn restore_child_conversation_for_terminal_view(
     parent_conversation_id: AIConversationId,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> AIConversationId {
-    let mut child_conversation = AIConversation::new(false);
+    let mut child_conversation = AIConversation::new(false, false);
     child_conversation.set_parent_conversation_id(parent_conversation_id);
     let child_conversation_id = child_conversation.id();
 
@@ -420,8 +429,14 @@ fn create_already_fullscreen_parent_pane_data(
     panes: &PaneGroup,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> (TerminalPane, PaneId, AIConversationId) {
-    let (pane_data, terminal_view) =
-        panes.create_terminal_pane_data(None, HashMap::new(), None, None, ctx);
+    let (pane_data, terminal_view) = panes.create_terminal_pane_data(
+        None,
+        HashMap::new(),
+        IsSharedSessionCreator::No,
+        None,
+        None,
+        ctx,
+    );
     let pane_id = pane_data.terminal_pane_id().into();
     let parent_conversation_id =
         start_parent_conversation_for_terminal_view(terminal_view.id(), ctx);
@@ -627,6 +642,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
                 parent_pane_id,
                 HashMap::new(),
+                IsSharedSessionCreator::No,
                 ctx,
             );
 
@@ -647,6 +663,30 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     });
 }
 
+#[test]
+fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let child_pane_id =
+                panes.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
+
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("hidden ambient child pane should have a terminal view");
+            assert!(
+                terminal_view
+                    .as_ref(ctx)
+                    .is_initial_conversation_details_panel_auto_open_suppressed_for_test(),
+                "hidden ambient child panes opened from the parent orchestration UI should not \
+                 auto-open details during environment setup or session readiness"
+            );
+        });
+    });
+}
 #[test]
 fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
     let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -672,6 +712,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                         task_id,
                         working_dir: None,
                     }),
+                    is_shared_session_creator: IsSharedSessionCreator::No,
                 },
                 ctx,
             )
@@ -709,7 +750,7 @@ fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
 
-            let mut child_conversation = AIConversation::new(false);
+            let mut child_conversation = AIConversation::new(false, false);
             child_conversation.set_parent_conversation_id(parent_conversation_id);
             child_conversation.set_task_id(task_id);
             let child_conversation_id = child_conversation.id();
@@ -748,7 +789,7 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
 
-            let mut child_conversation = AIConversation::new(false);
+            let mut child_conversation = AIConversation::new(false, false);
             child_conversation.set_parent_conversation_id(parent_conversation_id);
             child_conversation.set_task_id(task_id);
             child_conversation.mark_as_remote_child();
@@ -771,6 +812,17 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
                 "remote child restore should view the existing ambient session"
             );
             assert_eq!(active_conversation_id, Some(child_conversation_id));
+
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("remote child pane should have a terminal view");
+            assert!(
+                terminal_view
+                    .as_ref(ctx)
+                    .is_initial_conversation_details_panel_auto_open_suppressed_for_test(),
+                "remote child panes opened from the parent orchestration UI should not auto-open \
+                 details when the ambient session becomes ready"
+            );
         });
     });
 }

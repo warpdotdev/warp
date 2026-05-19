@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use warp_multi_agent_api::{
     self as api,
     apply_file_diffs_result::success::UpdatedFileContent,
@@ -7,6 +8,13 @@ use warp_multi_agent_api::{
 use crate::agent::{action_result::ShellCommandError, convert::ConvertToAPITypeError};
 
 use super::*;
+
+fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: timestamp.timestamp(),
+        nanos: timestamp.timestamp_subsec_nanos() as i32,
+    }
+}
 
 impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_result::Result {
     type Error = ConvertToAPITypeError;
@@ -18,7 +26,8 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                 block_id,
                 output,
                 exit_code,
-                ..
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::RunShellCommand(
                     #[allow(deprecated)]
@@ -31,6 +40,8 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
                         )),
                     },
@@ -112,7 +123,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                     },
                 ),
             ),
-            WriteToLongRunningShellCommandResult::CommandFinished { block_id, output, exit_code, .. } => Ok(
+            WriteToLongRunningShellCommandResult::CommandFinished { block_id, output, exit_code, start_ts, completed_ts } => Ok(
                 api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
                     api::WriteToLongRunningShellCommandResult {
                         result: Some(api::write_to_long_running_shell_command_result::Result::CommandFinished(
@@ -120,6 +131,8 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             }
                         ))
                     },
@@ -651,7 +664,8 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                 block_id,
                 output,
                 exit_code,
-                ..
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::ReadShellCommandOutput(
                     api::ReadShellCommandOutputResult {
@@ -661,6 +675,8 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
                         )),
                     },
@@ -745,6 +761,8 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                 block_id,
                 output,
                 exit_code,
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
                     api::TransferShellCommandControlToUserResult {
@@ -754,6 +772,8 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                                     command_id: block_id.to_string(),
                                     output,
                                     exit_code: exit_code.value(),
+                                    start_ts: start_ts.map(local_datetime_to_timestamp),
+                                    finish_ts: completed_ts.map(local_datetime_to_timestamp),
                                 },
                             ),
                         ),

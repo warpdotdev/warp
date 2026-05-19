@@ -76,6 +76,11 @@ impl SetupCommandState {
         self.running_group_id == Some(group_id)
     }
 
+    pub fn should_suppress_input_sync_for_current_group(&self) -> bool {
+        self.current_group_id != SetupCommandGroupId::initial()
+            && self.is_running(self.current_group_id)
+    }
+
     pub fn start_new_group(&mut self) -> SetupCommandGroupId {
         let group_id = SetupCommandGroupId(self.next_group_id);
         self.next_group_id += 1;
@@ -218,6 +223,7 @@ impl View for CloudModeSetupTextBlock {
             &self.ambient_agent_view_model,
             app,
         )
+        .with_margin_top(8.)
         .finish()
     }
 }

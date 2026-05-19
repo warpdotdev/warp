@@ -1,4 +1,11 @@
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use warp_util::{
+    local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
+    standardized_path::StandardizedPath,
+};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::{
@@ -82,6 +89,35 @@ impl ActiveSession {
 
     pub fn current_working_directory(&self) -> Option<&String> {
         self.current_working_directory.as_ref()
+    }
+
+    /// Returns a session-aware path for `path`.
+    ///
+    /// Local session paths are canonicalized to match git-detected repository paths on
+    /// case-insensitive filesystems. Remote session paths are standardized and tagged with
+    /// the connected host ID.
+    pub fn location_for_path(&self, path: &str, app: &AppContext) -> Option<LocalOrRemotePath> {
+        match self.session_type(app) {
+            Some(SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            }) => StandardizedPath::try_new(path)
+                .ok()
+                .map(|path| LocalOrRemotePath::Remote(RemotePath::new(host_id, path))),
+            Some(SessionType::WarpifiedRemote { host_id: None }) => None,
+            Some(SessionType::Local) | None => {
+                let path =
+                    dunce::canonicalize(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
+                Some(LocalOrRemotePath::Local(path))
+            }
+        }
+    }
+
+    pub fn current_working_directory_location(
+        &self,
+        app: &AppContext,
+    ) -> Option<LocalOrRemotePath> {
+        let cwd = self.current_working_directory()?;
+        self.location_for_path(cwd.as_str(), app)
     }
 
     /// Returns the `WarpAiExecutionContext` for the active session.

@@ -13,7 +13,7 @@ use warp_cli::agent::Harness;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
@@ -26,6 +26,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_managed_secrets::ManagedSecretValue;
 
 use super::terminal::{CommandHandle, TerminalDriver};
 use super::{
@@ -40,11 +41,13 @@ mod codex;
 pub(crate) mod codex_transcript;
 mod gemini;
 mod json_utils;
+mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
+pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
@@ -137,6 +140,21 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         validate_cli_installed(self.cli_agent().command_prefix(), self.install_docs_url())
     }
 
+    /// Shell command to verify authentication credentials are valid.
+    /// Exit code 0 = pass; non-zero = fail.
+    fn auth_check_command(&self) -> Option<String> {
+        None
+    }
+
+    /// Substrings to scan for in the running harness block's output. A hit
+    /// indicates the harness can't make a successful API request (e.g.
+    /// invalid key, no billing, quota exhausted). The driver matches
+    /// case-insensitively against the block's plaintext via the same DFA
+    /// machinery used by the find feature.
+    fn runtime_error_patterns(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Fetch the harness-specific resume payload for an existing conversation.
     ///
     /// The driver calls this when the user passes `--conversation <id>` and the harness
@@ -164,6 +182,9 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// `resolved_env_vars` contains already-resolved secret env vars (worker
     /// env > typed secrets > raw values precedence already applied).
     ///
+    /// `resolved_secrets` provides the raw typed managed secrets so harnesses
+    /// can read structured fields (e.g. `base_url`) without relying on env vars.
+    ///
     /// If `resume` is `Some`, the harness matches on its own [`ResumePayload`]
     /// variant and reuses stored session/conversation ids.
     #[allow(clippy::too_many_arguments)]
@@ -179,8 +200,9 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
-        third_party_harness_model_id: Option<&str>,
+        third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError>;
 }
 
@@ -225,6 +247,23 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
         Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
         Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
     }
+}
+
+/// Returns the harness's auth-check preflight command, if any.
+///
+/// The viewer uses this to recognize preflight blocks via exact string
+/// equality (so they stay grouped under "Set up environment commands"
+/// rather than being mistaken for the main harness invocation, which
+/// shares the same CLI prefix).
+///
+/// Returns `None` for [`Harness::Oz`], for unsupported harnesses, and
+/// for any third-party harness whose `auth_check_command` returns `None`
+/// (e.g. Gemini today).
+pub(crate) fn auth_check_command_for(harness: Harness) -> Option<String> {
+    let HarnessKind::ThirdParty(third_party) = harness_kind(harness).ok()? else {
+        return None;
+    };
+    third_party.auth_check_command()
 }
 
 /// Check that `cli` is installed and on PATH, returning a `HarnessSetupFailed`
@@ -374,10 +413,13 @@ pub(crate) fn task_env_vars(
 /// Claude Code's `settings.json`.
 pub(crate) fn harness_model_env_vars(
     selected_harness: Harness,
-    third_party_harness_model_id: Option<&str>,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> HashMap<OsString, OsString> {
     let mut env_vars = HashMap::new();
-    let Some(model_id) = third_party_harness_model_id.filter(|id| !id.is_empty()) else {
+    let Some(model_id) = third_party_harness_model_config
+        .map(|config| config.model_id.as_str())
+        .filter(|id| !id.is_empty())
+    else {
         return env_vars;
     };
 
@@ -426,6 +468,8 @@ pub(crate) enum HarnessCleanupDisposition {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub(crate) trait HarnessRunner: Send + Sync {
+    fn harness_name(&self) -> &str;
+
     /// Create the external conversation on the server and start the harness
     /// command in the terminal.
     ///

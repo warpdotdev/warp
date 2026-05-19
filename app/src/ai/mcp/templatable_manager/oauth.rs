@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use oauth2::{RefreshToken, TokenResponse as _};
 use rmcp::transport::{
     auth::{
         AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore,
-        OAuthClientConfig, OAuthState, OAuthTokenResponse, StoredCredentials,
+        OAuthClientConfig, OAuthState, StoredCredentials,
     },
     AuthError, AuthorizationSession,
 };
@@ -39,32 +38,14 @@ static GITHUB_OAUTH_SCOPES: [&str; 7] = [
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedCredentials {
-    client_id: String,
+    /// The credential information that `rmcp` wants us to store and retrieve.
+    #[serde(flatten)]
+    credentials: StoredCredentials,
+    /// The client secret for the OAuth application.
+    ///
+    /// This is needed to properly refresh tokens when using DCR (Dynamic Client Registration),
+    /// as the server expects the client to provide the secret when refreshing.
     client_secret: Option<String>,
-    token_response: OAuthTokenResponse,
-    /// Unix timestamp (seconds) when this token was received from the OAuth server.
-    ///
-    /// Required for rmcp's pre-emptive refresh: it computes remaining lifetime as
-    /// `expires_in - (now - token_received_at)` and refreshes when below the buffer.
-    /// Without this value the check is skipped, the cached token stays in use past
-    /// its TTL, and the next request fails with 401 (see #8863).
-    ///
-    /// `None` for credentials persisted by older Warp versions; the next refresh
-    /// will populate it via the credential-store save path.
-    #[serde(default)]
-    token_received_at: Option<u64>,
-}
-
-/// Returns the current Unix timestamp in seconds.
-///
-/// Mirrors rmcp's internal `now_epoch_secs` (which is private) so we can stamp
-/// `token_received_at` consistently with the timestamps rmcp itself emits during
-/// refresh.
-fn now_epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 /// Maps cloud MCP installation UUID to its OAuth credentials in secure storage.
@@ -132,17 +113,13 @@ impl CredentialStore for PersistingCredentialStore {
         self.apply_refresh_token_carry_forward(&mut credentials)
             .await;
 
-        // Capture before `credentials` is consumed below.
-        let token_received_at = credentials.token_received_at;
-
         self.inner.save(credentials.clone()).await?;
 
-        if let Some(token_response) = credentials.token_response {
+        // Only persist credentials if we actually have any.
+        if credentials.token_response.is_some() {
             let _ = self.persist_tx.try_send(PersistedCredentials {
-                client_id: credentials.client_id,
+                credentials,
                 client_secret: self.client_secret.clone(),
-                token_response,
-                token_received_at,
             });
         }
         Ok(())
@@ -166,35 +143,26 @@ impl CredentialStore for PersistingCredentialStore {
 /// sole role is to write token updates back to secure storage as they occur.
 async fn install_persisting_credential_store(
     auth_manager: &mut AuthorizationManager,
-    client_secret: Option<String>,
+    persisted_credentials: Option<PersistedCredentials>,
     spawner: ModelSpawner<TemplatableMCPServerManager>,
     installation_uuid: Uuid,
-    token_received_at: Option<u64>,
 ) {
+    let client_secret = persisted_credentials
+        .as_ref()
+        .and_then(|c| c.client_secret.clone());
+    let in_memory_store = InMemoryCredentialStore::new();
+
+    // If we have persisted credentials, populate the backing in-memory store with them.
+    if let Some(credentials) = persisted_credentials {
+        let _ = in_memory_store.save(credentials.credentials).await;
+    }
+
     let (persist_tx, persist_rx) = async_channel::unbounded();
     let store = PersistingCredentialStore {
-        inner: InMemoryCredentialStore::new(),
+        inner: in_memory_store,
         client_secret,
         persist_tx,
     };
-
-    // Seed the new store with the current credentials so that subsequent
-    // get_access_token() calls can find them. `token_received_at` must be
-    // preserved across the seed; otherwise rmcp's pre-emptive refresh check
-    // (which requires both `expires_in` and `token_received_at`) is skipped
-    // for the lifetime of this store, and the cached token will be used past
-    // its TTL until a request fails with 401 (#8863).
-    if let Ok((client_id, Some(token_response))) = auth_manager.get_credentials().await {
-        let _ = store
-            .inner
-            .save(StoredCredentials {
-                client_id,
-                token_response: Some(token_response),
-                granted_scopes: Vec::new(),
-                token_received_at,
-            })
-            .await;
-    }
 
     auth_manager.set_credential_store(store);
 
@@ -257,69 +225,35 @@ pub async fn make_authenticated_client(
     // Dynamic Client Registration, satisfying RFC 6749 §3.1.2.2 exact-match validation.
     let redirect_uri = format!("{}://mcp/oauth2callback", ChannelState::url_scheme());
 
-    // Create the OAuth state machine.
-    let mut oauth_state = OAuthState::new(resource_url, None).await?;
+    // Create the auth manager and initialize it with a backing credential store that persists
+    // new credentials to secure storage.
+    let client_id = persisted_credentials
+        .as_ref()
+        .map(|c| c.credentials.client_id.clone());
+    let client_secret = persisted_credentials
+        .as_ref()
+        .and_then(|c| c.client_secret.clone());
+    let mut auth_manager = AuthorizationManager::new(resource_url).await?;
+    install_persisting_credential_store(
+        &mut auth_manager,
+        persisted_credentials,
+        spawner.clone(),
+        uuid,
+    )
+    .await;
 
-    // If we have cached credentials, use them.
-    if let Some(credentials) = persisted_credentials {
-        let provider = ChannelState::mcp_oauth_provider_by_client_id(&credentials.client_id);
-        let client_secret = credentials
-            .client_secret
-            .or_else(|| provider.as_ref().map(|p| p.client_secret.to_string()));
-        let cached_token_received_at = credentials.token_received_at;
-        oauth_state
-            .set_credentials(&credentials.client_id, credentials.token_response)
-            .await?;
-        if let OAuthState::Authorized(mut auth_manager) = oauth_state {
-            // If this is a client for which we have a known client secret,
-            // update our client config accordingly.
-            if let Some(client_secret) = &client_secret {
-                auth_manager.configure_client(OAuthClientConfig {
-                    client_id: credentials.client_id.clone(),
-                    client_secret: Some(client_secret.clone()),
-                    scopes: vec![],
-                    redirect_uri: redirect_uri.clone(),
-                })?;
-            }
-
-            // GitHub does not issue refresh tokens for OAuth apps; their access tokens are valid
-            // until the user explicitly revokes them.
-            //
-            // As such, if we have an access token for a GitHub server, we must assume it's valid.
-            if provider.as_ref().is_some_and(|p| p.issuer == GITHUB_ISSUER) {
-                return Ok((AuthClient::new(reqwest::Client::new(), auth_manager), false));
-            }
-
-            // Else, make sure we have an up-to-date access token.
-            // We need to do this because our fork of rmcp does not properly detect expired tokens.
-            // This is fixed in https://github.com/modelcontextprotocol/rust-sdk/pull/680
-            //
-            // Install the persisting credential store before refreshing so that
-            // the refresh result is automatically written back to secure storage.
-            // Pass the cached `token_received_at` so rmcp's pre-emptive refresh
-            // check has the data it needs after this connect-time refresh — see
-            // #8863 for what happens when this is `None`.
-            install_persisting_credential_store(
-                &mut auth_manager,
-                client_secret,
-                spawner.clone(),
-                uuid,
-                cached_token_received_at,
-            )
-            .await;
-            match auth_manager.refresh_token().await {
-                Ok(_) => {
-                    return Ok((AuthClient::new(reqwest::Client::new(), auth_manager), false));
-                }
-                Err(e) => {
-                    log::warn!("Failed to refresh token: {e:#}");
-
-                    // We didn't have a valid auth token _and_ we could not refresh it, so
-                    // we need to go through the OAuth flow again.
-                    oauth_state = OAuthState::new(resource_url, None).await?;
-                }
-            }
+    // If we loaded persisted credentials from the store, and we have a valid access token
+    // (or successfully refreshed a valid refresh token), we're already authorized and good
+    // to go.
+    if auth_manager.initialize_from_store().await? && auth_manager.get_access_token().await.is_ok()
+    {
+        if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
+            auth_manager.configure_client(
+                OAuthClientConfig::new(client_id, redirect_uri.clone())
+                    .with_client_secret(client_secret),
+            )?;
         }
+        return Ok((AuthClient::new(reqwest::Client::new(), auth_manager), false));
     }
 
     // If we're in headless mode and we reach here, it means we either have no credentials
@@ -339,67 +273,50 @@ pub async fn make_authenticated_client(
         ));
     }
 
-    // Start the authorization process with our custom redirect URI
-    oauth_state
-        .start_authorization(&[], &redirect_uri, Some("Warp"))
-        .await?;
+    let metadata = auth_manager.discover_metadata().await?;
 
-    let OAuthState::Session(AuthorizationSession {
-        mut auth_manager, ..
-    }) = oauth_state
-    else {
-        return Err(AuthError::InternalError(
-            "OAuth state is not in the expected state".to_string(),
-        ));
+    // Configure the auth manager's OAuth client using dynamic or static client registration.
+    let mut oauth_state = if let Some(provider) = metadata
+        .issuer
+        .as_deref()
+        .and_then(ChannelState::mcp_oauth_provider_by_issuer)
+    {
+        // Configure the auth manager based on the static MCP configuration for this
+        // issuer.
+        auth_manager.set_metadata(metadata);
+
+        let scopes = if provider.issuer == GITHUB_ISSUER {
+            GITHUB_OAUTH_SCOPES
+                .into_iter()
+                .map(ToString::to_string)
+                .collect()
+        } else {
+            vec![]
+        };
+        auth_manager.configure_client(
+            OAuthClientConfig::new(provider.client_id, redirect_uri.clone())
+                .with_client_secret(provider.client_secret)
+                .with_scopes(scopes),
+        )?;
+
+        // We do a scope "upgrade" with no additional scopes here as it's the easiest way
+        // to construct an auth URL.
+        let auth_url = auth_manager.request_scope_upgrade("").await?;
+        OAuthState::Session(AuthorizationSession::for_scope_upgrade(
+            auth_manager,
+            auth_url,
+            &redirect_uri,
+        ))
+    } else {
+        // Try dynamic client registration.
+        let mut oauth_state = OAuthState::Unauthorized(auth_manager);
+        oauth_state
+            .start_authorization(&[], &redirect_uri, Some("Warp"))
+            .await?;
+        oauth_state
     };
 
-    // With DCR (Dynamic Client Registration), we don't pass in explicit scopes; they are specified
-    // during dynamic registration.
-    //
-    // For apps for which we have static client IDs (e.g. GitHub), we manually override scopes.
-    let mut scopes: &[&str] = &[];
-
-    let config = match auth_manager.register_client("Warp", &redirect_uri).await {
-        Ok(config) => config,
-        Err(err @ AuthError::RegistrationFailed(_)) => {
-            // If we failed dynamic registration, check to see if this is an auth
-            // server we have a static client ID for.
-
-            // TODO(vorporeal): adjust APIs in rmcp so that we don't need to make this redundant
-            // discover_metadata() call (as it gets made within start_authorization() but we can't
-            // look at the results).
-            let metadata = auth_manager.discover_metadata().await?;
-            let provider = metadata
-                .issuer
-                .as_deref()
-                .and_then(ChannelState::mcp_oauth_provider_by_issuer)
-                .ok_or(err)?;
-
-            if provider.issuer == GITHUB_ISSUER {
-                scopes = &GITHUB_OAUTH_SCOPES;
-            }
-
-            OAuthClientConfig {
-                client_id: provider.client_id.into_owned(),
-                client_secret: Some(provider.client_secret.into_owned()),
-                redirect_uri: redirect_uri.clone(),
-                // This `scopes` field appears to be unused by rmcp as of 9/17/25 - we pass scopes
-                // in construction of the authorization url below.
-                scopes: vec![],
-            }
-        }
-        Err(e) => return Err(e),
-    };
-
-    let client_secret = config.client_secret.clone();
-    auth_manager.configure_client(config)?;
-
-    let auth_url = auth_manager.get_authorization_url(scopes).await?;
-    oauth_state = OAuthState::Session(AuthorizationSession {
-        auth_manager,
-        auth_url: auth_url.clone(),
-        redirect_uri,
-    });
+    let auth_url = oauth_state.get_authorization_url().await?;
 
     // Extract the CSRF token that rmcp embedded as the `state` query parameter in the
     // authorization URL. We register a csrf→uuid mapping on the manager so that
@@ -445,41 +362,11 @@ pub async fn make_authenticated_client(
     // Handle the callback with the received authorization code and CSRF token.
     oauth_state.handle_callback(code, csrf_token).await?;
 
-    // Save the credentials to secure storage. Stamp `token_received_at` so the
-    // pre-emptive refresh check in rmcp has a timestamp to compute remaining
-    // lifetime against on subsequent connects (without it, the cached token
-    // would be used past its TTL — see #8863).
-    let token_received_at = now_epoch_secs();
-    let (client_id, token_response) = oauth_state.get_credentials().await?;
-    if let Some(token_response) = token_response {
-        let credentials = PersistedCredentials {
-            client_id,
-            client_secret: client_secret.clone(),
-            token_response,
-            token_received_at: Some(token_received_at),
-        };
-        spawner
-            .spawn(move |manager, ctx| {
-                manager.save_credentials_to_secure_storage(ctx, uuid, credentials);
-            })
-            .await
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
-    }
-
-    let mut am = oauth_state.into_authorization_manager().ok_or_else(|| {
+    let auth_manager = oauth_state.into_authorization_manager().ok_or_else(|| {
         AuthError::InternalError("Failed to create authorization manager".to_string())
     })?;
 
-    install_persisting_credential_store(
-        &mut am,
-        client_secret,
-        spawner,
-        uuid,
-        Some(token_received_at),
-    )
-    .await;
-
-    Ok((AuthClient::new(reqwest::Client::new(), am), true))
+    Ok((AuthClient::new(reqwest::Client::new(), auth_manager), true))
 }
 
 impl TemplatableMCPServerManager {
@@ -621,209 +508,5 @@ pub(crate) fn write_to_secure_storage<T: Serialize>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rmcp::transport::auth::OAuthTokenResponse;
-
-    /// Builds a minimal `OAuthTokenResponse` for tests, optionally with a refresh token.
-    fn make_test_token_response(refresh_token: Option<&str>) -> OAuthTokenResponse {
-        let mut json = serde_json::json!({
-            "access_token": "test_access_token",
-            "token_type": "bearer",
-            "expires_in": 3600,
-        });
-        if let Some(rt) = refresh_token {
-            json["refresh_token"] = serde_json::Value::String(rt.to_string());
-        }
-        serde_json::from_value(json).expect("OAuthTokenResponse deserialization")
-    }
-
-    /// Constructs a fresh `PersistingCredentialStore` plus the receiver side of its
-    /// persist channel so tests can observe what would be written to secure storage.
-    fn make_test_store(
-        client_secret: Option<String>,
-    ) -> (
-        PersistingCredentialStore,
-        async_channel::Receiver<PersistedCredentials>,
-    ) {
-        let (tx, rx) = async_channel::unbounded();
-        let store = PersistingCredentialStore {
-            inner: InMemoryCredentialStore::new(),
-            client_secret,
-            persist_tx: tx,
-        };
-        (store, rx)
-    }
-
-    #[test]
-    fn persisted_credentials_round_trip_through_serde_preserves_received_at() {
-        let original = PersistedCredentials {
-            client_id: "client-abc".to_string(),
-            client_secret: Some("shh".to_string()),
-            token_response: make_test_token_response(Some("refresh-1")),
-            token_received_at: Some(1_700_000_000),
-        };
-
-        let json = serde_json::to_string(&original).expect("serialize");
-        let parsed: PersistedCredentials = serde_json::from_str(&json).expect("deserialize");
-
-        assert_eq!(parsed.client_id, original.client_id);
-        assert_eq!(parsed.client_secret, original.client_secret);
-        assert_eq!(parsed.token_received_at, Some(1_700_000_000));
-    }
-
-    /// Backward compatibility: credentials persisted by older Warp versions do not
-    /// have the `token_received_at` field. Deserializing them must succeed and
-    /// default to `None` so the next refresh can populate it. Failing this test
-    /// would mean every existing user loses their MCP OAuth tokens on upgrade.
-    #[test]
-    fn persisted_credentials_deserializes_legacy_format_without_received_at() {
-        // Legacy format: no `token_received_at` field.
-        let legacy_json = r#"{
-            "client_id": "client-abc",
-            "client_secret": null,
-            "token_response": {
-                "access_token": "old_access",
-                "token_type": "bearer",
-                "expires_in": 3600,
-                "refresh_token": "old_refresh"
-            }
-        }"#;
-
-        let parsed: PersistedCredentials =
-            serde_json::from_str(legacy_json).expect("legacy format must deserialize");
-
-        assert_eq!(parsed.client_id, "client-abc");
-        assert_eq!(parsed.token_received_at, None);
-    }
-
-    /// Regression test for #8863. When rmcp persists refreshed credentials via
-    /// `CredentialStore::save`, the `token_received_at` must be forwarded into
-    /// the channel so the persisted (secure-storage) representation can stamp
-    /// it. Without this, a restart would lose the timestamp and rmcp's
-    /// pre-emptive refresh check would be permanently disabled for the cached
-    /// session.
-    #[tokio::test]
-    async fn save_forwards_token_received_at_to_persist_channel() {
-        let (store, rx) = make_test_store(Some("client_secret_xyz".to_string()));
-
-        let credentials = StoredCredentials {
-            client_id: "client-id".to_string(),
-            token_response: Some(make_test_token_response(Some("refresh-1"))),
-            granted_scopes: Vec::new(),
-            token_received_at: Some(1_700_000_500),
-        };
-
-        store.save(credentials).await.expect("save succeeds");
-
-        let persisted = rx.try_recv().expect("persist channel received credentials");
-        assert_eq!(persisted.token_received_at, Some(1_700_000_500));
-        assert_eq!(persisted.client_id, "client-id");
-        assert_eq!(
-            persisted.client_secret.as_deref(),
-            Some("client_secret_xyz")
-        );
-    }
-
-    /// Defensive: if rmcp ever calls `save` without a `token_received_at`
-    /// (e.g., during initial credential set-up before refresh), we must
-    /// propagate `None` rather than silently substituting a value.
-    #[tokio::test]
-    async fn save_forwards_none_when_received_at_is_none() {
-        let (store, rx) = make_test_store(None);
-
-        let credentials = StoredCredentials {
-            client_id: "c".to_string(),
-            token_response: Some(make_test_token_response(None)),
-            granted_scopes: Vec::new(),
-            token_received_at: None,
-        };
-
-        store.save(credentials).await.expect("save succeeds");
-
-        let persisted = rx.try_recv().expect("persist channel received credentials");
-        assert_eq!(persisted.token_received_at, None);
-    }
-
-    /// `save` only forwards a credentials snapshot to the persist channel when
-    /// `token_response` is `Some`. This guards the existing branch from regression.
-    #[tokio::test]
-    async fn save_skips_persist_when_token_response_absent() {
-        let (store, rx) = make_test_store(None);
-
-        let credentials = StoredCredentials {
-            client_id: "c".to_string(),
-            token_response: None,
-            granted_scopes: Vec::new(),
-            token_received_at: Some(1_700_000_500),
-        };
-
-        store.save(credentials).await.expect("save succeeds");
-
-        assert!(
-            rx.try_recv().is_err(),
-            "no PersistedCredentials should be sent when token_response is absent"
-        );
-    }
-
-    /// The carry-forward of refresh tokens (when the OAuth server omits one
-    /// from a refresh response) must not interfere with `token_received_at`
-    /// propagation. Tests both behaviors in one save: the new credentials get
-    /// the prior refresh token AND the new `token_received_at`.
-    #[tokio::test]
-    async fn save_carries_forward_refresh_token_and_preserves_received_at() {
-        let (store, rx) = make_test_store(None);
-
-        // Seed the inner store with prior credentials that have a refresh token.
-        store
-            .inner
-            .save(StoredCredentials {
-                client_id: "c".to_string(),
-                token_response: Some(make_test_token_response(Some("prior-refresh-token"))),
-                granted_scopes: Vec::new(),
-                token_received_at: Some(1_699_000_000),
-            })
-            .await
-            .expect("seed succeeds");
-
-        // Now save NEW credentials that omit a refresh token, simulating a
-        // refresh response from a server that does not rotate refresh tokens.
-        let new_credentials = StoredCredentials {
-            client_id: "c".to_string(),
-            token_response: Some(make_test_token_response(None)),
-            granted_scopes: Vec::new(),
-            token_received_at: Some(1_700_000_500),
-        };
-
-        store.save(new_credentials).await.expect("save succeeds");
-
-        let persisted = rx.try_recv().expect("persist channel received credentials");
-        assert_eq!(
-            persisted.token_received_at,
-            Some(1_700_000_500),
-            "newer received_at preserved"
-        );
-        assert_eq!(
-            persisted
-                .token_response
-                .refresh_token()
-                .map(|rt| rt.secret().to_string()),
-            Some("prior-refresh-token".to_string()),
-            "prior refresh token carried forward"
-        );
-    }
-
-    /// `now_epoch_secs` returns a non-zero monotonic-ish value. Sanity check
-    /// that the helper does what it claims and matches rmcp's own clock domain.
-    #[test]
-    fn now_epoch_secs_returns_recent_unix_time() {
-        let now = now_epoch_secs();
-        // Sanity: any timestamp produced by the running test process must be
-        // after the OSS-release date (2026-04-28) and before the year 2200.
-        assert!(now > 1_745_000_000, "epoch seconds must be a real time");
-        assert!(
-            now < 7_258_118_400,
-            "epoch seconds must be before year 2200"
-        );
-    }
-}
+#[path = "oauth_tests.rs"]
+mod tests;

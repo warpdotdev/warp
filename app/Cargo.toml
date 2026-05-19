@@ -73,7 +73,7 @@ bincode.workspace = true
 bitflags.workspace = true
 bitflags-serde-legacy.workspace = true
 blocking.workspace = true
-bounded-vec-deque = "0.1"
+bounded-vec-deque.workspace = true
 bytecount = "0.6.9"
 bytes.workspace = true
 byte-unit = "5.1.4"
@@ -103,6 +103,7 @@ email_address = { git = "https://github.com/warpdotdev/rust-email_address", bran
 embed_plist = "1.2"
 enclose = "1.1.8"
 enum-iterator.workspace = true
+event-listener.workspace = true
 field_mask.workspace = true
 firebase.workspace = true
 flate2 = "1.0.17"
@@ -296,10 +297,10 @@ aws-credential-types = "1"
 aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-types = "1"
 
+mcp.workspace = true
 rmcp = { workspace = true, features = [
     "auth",
     "transport-streamable-http-client-reqwest",
-    "transport-sse-client-reqwest",
     "transport-child-process",
 ] }
 notify-debouncer-full.workspace = true
@@ -439,6 +440,7 @@ agent_mode_pre_plan_xml = []
 agent_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
+async_find = []
 changelog = []
 clear_autosuggestion_on_escape = []
 cloud_object_initial_load = ["enforce_revisions_to_cloud_objects"]
@@ -546,6 +548,7 @@ default = [
     "agent_shared_sessions",
     "integration_command",
     "artifact_command",
+    "conversation_api",
     "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
@@ -561,6 +564,7 @@ default = [
     "classic_completions",
     "force_classic_completions",
     "team_api_keys",
+    "named_agents",
     "agent_tips",
     "pluggable_notifications",
     "agent_onboarding",
@@ -586,6 +590,7 @@ default = [
     "inline_model_selector",
     "oz_launch_modal",
     "open_warp_launch_modal",
+    "orchestration_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
@@ -618,7 +623,9 @@ default = [
     "open_code_notifications",
     "cli_agent_rich_input",
     "vertical_tabs",
+    "vertical_tabs_summary_mode",
     "tab_configs",
+    "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
@@ -628,6 +635,16 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "configurable_context_window",
+    "oz_handoff",
+    "handoff_local_cloud",
+    "orchestration_v2",
+    "orchestration_pill_bar",
+    "orchestration_viewer_pill_bar",
+    "run_agents_tool",
+    "pending_user_query_indicator",
+    "cloud_mode_input_v2",
+    "cloud_mode_setup_v2",
+    "handoff_cloud_cloud",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -658,8 +675,10 @@ grep_tool = []
 # For the most part, including GUI code in headless builds is fine; the main use case is
 # for things that pull in external dependencies.
 gui = ["voice_input"]
-nld_classifier_v1 = ["input_classifier/onnx_candle"]
-nld_classifier_v2 = ["input_classifier/onnx_candle"]
+nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
+nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
+nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
+nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 msys2_shells = []
 file_retrieval_tools = []
 welcome_tab = []
@@ -705,6 +724,7 @@ list_skills = []
 # include dependencies that should only exist in such environments.
 local_tty = []
 local_computer_use = []
+local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to
 # conditionally include dependencies that should only exist in such
@@ -839,6 +859,7 @@ pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
 conversations_as_context = []
+conversation_api = []
 sync_ambient_plans = []
 projects = []
 vim_code_editor = []
@@ -846,6 +867,7 @@ allow_opening_file_links_using_editor_env = []
 undo_closed_panes = []
 revert_diff_hunk = []
 code_review_save_changes = []
+remote_code_review = []
 file_tree = []
 code_launch_modal = []
 api_key_authentication = []
@@ -881,6 +903,7 @@ cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
 ambient_agents_rtc = []
 team_api_keys = []
+named_agents = []
 classic_completions = []
 cloud_mode = []
 cloud_mode_from_local_session = []
@@ -897,14 +920,16 @@ oz_platform_skills = []
 oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
+orchestration_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-orchestration = []
-orchestration_v2 = ["orchestration"]
+orchestration_v2 = []
 orchestration_pill_bar = []
+orchestration_viewer_pill_bar = []
+run_agents_tool = []
 pending_user_query_indicator = []
 queue_slash_command = []
 inline_menu_headers = []

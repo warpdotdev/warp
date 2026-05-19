@@ -229,6 +229,8 @@ impl SendMessageToAgentExecutor {
             .into();
         }
 
+        // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path once all
+        // agent-to-agent messages use the v2 server API.
         let result = OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.send_message(conversation_id, &addresses, subject, message_body, ctx)
         });

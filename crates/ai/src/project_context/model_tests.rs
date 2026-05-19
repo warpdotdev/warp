@@ -294,3 +294,150 @@ fn test_merge_rediscovery_keeps_latest() {
     assert_eq!(delta.discovered_rules.len(), 1);
     assert!(delta.deleted_rules.is_empty());
 }
+
+// Helper for global-rules tests: inserts a synthetic global rule directly into
+// the model. Bypasses the watcher infrastructure (which requires the warpui
+// runtime) so we can exercise `find_applicable_rules`'s layering logic.
+fn insert_global_rule(model: &mut ProjectContextModel, path: &Path, content: &str) {
+    model.global_rules.rules.insert(
+        path.to_path_buf(),
+        ProjectRule {
+            path: path.to_path_buf(),
+            content: content.to_string(),
+        },
+    );
+}
+
+fn insert_project_rule(
+    model: &mut ProjectContextModel,
+    project_root: &Path,
+    rule_path: &Path,
+    content: &str,
+) {
+    let rules = model
+        .path_to_rules
+        .entry(project_root.to_path_buf())
+        .or_default();
+    rules.upsert_rule(rule_path, content.to_string());
+}
+
+#[test]
+fn test_global_rule_alone_no_project_rules() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(
+        &mut model,
+        Path::new("/home/u/.agents/AGENTS.md"),
+        "global_content",
+    );
+
+    let result = model
+        .find_applicable_rules(Path::new("/some/project/file.rs"))
+        .expect("global rule should produce a result");
+
+    assert_eq!(result.active_rules.len(), 1);
+    assert_eq!(
+        result.active_rules[0].path,
+        PathBuf::from("/home/u/.agents/AGENTS.md")
+    );
+    assert_eq!(result.active_rules[0].content, "global_content");
+    assert!(result.additional_rule_paths.is_empty());
+}
+
+#[test]
+fn test_global_rule_layered_with_project_warp() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(&mut model, Path::new("/home/u/.agents/AGENTS.md"), "global");
+    insert_project_rule(
+        &mut model,
+        Path::new("/repo"),
+        Path::new("/repo/WARP.md"),
+        "project_warp",
+    );
+
+    let result = model
+        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .expect("layered rules should produce a result");
+
+    // Layered precedence: global first, then project rules.
+    assert_eq!(result.active_rules.len(), 2);
+    assert_eq!(result.active_rules[0].content, "global");
+    assert_eq!(result.active_rules[1].content, "project_warp");
+    assert_eq!(result.root_path, PathBuf::from("/repo"));
+}
+
+#[test]
+fn test_in_dir_warp_shadows_agents_with_global() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(&mut model, Path::new("/home/u/.agents/AGENTS.md"), "global");
+    // Both WARP.md and AGENTS.md in the same project directory: WARP.md should
+    // shadow AGENTS.md (existing in-directory behavior preserved).
+    insert_project_rule(
+        &mut model,
+        Path::new("/repo"),
+        Path::new("/repo/WARP.md"),
+        "project_warp",
+    );
+    insert_project_rule(
+        &mut model,
+        Path::new("/repo"),
+        Path::new("/repo/AGENTS.md"),
+        "project_agents",
+    );
+
+    let result = model
+        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .expect("layered rules should produce a result");
+
+    // Expect: [global, project WARP.md]. project AGENTS.md is shadowed.
+    assert_eq!(result.active_rules.len(), 2);
+    assert_eq!(result.active_rules[0].content, "global");
+    assert_eq!(result.active_rules[1].content, "project_warp");
+}
+
+#[test]
+fn test_no_rules_returns_none() {
+    let model = ProjectContextModel::default();
+    let result = model.find_applicable_rules(Path::new("/some/path/file.rs"));
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_global_rule_root_path_falls_back_to_parent() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(&mut model, Path::new("/home/u/.agents/AGENTS.md"), "global");
+
+    let result = model
+        .find_applicable_rules(Path::new("/some/file.rs"))
+        .expect("global rule should produce a result");
+
+    // No project root indexed; root_path falls back to parent of the global rule.
+    assert_eq!(result.root_path, PathBuf::from("/home/u/.agents"));
+}
+
+#[test]
+fn test_multiple_global_rules_all_contribute() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(
+        &mut model,
+        Path::new("/home/u/.agents/AGENTS.md"),
+        "agents_global",
+    );
+    insert_global_rule(
+        &mut model,
+        Path::new("/home/u/.warp/WARP.md"),
+        "warp_global",
+    );
+
+    let result = model
+        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .expect("globals should produce a result");
+
+    assert_eq!(result.active_rules.len(), 2);
+    let contents: Vec<&str> = result
+        .active_rules
+        .iter()
+        .map(|r| r.content.as_str())
+        .collect();
+    assert!(contents.contains(&"agents_global"));
+    assert!(contents.contains(&"warp_global"));
+}

@@ -8,7 +8,7 @@ fn sender_run_id_and_task_id_for_send_falls_back_to_ambient_task_id() {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         let ambient_task_id = "11111111-1111-1111-1111-111111111111"
             .parse()
@@ -33,7 +33,7 @@ fn sender_run_id_and_task_id_for_send_prefers_conversation_task_id() {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         let conversation_task_id = "22222222-2222-2222-2222-222222222222"
             .parse()

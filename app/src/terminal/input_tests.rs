@@ -137,6 +137,14 @@ pub fn initialize_app(app: &mut App) {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // Pill bar model subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(|ctx| {
+        crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel::new(
+            Default::default(),
+            ctx,
+        )
+    });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -149,6 +157,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
+    app.add_singleton_model(crate::remote_server::manager::RemoteServerManager::new);
     app.add_singleton_model(|_| crate::code_review::git_status_update::GitStatusUpdateModel::new());
     app.add_singleton_model(RepoMetadataModel::new);
     app.add_singleton_model(FileSearchModel::new);
@@ -5758,6 +5767,11 @@ fn test_cloud_handoff_prefix_activates_when_handoff_flags_enabled() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);
@@ -5787,6 +5801,11 @@ fn test_cloud_handoff_prefix_normal_deletion_does_not_exit() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);
@@ -5834,6 +5853,11 @@ fn test_cloud_handoff_prefix_exits_on_backspace_at_beginning_of_buffer() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);
@@ -5874,6 +5898,11 @@ fn test_cloud_handoff_prefix_keeps_shell_prefix_as_query_text() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);
@@ -5905,6 +5934,11 @@ fn test_cloud_handoff_prefix_escape_exits_mode_preserving_prompt_text() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);
@@ -5934,6 +5968,130 @@ fn test_cloud_handoff_prefix_escape_exits_mode_preserving_prompt_text() {
 }
 
 #[test]
+fn test_cloud_handoff_prefix_remains_text_in_powershell_with_nld_enabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(true, ctx);
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, _| {
+                editor.set_shell_family(ShellFamily::PowerShell);
+            });
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), CLOUD_HANDOFF_INPUT_PREFIX);
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_activates_in_powershell_when_nld_disabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, _| {
+                editor.set_shell_family(ShellFamily::PowerShell);
+            });
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+#[test]
+fn test_cloud_handoff_prefix_vim_escape_exits_insert_before_handoff_mode() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        enable_vim_mode(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (input, editor) = terminal.read(&app, |terminal, ctx| {
+            let input = terminal.input().clone();
+            let editor = input.as_ref(ctx).editor().clone();
+            (input, editor)
+        });
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.activate_cloud_handoff_compose(HandoffEntryPoint::Ampersand, ctx);
+            input.user_insert("fix tests", ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Insert));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.escape(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Normal));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.escape(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Normal));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+#[test]
 fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
     App::test((), |mut app| async move {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
@@ -5941,6 +6099,11 @@ fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
         initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         enter_fullscreen_agent_view_for_test(&terminal, &mut app);

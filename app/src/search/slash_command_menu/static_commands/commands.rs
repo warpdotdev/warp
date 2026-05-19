@@ -722,7 +722,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::Orchestration.is_enabled() {
+    if FeatureFlag::OrchestrationV2.is_enabled() {
         commands.push(ORCHESTRATE.clone());
     }
 

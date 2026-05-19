@@ -52,4 +52,5 @@ pub struct HarnessInfo {
 pub struct HarnessModel {
     pub id: cynic::Id,
     pub display_name: String,
+    pub reasoning_level: Option<String>,
 }

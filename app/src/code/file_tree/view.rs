@@ -42,7 +42,7 @@ use warpui::{
 use warpui::{BlurContext, ModelHandle};
 
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
-use crate::code::buffer_location::FileLocation;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
 #[cfg(feature = "local_fs")]
@@ -739,9 +739,17 @@ impl FileTreeView {
     fn handle_code_event(&mut self, event: &ActiveFileEvent, ctx: &mut ViewContext<Self>) {
         // When a file is focused, scroll to show it in the file tree
         match event {
-            ActiveFileEvent::ActiveFileChanged { file_info } => {
-                let Ok(file_std) = StandardizedPath::try_from_local(file_info) else {
-                    return;
+            ActiveFileEvent::ActiveFileChanged { location } => {
+                let file_std = match location {
+                    crate::code::buffer_location::LocalOrRemotePath::Local(path) => {
+                        match StandardizedPath::try_from_local(path) {
+                            Ok(std_path) => std_path,
+                            Err(_) => return,
+                        }
+                    }
+                    crate::code::buffer_location::LocalOrRemotePath::Remote(remote) => {
+                        remote.path.clone()
+                    }
                 };
                 // Prefer the currently-selected item's root if the file lives under it;
                 // otherwise fall back to the deepest matching root directory.
@@ -1282,8 +1290,9 @@ impl FileTreeView {
                     remote_host_id: None,
                 });
             let root_local = root_path.to_local_path_lossy();
-            if let Some(repo_root) =
-                DetectedRepositories::as_ref(ctx).get_root_for_path(&root_local)
+            if let Some(repo_root) = DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(root_local))
+                .and_then(|r| PathBuf::try_from(r).ok())
             {
                 let repo_entry = {
                     let repo_metadata = RepoMetadataModel::as_ref(ctx);
@@ -2225,7 +2234,7 @@ impl FileTreeView {
         );
 
         ctx.emit(FileTreeEvent::OpenFile {
-            path: FileLocation::Local(path.to_path_buf()),
+            path: LocalOrRemotePath::Local(path.to_path_buf()),
             target,
             line_col: None,
         });
@@ -2255,7 +2264,7 @@ impl FileTreeView {
                             (*metadata.path).clone(),
                         );
                         ctx.emit(FileTreeEvent::OpenFile {
-                            path: FileLocation::Remote(remote_path),
+                            path: LocalOrRemotePath::Remote(remote_path),
                             target: FileTarget::CodeEditor(EditorLayout::SplitPane),
                             line_col: None,
                         });
@@ -2884,7 +2893,7 @@ pub enum FileTreeEvent {
     AttachAsContext { path: PathBuf },
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFile {
-        path: FileLocation,
+        path: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },

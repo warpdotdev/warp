@@ -577,8 +577,8 @@ pub mod json {
     };
 
     use crate::ai::agent::comment::ReviewComment;
+    use crate::code::buffer_location::LocalOrRemotePath;
     use serde::Serialize;
-    use std::path::Path;
     use std::{
         borrow::Cow,
         io::{self, Write},
@@ -747,7 +747,7 @@ pub mod json {
     #[derive(Serialize)]
     struct JsonComment<'a> {
         comment_text: &'a str,
-        file_path: Option<&'a Path>,
+        file_path: Option<String>,
         line_number: Option<usize>,
         head_title: Option<&'a str>,
     }
@@ -1178,7 +1178,11 @@ pub mod json {
         fn from(review_comment: &'a ReviewComment) -> Self {
             Self {
                 comment_text: review_comment.content.as_str(),
-                file_path: review_comment.diff.file_path.as_deref(),
+                file_path: review_comment
+                    .diff
+                    .file_path
+                    .as_ref()
+                    .map(LocalOrRemotePath::display_path),
                 line_number: review_comment.diff.line_number,
                 head_title: review_comment.head_title.as_deref(),
             }

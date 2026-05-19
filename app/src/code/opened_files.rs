@@ -14,6 +14,7 @@ impl OpenedFilesInRepo {
         self.0.get(file_path)
     }
 
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     pub fn iter(&self) -> impl Iterator<Item = (&PathBuf, &Instant)> {
         self.0.iter()
     }

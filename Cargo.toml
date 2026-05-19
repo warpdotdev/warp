@@ -50,6 +50,7 @@ jsonrpc = { path = "crates/jsonrpc" }
 languages = { path = "crates/languages" }
 lsp = { path = "crates/lsp" }
 markdown_parser = { path = "crates/markdown_parser" }
+mcp = { path = "crates/mcp" }
 natural_language_detection = { path = "crates/natural_language_detection" }
 node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
@@ -115,6 +116,7 @@ bitflags = { version = "2.4.0", features = ["serde"] }
 bitflags-serde-legacy = "0.1.1"
 block = "0.1.6"
 blocking = "1.6.2"
+bounded-vec-deque = "0.1"
 bytemuck = { version = "1.13.1" }
 bytes = { version = "1.11.1", features = ["serde"] }
 command-corrections = { git = "https://github.com/warpdotdev/command-corrections.git", rev = "eae08c8c51d9bc9741fcb17eef2c21f696aebbeb" }
@@ -186,10 +188,7 @@ nix = { version = "0.26.4", default-features = false, features = ["signal"] }
 notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
 nom = "7.1.1"
 num-traits = "0.2"
-# We disable default features as the "rustls-tls" feature enables the reqwest
-# feature of the same name, which itself enables the "rustls-tls-webpki-roots"
-# feature, whereas we want to use native roots instead.
-oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
+oauth2 = { version = "5.0.0", default-features = false }
 openh264 = "0.8"
 static_assertions = "1.1.0"
 url = "2.5.4"
@@ -213,25 +212,23 @@ prost-reflect = "0.16.3"
 prost-types = "0.14.3"
 rand = "0.8.6"
 rangemap = "1.3.0"
-reqwest = { version = "0.12.28", default-features = false, features = [
+reqwest = { version = "0.13", features = [
   "blocking",
   "brotli",
-  "charset",
   "gzip",
-  "http2",
+  "form",
   "json",
-  "macos-system-configuration",
-  "rustls-tls-native-roots-no-provider",
+  "multipart",
+  "query",
   "stream",
-  "system-proxy",
 ] }
-reqwest-eventsource = "0.6.0"
+reqwest-eventsource = { package = "aha-reqwest-eventsource", version = "0.1" }
 resvg = "0.47.0"
 rust-embed = { version = "8.7.0", features = ["include-exclude"] }
 rustc-hash = "2.1.1"
 rustls = "0.23.39"
 schemars = { version = "1", features = ["chrono04"] }
-sentry = { version = "0.41.0", default-features = false, features = [
+sentry = { version = "0.47.0", default-features = false, features = [
   "anyhow",
   "backtrace",
   "contexts",
@@ -241,7 +238,7 @@ sentry = { version = "0.41.0", default-features = false, features = [
   "reqwest",
   "rustls",
 ] }
-sentry-log = "0.41.0"
+sentry-log = "0.47.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11"
 serde-bytes-repr = "0.3"
@@ -281,6 +278,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-css",
   "lang-c",
   "lang-json",
+  "lang-jq",
   "lang-hcl",
   "lang-lua",
   "lang-ruby",
@@ -306,7 +304,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "3dd0cd81eae83b4ce09c7805c8ef12599798aa26" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "9a2d2425c5d1eb40fb547956e659511906e03f9e" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -351,7 +349,7 @@ rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
 warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "00a032b8ea0ee5711e2077e39a92dc9ca2051cd3", default-features = false }
-winit = { git = "https://github.com/warpdotdev/winit.git", rev = "7ef01853ae3fe952e6014080a88dc4352662dfb1" }
+winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
 sysinfo = { version = "0.37.0", default-features = false, features = [
@@ -378,7 +376,7 @@ typed-path = "0.10.0"
 streaming-iterator = "0.1.0"
 derivative = "2.2.0"
 parquet = { version = "55.0.0", features = ["arrow"] }
-rmcp = { git = "https://github.com/warpdotdev/rmcp.git", rev = "c0f65dc441af7d714b9c453ac5e7ef641451abe3" }
+rmcp = { version = "1.6" }
 
 [profile.release]
 # Use line-tables-only (debug = 1) rather than full debuginfo (debug = 2 /
@@ -404,6 +402,8 @@ debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
+# Improve the performance of core terminal logic.
+warp_terminal.opt-level = 3
 # Minimize the runtime overhead of CPU profiling at the cost of a small
 # increase in compile time for this crate.
 backtrace.opt-level = 3

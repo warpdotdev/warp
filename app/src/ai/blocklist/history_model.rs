@@ -415,7 +415,7 @@ impl BlocklistAIHistoryModel {
 
         let auto_execute = true; // Child auto-executes by default.
         let conversation_id =
-            self.start_new_conversation(terminal_view_id, auto_execute, false, ctx);
+            self.start_new_conversation(terminal_view_id, auto_execute, false, false, ctx);
         {
             let conversation = self
                 .conversation_mut(&conversation_id)
@@ -473,6 +473,29 @@ impl BlocklistAIHistoryModel {
             return;
         };
         conversation.set_last_event_sequence(sequence);
+        conversation.write_updated_conversation_state(ctx);
+    }
+
+    /// Updates the persisted `pinned` state for a conversation and writes
+    /// the change to SQLite. Used by the orchestration pin singleton to
+    /// keep the per-conversation source of truth in sync with toggles.
+    pub fn set_conversation_pinned(
+        &mut self,
+        conversation_id: AIConversationId,
+        pinned: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            log::warn!(
+                "set_conversation_pinned called for conversation {conversation_id:?} that is \
+                 not loaded; pin state change to {pinned} will not be persisted."
+            );
+            return;
+        };
+        if conversation.is_pinned() == pinned {
+            return;
+        }
+        conversation.set_pinned(pinned);
         conversation.write_updated_conversation_state(ctx);
     }
 
@@ -830,9 +853,11 @@ impl BlocklistAIHistoryModel {
         terminal_view_id: EntityId,
         is_autoexecute_override: bool,
         is_viewing_shared_session: bool,
+        is_cli_agent_transcript: bool,
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
-        let mut new_conversation = AIConversation::new(is_viewing_shared_session);
+        let mut new_conversation =
+            AIConversation::new(is_viewing_shared_session, is_cli_agent_transcript);
         if is_autoexecute_override {
             new_conversation.toggle_autoexecute_override();
         }
@@ -1039,7 +1064,8 @@ impl BlocklistAIHistoryModel {
             exchange_ids_to_transfer.len()
         );
 
-        let new_conversation_id = self.start_new_conversation(terminal_view_id, false, false, ctx);
+        let new_conversation_id =
+            self.start_new_conversation(terminal_view_id, false, false, false, ctx);
         for exchange_id in exchange_ids_to_transfer {
             let old_conversation = self
                 .conversations_by_id
@@ -1166,6 +1192,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1323,6 +1350,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -1397,7 +1425,13 @@ impl BlocklistAIHistoryModel {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &mut ModelContext<Self>,
     ) {
+        // Track whether this update changes any state derived by
+        // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
+        // subscribers (e.g. the orchestration credit rollup). We emit the
+        // event only when there's actual data to react to.
+        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
@@ -1408,6 +1442,11 @@ impl BlocklistAIHistoryModel {
                 log::warn!(
                     "Failed to update request cost for conversation {conversation_id}: {e:#}"
                 );
+            }
+            if emits_usage_event {
+                ctx.emit(BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                });
             }
         } else {
             log::warn!(
@@ -2021,6 +2060,22 @@ impl BlocklistAIHistoryModel {
         None
     }
 
+    pub fn get_server_conversation_metadata_by_server_token(
+        &self,
+        server_token: &ServerConversationToken,
+    ) -> Option<&ServerAIConversationMetadata> {
+        self.find_conversation_id_by_server_token(server_token)
+            .and_then(|conversation_id| self.get_server_conversation_metadata(&conversation_id))
+            .or_else(|| {
+                self.all_conversations_metadata
+                    .values()
+                    .find(|metadata| {
+                        metadata.server_conversation_token.as_ref() == Some(server_token)
+                    })
+                    .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
+            })
+    }
+
     /// Finds an AIConversationId by its server conversation token.
     ///
     /// O(1) lookup via `server_token_to_conversation_id`, which is maintained
@@ -2044,6 +2099,38 @@ impl BlocklistAIHistoryModel {
             server_token.as_str()
         );
         None
+    }
+
+    /// Returns the canonical local conversation ID for a server token, creating
+    /// and caching one if this client has not seen the token before.
+    pub fn get_or_set_canonical_conversation_id_for_server_token(
+        &mut self,
+        server_token: &ServerConversationToken,
+    ) -> AIConversationId {
+        if let Some(conversation_id) = self.server_token_to_conversation_id.get(server_token) {
+            return *conversation_id;
+        }
+
+        let conversation_id = self
+            .conversations_by_id
+            .iter()
+            .find_map(|(conversation_id, conversation)| {
+                (conversation.server_conversation_token() == Some(server_token))
+                    .then_some(*conversation_id)
+            })
+            .or_else(|| {
+                self.all_conversations_metadata
+                    .iter()
+                    .find_map(|(conversation_id, metadata)| {
+                        (metadata.server_conversation_token.as_ref() == Some(server_token))
+                            .then_some(*conversation_id)
+                    })
+            })
+            .unwrap_or_else(AIConversationId::new);
+
+        self.server_token_to_conversation_id
+            .insert(server_token.clone(), conversation_id);
+        conversation_id
     }
 
     /// Mark conversations as historical
@@ -2315,9 +2402,20 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
     },
 
-    /// Emitted when a conversation's orchestration config is updated reactively
-    /// from an incoming `OrchestrationConfigSnapshot` message.
+    /// Emitted when a conversation's orchestration config is updated
+    /// (live wire snapshot, user edit, or restore-hydration).
+    /// Consumers that perform UI side effects should gate on `!from_restore`.
     OrchestrationConfigUpdated {
+        conversation_id: AIConversationId,
+        from_restore: bool,
+    },
+
+    /// Emitted when a conversation's `conversation_usage_metadata` is updated
+    /// (for example after a `StreamFinished` event). Subscribers that derive
+    /// data from cross-conversation usage — e.g. the orchestration credit
+    /// rollup in the agent-mode footer — can listen for this to re-render
+    /// when a descendant's credits change.
+    ConversationUsageMetadataUpdated {
         conversation_id: AIConversationId,
     },
 }
@@ -2396,6 +2494,11 @@ impl BlocklistAIHistoryEvent {
             // OrchestrationConfigUpdated is conversation-scoped and has no
             // terminal_view_id.
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => None,
+            // ConversationUsageMetadataUpdated is conversation-scoped and
+            // has no terminal_view_id. Cross-pane consumers (e.g. the
+            // orchestrator footer reading descendant credits) can't be
+            // disambiguated by a single owner pane.
+            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
         }
     }
 }

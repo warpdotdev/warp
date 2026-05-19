@@ -33,11 +33,47 @@ const REPO_SNAPSHOT_SHELF_LIFE_DURATION: Duration =
 
 /// Subdirectory inside the app's statedirectory that holds snapshot files.
 const REPO_SNAPSHOT_SUBDIR_NAME: &str = "codebase_index_snapshots";
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotStorage {
+    dir: PathBuf,
+}
+
+impl SnapshotStorage {
+    /// Construct snapshot storage using the app's default secure snapshot directory.
+    pub fn app_default() -> Option<Self> {
+        snapshot_dir().map(|dir| Self { dir })
+    }
+
+    /// Construct snapshot storage rooted at the supplied directory, creating it if needed.
+    pub fn from_dir(dir: PathBuf) -> Option<Self> {
+        if !dir.is_dir() {
+            std::fs::create_dir_all(&dir).ok()?;
+        }
+        Some(Self { dir })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.dir
+    }
+    #[cfg(feature = "local_fs")]
+    pub(super) fn is_app_default(&self) -> bool {
+        self.dir == default_snapshot_dir_path()
+    }
+
+    pub(super) fn has_snapshot(&self, repo_path: &Path) -> bool {
+        self.snapshot_path(repo_path).is_file()
+    }
+
+    pub(super) fn snapshot_path(&self, repo_path: &Path) -> PathBuf {
+        snapshot_path(&self.dir, repo_path)
+    }
+}
 
 /// Splits a list of codebase indices into invalid and valid indices,
 /// based on their last write date and whether they have a corresponding snapshot file.
 pub(super) fn split_snapshot_metadata_by_validity(
     persisted_codebase_indices: Vec<WorkspaceMetadata>,
+    snapshot_storage: Option<&SnapshotStorage>,
 ) -> (Vec<WorkspaceMetadata>, Vec<WorkspaceMetadata>) {
     let now = Utc::now();
     persisted_codebase_indices
@@ -48,7 +84,8 @@ pub(super) fn split_snapshot_metadata_by_validity(
                 index_metadata.path
             );
             index_metadata.is_expired(now, REPO_SNAPSHOT_SHELF_LIFE_DAYS)
-                || !has_snapshot(&index_metadata.path)
+                || !snapshot_storage
+                    .is_some_and(|storage| storage.has_snapshot(&index_metadata.path))
         })
 }
 
@@ -159,12 +196,7 @@ pub(super) fn read_snapshot(
 }
 
 pub(super) fn has_snapshot(repo_path: &Path) -> bool {
-    let Some(snapshot_dir) = snapshot_dir() else {
-        return false;
-    };
-
-    let snapshot_path = snapshot_path(snapshot_dir.as_path(), repo_path);
-    snapshot_path.is_file()
+    SnapshotStorage::app_default().is_some_and(|storage| storage.has_snapshot(repo_path))
 }
 
 /// Construct a directory to store index snapshots, if it doesn't already exist,
@@ -175,9 +207,7 @@ pub(super) fn snapshot_dir() -> Option<PathBuf> {
 
     #[cfg(feature = "local_fs")]
     {
-        let base_dir =
-            warp_core::paths::secure_state_dir().unwrap_or_else(warp_core::paths::state_dir);
-        let snapshot_dir_path = base_dir.join(REPO_SNAPSHOT_SUBDIR_NAME);
+        let snapshot_dir_path = default_snapshot_dir_path();
 
         if !snapshot_dir_path.is_dir() {
             std::fs::create_dir_all(&snapshot_dir_path).ok()?;
@@ -186,6 +216,12 @@ pub(super) fn snapshot_dir() -> Option<PathBuf> {
     }
 }
 
+#[cfg(feature = "local_fs")]
+fn default_snapshot_dir_path() -> PathBuf {
+    warp_core::paths::secure_state_dir()
+        .unwrap_or_else(warp_core::paths::state_dir)
+        .join(REPO_SNAPSHOT_SUBDIR_NAME)
+}
 /// Constructs a snapshot path given a base directory and the codebase index's root path.
 pub(super) fn snapshot_path(snapshot_dir: &Path, repo_path: &Path) -> PathBuf {
     // Use a hash of the repo_path to create a unique filename

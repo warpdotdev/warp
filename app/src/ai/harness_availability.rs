@@ -1,26 +1,34 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
+use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_managed_secrets::{client::SecretOwner, ManagedSecretManager, ManagedSecretValue};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::report_error;
+use crate::server::retry_strategies::{
+    is_transient_graphql_or_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const CACHE_KEY: &str = "AvailableHarnesses";
+const AUTH_SECRET_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HarnessModelInfo {
     pub id: String,
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,13 +68,24 @@ pub struct AuthSecretEntry {
 pub enum HarnessAvailabilityEvent {
     Changed,
     AuthSecretsLoaded,
-    AuthSecretCreated { harness: Harness, name: String },
-    AuthSecretCreationFailed { error: String },
+    /// Emitted when a lazy auth-secrets fetch fails. Subscribers should
+    /// re-render so any "Loading…" placeholders can transition to an
+    /// error state — without this signal the picker would otherwise be
+    /// stuck on the loading placeholder until the next refetch.
+    AuthSecretsFetchFailed,
+    AuthSecretCreated {
+        harness: Harness,
+        name: String,
+    },
+    AuthSecretCreationFailed {
+        error: String,
+    },
 }
 
 pub struct HarnessAvailabilityModel {
     harnesses: Vec<HarnessAvailability>,
     auth_secrets: HashMap<Harness, AuthSecretFetchState>,
+    auth_secret_retry_after: HashMap<Harness, Instant>,
 }
 
 impl HarnessAvailabilityModel {
@@ -101,6 +120,7 @@ impl HarnessAvailabilityModel {
         let me = Self {
             harnesses,
             auth_secrets: HashMap::new(),
+            auth_secret_retry_after: HashMap::new(),
         };
         me.refresh(ctx);
         me
@@ -150,11 +170,14 @@ impl HarnessAvailabilityModel {
     }
 
     pub fn ensure_auth_secrets_fetched(&mut self, harness: Harness, ctx: &mut ModelContext<Self>) {
-        if matches!(
-            self.auth_secrets_for(harness),
-            AuthSecretFetchState::NotFetched | AuthSecretFetchState::Failed(_)
-        ) {
-            self.fetch_auth_secrets(harness, ctx);
+        match self.auth_secrets_for(harness) {
+            AuthSecretFetchState::NotFetched => self.fetch_auth_secrets(harness, ctx),
+            AuthSecretFetchState::Failed(_) if self.can_retry_auth_secret_fetch(harness) => {
+                self.fetch_auth_secrets(harness, ctx);
+            }
+            AuthSecretFetchState::Failed(_)
+            | AuthSecretFetchState::Loading
+            | AuthSecretFetchState::Loaded(_) => {}
         }
     }
 
@@ -169,34 +192,59 @@ impl HarnessAvailabilityModel {
 
         self.auth_secrets
             .insert(harness, AuthSecretFetchState::Loading);
+        self.auth_secret_retry_after.remove(&harness);
 
         let api = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
-        ctx.spawn(
-            async move { api.list_harness_auth_secrets(agent_harness).await },
-            move |me, result: Result<Vec<warp_graphql::managed_secrets::ManagedSecret>, _>, ctx| {
-                match result {
-                    Ok(secrets) => {
-                        let entries = secrets
-                            .into_iter()
-                            .map(|s| AuthSecretEntry { name: s.name })
-                            .collect();
-                        me.auth_secrets
-                            .insert(harness, AuthSecretFetchState::Loaded(entries));
-                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsLoaded);
-                    }
-                    Err(e) => {
-                        let msg = e.to_string();
-                        report_error!(e.context("Failed to fetch harness auth secrets"));
-                        me.auth_secrets
-                            .insert(harness, AuthSecretFetchState::Failed(msg));
-                    }
+        ctx.spawn_with_retry_on_error_when(
+            move || {
+                let api = api.clone();
+                let agent_harness = agent_harness.clone();
+                async move { api.list_harness_auth_secrets(agent_harness).await }
+            },
+            OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
+            is_transient_graphql_or_http_error,
+            move |me,
+                  result: RequestState<Vec<warp_graphql::managed_secrets::ManagedSecret>>,
+                  ctx| match result {
+                RequestState::RequestSucceeded(secrets) => {
+                    let entries = secrets
+                        .into_iter()
+                        .map(|s| AuthSecretEntry { name: s.name })
+                        .collect();
+                    me.auth_secrets
+                        .insert(harness, AuthSecretFetchState::Loaded(entries));
+                    me.auth_secret_retry_after.remove(&harness);
+                    ctx.emit(HarnessAvailabilityEvent::AuthSecretsLoaded);
+                }
+                RequestState::RequestFailedRetryPending(e) => {
+                    log::warn!("Failed to fetch harness auth secrets; retrying: {e:#}");
+                }
+                RequestState::RequestFailed(e) => {
+                    let msg = e.to_string();
+                    report_error!(e.context("Failed to fetch harness auth secrets"));
+                    me.auth_secrets
+                        .insert(harness, AuthSecretFetchState::Failed(msg));
+                    me.auth_secret_retry_after
+                        .insert(harness, Instant::now() + AUTH_SECRET_FETCH_FAILURE_COOLDOWN);
+                    // Notify subscribers so they can drop any
+                    // "Loading…" placeholder rendered during the
+                    // in-flight fetch and surface the error state.
+                    ctx.emit(HarnessAvailabilityEvent::AuthSecretsFetchFailed);
                 }
             },
         );
     }
 
+    fn can_retry_auth_secret_fetch(&self, harness: Harness) -> bool {
+        self.auth_secret_retry_after
+            .get(&harness)
+            .map(|retry_after| Instant::now() >= *retry_after)
+            .unwrap_or(true)
+    }
+
     pub fn invalidate_auth_secrets(&mut self, harness: Harness) {
         self.auth_secrets.remove(&harness);
+        self.auth_secret_retry_after.remove(&harness);
     }
 
     pub fn create_auth_secret(
@@ -204,13 +252,11 @@ impl HarnessAvailabilityModel {
         harness: Harness,
         name: String,
         value: ManagedSecretValue,
+        owner: SecretOwner,
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let create_future =
-            manager
-                .as_ref(ctx)
-                .create_secret(SecretOwner::CurrentUser, name, value, None);
+        let create_future = manager.as_ref(ctx).create_secret(owner, name, value, None);
         ctx.spawn(create_future, move |me, result, ctx| match result {
             Ok(secret) => {
                 let entry = AuthSecretEntry {

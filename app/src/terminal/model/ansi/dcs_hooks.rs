@@ -255,6 +255,9 @@ impl DProtoHook {
                 "path" => {
                     value.path = map_empty_to_none(v);
                 }
+                "cdpath" => {
+                    value.cdpath = map_empty_to_none(v);
+                }
                 "editor" => {
                     value.editor = map_empty_to_none(v);
                 }
@@ -510,6 +513,10 @@ pub struct BootstrappedValue {
 
     #[serde(deserialize_with = "empty_string_is_none")]
     pub path: Option<String>,
+
+    /// `CDPATH` from the shell, colon-separated.
+    #[serde(deserialize_with = "empty_string_is_none", default)]
+    pub cdpath: Option<String>,
 
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub editor: Option<String>,

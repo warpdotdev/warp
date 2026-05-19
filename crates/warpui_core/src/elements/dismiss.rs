@@ -91,20 +91,37 @@ impl Element for Dismiss {
 
         let z_index = self.z_index().unwrap();
 
-        match (
-            self.dismiss_handler.as_mut(),
-            event.at_z_index(z_index, ctx),
-        ) {
+        let event_at_z_index = event.at_z_index(z_index, ctx);
+        match (self.dismiss_handler.as_mut(), event_at_z_index) {
             // If the event is available at the root z-index, that means it isn't covered by the
             // child element, which means the user is clicking outside of the child element
             (Some(handler), Some(Event::LeftMouseDown { .. })) => {
                 handler(ctx, app);
+                return self.prevent_interaction_with_other_elements;
             }
             (None, Some(Event::LeftMouseDown { .. })) => {
                 log::warn!("Dismiss underlay was clicked but no handler was set!");
+                return self.prevent_interaction_with_other_elements;
             }
             _ => {}
         };
+
+        if self.prevent_interaction_with_other_elements
+            && event_at_z_index.is_some()
+            && matches!(
+                event.raw_event(),
+                Event::ScrollWheel { .. }
+                    | Event::LeftMouseUp { .. }
+                    | Event::LeftMouseDragged { .. }
+                    | Event::MiddleMouseDown { .. }
+                    | Event::RightMouseDown { .. }
+                    | Event::BackMouseDown { .. }
+                    | Event::ForwardMouseDown { .. }
+                    | Event::MouseMoved { .. }
+            )
+        {
+            return true;
+        }
 
         false
     }

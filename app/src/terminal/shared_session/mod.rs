@@ -173,11 +173,11 @@ impl SharedSessionStatus {
 /// Note: currently, these options only encode the point at which
 /// scrollback _starts_. We do not yet support more
 /// selective scrollback (e.g. a closed range).
-/// The active block is always included in scrollback for the prompt.
+/// The active block is included for the prompt when it is scrollback-eligible.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedSessionScrollbackType {
     /// Do not include any scrollback in this shared session.
-    /// Note the active block is still sent as part of scrollback for the prompt.
+    /// The active block can still be sent as part of scrollback for the prompt.
     /// TODO(suraj): consider renaming this to "from active block" or encapsulating
     /// this with the `FromBlock` variant with the block_index equal to the
     /// active block index.
@@ -195,7 +195,7 @@ impl SharedSessionScrollbackType {
     /// Note that some blocks might not actually be included in the scrollback
     /// even if they were specified as part of the scrollback type.
     /// For example, if the [`Self::All]` variant is used, restored blocks
-    /// _won't_ be included in scrollback.
+    /// _won't_ be included in scrollback, and neither will hidden active blocks.
     fn to_scrollback(self, model: &TerminalModel) -> Scrollback {
         let first_block_index = self.first_block_index(model);
         let blocks = model
