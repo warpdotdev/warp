@@ -14,10 +14,11 @@ use warpui::{
     },
     fonts::{Properties, Weight},
     platform::Cursor,
-    Element, EventContext,
+    AppContext, Element, EventContext, SingletonEntity,
 };
 
 use crate::{
+    auth::AuthStateProvider,
     settings_view::billing_and_usage_page_v2::{
         AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
         BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
@@ -54,6 +55,7 @@ const CARD_BAR_RADIUS: f32 = CARD_BAR_HEIGHT / 2.;
 const CARD_OVERALL_KEY: &str = "__card_overall__";
 const CARD_LOCAL_KEY: &str = "__card_local__";
 const CARD_CLOUD_KEY: &str = "__card_cloud__";
+const OTHER_MEMBERS_KEY: &str = "__other_members__";
 const COST_TYPE_ORDER: &[AiCreditsUsageAndCostType] = &[
     AiCreditsUsageAndCostType::BaseLimit,
     AiCreditsUsageAndCostType::BonusGrant,
@@ -153,7 +155,7 @@ fn member_base_limit(member: &WorkspaceMember) -> Option<i64> {
 }
 
 /// Swatch color for one cost-type bucket, mirroring the legend palette.
-pub fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
+fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
     match cost_type {
         AiCreditsUsageAndCostType::BaseLimit => BASE_CREDITS_DOT_COLOR,
         AiCreditsUsageAndCostType::BonusGrant => BONUS_CREDITS_DOT_COLOR,
@@ -164,12 +166,12 @@ pub fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
     }
 }
 
-pub fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
+fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
     match cost_type {
         AiCreditsUsageAndCostType::BaseLimit => "Base",
         AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
         AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
-        AiCreditsUsageAndCostType::AmbientBonusGrant => "Ambient-only",
+        AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
         AiCreditsUsageAndCostType::Aggregate => "All sources",
         AiCreditsUsageAndCostType::Other(_) => "Other",
     }
@@ -206,14 +208,6 @@ fn segment_sort_key(segment: &BarSegment) -> (usize, usize) {
         cost_type_rank(&segment.cost_type),
         bucket_rank(&segment.usage_bucket),
     )
-}
-
-/// Voice and suggested code diffs are billed separately; pre-synthesized `Team`
-/// rows are handled by the `TeamAggregate` branch.
-fn entry_is_renderable(entry: &BillingCycleUsageEntry) -> bool {
-    entry.usage_bucket != AiCreditsUsageBucket::Voice
-        && entry.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
-        && entry.subject_type != AiCreditsUsageAndCostSubjectType::Team
 }
 
 /// Group `entries` by `(cost_type, usage_bucket)` into [`BarSegment`]s; returns
@@ -260,7 +254,7 @@ pub fn build_own_usage_row(
 ) -> MemberUsageRow {
     let viewer_entries: Vec<&BillingCycleUsageEntry> = entries
         .iter()
-        .filter(|e| entry_is_renderable(e))
+        .filter(|e| e.subject_type != AiCreditsUsageAndCostSubjectType::Team)
         .filter(|e| source_filter.matches(&e.usage_source))
         // Defensive: filter to viewer-only even though OwnOnly should already be redacted.
         .filter(|e| match (viewer_uid, e.subject_uid.as_deref()) {
@@ -280,6 +274,23 @@ pub fn build_own_usage_row(
         total_credits,
         total_cost_cents,
         base_limit: viewer_base_limit,
+        segments,
+    }
+}
+
+fn build_other_members_usage_row(entries: &[BillingCycleUsageEntry]) -> MemberUsageRow {
+    let team_entries = entries
+        .iter()
+        .filter(|e| e.subject_type == AiCreditsUsageAndCostSubjectType::Team);
+    let (segments, total_credits, total_cost_cents) = aggregate_segments(team_entries);
+
+    MemberUsageRow {
+        subject_type: AiCreditsUsageAndCostSubjectType::Team,
+        subject_key: OTHER_MEMBERS_KEY.to_string(),
+        display_name: "Other members".to_string(),
+        total_credits,
+        total_cost_cents,
+        base_limit: None,
         segments,
     }
 }
@@ -307,40 +318,50 @@ pub struct TeamTotalCardSummary {
 pub fn build_team_total_card_summaries(
     entries: &[BillingCycleUsageEntry],
 ) -> Vec<TeamTotalCardSummary> {
-    let renderable = || entries.iter().filter(|e| entry_is_renderable(e));
+    let (overall_segments, overall_credits, overall_cost) = aggregate_segments(entries.iter());
+    let mut summaries = vec![TeamTotalCardSummary {
+        title: "Overall usage",
+        card_key: CARD_OVERALL_KEY,
+        segments: overall_segments,
+        total_credits: overall_credits,
+        total_cost_cents: overall_cost,
+        limit_cents: None,
+    }];
 
-    let (overall_segments, overall_credits, overall_cost) = aggregate_segments(renderable());
-    let (local_segments, local_credits, local_cost) =
-        aggregate_segments(renderable().filter(|e| e.usage_source == AiCreditsUsageSource::Local));
-    let (cloud_segments, cloud_credits, cloud_cost) =
-        aggregate_segments(renderable().filter(|e| e.usage_source == AiCreditsUsageSource::Cloud));
-
-    vec![
-        TeamTotalCardSummary {
-            title: "Overall usage",
-            card_key: CARD_OVERALL_KEY,
-            segments: overall_segments,
-            total_credits: overall_credits,
-            total_cost_cents: overall_cost,
-            limit_cents: None,
-        },
-        TeamTotalCardSummary {
+    let has_per_source_data = !entries.is_empty()
+        && entries
+            .iter()
+            .all(|e| e.usage_source != AiCreditsUsageSource::Aggregate);
+    if has_per_source_data {
+        let (local_segments, local_credits, local_cost) = aggregate_segments(
+            entries
+                .iter()
+                .filter(|e| e.usage_source == AiCreditsUsageSource::Local),
+        );
+        let (cloud_segments, cloud_credits, cloud_cost) = aggregate_segments(
+            entries
+                .iter()
+                .filter(|e| e.usage_source == AiCreditsUsageSource::Cloud),
+        );
+        summaries.push(TeamTotalCardSummary {
             title: "Local agent usage",
             card_key: CARD_LOCAL_KEY,
             segments: local_segments,
             total_credits: local_credits,
             total_cost_cents: local_cost,
             limit_cents: None,
-        },
-        TeamTotalCardSummary {
+        });
+        summaries.push(TeamTotalCardSummary {
             title: "Cloud agent usage",
             card_key: CARD_CLOUD_KEY,
             segments: cloud_segments,
             total_credits: cloud_credits,
             total_cost_cents: cloud_cost,
             limit_cents: None,
-        },
-    ]
+        });
+    }
+
+    summaries
 }
 
 /// Per-member rows for `PerUserTotals` viewers. Iterates the workspace member
@@ -362,7 +383,10 @@ pub fn build_member_usage_rows(
     > = HashMap::new();
     let mut unknown_counter = 0usize;
 
-    for entry in entries.iter().filter(|e| entry_is_renderable(e)) {
+    for entry in entries
+        .iter()
+        .filter(|e| e.subject_type != AiCreditsUsageAndCostSubjectType::Team)
+    {
         if !source_filter.matches(&entry.usage_source) {
             continue;
         }
@@ -1109,6 +1133,46 @@ fn render_team_totals_section(
     row.finish()
 }
 
+/// Team-totals block (subheader + cards) for visibilities that surface team-
+/// level usage. Skipped for `OwnOnly`; callers should gate on visibility
+/// before invoking. `PerUserTotals` gets a "Team totals" subheader above
+/// the cards to match the admin panel; `TeamAggregate` shows just the cards.
+pub fn render_team_totals_block(
+    entries: &[BillingCycleUsageEntry],
+    visibility: &crate::workspaces::workspace::UsageVisibility,
+    mouse_states: &RowMouseStates,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    if visibility.granularity == UsageVisibilityGranularity::PerUserTotals {
+        column.add_child(
+            Container::new(render_section_subheader("Team totals", appearance))
+                .with_margin_bottom(8.)
+                .finish(),
+        );
+    }
+    column.add_child(render_team_totals_section(
+        entries,
+        mouse_states,
+        appearance,
+    ));
+    column.finish()
+}
+
+/// Drops legacy buckets we no longer charge for (Voice / SuggestedCodeDiffs).
+/// Centralized here so the section view can filter once before fanning the
+/// entries out to the team-totals block and the per-row renderer below.
+pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| {
+            e.usage_bucket != AiCreditsUsageBucket::Voice
+                && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
+        })
+        .cloned()
+        .collect()
+}
+
 pub type FilterChangeFn = std::sync::Arc<dyn Fn(SourceFilter, &mut EventContext) + 'static>;
 
 /// All / Local / Cloud pill toggle.
@@ -1168,22 +1232,51 @@ fn render_source_filter_toggle(
         .finish()
 }
 
-/// Top-level row dispatcher. `on_filter_change` is only consumed by the
-/// `PerUserTotals` branch. `upgrade_banner`, when present, is inserted at
-/// the most relevant spot for the current visibility tier (above the per-
-/// member breakdown on `PerUserTotals`, after the cards on `TeamAggregate`,
-/// or after the own-usage row on `OwnOnly`).
+/// Resolves the current viewer's own usage row from the auth state, picking
+/// up their display name and base credit limit from the workspace member list.
+fn build_viewer_own_usage_row(
+    workspace: &Workspace,
+    entries: &[BillingCycleUsageEntry],
+    app: &AppContext,
+    source_filter: SourceFilter,
+) -> MemberUsageRow {
+    let auth_state = AuthStateProvider::as_ref(app).get();
+    let viewer_uid = auth_state.user_id().map(|uid| uid.as_string());
+    let display_name = auth_state
+        .display_name()
+        .or_else(|| auth_state.username_for_display())
+        .or_else(|| auth_state.user_email())
+        .unwrap_or_else(|| "Your usage".to_string());
+    // Surface the viewer's own base limit so they see `used / limit`.
+    let viewer_base_limit = viewer_uid.as_deref().and_then(|uid| {
+        workspace
+            .members
+            .iter()
+            .find(|m| m.uid.as_str() == uid)
+            .and_then(member_base_limit)
+    });
+    build_own_usage_row(
+        entries,
+        viewer_uid.as_deref(),
+        display_name,
+        viewer_base_limit,
+        source_filter,
+    )
+}
+
+/// Top-level row dispatcher. Caller is expected to have already filtered
+/// legacy buckets via [`filter_legacy_buckets`] and rendered the team-totals
+/// block (if any) above. `on_filter_change` is only consumed by the
+/// `PerUserTotals` branch.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
-    viewer_uid: Option<&str>,
-    viewer_display_name: Option<&str>,
     visibility: &crate::workspaces::workspace::UsageVisibility,
     source_filter: SourceFilter,
     mouse_states: &RowMouseStates,
-    upgrade_banner: Option<Box<dyn Element>>,
     appearance: &Appearance,
+    app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
     let mut column = Flex::column()
@@ -1192,22 +1285,7 @@ pub fn render_rows(
 
     match visibility.granularity {
         UsageVisibilityGranularity::OwnOnly => {
-            let display_name = viewer_display_name.unwrap_or("Your usage").to_string();
-            // Surface the viewer's own base limit so they see `used / limit`.
-            let viewer_base_limit = viewer_uid.and_then(|uid| {
-                workspace
-                    .members
-                    .iter()
-                    .find(|m| m.uid.as_str() == uid)
-                    .and_then(member_base_limit)
-            });
-            let row = build_own_usage_row(
-                entries,
-                viewer_uid,
-                display_name,
-                viewer_base_limit,
-                source_filter,
-            );
+            let row = build_viewer_own_usage_row(workspace, entries, app, source_filter);
             let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
             let max_credits = row.total_credits.max(1);
             column.add_child(render_member_row(
@@ -1216,46 +1294,38 @@ pub fn render_rows(
                 tooltip_state,
                 appearance,
             ));
-            if let Some(banner) = upgrade_banner {
-                column.add_child(Container::new(banner).with_margin_top(8.).finish());
-            }
         }
         UsageVisibilityGranularity::TeamAggregate => {
-            // TeamAggregate viewers can't see per-member breakdowns, so the
-            // page is just the team-totals cards.
-            column.add_child(render_team_totals_section(
+            let mut rows = vec![build_viewer_own_usage_row(
+                workspace,
                 entries,
-                mouse_states,
-                appearance,
-            ));
-            if let Some(banner) = upgrade_banner {
-                column.add_child(Container::new(banner).with_margin_top(8.).finish());
+                app,
+                SourceFilter::All,
+            )];
+            if workspace.members.len() > 1
+                || entries
+                    .iter()
+                    .any(|e| e.subject_type == AiCreditsUsageAndCostSubjectType::Team)
+            {
+                rows.push(build_other_members_usage_row(entries));
+            }
+            let max_credits = rows
+                .iter()
+                .map(|row| row.total_credits)
+                .max()
+                .unwrap_or(0)
+                .max(1);
+            for row in &rows {
+                let tooltip_state = mouse_states.tooltip_mouse_state(&row.subject_key);
+                column.add_child(render_member_row(
+                    row,
+                    max_credits,
+                    tooltip_state,
+                    appearance,
+                ));
             }
         }
         UsageVisibilityGranularity::PerUserTotals => {
-            // Admin viewers get two labeled subsections: team totals at the
-            // top, and per-member rows below. Both subheaders match the admin
-            // panel's `text-sm font-medium` styling.
-            column.add_child(
-                Container::new(render_section_subheader("Team totals", appearance))
-                    .with_margin_bottom(8.)
-                    .finish(),
-            );
-            // Team-level totals always show every entry regardless of the
-            // member-row source filter toggle below.
-            column.add_child(render_team_totals_section(
-                entries,
-                mouse_states,
-                appearance,
-            ));
-
-            // Upgrade CTA sits between Team totals and Member usage so admins
-            // see the path to fuller visibility right before the per-member
-            // section it gates.
-            if let Some(banner) = upgrade_banner {
-                column.add_child(Container::new(banner).with_margin_top(16.).finish());
-            }
-
             let member_rows = build_member_usage_rows(entries, &workspace.members, source_filter);
 
             // Member usage subheader; source filter (if any cloud usage) lives
@@ -1275,7 +1345,6 @@ pub fn render_rows(
             }
             column.add_child(
                 Container::new(member_header_row.finish())
-                    .with_margin_top(16.)
                     .with_margin_bottom(8.)
                     .finish(),
             );
@@ -1305,7 +1374,7 @@ pub fn render_rows(
         }
         UsageVisibilityGranularity::FullBreakdown => {
             // Enterprise admins short-circuit to the admin-panel CTA before
-            // render_body runs, so this branch is unreachable in practice.
+            // render_rows runs, so this branch is unreachable in practice.
             column.add_child(Empty::new().finish());
         }
     }

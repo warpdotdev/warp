@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -21,7 +21,10 @@ use crate::{
     menu::{self, Menu, MenuItem, MenuItemFields},
     settings_view::{
         admin_actions::AdminActions,
-        billing_and_usage::billing_cycle_usage_rows::{render_rows, RowMouseStates, SourceFilter},
+        billing_and_usage::billing_cycle_usage_rows::{
+            filter_legacy_buckets, render_rows, render_team_totals_block, RowMouseStates,
+            SourceFilter,
+        },
         billing_and_usage_page_v2::{
             AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
             BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
@@ -32,8 +35,8 @@ use crate::{
         update_manager::TeamUpdateManager,
         user_workspaces::UserWorkspaces,
         workspace::{
-            AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-            UsageVisibilityGranularity, Workspace,
+            AiCreditsUsageAndCostType, BillingCycleUsageData, BillingCycleUsageSummary,
+            MaxPriorCycles, UsageVisibility, UsageVisibilityGranularity, Workspace,
         },
     },
 };
@@ -115,19 +118,18 @@ impl BillingCycleUsageSectionView {
         AuthStateProvider::as_ref(app).get().user_email()
     }
 
-    fn resolved_viewer_uid(app: &AppContext) -> Option<String> {
-        AuthStateProvider::as_ref(app)
-            .get()
-            .user_id()
-            .map(|uid| uid.as_string())
-    }
-
-    fn resolved_viewer_display_name(app: &AppContext) -> Option<String> {
-        let state = AuthStateProvider::as_ref(app).get();
-        state
-            .display_name()
-            .or_else(|| state.username_for_display())
-            .or_else(|| state.user_email())
+    /// Whether the current viewer has admin/owner permissions on the current
+    /// team. Mirrors the convention used by the other settings pages (main,
+    /// ai, billing-and-usage v1/v2, teams): Owners always count as admins,
+    /// and non-owner Admins count only when the tier's `multi_admin_policy`
+    /// is enabled.
+    fn viewer_is_admin(app: &AppContext) -> bool {
+        let Some(team) = UserWorkspaces::as_ref(app).current_team() else {
+            return false;
+        };
+        Self::resolved_viewer_email(app)
+            .as_deref()
+            .is_some_and(|email| team.has_admin_permissions(email))
     }
 
     fn current_summary<'a>(
@@ -135,9 +137,10 @@ impl BillingCycleUsageSectionView {
         workspace: &'a Workspace,
     ) -> Option<&'a BillingCycleUsageSummary> {
         let data = workspace.billing_cycle_usage.as_ref()?;
+        let aligned = aligned_summaries(data);
         match self.selected_period_end {
-            Some(end) => data.summaries.iter().find(|s| s.period_end == end),
-            None => data.summaries.first(),
+            Some(end) => aligned.into_iter().find(|s| s.period_end == end),
+            None => aligned.into_iter().next(),
         }
     }
 
@@ -148,7 +151,11 @@ impl BillingCycleUsageSectionView {
         let still_present = UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .and_then(|ws| ws.billing_cycle_usage.as_ref())
-            .map(|data| data.summaries.iter().any(|s| s.period_end == selected))
+            .map(|data| {
+                aligned_summaries(data)
+                    .iter()
+                    .any(|s| s.period_end == selected)
+            })
             .unwrap_or(false);
         if !still_present {
             self.selected_period_end = None;
@@ -197,9 +204,8 @@ impl BillingCycleUsageSectionView {
         let Some(data) = workspace.billing_cycle_usage.as_ref() else {
             return;
         };
-        let items: Vec<MenuItem<BillingCycleUsageAction>> = data
-            .summaries
-            .iter()
+        let items: Vec<MenuItem<BillingCycleUsageAction>> = aligned_summaries(data)
+            .into_iter()
             .map(|summary| {
                 let label = format_period_label(summary);
                 MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
@@ -225,50 +231,52 @@ impl View for BillingCycleUsageSectionView {
         let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace().cloned() else {
             return Empty::new().finish();
         };
-        let viewer_email = Self::resolved_viewer_email(app);
-        let is_admin = viewer_email
-            .as_deref()
-            .is_some_and(|email| workspace.is_workspace_admin(email));
+        let is_admin = Self::viewer_is_admin(app);
         let visibility = workspace.resolve_usage_visibility(is_admin);
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        column.add_child(self.render_header(&workspace, &visibility, appearance));
+        column.add_child(self.render_header(&workspace, &visibility, appearance, app));
 
-        // Secondary row below the title: "Resets ..." on the left (current
-        // cycle only) + cost-type legend on the right. Mirrors the admin
-        // panel's `Resets May 27, 11:24 PM EDT` ⟷ legend layout.
-        let resets_text = self.render_resets_label(appearance, app);
-        let legend = self.render_legend(&workspace, appearance);
-        if resets_text.is_some() || legend.is_some() {
-            let mut secondary_row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_main_axis_size(MainAxisSize::Max);
-            secondary_row.add_child(resets_text.unwrap_or_else(|| Empty::new().finish()));
-            secondary_row.add_child(legend.unwrap_or_else(|| Empty::new().finish()));
+        // Filter legacy (Voice / SuggestedCodeDiffs) entries once before
+        // both the team-totals block and the per-row renderer consume them.
+        let entries = filter_legacy_buckets(
+            self.current_summary(&workspace)
+                .map(|summary| summary.entries.as_slice())
+                .unwrap_or_default(),
+        );
+
+        if visibility.granularity != UsageVisibilityGranularity::OwnOnly {
             column.add_child(
-                Container::new(secondary_row.finish())
-                    .with_margin_top(4.)
-                    .finish(),
+                Container::new(render_team_totals_block(
+                    &entries,
+                    &visibility,
+                    &self.row_mouse_states,
+                    appearance,
+                ))
+                .with_margin_top(16.)
+                .finish(),
             );
         }
 
-        // Upgrade banner is rendered inline within the body so that on
-        // PerUserTotals (admin) views it sits between the team-totals cards
-        // and the per-member breakdown rather than dangling at the bottom.
-        let upgrade_banner = if is_admin {
-            self.render_upgrade_visibility_banner(&workspace, appearance)
-        } else {
-            None
-        };
+        if is_admin {
+            if let Some(banner) = self.render_upgrade_visibility_banner(&workspace, appearance) {
+                column.add_child(Container::new(banner).with_margin_top(16.).finish());
+            }
+        }
+
         column.add_child(
-            Container::new(self.render_body(
+            Container::new(render_rows(
                 &workspace,
+                &entries,
                 &visibility,
-                upgrade_banner,
+                self.source_filter,
+                &self.row_mouse_states,
                 appearance,
                 app,
+                std::sync::Arc::new(|filter, ctx| {
+                    ctx.dispatch_typed_action(BillingCycleUsageAction::ChangeSourceFilter(filter));
+                }),
             ))
             .with_margin_top(16.)
             .finish(),
@@ -284,6 +292,7 @@ impl BillingCycleUsageSectionView {
         workspace: &Workspace,
         visibility: &UsageVisibility,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let mut row = Flex::row()
@@ -302,16 +311,44 @@ impl BillingCycleUsageSectionView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End);
 
-        let period_element = if visibility.max_prior_cycles == MaxPriorCycles::None {
-            self.render_period_range_static(workspace, appearance)
-        } else {
+        // Collapse to a static label when there's effectively one period to
+        // pick from: either the tier policy doesn't expose history at all, or
+        // we've deduped/grid-aligned down to a single canonical cycle.
+        let aligned_count = workspace
+            .billing_cycle_usage
+            .as_ref()
+            .map(|d| aligned_summaries(d).len())
+            .unwrap_or(0);
+        let use_selector = visibility.max_prior_cycles != MaxPriorCycles::None && aligned_count > 1;
+        let period_element = if use_selector {
             self.render_period_selector(workspace, appearance)
+        } else {
+            self.render_period_range_static(workspace, appearance)
         };
         right_side.add_child(period_element);
 
         row.add_child(right_side.finish());
 
-        Container::new(row.finish()).finish()
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        column.add_child(row.finish());
+
+        let resets_text = self.render_resets_label(appearance, app);
+        let legend = self.render_legend(workspace, appearance);
+        if resets_text.is_some() || legend.is_some() {
+            let mut secondary_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_main_axis_size(MainAxisSize::Max);
+            secondary_row.add_child(resets_text.unwrap_or_else(|| Empty::new().finish()));
+            secondary_row.add_child(legend.unwrap_or_else(|| Empty::new().finish()));
+            column.add_child(
+                Container::new(secondary_row.finish())
+                    .with_margin_top(4.)
+                    .finish(),
+            );
+        }
+
+        Container::new(column.finish()).finish()
     }
 
     /// Secondary "Resets May 27, 11:24 PM EDT" label rendered below the
@@ -372,18 +409,10 @@ impl BillingCycleUsageSectionView {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg = theme.background();
-        let label = match self.selected_period_end {
-            Some(_) => self
-                .current_summary(workspace)
-                .map(format_period_label)
-                .unwrap_or_default(),
-            None => workspace
-                .billing_cycle_usage
-                .as_ref()
-                .and_then(|d| d.summaries.first())
-                .map(format_period_label)
-                .unwrap_or_default(),
-        };
+        let label = self
+            .current_summary(workspace)
+            .map(format_period_label)
+            .unwrap_or_default();
 
         let mouse_state = self.period_selector_mouse_state.clone();
         let font_family = appearance.ui_font_family();
@@ -542,41 +571,6 @@ impl BillingCycleUsageSectionView {
         .finish()
     }
 
-    fn render_body(
-        &self,
-        workspace: &Workspace,
-        visibility: &UsageVisibility,
-        upgrade_banner: Option<Box<dyn Element>>,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let Some(summary) = self.current_summary(workspace) else {
-            return self.render_empty_state(
-                "No usage this period",
-                "Usage will appear here once you start making agent requests.",
-                appearance,
-            );
-        };
-
-        let viewer_uid = Self::resolved_viewer_uid(app);
-        let viewer_display_name = Self::resolved_viewer_display_name(app);
-
-        render_rows(
-            workspace,
-            &summary.entries,
-            viewer_uid.as_deref(),
-            viewer_display_name.as_deref(),
-            visibility,
-            self.source_filter,
-            &self.row_mouse_states,
-            upgrade_banner,
-            appearance,
-            std::sync::Arc::new(|filter, ctx| {
-                ctx.dispatch_typed_action(BillingCycleUsageAction::ChangeSourceFilter(filter));
-            }),
-        )
-    }
-
     fn render_upgrade_visibility_banner(
         &self,
         workspace: &Workspace,
@@ -619,14 +613,10 @@ impl BillingCycleUsageSectionView {
         })
         .finish();
 
-        let icon = ConstrainedBox::new(
-            Icon::ArrowCircleBrokenUp
-                .to_warpui_icon(sub_text.into())
-                .finish(),
-        )
-        .with_width(14.)
-        .with_height(14.)
-        .finish();
+        let icon = ConstrainedBox::new(Icon::ArrowCircleBrokenUp.to_warpui_icon(sub_text).finish())
+            .with_width(14.)
+            .with_height(14.)
+            .finish();
 
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -641,44 +631,6 @@ impl BillingCycleUsageSectionView {
                 .with_uniform_padding(12.)
                 .finish(),
         )
-    }
-
-    fn render_empty_state(
-        &self,
-        title: &str,
-        subtitle: &str,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let bg = theme.background();
-        let mut col = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::Center);
-        col.add_child(
-            Container::new(
-                Text::new_inline(title.to_string(), appearance.ui_font_family(), 14.)
-                    .with_color(theme.active_ui_text_color().into())
-                    .with_style(Properties::default().weight(Weight::Medium))
-                    .finish(),
-            )
-            .with_margin_bottom(4.)
-            .finish(),
-        );
-        col.add_child(
-            Text::new_inline(
-                subtitle.to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(theme.sub_text_color(bg).into())
-            .finish(),
-        );
-
-        Container::new(col.finish())
-            .with_background_color(theme.surface_1().into_solid())
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-            .with_uniform_padding(16.)
-            .finish()
     }
 }
 
@@ -710,7 +662,7 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
         AiCreditsUsageAndCostType::BaseLimit => (BASE_CREDITS_DOT_COLOR, "Base"),
         AiCreditsUsageAndCostType::BonusGrant => (BONUS_CREDITS_DOT_COLOR, "Add-ons"),
         AiCreditsUsageAndCostType::Payg => (PAYG_CREDITS_DOT_COLOR, "Pay-as-you-go"),
-        AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Ambient-only"),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Cloud-only"),
         AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "All sources"),
         AiCreditsUsageAndCostType::Other(_) => (BASE_CREDITS_DOT_COLOR, ""),
     }
@@ -719,7 +671,7 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
 fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "Aggregates usage from base, add-on, pay-as-you-go, and ambient-only credits.".to_string(),
+        "Aggregates usage from base, add-on, pay-as-you-go, and cloud-only credits.".to_string(),
         appearance.ui_font_family(),
         12.,
     )
@@ -745,9 +697,56 @@ fn format_period_label(summary: &BillingCycleUsageSummary) -> String {
 fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
     let start = start.with_timezone(&Local);
     let end = end.with_timezone(&Local);
-    format!(
-        "{} - {}",
-        start.format("%b %d, %Y"),
-        end.format("%b %d, %Y")
-    )
+    if start.year() == end.year() {
+        format!("{} - {}", start.format("%b %d"), end.format("%b %d, %Y"))
+    } else {
+        format!(
+            "{} - {}",
+            start.format("%b %d, %Y"),
+            end.format("%b %d, %Y")
+        )
+    }
+}
+
+fn aligned_summaries(data: &BillingCycleUsageData) -> Vec<&BillingCycleUsageSummary> {
+    let anchor = data.current_period_end;
+    let mut seen: std::collections::HashSet<DateTime<Utc>> = std::collections::HashSet::new();
+    let mut result: Vec<&BillingCycleUsageSummary> = Vec::new();
+    for summary in &data.summaries {
+        if !is_on_grid(summary.period_end, anchor) {
+            continue;
+        }
+        if !seen.insert(summary.period_end) {
+            continue;
+        }
+        result.push(summary);
+    }
+    result
+}
+
+fn is_on_grid(period_end: DateTime<Utc>, anchor_end: DateTime<Utc>) -> bool {
+    let anchor_day = anchor_end.day();
+    let last_day = last_day_of_month(period_end.year(), period_end.month());
+    let expected_day = anchor_day.min(last_day);
+
+    period_end.day() == expected_day
+        && period_end.hour() == anchor_end.hour()
+        && period_end.minute() == anchor_end.minute()
+        && period_end.second() == anchor_end.second()
+        // Match `warp-server-3`'s ms-precision comparison rather than
+        // chrono's nanosecond precision, so we don't reject summaries that
+        // differ from the anchor only in sub-ms noise.
+        && period_end.nanosecond() / 1_000_000 == anchor_end.nanosecond() / 1_000_000
+}
+
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .and_then(|d| d.pred_opt())
+        .map(|d| d.day())
+        .unwrap_or(28)
 }
