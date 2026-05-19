@@ -16,28 +16,28 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_multi_agent_api::{
     self as api,
-    message::{tool_call::subagent::Metadata, Message},
+    message::{Message, tool_call::subagent::Metadata},
 };
 
 use crate::{
+    AIAgentTodoList,
     ai::{
         agent::comment::CodeReview,
         document::ai_document_model::{AIDocumentId, AIDocumentVersion},
     },
     server::datetime_ext::DateTimeExt,
     terminal::model::block::BlockId,
-    AIAgentTodoList,
 };
 
 use super::{
-    api::{
-        convert_conversation::convert_tool_call_result_to_input, user_inputs_from_messages,
-        ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    },
-    conversation::{context_in_exchanges, update_todo_list_from_todo_op},
     AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputStatus, MaybeAIAgentOutputMessage, MessageId, MessageToAIAgentOutputMessageError,
     Shared,
+    api::{
+        ConversionParams, ConvertAPIMessageToClientOutputMessage,
+        convert_conversation::convert_tool_call_result_to_input, user_inputs_from_messages,
+    },
+    conversation::{context_in_exchanges, update_todo_list_from_todo_op},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -275,6 +275,20 @@ impl Task {
         }
     }
 
+    pub(super) fn new_restored_optimistic_root(
+        task_id: String,
+        restored_exchanges: impl Iterator<Item = AIAgentExchange>,
+    ) -> Self {
+        let mut restored_exchanges = restored_exchanges.collect_vec();
+        restored_exchanges.sort_by_key(|exchange| exchange.start_time);
+
+        Self {
+            id: TaskId::new(task_id),
+            data: TaskImpl::Optimistic(optimistic::Task::Root),
+            exchanges: restored_exchanges,
+        }
+    }
+
     pub(super) fn new_subtask(
         subtask: api::Task,
         parent_task: &api::Task,
@@ -475,6 +489,10 @@ impl Task {
                 .is_none_or(|deps| deps.parent_task_id.is_empty()),
             TaskImpl::Optimistic(task) => task.is_root(),
         }
+    }
+
+    pub(super) fn is_optimistic_root_task(&self) -> bool {
+        matches!(&self.data, TaskImpl::Optimistic(optimistic::Task::Root))
     }
 
     pub fn is_cli_subagent(&self) -> bool {

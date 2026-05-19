@@ -371,6 +371,7 @@ fn persisted_remote_child_conversation(
                 orchestration_harness_type: None,
                 parent_conversation_id: parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: true,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.to_string()),
                 autoexecute_override: None,
                 last_event_sequence: None,

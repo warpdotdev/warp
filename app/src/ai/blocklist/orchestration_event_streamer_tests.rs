@@ -1,12 +1,12 @@
 use super::*;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_events::{
-    agent_event_backoff, agent_event_failures_exceeded_threshold, AgentEventConsumerControlFlow,
-    DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+    AgentEventConsumerControlFlow, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+    agent_event_backoff, agent_event_failures_exceeded_threshold,
 };
 use crate::persistence::ModelEvent;
-use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 use std::sync::Arc;
@@ -152,6 +152,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
         last_event_sequence: Some(42),
@@ -243,8 +244,8 @@ fn make_server_metadata_with_harness(
 #[test]
 fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -303,8 +304,8 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
 #[test]
 fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warp_cli::agent::Harness;
     use warpui::App;
@@ -415,8 +416,8 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
 #[test]
 fn restored_conversations_skip_v2_streaming_when_orchestration_v2_disabled() {
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -518,8 +519,8 @@ async fn sse_forwarding_consumer_skips_message_hydration_when_disabled() {
 #[test]
 fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -578,8 +579,8 @@ fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
 fn handle_event_batch_persists_max_seq_to_history_model() {
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use crate::test_util::settings::initialize_settings_for_tests;
     use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
     use std::sync::Arc;
@@ -797,9 +798,10 @@ fn killed_run_ids_are_bounded() {
             assert_eq!(me.killed_run_ids.len(), MAX_KILLED_RUN_IDS);
             assert!(!me.killed_run_ids.contains("killed-run-0"));
             assert!(me.killed_run_ids.contains("killed-run-1"));
-            assert!(me
-                .killed_run_ids
-                .contains(&format!("killed-run-{MAX_KILLED_RUN_IDS}")));
+            assert!(
+                me.killed_run_ids
+                    .contains(&format!("killed-run-{MAX_KILLED_RUN_IDS}"))
+            );
         });
     });
 }
@@ -811,8 +813,8 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
     // uses the missing entry as a sentinel and must not re-populate
     // streamer state for the deleted conversation.
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -857,7 +859,7 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
                 task_id,
                 /* sqlite_cursor */ 0,
                 Ok(make_ambient_task_with_children(vec![
-                    "child-run-1".to_string()
+                    "child-run-1".to_string(),
                 ])),
                 ctx,
             );
@@ -880,8 +882,8 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
     // defeat the deletion sentinel inside the retry timer and cause an
     // indefinite retry loop).
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -945,8 +947,8 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
     // model after the removal, which always returned `None` because the
     // history model emits `RemoveConversation` after dropping the record.
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -1004,8 +1006,8 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
 #[test]
 fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tombstone() {
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -1055,8 +1057,8 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
     // before children are known, finish_restore_fetch must reconnect SSE
     // with the updated run_id set rather than leaving children unwatched.
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use std::sync::Arc;
     use warpui::App;
 
@@ -1120,7 +1122,7 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
                 task_id,
                 /* sqlite_cursor */ 0,
                 Ok(make_ambient_task_with_children(vec![
-                    "child-run-1".to_string()
+                    "child-run-1".to_string(),
                 ])),
                 ctx,
             );
@@ -1135,14 +1137,14 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
             );
             // The old generation-0 connection must have been replaced by a
             // new one with a higher generation, proving SSE was reconnected.
-            let gen = me
+            let generation = me
                 .streams
                 .get(&conversation_id)
                 .and_then(|s| s.sse_connection.as_ref())
                 .map(|c| c.generation);
             assert!(
-                gen.is_some_and(|g| g > 0),
-                "SSE must be reconnected (new generation) after children are discovered; got gen={gen:?}"
+                generation.is_some_and(|g| g > 0),
+                "SSE must be reconnected (new generation) after children are discovered; got generation={generation:?}"
             );
         });
     });

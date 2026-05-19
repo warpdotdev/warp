@@ -5,8 +5,8 @@ use persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 use warp_core::features::FeatureFlag;
@@ -18,9 +18,9 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
     ServerAIConversationMetadata,
 };
-use crate::ai::ambient_agents::task::{TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::AgentConfigSnapshot;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::{TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{
@@ -38,8 +38,8 @@ use super::entry::{
 use super::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
     AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata, ConversationUpdateKind,
-    EnvironmentFilter, HarnessFilter, OwnerFilter, StatusFilter, TaskFetchState,
-    MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
+    EnvironmentFilter, HarnessFilter, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS, OwnerFilter,
+    StatusFilter, TaskFetchState,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::workspace::WorkspaceAction;
@@ -259,6 +259,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -314,6 +315,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -376,6 +378,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -454,6 +457,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -508,6 +512,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -798,6 +803,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -851,6 +857,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -909,9 +916,11 @@ fn test_get_entries_keeps_unrelated_task_and_conversation_entries() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));
@@ -1019,6 +1028,7 @@ fn test_resolve_open_action_falls_back_to_local_conversation_for_invalid_session
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1309,6 +1319,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1468,6 +1479,7 @@ fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_tok
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1699,9 +1711,11 @@ fn test_environment_none_filter_includes_conversations() {
         app.update(|ctx| {
             let entries = model.get_entries(&filters, ctx);
 
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)));
+            assert!(
+                entries.iter().any(
+                    |entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)
+                )
+            );
             assert!(
                 entries
                     .iter()
@@ -1793,6 +1807,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1852,6 +1867,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1907,9 +1923,11 @@ fn test_get_entries_keeps_unrelated_tasks_and_conversations() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));
