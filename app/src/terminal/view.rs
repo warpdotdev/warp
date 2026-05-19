@@ -3870,7 +3870,7 @@ impl TerminalView {
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text("Seems like your completions are not working ("),
                 FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
-                FormattedTextFragment::plain_text("). Enabling tmux warpification in "),
+                FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
                 FormattedTextFragment::hyperlink_action(
                     "settings",
                     TerminalAction::ShowWarpifySettings,
@@ -8679,13 +8679,6 @@ impl TerminalView {
         // probably won't happen often, but it's something that we might want to clean
         // up eventually.
         if self.control_master_error_banner_state.associated_session_id != active_session_id {
-            self.control_master_error_banner_state = ControlMasterErrorBannerState {
-                is_open: true,
-                associated_session_id: active_session_id,
-            };
-
-            ctx.notify();
-
             let has_remote_server = active_session_id.is_some_and(|session_id| {
                 self.sessions
                     .as_ref(ctx)
@@ -8700,6 +8693,16 @@ impl TerminalView {
                         )
                     })
             });
+
+            // Don't show the banner when the session already has a remote server
+            // active — the CTA to enable the SSH extension is irrelevant.
+            self.control_master_error_banner_state = ControlMasterErrorBannerState {
+                is_open: !has_remote_server,
+                associated_session_id: active_session_id,
+            };
+
+            ctx.notify();
+
             send_telemetry_from_ctx!(
                 TelemetryEvent::SSHControlMasterError { has_remote_server },
                 ctx
