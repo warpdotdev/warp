@@ -1085,6 +1085,15 @@ impl EventLoop {
                 // that include the cmd key because they are assumed to be
                 // intended as OS-level or application-level shortcuts. This matches the behavior
                 // on macOS.)
+                //
+                // Ordering invariant (see issue #9418): each winit `KeyboardInput` is processed
+                // synchronously on the UI thread, in the same order winit delivered it. Both
+                // `dispatch_event` calls below are synchronous; any side effects they emit (e.g.
+                // `WriteBytesToPty`) are appended to `pending_effects` and flushed in FIFO order.
+                // Downstream, the PTY event loop's mio channel and `State::write_list` (a
+                // `VecDeque`) also preserve order. Do NOT introduce any background-thread hop,
+                // batching, or coalescing for printable characters here without an equivalent
+                // ordering guarantee.
                 let cmd_pressed = match &event {
                     crate::event::Event::KeyDown { keystroke, .. } => keystroke.cmd,
                     _ => false,
