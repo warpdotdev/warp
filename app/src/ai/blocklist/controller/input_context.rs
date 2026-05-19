@@ -73,7 +73,7 @@ pub(super) fn input_context_for_request(
     {
         let session_context = SessionContext::from_session(active_session, app);
         if session_context.is_remote() {
-            add_remote_codebase_context(&mut context, app);
+            add_remote_codebase_context(&mut context, &session_context, app);
         } else {
             add_local_codebase_context(&mut context, app);
         }
@@ -118,8 +118,15 @@ fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContex
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
-    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context() {
+fn add_remote_codebase_context(
+    context: &mut Vec<AIAgentContext>,
+    session_context: &SessionContext,
+    app: &AppContext,
+) {
+    let Some(host_id) = session_context.host_id() else {
+        return;
+    };
+    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context(host_id) {
         context.push(AIAgentContext::Codebase {
             name: codebase.name,
             path: codebase.path,
@@ -128,7 +135,12 @@ fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppConte
 }
 
 #[cfg(target_family = "wasm")]
-fn add_remote_codebase_context(_context: &mut Vec<AIAgentContext>, _app: &AppContext) {}
+fn add_remote_codebase_context(
+    _context: &mut Vec<AIAgentContext>,
+    _session_context: &SessionContext,
+    _app: &AppContext,
+) {
+}
 
 /// Parses context reference strings like <block:123> from the user query and returns
 /// a map of reference strings to AIAgentAttachment objects.
