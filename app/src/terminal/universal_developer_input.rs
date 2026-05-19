@@ -135,23 +135,38 @@ impl AtContextMenuDisabledReason {
         ctx: &AppContext,
     ) -> Option<AtContextMenuDisabledReason> {
         // Derive session information from block metadata and sessions
-        let (is_ssh_without_remote_server, is_subshell) = active_block_metadata
-            .and_then(|metadata| metadata.session_id())
-            .and_then(|session_id| sessions.get(session_id))
+        let session_id = active_block_metadata.and_then(|metadata| metadata.session_id());
+        let session = session_id.and_then(|sid| sessions.get(sid));
+
+        let (is_ssh_without_remote_server, is_subshell) = session
+            .as_ref()
             .map(|session| {
+                let session_type = session.session_type();
+                let is_legacy_ssh = session.is_legacy_ssh_session();
+                let is_warpified_no_host = matches!(
+                    session_type,
+                    SessionType::WarpifiedRemote { host_id: None }
+                );
                 // The @ menu requires repo metadata which is only available for:
                 // - Local sessions
                 // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
                 // Block legacy SSH and WarpifiedRemote sessions still connecting (host_id is None).
-                let is_ssh_without_remote_server = session.is_legacy_ssh_session()
-                    || matches!(
-                        session.session_type(),
-                        SessionType::WarpifiedRemote { host_id: None }
-                    );
+                let is_ssh_without_remote_server = is_legacy_ssh || is_warpified_no_host;
                 let is_subshell = session.subshell_info().is_some();
+                log::info!(
+                    "[at-context-debug] session_type={:?} is_legacy_ssh={} is_warpified_no_host={} is_ssh_without_remote_server={} is_subshell={}",
+                    session_type, is_legacy_ssh, is_warpified_no_host, is_ssh_without_remote_server, is_subshell
+                );
                 (is_ssh_without_remote_server, is_subshell)
             })
-            .unwrap_or((false, false));
+            .unwrap_or_else(|| {
+                log::info!(
+                    "[at-context-debug] no session found (session_id={:?}, has_block_metadata={})",
+                    session_id,
+                    active_block_metadata.is_some()
+                );
+                (false, false)
+            });
 
         // Only check the setting if we're in shell mode
         if input_config.input_type == InputType::Shell
@@ -159,13 +174,16 @@ impl AtContextMenuDisabledReason {
                 .at_context_menu_in_terminal_mode
                 .value()
         {
+            log::info!("[at-context-debug] DISABLED: DisabledInTerminalMode (input_type=Shell, at_context_menu_in_terminal_mode=false)");
             return Some(AtContextMenuDisabledReason::DisabledInTerminalMode);
         }
 
         if is_ssh_without_remote_server {
+            log::info!("[at-context-debug] DISABLED: SshWithoutRemoteServer");
             return Some(AtContextMenuDisabledReason::SshWithoutRemoteServer);
         }
         if is_subshell {
+            log::info!("[at-context-debug] DISABLED: Subshell");
             return Some(AtContextMenuDisabledReason::Subshell);
         }
 
@@ -175,18 +193,25 @@ impl AtContextMenuDisabledReason {
 
         // This condition kicks in if we're locked in shell mode and not in a git repository, so we have
         // no categories available.
-        if AIContextMenu::get_categories_for_mode(
+        let categories = AIContextMenu::get_categories_for_mode(
             input_config.input_type.is_ai() || !input_config.is_locked,
             false,
             false, /* is_in_ambient_agent */
             false, /* is_cli_agent_input */
             ctx,
-        )
-        .is_empty()
-        {
+        );
+        if categories.is_empty() {
+            log::info!(
+                "[at-context-debug] DISABLED: NoObjectsAvailable (input_type={:?}, is_locked={})",
+                input_config.input_type, input_config.is_locked
+            );
             return Some(AtContextMenuDisabledReason::NoObjectsAvailable);
         }
 
+        log::info!(
+            "[at-context-debug] ENABLED: no disable reason found (categories_count={})",
+            categories.len()
+        );
         None
     }
 }
