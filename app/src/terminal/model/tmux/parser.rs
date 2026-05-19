@@ -295,6 +295,25 @@ impl TmuxControlModeParser {
                             output_lines: Err(std::mem::take(lines)),
                         });
                         self.state = ParserState::BeginningOfLine;
+                    } else if looks_like_ssh_disconnect_diagnostic(current_line) {
+                        // Issue #9900: if the SSH transport dies after `%begin`
+                        // but before `%end` arrives, this state would otherwise
+                        // swallow every subsequent byte (local zsh's prompt,
+                        // queued wrapper fragments, etc.) as command-output
+                        // content forever. OpenSSH's standard disconnect
+                        // diagnostics are highly recognizable, so seeing one of
+                        // them inside a `%begin/%end` block is a strong
+                        // signal that the multiplexed transport is gone and
+                        // the rest of this stream is local shell bytes, not
+                        // tmux output. Treat as a parse error so the existing
+                        // recovery path tears down control mode and
+                        // re-renders to the user.
+                        report_parse_error(
+                            handler,
+                            "SSH transport disconnect detected inside %begin/%end",
+                            b'\n',
+                        );
+                        self.state = ParserState::Error;
                     } else {
                         // Command output still ongoing -- append to list of lines.
                         lines.push(std::mem::take(current_line));
@@ -458,6 +477,41 @@ impl Default for TmuxControlModeParser {
 
 fn report_parse_error(handler: &mut impl TmuxControlModeHandler, message: &'static str, byte: u8) {
     handler.tmux_control_mode_message(TmuxMessage::ParseError { message, byte })
+}
+
+/// Returns `true` if `line` looks like one of OpenSSH's standard disconnect
+/// diagnostics. Used inside `ReadingCommandOutput` to detect that the
+/// multiplexed SSH transport has died mid-command, so we can break out of
+/// the begin/end block instead of buffering every subsequent byte forever.
+///
+/// We deliberately stick to needles that are emitted by OpenSSH itself (not
+/// translatable, present across versions):
+/// - `client_loop: send disconnect`     -- OpenSSH client's `client_loop`
+/// - `packet_write_wait`                -- OpenSSH stderr on write-side EPIPE
+/// - `ssh_exchange_identification`      -- handshake failed at version-string exchange
+/// - `kex_exchange_identification`      -- modern variant of the above for key exchange
+/// - `Read from remote host`            -- OpenSSH stderr on read error
+/// - `Connection to ` ... ` closed`     -- OpenSSH's final "Connection to <host> closed." line (both substrings must appear on the same line)
+///
+/// Plain `Broken pipe` is intentionally NOT included because that text is
+/// produced by many unrelated tools and would risk false positives. The
+/// needles above are specific enough that they should not occur in a
+/// legitimate tmux command response.
+fn looks_like_ssh_disconnect_diagnostic(line: &[u8]) -> bool {
+    const NEEDLES: &[&[u8]] = &[
+        b"client_loop: send disconnect",
+        b"packet_write_wait",
+        b"ssh_exchange_identification",
+        b"kex_exchange_identification",
+        b"Read from remote host",
+    ];
+    for needle in NEEDLES {
+        if memchr::memmem::find(line, needle).is_some() {
+            return true;
+        }
+    }
+    memchr::memmem::find(line, b"Connection to ").is_some()
+        && memchr::memmem::find(line, b" closed").is_some()
 }
 
 #[cfg(test)]
