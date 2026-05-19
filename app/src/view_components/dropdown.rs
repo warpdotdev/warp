@@ -477,6 +477,8 @@ where
     }
 
     fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
+        self.selected_item = self.selected_item(ctx);
+        ctx.notify();
         ctx.dispatch_typed_action(action);
         self.close(ctx);
     }
