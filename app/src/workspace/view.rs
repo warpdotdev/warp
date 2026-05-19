@@ -379,6 +379,7 @@ use crate::view_components::callout_bubble::{
 };
 use crate::view_components::{
     AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
+    DISMISSIBLE_TOAST_WIDTH,
 };
 use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
 use crate::workflows::{
@@ -405,12 +406,14 @@ use futures::Future;
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
+use qrcode::{types::Color as QrColor, QrCode};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
 use session_sharing_protocol::common::SessionId as SharedSessionId;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "local_fs")]
 use std::convert::TryFrom;
+use std::io::Cursor as IoCursor;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -422,6 +425,7 @@ use warpui::fonts::Weight;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
 use warp_core::user_preferences::GetUserPreferences as _;
+use warpui::assets::asset_cache::AssetCache;
 use warpui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
@@ -429,6 +433,7 @@ use warpui::elements::{
     CacheOption, DispatchEventResult, DraggableState, DropTarget, EventHandler, Image,
     MouseInBehavior, Rect,
 };
+use warpui::image_cache::ImageType;
 use warpui::ui_components::button::{Button, ButtonVariant};
 use warpui::windowing::{state::ApplicationStage, StateEvent, WindowManager};
 use warpui::{elements::MouseStateHandle, fonts::Properties};
@@ -619,6 +624,51 @@ const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT: f32 = 32.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
+
+const QR_CODE_QUIET_ZONE_MODULES: usize = 4;
+
+fn render_remote_control_qr_code_png(shared_session_link: &str) -> Option<Vec<u8>> {
+    let code = QrCode::new(shared_session_link.as_bytes()).ok()?;
+    let image_size = DISMISSIBLE_TOAST_WIDTH.round() as u32;
+    let module_count = code.width();
+    let modules_with_quiet_zone = module_count + (QR_CODE_QUIET_ZONE_MODULES * 2);
+    let pixels_per_module = ((image_size as usize) / modules_with_quiet_zone).max(1);
+    let qr_size = modules_with_quiet_zone * pixels_per_module;
+    let quiet_zone_offset = ((image_size as usize).saturating_sub(qr_size)) / 2;
+
+    let mut image =
+        image::RgbaImage::from_pixel(image_size, image_size, image::Rgba([255, 255, 255, 255]));
+    let dark_module = image::Rgba([0, 0, 0, 255]);
+
+    for y in 0..module_count {
+        for x in 0..module_count {
+            if code[(x, y)] != QrColor::Dark {
+                continue;
+            }
+
+            let start_x =
+                quiet_zone_offset + ((x + QR_CODE_QUIET_ZONE_MODULES) * pixels_per_module);
+            let start_y =
+                quiet_zone_offset + ((y + QR_CODE_QUIET_ZONE_MODULES) * pixels_per_module);
+            let end_x = (start_x + pixels_per_module).min(image_size as usize);
+            let end_y = (start_y + pixels_per_module).min(image_size as usize);
+
+            for pixel_y in start_y..end_y {
+                for pixel_x in start_x..end_x {
+                    image.put_pixel(pixel_x as u32, pixel_y as u32, dark_module);
+                }
+            }
+        }
+    }
+
+    let mut png_bytes = Vec::new();
+    let mut cursor = IoCursor::new(&mut png_bytes);
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .ok()?;
+
+    Some(png_bytes)
+}
 const NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING: f32 = 6.;
 const NEW_SESSION_SIDECAR_FOOTER_HORIZONTAL_PADDING: f32 = 16.;
 const NEW_SESSION_SIDECAR_FOOTER_VERTICAL_PADDING: f32 = 8.;
@@ -4283,14 +4333,38 @@ impl Workspace {
         session_id: &SharedSessionId,
         ctx: &mut ViewContext<Self>,
     ) {
-        ctx.clipboard().write(ClipboardContent::plain_text(
-            terminal::shared_session::join_link(session_id),
-        ));
+        let shared_session_link = terminal::shared_session::join_link(session_id);
+        ctx.clipboard()
+            .write(ClipboardContent::plain_text(shared_session_link.clone()));
+
+        let qr_code_asset_id =
+            Self::insert_remote_control_qr_code(&shared_session_link, session_id, ctx);
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string());
+            let mut toast = DismissibleToast::default("Remote control link copied.".to_string());
+            if let Some(qr_code_asset_id) = qr_code_asset_id {
+                toast = toast.with_qr_code_asset_id(qr_code_asset_id);
+            }
             toast_stack.add_ephemeral_toast(toast, ctx);
         });
+    }
+
+    fn insert_remote_control_qr_code(
+        shared_session_link: &str,
+        session_id: &SharedSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<String> {
+        let asset_id = format!("remote-control-link-qr-{session_id}");
+        let Some(qr_code_png) = render_remote_control_qr_code_png(shared_session_link) else {
+            log::warn!("Failed to generate remote control QR code");
+            return None;
+        };
+
+        AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+            asset_cache.insert_raw_asset_bytes::<ImageType>(asset_id.clone(), &qr_code_png, ctx);
+        });
+
+        Some(asset_id)
     }
 
     // Returns true if the focused pane is the viewer of a shared session
