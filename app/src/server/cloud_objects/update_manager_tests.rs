@@ -261,12 +261,12 @@ fn create_workflow_enum_internal(
 }
 
 fn mock_server_workflow(id: WorkflowId, owner: Owner, metadata: ServerMetadata) -> ServerWorkflow {
-    ServerWorkflow {
-        id: SyncId::ServerId(id.into()),
+    ServerWorkflow::new(
+        SyncId::ServerId(id.into()),
+        CloudWorkflowModel::new(Workflow::new(format!("w{id}"), format!("c{id}"))),
         metadata,
-        permissions: mock_server_permissions(owner),
-        model: CloudWorkflowModel::new(Workflow::new(format!("w{id}"), format!("c{id}"))),
-    }
+        mock_server_permissions(owner),
+    )
 }
 
 fn mock_server_workflow_with_enum(
@@ -275,11 +275,9 @@ fn mock_server_workflow_with_enum(
     owner: Owner,
     metadata: ServerMetadata,
 ) -> (ServerWorkflow, ServerWorkflowEnum) {
-    let workflow = ServerWorkflow {
-        id: SyncId::ServerId(id.into()),
-        metadata: metadata.clone(),
-        permissions: mock_server_permissions(owner),
-        model: CloudWorkflowModel::new(
+    let workflow = ServerWorkflow::new(
+        SyncId::ServerId(id.into()),
+        CloudWorkflowModel::new(
             Workflow::new(format!("w{id}"), format!("c{id}")).with_arguments(vec![Argument {
                 name: format!("e{enum_id}"),
                 default_value: None,
@@ -289,47 +287,49 @@ fn mock_server_workflow_with_enum(
                 },
             }]),
         ),
-    };
+        metadata.clone(),
+        mock_server_permissions(owner),
+    );
 
-    let workflow_enum = ServerWorkflowEnum {
-        id: SyncId::ServerId(enum_id.into()),
-        metadata,
-        permissions: mock_server_permissions(owner),
-        model: CloudWorkflowEnumModel::new(WorkflowEnum {
+    let workflow_enum = ServerWorkflowEnum::new(
+        SyncId::ServerId(enum_id.into()),
+        CloudWorkflowEnumModel::new(WorkflowEnum {
             name: format!("e{id}"),
             is_shared: false,
             variants: EnumVariants::Static(vec!["v1".to_string(), "v2".to_string()]),
         }),
-    };
+        metadata,
+        mock_server_permissions(owner),
+    );
 
     (workflow, workflow_enum)
 }
 
 fn mock_server_notebook(id: NotebookId, owner: Owner, metadata: ServerMetadata) -> ServerNotebook {
-    ServerNotebook {
-        id: SyncId::ServerId(id.into()),
-        metadata,
-        permissions: mock_server_permissions(owner),
-        model: CloudNotebookModel {
+    ServerNotebook::new(
+        SyncId::ServerId(id.into()),
+        CloudNotebookModel {
             title: format!("n{id}"),
             data: format!("n{id}"),
             ai_document_id: None,
             conversation_id: None,
         },
-    }
+        metadata,
+        mock_server_permissions(owner),
+    )
 }
 
 fn mock_server_folder(id: FolderId, owner: Owner, metadata: ServerMetadata) -> ServerFolder {
-    ServerFolder {
-        id: SyncId::ServerId(id.into()),
-        metadata,
-        permissions: mock_server_permissions(owner),
-        model: CloudFolderModel {
+    ServerFolder::new(
+        SyncId::ServerId(id.into()),
+        CloudFolderModel {
             name: format!("f{id}"),
             is_open: false,
             is_warp_pack: false,
         },
-    }
+        metadata,
+        mock_server_permissions(owner),
+    )
 }
 
 fn update_notebook(
@@ -603,10 +603,10 @@ fn mock_fetch_single_cloud_object(
         .times(1)
         .return_once(move |_| {
             Ok(GetCloudObjectResponse {
-                object: ServerCloudObject::Workflow(Box::new(ServerWorkflow {
-                    id: SyncId::ServerId(workflow_id.into()),
-                    model: CloudWorkflowModel::new(Workflow::new("server workflow", "echo server")),
-                    metadata: ServerMetadata {
+                object: ServerCloudObject::Workflow(Box::new(ServerWorkflow::new(
+                    SyncId::ServerId(workflow_id.into()),
+                    CloudWorkflowModel::new(Workflow::new("server workflow", "echo server")),
+                    ServerMetadata {
                         uid: server_id,
                         revision: Revision::now(),
                         metadata_last_updated_ts: Utc::now().into(),
@@ -617,13 +617,13 @@ fn mock_fetch_single_cloud_object(
                         last_editor_uid: None,
                         current_editor_uid: None,
                     },
-                    permissions: ServerPermissions {
+                    ServerPermissions {
                         space: Owner::mock_current_user(),
                         guests: Vec::new(),
                         anyone_link_sharing: None,
                         permissions_last_updated_ts: Utc::now().into(),
                     },
-                })),
+                ))),
                 descendants: vec![],
                 action_histories: vec![ObjectActionHistory {
                     uid: server_id.uid(),
@@ -2673,9 +2673,9 @@ fn test_pending_metadata_update_with_polling() {
         > = HashMap::new();
         updated_generic_string_objects.insert(
             GenericStringObjectFormat::Json(JsonObjectType::Preference),
-            vec![Box::new(ServerPreference {
-                id: SyncId::ServerId(generic_object_server_id),
-                model: CloudPreferenceModel::new(
+            vec![Box::new(ServerPreference::new(
+                SyncId::ServerId(generic_object_server_id),
+                CloudPreferenceModel::new(
                     Preference::new(
                         "test_storage_key".to_string(),
                         "{\"test_key\": \"test_value\"}",
@@ -2683,23 +2683,23 @@ fn test_pending_metadata_update_with_polling() {
                     )
                     .expect("error creating preference"),
                 ),
-                metadata: mocked_metadata.clone(),
-                permissions: mock_server_permissions(Owner::mock_current_user()),
-            })],
+                mocked_metadata.clone(),
+                mock_server_permissions(Owner::mock_current_user()),
+            ))],
         );
 
         let mocked_response = InitialLoadResponse {
-            updated_notebooks: vec![ServerNotebook {
-                id: SyncId::ServerId(notebood_server_id),
-                model: CloudNotebookModel {
+            updated_notebooks: vec![ServerNotebook::new(
+                SyncId::ServerId(notebood_server_id),
+                CloudNotebookModel {
                     title: "".into(),
                     data: "".into(),
                     ai_document_id: None,
                     conversation_id: None,
                 },
-                metadata: mocked_metadata.clone(),
-                permissions: mock_server_permissions(Owner::mock_current_user()),
-            }],
+                mocked_metadata.clone(),
+                mock_server_permissions(Owner::mock_current_user()),
+            )],
             deleted_notebooks: vec![],
             updated_workflows: vec![],
             deleted_workflows: vec![],
@@ -2806,17 +2806,17 @@ fn test_metadata_update_with_polling_no_pending() {
             current_editor_uid: Some("ian@warp.dev".to_string()),
         };
         let mocked_response = InitialLoadResponse {
-            updated_notebooks: vec![ServerNotebook {
-                id: SyncId::ServerId(server_id),
-                model: CloudNotebookModel {
+            updated_notebooks: vec![ServerNotebook::new(
+                SyncId::ServerId(server_id),
+                CloudNotebookModel {
                     title: "".into(),
                     data: "".into(),
                     ai_document_id: None,
                     conversation_id: None,
                 },
-                metadata: mocked_metadata.clone(),
-                permissions: mock_server_permissions(Owner::mock_current_user()),
-            }],
+                mocked_metadata.clone(),
+                mock_server_permissions(Owner::mock_current_user()),
+            )],
             deleted_notebooks: vec![],
             updated_workflows: vec![],
             deleted_workflows: vec![],
@@ -4107,17 +4107,17 @@ fn test_accepts_new_metadata_with_force_refresh() {
             current_editor_uid: None,
         };
         let mocked_response = InitialLoadResponse {
-            updated_notebooks: vec![ServerNotebook {
-                id: SyncId::ServerId(server_id),
-                model: CloudNotebookModel {
+            updated_notebooks: vec![ServerNotebook::new(
+                SyncId::ServerId(server_id),
+                CloudNotebookModel {
                     title: "".into(),
                     data: "".into(),
                     ai_document_id: None,
                     conversation_id: None,
                 },
-                metadata: mocked_metadata.clone(),
-                permissions: mock_server_permissions(Owner::mock_current_user()),
-            }],
+                mocked_metadata.clone(),
+                mock_server_permissions(Owner::mock_current_user()),
+            )],
             deleted_notebooks: vec![],
             updated_workflows: vec![],
             deleted_workflows: vec![],

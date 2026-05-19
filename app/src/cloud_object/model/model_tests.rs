@@ -173,14 +173,16 @@ fn mock_server_workflows(
     number_of_workflows: i64,
 ) -> Vec<ServerWorkflow> {
     (0..number_of_workflows)
-        .map(|idx| ServerWorkflow {
-            id: SyncId::ServerId((start_id + idx).into()),
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-            model: CloudWorkflowModel::new(Workflow::new(
-                format!("w{}", start_id + idx),
-                format!("c{}", start_id + idx),
-            )),
+        .map(|idx| {
+            ServerWorkflow::new(
+                SyncId::ServerId((start_id + idx).into()),
+                CloudWorkflowModel::new(Workflow::new(
+                    format!("w{}", start_id + idx),
+                    format!("c{}", start_id + idx),
+                )),
+                mock_server_metadata(),
+                mock_server_permissions(owner),
+            )
         })
         .collect()
 }
@@ -194,11 +196,13 @@ fn mock_random_folders(start_id: i64, owner: Owner) -> Vec<ServerFolder> {
 
 fn mock_server_folders(start_id: i64, owner: Owner, number_of_folders: i64) -> Vec<ServerFolder> {
     (0..number_of_folders)
-        .map(|idx| ServerFolder {
-            id: SyncId::ServerId((start_id + idx).into()),
-            model: CloudFolderModel::new(&format!("f{}", start_id + idx), false),
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
+        .map(|idx| {
+            ServerFolder::new(
+                SyncId::ServerId((start_id + idx).into()),
+                CloudFolderModel::new(&format!("f{}", start_id + idx), false),
+                mock_server_metadata(),
+                mock_server_permissions(owner),
+            )
         })
         .collect()
 }
@@ -206,50 +210,50 @@ fn mock_server_folders(start_id: i64, owner: Owner, number_of_folders: i64) -> V
 fn mock_server_notebooks() -> Vec<ServerNotebook> {
     let owner = Owner::mock_current_user();
     vec![
-        ServerNotebook {
-            id: SyncId::ServerId(1.into()),
-            model: CloudNotebookModel {
+        ServerNotebook::new(
+            SyncId::ServerId(1.into()),
+            CloudNotebookModel {
                 title: "t1".to_string(),
                 data: "d1".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(2.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(2.into()),
+            CloudNotebookModel {
                 title: "t2".to_string(),
                 data: "d2".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(3.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(3.into()),
+            CloudNotebookModel {
                 title: "t3".to_string(),
                 data: "d3".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(4.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(4.into()),
+            CloudNotebookModel {
                 title: "t4".to_string(),
                 data: "d4".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
     ]
 }
 
@@ -1335,15 +1339,15 @@ fn test_update_folder_timestamp_from_child_update() {
         let new_ts = initial_ts + chrono::Duration::seconds(5);
         receive_rtc_update(
             ObjectUpdateMessage::ObjectContentChanged {
-                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook {
-                    id: SyncId::ServerId(notebook_id),
-                    model: CloudNotebookModel {
+                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook::new(
+                    SyncId::ServerId(notebook_id),
+                    CloudNotebookModel {
                         title: "Test Notebook".to_string(),
                         data: "test2".into(),
                         ai_document_id: None,
                         conversation_id: None,
                     },
-                    metadata: ServerMetadata {
+                    ServerMetadata {
                         uid: notebook_id,
                         revision: new_ts.into(),
                         metadata_last_updated_ts: new_ts.into(),
@@ -1354,8 +1358,8 @@ fn test_update_folder_timestamp_from_child_update() {
                         last_editor_uid: None,
                         current_editor_uid: None,
                     },
-                    permissions: mock_server_permissions(Owner::mock_current_user()),
-                })),
+                    mock_server_permissions(Owner::mock_current_user()),
+                ))),
                 last_editor: None,
             },
             &mut app,
@@ -1466,15 +1470,15 @@ fn test_update_folder_timestamp_from_new_child() {
         // Create a notebook inside the folder.
         receive_rtc_update(
             ObjectUpdateMessage::ObjectContentChanged {
-                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook {
-                    id: SyncId::ServerId(notebook_id),
-                    model: CloudNotebookModel {
+                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook::new(
+                    SyncId::ServerId(notebook_id),
+                    CloudNotebookModel {
                         title: "Test Notebook".to_string(),
                         data: "test".to_string(),
                         ai_document_id: None,
                         conversation_id: None,
                     },
-                    metadata: ServerMetadata {
+                    ServerMetadata {
                         uid: notebook_id,
                         revision: t2.into(),
                         metadata_last_updated_ts: t2.into(),
@@ -1485,8 +1489,8 @@ fn test_update_folder_timestamp_from_new_child() {
                         last_editor_uid: None,
                         current_editor_uid: None,
                     },
-                    permissions: mock_server_permissions(Owner::mock_current_user()),
-                })),
+                    mock_server_permissions(Owner::mock_current_user()),
+                ))),
                 last_editor: None,
             },
             &mut app,

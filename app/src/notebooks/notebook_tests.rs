@@ -162,15 +162,15 @@ fn cloud_notebook(title: impl Into<String>, data: impl Into<String>) -> CloudNot
 /// Mock a server notebook
 fn mock_server_notebook(title: impl Into<String>, data: impl Into<String>) -> ServerNotebook {
     let metadata_ts = Utc::now().into();
-    ServerNotebook {
-        id: ServerId(123.into()),
-        model: CloudNotebookModel {
+    ServerNotebook::new(
+        ServerId(123.into()),
+        CloudNotebookModel {
             title: title.into(),
             data: data.into(),
             ai_document_id: None,
             conversation_id: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             uid: 123.into(),
             revision: Revision::now(),
             metadata_last_updated_ts: metadata_ts,
@@ -181,13 +181,13 @@ fn mock_server_notebook(title: impl Into<String>, data: impl Into<String>) -> Se
             last_editor_uid: None,
             current_editor_uid: None,
         },
-        permissions: ServerPermissions {
+        ServerPermissions {
             space: Owner::mock_current_user(),
             guests: Vec::new(),
             anyone_link_sharing: None,
             permissions_last_updated_ts: metadata_ts,
         },
-    }
+    )
 }
 
 /// Send changed objects to [`UpdateManager`] so that tests requiring "up-to-date" metadata can run.

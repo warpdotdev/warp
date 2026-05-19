@@ -29,9 +29,15 @@ use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 
 fn mock_server_notebook_with_revision(id: i64, title: &str, revision: Revision) -> ServerNotebook {
-    ServerNotebook {
-        id: SyncId::ServerId(id.into()),
-        metadata: ServerMetadata {
+    ServerNotebook::new(
+        SyncId::ServerId(id.into()),
+        CloudNotebookModel {
+            title: title.to_string(),
+            data: format!("{title} content"),
+            ai_document_id: None,
+            conversation_id: None,
+        },
+        ServerMetadata {
             uid: ServerId::default(),
             revision,
             metadata_last_updated_ts: Utc::now().into(),
@@ -42,19 +48,13 @@ fn mock_server_notebook_with_revision(id: i64, title: &str, revision: Revision) 
             last_editor_uid: None,
             current_editor_uid: None,
         },
-        permissions: ServerPermissions {
+        ServerPermissions {
             space: Owner::mock_current_user(),
             guests: Vec::new(),
             anyone_link_sharing: None,
             permissions_last_updated_ts: Utc::now().into(),
         },
-        model: CloudNotebookModel {
-            title: title.to_string(),
-            data: format!("{title} content"),
-            ai_document_id: None,
-            conversation_id: None,
-        },
-    }
+    )
 }
 
 fn initialize_app(app: &mut App) {

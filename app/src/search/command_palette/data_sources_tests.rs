@@ -64,26 +64,26 @@ fn mock_server_permissions(owner: Owner) -> ServerPermissions {
 }
 
 fn mock_server_workflow(id: WorkflowId, owner: Owner) -> ServerWorkflow {
-    ServerWorkflow {
-        id: SyncId::ServerId(id.into()),
-        metadata: mock_server_metadata(),
-        permissions: mock_server_permissions(owner),
-        model: CloudWorkflowModel::new(Workflow::new(format!("foo{id}"), format!("bar{id}"))),
-    }
+    ServerWorkflow::new(
+        SyncId::ServerId(id.into()),
+        CloudWorkflowModel::new(Workflow::new(format!("foo{id}"), format!("bar{id}"))),
+        mock_server_metadata(),
+        mock_server_permissions(owner),
+    )
 }
 
 fn mock_server_notebook(id: NotebookId, owner: Owner) -> ServerNotebook {
-    ServerNotebook {
-        id: SyncId::ServerId(id.into()),
-        metadata: mock_server_metadata(),
-        permissions: mock_server_permissions(owner),
-        model: CloudNotebookModel {
+    ServerNotebook::new(
+        SyncId::ServerId(id.into()),
+        CloudNotebookModel {
             title: format!("foo{id}"),
             data: format!("bar{id}"),
             ai_document_id: None,
             conversation_id: None,
         },
-    }
+        mock_server_metadata(),
+        mock_server_permissions(owner),
+    )
 }
 
 fn initialize_app(app: &mut App) {
