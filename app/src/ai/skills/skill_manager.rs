@@ -387,37 +387,66 @@ impl SkillManager {
     }
 
     fn handle_path_deleted(&mut self, path: &Path) {
+        let mut touched_names = HashSet::new();
         // Delete all skills that are affected by this deleted path
         for (dir, skill_paths) in &self.directory_skills.clone() {
             if dir.starts_with(path) {
                 // Delete this entire entry and remove all skill_paths under this directory from cache
                 for skill_path in skill_paths {
-                    let skill = self.skills_by_path.remove(skill_path);
-                    if let Some(skill) = skill {
-                        self.skills_by_name
-                            .entry(skill.name.clone())
-                            .or_default()
-                            .remove(skill_path);
+                    if let Some(name) = self.remove_skill_path_from_indexes(skill_path) {
+                        touched_names.insert(name);
                     }
                 }
-                self.directory_skills.remove(dir);
             } else if path.starts_with(dir) {
                 // Remove all skills under this directory that is a child of the deleted path
                 for skill_path in skill_paths {
                     if skill_path.starts_with(path) {
-                        let skill = self.skills_by_path.remove(skill_path);
-                        if let Some(skill) = skill {
-                            self.skills_by_name
-                                .entry(skill.name.clone())
-                                .or_default()
-                                .remove(skill_path);
+                        if let Some(name) = self.remove_skill_path_from_indexes(skill_path) {
+                            touched_names.insert(name);
                         }
-                        self.directory_skills
-                            .entry(dir.clone())
-                            .or_default()
-                            .remove(skill_path);
                     }
                 }
+            }
+        }
+
+        // Skills can be reachable through multiple provider paths that resolve to the
+        // same file. Until the storage model deduplicates those at write time, deleting
+        // one path can leave same-name sibling paths whose files are also gone.
+        self.prune_stale_skill_paths_for_names(&touched_names);
+    }
+
+    fn remove_skill_path_from_indexes(&mut self, skill_path: &Path) -> Option<String> {
+        self.directory_skills.retain(|_, skill_paths| {
+            skill_paths.remove(skill_path);
+            !skill_paths.is_empty()
+        });
+
+        let skill = self.skills_by_path.remove(skill_path)?;
+        let remove_name_entry = if let Some(paths) = self.skills_by_name.get_mut(&skill.name) {
+            paths.remove(skill_path);
+            paths.is_empty()
+        } else {
+            false
+        };
+        if remove_name_entry {
+            self.skills_by_name.remove(&skill.name);
+        }
+        Some(skill.name)
+    }
+
+    fn prune_stale_skill_paths_for_names(&mut self, names: &HashSet<String>) {
+        for name in names {
+            let stale_paths: Vec<PathBuf> = self
+                .skills_by_name
+                .get(name)
+                .into_iter()
+                .flat_map(|paths| paths.iter())
+                .filter(|path| !path.exists())
+                .cloned()
+                .collect();
+
+            for stale_path in stale_paths {
+                self.remove_skill_path_from_indexes(&stale_path);
             }
         }
     }

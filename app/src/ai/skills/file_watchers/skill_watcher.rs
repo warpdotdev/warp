@@ -27,7 +27,7 @@ use chrono::{DateTime, Duration, Utc};
 use repo_metadata::{
     repositories::DetectedRepositories,
     repository::{Repository, SubscriberId},
-    DirectoryWatcher, RepoMetadataModel, RepositoryUpdate,
+    DirectoryWatcher, RepoMetadataModel, RepositoryUpdate, TargetFile,
 };
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -56,11 +56,29 @@ pub struct SkillWatcher {
     /// Tracks watchers on home provider directories (e.g. ~/.agents, ~/.claude) so they
     /// can be cleaned up when the directory is deleted.
     home_provider_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
+    /// Canonical (symlink-resolved) provider directory → originals (user-facing).
+    ///
+    /// Invariant: after translation at the entry of `handle_repository_update`,
+    /// downstream code sees only *original* paths, matching `home_skills_path()`.
+    /// Watches register via `from_local_canonicalized`, so kernel/FSEvents emit
+    /// canonical paths; downstream filters (`is_skill_file`,
+    /// `is_home_skill_directory`) compare against the un-canonicalized form.
+    ///
+    /// Originals are kept because provider identity lives in the symlink prefix:
+    /// `~/.agents` and `~/.claude` may both resolve to the same canonical
+    /// directory but are different `SkillProvider`s. The set holds multiple
+    /// originals when providers share a target; events fan out to each.
+    ///
+    /// Mirrors `symlink_canonical_to_originals` at the skill-file layer.
+    /// Refs warpdotdev/warp#8897.
+    home_provider_canonical_to_originals: HashMap<PathBuf, HashSet<PathBuf>>,
     /// Maps canonical (resolved) SKILL.md paths → set of original symlink-based paths.
     /// Multiple symlinks can resolve to the same canonical file, so we track all of them.
     /// Used to detect changes to the real files behind symlinked skill directories
     /// on platforms where the OS-level watcher (e.g. FSEvents on macOS) does not
     /// follow symlinks.
+    ///
+    /// See also `home_provider_canonical_to_originals` at the provider-parent layer.
     symlink_canonical_to_originals: HashMap<PathBuf, HashSet<PathBuf>>,
     /// Watchers for resolved symlink target directories, keyed by canonical
     /// parent directory. Used both as a dedup guard (skip if already watching)
@@ -137,6 +155,8 @@ impl SkillWatcher {
         // Note: This will not create watchers for provider directories that haven't been created yet.
         // We use a separate HomeDirectoryWatcher to detect when those are created and start watching them after they are created.
         let mut home_provider_watchers = HashMap::new();
+        let mut home_provider_canonical_to_originals: HashMap<PathBuf, HashSet<PathBuf>> =
+            HashMap::new();
         if let Some(home_path) = home_dir {
             Self::spawn_read_skills_from_directories(warp_managed_skill_dirs(), ctx);
             let skills_parent_paths: HashSet<PathBuf> = SKILL_PROVIDER_DEFINITIONS
@@ -154,6 +174,7 @@ impl SkillWatcher {
                     &parent_path,
                     &repository_message_tx,
                     &mut home_provider_watchers,
+                    &mut home_provider_canonical_to_originals,
                     ctx,
                 );
             }
@@ -193,6 +214,7 @@ impl SkillWatcher {
             queued_project_directory_creations: Vec::new(),
             watcher_event_tx,
             home_provider_watchers,
+            home_provider_canonical_to_originals,
             symlink_canonical_to_originals: HashMap::new(),
             symlink_target_watchers: HashMap::new(),
         }
@@ -284,11 +306,114 @@ impl SkillWatcher {
         }
     }
 
+    /// If `path` falls under a registered canonical home-provider directory, return
+    /// the rewritten path under each original (symlinked) provider. Multiple originals
+    /// can resolve to the same canonical (e.g. `~/.agents` and `~/.claude` both
+    /// pointing at a shared dir), so we fan out to all of them. Returns `path`
+    /// unchanged in a single-element vec if it doesn't match any known canonical.
+    fn translate_canonical_to_original_paths(&self, path: &Path) -> Vec<PathBuf> {
+        // Pick the deepest (longest) matching canonical so nested registrations
+        // resolve deterministically. `HashMap` iteration order is unstable, so
+        // first-match-wins would translate the same input two different ways.
+        let best = self
+            .home_provider_canonical_to_originals
+            .iter()
+            .filter_map(|(canonical, originals)| {
+                path.strip_prefix(canonical)
+                    .ok()
+                    .map(|rel| (canonical, originals, rel))
+            })
+            .max_by_key(|(canonical, _, _)| canonical.as_os_str().len());
+        match best {
+            Some((_, originals, rel)) => originals.iter().map(|orig| orig.join(rel)).collect(),
+            None => vec![path.to_path_buf()],
+        }
+    }
+
+    fn translate_canonical_paths(&self, update: &RepositoryUpdate) -> RepositoryUpdate {
+        let fan_out = |tf: &TargetFile| -> Vec<TargetFile> {
+            self.translate_canonical_to_original_paths(&tf.path)
+                .into_iter()
+                .map(|p| TargetFile::new(p, tf.is_ignored))
+                .collect()
+        };
+        let mut moved = HashMap::new();
+        let mut salvaged_added: Vec<TargetFile> = Vec::new();
+        let mut salvaged_deleted: Vec<TargetFile> = Vec::new();
+        for (to, from) in &update.moved {
+            let to_paths = self.translate_canonical_to_original_paths(&to.path);
+            let from_paths = self.translate_canonical_to_original_paths(&from.path);
+            // Same canonical on both sides → fan-outs match, paired correctly.
+            // Different canonicals with equal fan-out → arbitrary pairing, but the
+            // aggregate adds/deletes still match what downstream expects.
+            // Mismatched fan-outs → can't pair the move, but salvage both sides as
+            // independent add/delete events. `notify` can report a cross-boundary
+            // rename without a separate add, so dropping would lose the destination
+            // skill entirely (e.g. `mv` from outside a provider into a shared-
+            // canonical provider with multiple originals).
+            if to_paths.len() != from_paths.len() {
+                log::debug!(
+                    "skill_watcher: splitting move with mismatched canonical fan-out into add+delete: from={} to={}",
+                    from.path.display(),
+                    to.path.display()
+                );
+                salvaged_added.extend(
+                    to_paths
+                        .into_iter()
+                        .map(|p| TargetFile::new(p, to.is_ignored)),
+                );
+                salvaged_deleted.extend(
+                    from_paths
+                        .into_iter()
+                        .map(|p| TargetFile::new(p, from.is_ignored)),
+                );
+                continue;
+            }
+            for (to_p, from_p) in to_paths.into_iter().zip(from_paths) {
+                moved.insert(
+                    TargetFile::new(to_p, to.is_ignored),
+                    TargetFile::new(from_p, from.is_ignored),
+                );
+            }
+        }
+        RepositoryUpdate {
+            added: update
+                .added
+                .iter()
+                .flat_map(fan_out)
+                .chain(salvaged_added)
+                .collect(),
+            modified: update.modified.iter().flat_map(fan_out).collect(),
+            deleted: update
+                .deleted
+                .iter()
+                .flat_map(fan_out)
+                .chain(salvaged_deleted)
+                .collect(),
+            moved,
+            // Non-path fields pass through; new path-bearing fields need fan_out.
+            commit_updated: update.commit_updated,
+            index_lock_detected: update.index_lock_detected,
+        }
+    }
+
     fn handle_repository_update(
         &mut self,
         update: &RepositoryUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Translation boundary: rewrite event paths from canonical to original form
+        // when symlinked provider parents are registered. See
+        // `home_provider_canonical_to_originals` for the full rationale.
+        // Short-circuits to a no-op when no provider translation is needed.
+        let translated;
+        let update = if self.home_provider_canonical_to_originals.is_empty() {
+            update
+        } else {
+            translated = self.translate_canonical_paths(update);
+            &translated
+        };
+
         let mut queued_project_directories = HashSet::new();
         let mut home_path_additions = HashSet::new();
         let mut deleted_paths = Vec::new();
@@ -758,6 +883,10 @@ impl SkillWatcher {
                     repo.stop_watching(subscriber_id, ctx);
                 });
             }
+            Self::remove_home_provider_original_mapping(
+                &mut self.home_provider_canonical_to_originals,
+                deleted_path,
+            );
         }
 
         if !deleted_paths.is_empty() {
@@ -774,6 +903,7 @@ impl SkillWatcher {
                 &added_path,
                 &self.repository_message_tx,
                 &mut self.home_provider_watchers,
+                &mut self.home_provider_canonical_to_originals,
                 ctx,
             );
         }
@@ -792,13 +922,30 @@ impl SkillWatcher {
         }
     }
 
-    /// Watch a provider path in the home directory (e.g. ~/.agents), storing the handle
-    /// and subscriber ID in `home_provider_watchers` so the watcher can be cleaned up
-    /// when the directory is deleted.
+    /// Removes `original` from every canonical entry; drops canonical entries
+    /// whose set becomes empty. Shared between provider deletion and rollback
+    /// when watcher registration fails — the canonical map must reflect only
+    /// providers whose watches actually committed.
+    fn remove_home_provider_original_mapping(
+        map: &mut HashMap<PathBuf, HashSet<PathBuf>>,
+        original: &Path,
+    ) {
+        map.retain(|_, originals| {
+            originals.remove(original);
+            !originals.is_empty()
+        });
+    }
+
+    /// Registers a home provider path and stores the watcher handle for cleanup.
+    /// If the watch canonicalizes to a different local path, records the original
+    /// path for later event translation. On registration failure (sync or async),
+    /// any canonical mapping inserted is rolled back so the map only reflects
+    /// committed watches.
     fn watch_home_provider_path(
         path: &Path,
         repository_message_tx: &Sender<SkillRepositoryMessage>,
         home_provider_watchers: &mut HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
+        home_provider_canonical_to_originals: &mut HashMap<PathBuf, HashSet<PathBuf>>,
         ctx: &mut ModelContext<Self>,
     ) {
         let Ok(std_path) =
@@ -807,8 +954,18 @@ impl SkillWatcher {
             return;
         };
 
+        if let Some(canonical) = std_path.to_local_path() {
+            if canonical != path {
+                home_provider_canonical_to_originals
+                    .entry(canonical)
+                    .or_default()
+                    .insert(path.to_path_buf());
+            }
+        }
+
         let subscriber = Box::new(HomeSkillSubscriber {
             message_tx: repository_message_tx.clone(),
+            provider_path: path.to_path_buf(),
         });
 
         let parent_path_display = std_path.to_string();
@@ -819,6 +976,10 @@ impl SkillWatcher {
             Err(err) => {
                 log::warn!(
                     "Failed to register home skills directory {parent_path_display} for watching: {err}"
+                );
+                Self::remove_home_provider_original_mapping(
+                    home_provider_canonical_to_originals,
+                    path,
                 );
                 return;
             }
@@ -836,8 +997,13 @@ impl SkillWatcher {
                 log::warn!(
                     "Failed to start watching home skills directory {parent_path_display}: {err}"
                 );
-                // Remove the stored watcher since registration failed.
+                // Remove the stored watcher and roll back the canonical mapping
+                // so neither map reflects a registration that didn't commit.
                 me.home_provider_watchers.remove(&path_owned);
+                Self::remove_home_provider_original_mapping(
+                    &mut me.home_provider_canonical_to_originals,
+                    &path_owned,
+                );
                 repo_handle.update(ctx, |repo, ctx| {
                     repo.stop_watching(subscriber_id, ctx);
                 });

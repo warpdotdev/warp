@@ -340,6 +340,70 @@ fn cloud_environment_skills_always_included() {
 }
 
 #[test]
+fn handle_skills_deleted_prunes_stale_same_name_paths() {
+    let temp = TempDir::new().unwrap();
+    let base = dunce::canonicalize(temp.path()).unwrap();
+
+    let deleted_path = base.join(".agents/skills/diag-test/SKILL.md");
+    let stale_sibling_path = base.join(".claude/skills/diag-test/SKILL.md");
+    let live_sibling_path = base.join(".codex/skills/diag-test/SKILL.md");
+
+    fs::create_dir_all(live_sibling_path.parent().unwrap()).unwrap();
+    fs::write(&live_sibling_path, "# live skill").unwrap();
+
+    let skill = |path: PathBuf, provider: SkillProvider| ParsedSkill {
+        name: "diag-test".to_string(),
+        description: "Diagnostic skill".to_string(),
+        path,
+        content: "# Diagnostic skill".to_string(),
+        line_range: None,
+        provider,
+        scope: SkillScope::Project,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let skill_manager_handle = app.add_singleton_model(SkillManager::new);
+
+        skill_manager_handle.update(&mut app, |manager, _ctx| {
+            manager.handle_skills_added(vec![
+                skill(deleted_path.clone(), SkillProvider::Agents),
+                skill(stale_sibling_path.clone(), SkillProvider::Claude),
+                skill(live_sibling_path.clone(), SkillProvider::Codex),
+            ]);
+
+            assert_eq!(manager.skill_paths_by_name("diag-test").len(), 3);
+            manager.handle_skills_deleted(vec![deleted_path.clone()]);
+        });
+
+        skill_manager_handle.read(&app, |manager, _ctx| {
+            assert!(manager.skill_by_path(&deleted_path).is_none());
+            assert!(manager.skill_by_path(&stale_sibling_path).is_none());
+            assert!(manager.skill_by_path(&live_sibling_path).is_some());
+
+            assert_eq!(
+                manager.skill_paths_by_name("diag-test"),
+                vec![live_sibling_path.clone()]
+            );
+
+            let remaining_directory_paths: HashSet<PathBuf> = manager
+                .directory_skills
+                .values()
+                .flat_map(|paths| paths.iter().cloned())
+                .collect();
+            assert_eq!(
+                remaining_directory_paths,
+                HashSet::from([live_sibling_path])
+            );
+        });
+    });
+}
+
+#[test]
 fn test_read_bundled_skills_with_variable_substitution() {
     let temp_dir = TempDir::new().unwrap();
     let skills_dir = temp_dir.path();
