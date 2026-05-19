@@ -905,6 +905,23 @@ impl TypedActionView for MCPServersEditPageView {
                         return;
                     }
 
+                    // Run the same secret-redaction predicate that gates the
+                    // edit-existing save path. Without this loop the new-server
+                    // (`+ Add`) save bypasses `parse_templatable_json` (where
+                    // the predicate is wired) and ignores Settings → Privacy
+                    // → Secret redaction entirely (#11265).
+                    for parsed_server in &parsed_servers {
+                        if self
+                            .detect_secrets_in_templatable_mcp_server(
+                                ctx,
+                                &parsed_server.templatable_mcp_server,
+                            )
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+
                     for parsed_server in parsed_servers {
                         TemplatableMCPServerManager::handle(ctx).update(
                             ctx,
