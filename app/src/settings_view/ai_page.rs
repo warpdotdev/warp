@@ -53,8 +53,10 @@ use strum::IntoEnumIterator;
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Dismiss,
     Empty, Expanded, Fill, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize,
@@ -7092,6 +7094,7 @@ impl ApiKeysWidget {
                 ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
             ),
         ])]);
+        let tooltip_background = appearance.theme().tooltip_background();
 
         let info_button =
             Hoverable::new(self.custom_inference_info_tooltip.clone(), move |state| {
@@ -7111,8 +7114,11 @@ impl ApiKeysWidget {
                                 appearance
                                     .theme()
                                     .accent()
-                                    .blend(&warp_core::ui::theme::Fill::black().with_opacity(50))
-                                    .into_solid(),
+                                    .on_background(
+                                        ThemeFill::Solid(tooltip_background),
+                                        MinimumAllowedContrast::Text,
+                                    )
+                                    .into(),
                             )
                             .register_default_click_handlers(|url, ctx, _| {
                                 ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(
@@ -7121,7 +7127,7 @@ impl ApiKeysWidget {
                             })
                             .finish(),
                         )
-                        .with_background_color(appearance.theme().tooltip_background())
+                        .with_background_color(tooltip_background)
                         .with_vertical_padding(4.)
                         .with_horizontal_padding(8.)
                         .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
