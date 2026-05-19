@@ -131,7 +131,6 @@ impl ContextFlag {
         disable_flag(Self::WarpEssentials);
         disable_flag(Self::ShowMCPServers);
         disable_flag(Self::RunWorkflow);
-        disable_flag(Self::DynamicBrowserUrl);
     }
 }
 
