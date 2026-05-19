@@ -32,6 +32,14 @@ const DIFF_LINE_RENDER_LIMIT: usize = 10_000;
  */
 const DELETION_LINE_RENDER_LIMIT: usize = 8000;
 
+/**
+ * Combined (additions + deletions) threshold from `git diff --numstat` per file.
+ * Files exceeding this skip `git diff --patch` entirely to avoid buffering
+ * multi-GB diff output. Set well above the per-side render limits so normal
+ * large diffs are unaffected.
+ */
+const MAX_NUMSTAT_LINES_EARLY_BAIL: usize = 50_000;
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DiffSize {
     /// Small diff that can be rendered normally
@@ -57,6 +65,23 @@ fn is_diff_too_large(diff: &[DiffHunk]) -> bool {
     diff.iter()
         .flat_map(|hunk| &hunk.lines)
         .any(|line| line.text.len() > MAX_CHARACTERS_PER_LINE)
+}
+
+/// Returns `true` when the raw `git diff` output is too large to parse.
+/// Called *before* `parse_diff_hunks` to avoid allocating memory for
+/// diffs that would be marked [`DiffSize::Unrenderable`] anyway.
+pub fn is_raw_diff_unrenderable(buffer_length: usize) -> bool {
+    buffer_length > MAX_DIFF_SIZE
+}
+
+/// Returns `true` when `git diff --numstat` line counts predict the diff will
+/// be unrenderable. Used to skip running `git diff --patch` entirely for
+/// files with extreme change counts.
+pub fn is_numstat_unrenderable(lines_added: usize, lines_removed: usize) -> bool {
+    // Matches the deletion-only check in `compute_diff_size`.
+    lines_removed > DELETION_LINE_RENDER_LIMIT
+        // Catch pathologically large files that would produce multi-GB output.
+        || lines_added + lines_removed > MAX_NUMSTAT_LINES_EARLY_BAIL
 }
 
 /// Categorizes a diff based on multiple size heuristics
