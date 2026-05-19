@@ -1,9 +1,11 @@
 use super::{
     api_key_table_min_non_resizable_columns_width, compute_api_key_name_column_max_width,
-    API_KEY_KEY_COLUMN_WIDTH, API_KEY_NAME_COLUMN_MIN_WIDTH, API_KEY_TABLE_LAYOUT_SAFETY_PADDING,
-    API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH, SETTINGS_PAGE_HORIZONTAL_PADDING,
-    SETTINGS_PAGE_MAX_CONTENT_WIDTH, SETTINGS_SECTION_BORDER_WIDTH, SETTINGS_SIDEBAR_WIDTH_DEFAULT,
+    APIKeyProperties, ApiKeyScope, API_KEY_KEY_COLUMN_WIDTH, API_KEY_NAME_COLUMN_MIN_WIDTH,
+    API_KEY_TABLE_LAYOUT_SAFETY_PADDING, API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH,
+    SETTINGS_PAGE_HORIZONTAL_PADDING, SETTINGS_PAGE_MAX_CONTENT_WIDTH,
+    SETTINGS_SECTION_BORDER_WIDTH, SETTINGS_SIDEBAR_WIDTH_DEFAULT,
 };
+use chrono::Utc;
 
 fn table_width_chrome() -> f32 {
     SETTINGS_SIDEBAR_WIDTH_DEFAULT
@@ -74,4 +76,42 @@ fn name_column_max_width_never_drops_below_min_width() {
         table_width_chrome(),
     );
     assert_f32_eq(max_width, API_KEY_NAME_COLUMN_MIN_WIDTH);
+}
+
+fn test_api_key(name: &str, agent_name: Option<&str>) -> APIKeyProperties {
+    APIKeyProperties::new(
+        "api-key-uid".to_string(),
+        name,
+        "abcd",
+        ApiKeyScope::Personal,
+        Utc::now(),
+        None,
+        None,
+        agent_name.map(str::to_string),
+    )
+}
+
+#[test]
+fn api_key_search_matches_key_name_case_insensitively() {
+    let key = test_api_key("Production Deploy Key", None);
+
+    assert!(key.matches_search_query("deploy", false));
+    assert!(key.matches_search_query("PRODUCTION", false));
+    assert!(!key.matches_search_query("staging", false));
+}
+
+#[test]
+fn api_key_search_matches_agent_name_only_when_enabled() {
+    let key = test_api_key("Production Key", Some("Release Manager"));
+
+    assert!(key.matches_search_query("release", true));
+    assert!(!key.matches_search_query("release", false));
+}
+
+#[test]
+fn api_key_search_treats_empty_query_as_match() {
+    let key = test_api_key("Production Key", Some("Release Manager"));
+
+    assert!(key.matches_search_query("", false));
+    assert!(key.matches_search_query("   ", true));
 }
