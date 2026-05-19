@@ -96,7 +96,7 @@ impl fmt::Display for DisplayIdx {
 }
 
 /// Information to display the IME editor near the active cursor.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CursorInfo {
     /// Position of the active cursor.
     pub position: RectF,
