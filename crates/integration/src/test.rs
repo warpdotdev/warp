@@ -3555,6 +3555,24 @@ pub fn test_osc7_updates_current_working_directory() -> Builder {
                             "expected OSC 7 to set the printf block's pwd to /tmp/osc7-test"
                         )
                     })
+                })
+                // Locks in the fix for the user-visible regression Zach saw:
+                // the `WorkingDirectory` prompt chip text (read by
+                // `display_working_directory`, which feeds the vertical-tab
+                // subtitle) must be refreshed after OSC 7. Without
+                // `refresh_warp_prompt` in the `BlockWorkingDirectoryUpdated`
+                // path, the block's `pwd` updates but the chip text stays on
+                // the old CWD until the next `BlockCompleted`.
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        let displayed = view.display_working_directory(ctx);
+                        async_assert_eq!(
+                            Some("/tmp/osc7-test".to_string()),
+                            displayed,
+                            "expected the WorkingDirectory chip / tab subtitle to reflect the OSC 7 CWD"
+                        )
+                    })
                 }),
         )
 }

@@ -11867,6 +11867,25 @@ impl TerminalView {
                     block_working_directory_updated_event.is_done_bootstrapping,
                     ctx,
                 );
+                // Recompute Warp-prompt chip values (notably the
+                // `WorkingDirectory` chip text that feeds the vertical-tab
+                // subtitle via `display_working_directory`). The chip
+                // generator reads from `CurrentPrompt::latest_context`, which
+                // is only refreshed through `refresh_warp_prompt` →
+                // `current_prompt.update_context`. In the normal precmd flow
+                // that refresh is triggered by `BlockCompleted`, but an OSC 7
+                // fires mid-command — the block never completes — so without
+                // this call the chip text stays stuck on the previous CWD
+                // even though the underlying block metadata is up to date.
+                //
+                // Skip in-band-command blocks for the same reason
+                // `apply_block_metadata_update` bails early on them: in-band
+                // commands don't change CWD, and refreshing the prompt here
+                // can re-fire chip generators that schedule another in-band
+                // command, leading to a refresh loop.
+                if !block_working_directory_updated_event.is_for_in_band_command {
+                    self.refresh_warp_prompt(ctx);
+                }
             }
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]
