@@ -4,6 +4,7 @@ use crate::{
     ai::{
         agent::conversation::AIConversationId,
         ambient_agents::scheduled::{CloudScheduledAmbientAgentModel, ScheduledAmbientAgent},
+        ambient_agents::AmbientAgentTaskId,
         blocklist::BlocklistAIHistoryModel,
         cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel},
         execution_profiles::{
@@ -135,10 +136,19 @@ pub struct ObjectOperationResult {
 
 #[derive(Debug)]
 pub enum UpdateManagerEvent {
-    ObjectOperationComplete { result: ObjectOperationResult },
-    CloudPreferencesUpdated { updated: Vec<Preference> },
-    MCPGalleryUpdated { templates: Vec<MCPGalleryTemplate> },
-    AmbientTaskUpdated { timestamp: DateTime<Utc> },
+    ObjectOperationComplete {
+        result: ObjectOperationResult,
+    },
+    CloudPreferencesUpdated {
+        updated: Vec<Preference>,
+    },
+    MCPGalleryUpdated {
+        templates: Vec<MCPGalleryTemplate>,
+    },
+    AmbientTaskUpdated {
+        task_id: AmbientAgentTaskId,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// An enum for choosing the behavior of the fetch_single_cloud_object function.
@@ -1118,11 +1128,15 @@ impl UpdateManager {
 
     fn handle_ambient_task_changed(
         &mut self,
-        _task_id: String,
+        task_id: String,
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { timestamp });
+        let Ok(task_id) = task_id.parse::<AmbientAgentTaskId>() else {
+            log::warn!("Ignoring AmbientTaskUpdated with unparseable task_id: {task_id}");
+            return;
+        };
+        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
 
     /// Fetches environment "last used" timestamps from the server and merges them
