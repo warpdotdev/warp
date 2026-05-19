@@ -3549,9 +3549,13 @@ impl AIBlock {
                 *shown.lock() = true;
             }
             let terminal_view_id = self.terminal_view_id;
+            let permission = AIExecutionProfilesModel::as_ref(ctx)
+                .active_profile(Some(terminal_view_id), ctx)
+                .data()
+                .ask_user_question;
             view.update(ctx, |view, ctx| {
                 view.set_speedbump_settings_link(Some(settings_link_handle), ctx);
-                view.init_speedbump_dropdown(ctx);
+                view.init_speedbump_dropdown(permission, ctx);
                 view.refresh_speedbump_dropdown_selection(terminal_view_id, ctx);
             });
             true
