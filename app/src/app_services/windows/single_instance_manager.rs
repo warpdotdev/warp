@@ -85,9 +85,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
 /// A singleton model that is responsible for ensuring there is only one instance of Warp running.
 /// Uses a Windows named mutex (via `CreateMutexW`) which is a kernel object automatically cleaned
 /// up by the OS when all handles are closed, including on crash.
-pub(super) struct SingleInstanceManager {
-    _server: Option<ipc::Server>,
-}
+pub(super) struct SingleInstanceManager {}
 
 impl SingleInstanceManager {
     /// Attempts to upgrade the current Warp instance to the "main" instance (i.e. the one that
