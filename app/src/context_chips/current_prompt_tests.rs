@@ -166,6 +166,110 @@ fn test_prompt_to_string() {
 }
 
 #[test]
+fn test_pull_request_artifact_populates_github_pr_chip() {
+    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [
+                    ContextChipKind::ShellGitBranch,
+                    ContextChipKind::GithubPullRequest,
+                ],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |current_prompt, _ctx| {
+            assert!(current_prompt.apply_github_pull_request_artifact(
+                "https://github.com/warpdotdev/warp/pull/4543",
+                "oz-agent/APP-4543/fix-pr-chip",
+            ));
+            assert_eq!(
+                current_prompt
+                    .latest_chip_value(&ContextChipKind::ShellGitBranch)
+                    .and_then(|value| value.as_text()),
+                Some("oz-agent/APP-4543/fix-pr-chip")
+            );
+            assert_eq!(
+                current_prompt
+                    .latest_chip_value(&ContextChipKind::GithubPullRequest)
+                    .and_then(|value| value.as_text()),
+                Some("https://github.com/warpdotdev/warp/pull/4543")
+            );
+            assert!(
+                current_prompt
+                    .latest_chip_result(&ContextChipKind::GithubPullRequest)
+                    .is_some(),
+                "artifact-seeded PR chip should render"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pull_request_artifact_is_ignored_for_different_current_branch() {
+    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [
+                    ContextChipKind::ShellGitBranch,
+                    ContextChipKind::GithubPullRequest,
+                ],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |current_prompt, _ctx| {
+            current_prompt.ensure_chip_state(ContextChipKind::ShellGitBranch);
+            current_prompt.update_chip_value(
+                &ContextChipKind::ShellGitBranch,
+                Some(crate::context_chips::ChipValue::Text("main".to_string())),
+            );
+
+            assert!(!current_prompt.apply_github_pull_request_artifact(
+                "https://github.com/warpdotdev/warp/pull/4543",
+                "oz-agent/APP-4543/fix-pr-chip",
+            ));
+            assert_eq!(
+                current_prompt.latest_chip_value(&ContextChipKind::GithubPullRequest),
+                None
+            );
+        });
+    });
+}
+
+#[test]
 fn test_fingerprint_skips_contextual_chip_recompute_when_context_is_unchanged() {
     App::test((), |mut app| async move {
         let session_id = SessionId::from(777);

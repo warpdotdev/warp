@@ -96,6 +96,51 @@ impl PromptType {
         }
     }
 
+    pub fn apply_github_pull_request_artifact(
+        &mut self,
+        url: &str,
+        branch: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let url = url.trim();
+        if url.is_empty() || ContextChipKind::GithubPullRequest.to_chip().is_none() {
+            return false;
+        }
+
+        match self {
+            Self::Dynamic { prompt } => prompt.update(ctx, |prompt, _| {
+                prompt.apply_github_pull_request_artifact(url, branch)
+            }),
+            Self::Static { snapshot } => {
+                let artifact_branch = branch.trim();
+                let current_branch = snapshot
+                    .chip_value(&ContextChipKind::ShellGitBranch)
+                    .and_then(|value| value.as_text().map(str::to_string))
+                    .map(|branch| branch.trim().to_string())
+                    .filter(|branch| !branch.is_empty());
+
+                if current_branch.as_deref().is_some_and(|current_branch| {
+                    !artifact_branch.is_empty() && current_branch != artifact_branch
+                }) {
+                    return false;
+                }
+
+                if current_branch.is_none() && !artifact_branch.is_empty() {
+                    snapshot.set_chip_value(
+                        ContextChipKind::ShellGitBranch,
+                        Some(ChipValue::Text(artifact_branch.to_string())),
+                    );
+                }
+                snapshot.set_chip_value(
+                    ContextChipKind::GithubPullRequest,
+                    Some(ChipValue::Text(url.to_string())),
+                );
+                ctx.notify();
+                true
+            }
+        }
+    }
+
     pub fn prompt_as_string(&self, ctx: &AppContext) -> String {
         match self {
             Self::Dynamic { prompt } => prompt.as_ref(ctx).prompt_as_string(ctx),
