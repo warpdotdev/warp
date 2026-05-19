@@ -58,9 +58,9 @@ summary: Launching targeted cloud follow-up agents to explore distinct onboardin
 remote.computer_use_enabled: true
 agent_run_configs:
 - name: "warp-onboarding-followup-theme-choice"
-  prompt: the follow-up flow prompt below plus one synthesized branch assignment
+  prompt: the follow-up flow prompt below, the logged-out flow prompt below, and one synthesized logged-out branch assignment
 - name: "warp-onboarding-followup-model-choice"
-  prompt: the follow-up flow prompt below plus one synthesized branch assignment
+  prompt: the follow-up flow prompt below, the logged-in flow prompt below, and one synthesized logged-in branch assignment
 base_prompt: the shared child prompt below
 ```
 
