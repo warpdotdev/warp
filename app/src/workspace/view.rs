@@ -10505,7 +10505,7 @@ impl Workspace {
                             })
                         }
                     })
-                    .build();
+                    .build(ctx);
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::QuitModalShown {
@@ -16244,6 +16244,7 @@ impl Workspace {
                 n,
                 &result.operation,
                 &result.success_type,
+                ctx,
             ) {
                 self.toast_stack
                     .update(ctx, |view, ctx| match result.success_type {
@@ -19489,7 +19490,7 @@ impl Workspace {
             return None;
         }
         let error = self.settings_file_error.as_ref()?;
-        let (heading, description) = error.heading_and_description();
+        let (heading, description) = error.heading_and_description(app);
         let secondary_button =
             AISettings::as_ref(app)
                 .is_any_ai_enabled(app)

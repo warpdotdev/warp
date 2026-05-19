@@ -22,6 +22,7 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
+use crate::localization;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -45,16 +46,6 @@ const SIDECAR_WIDTH: f32 = 220.;
 const SIDECAR_HORIZONTAL_GAP: f32 = 4.;
 
 const MENU_MAX_HEIGHT: f32 = 280.;
-
-const BUTTON_TOOLTIP: &str = "API key";
-
-const MENU_HEADER_LABEL: &str = "API key";
-
-const SIDECAR_HEADER_LABEL: &str = "Choose a type";
-
-const NO_SECRET_LABEL: &str = "Inherit key from environment";
-
-const NEW_ITEM_LABEL: &str = "New";
 
 const MAIN_MENU_SAVE_POSITION_ID: &str = "auth_secret_selector_main_menu";
 
@@ -88,15 +79,21 @@ impl AuthSecretSelector {
         ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(NO_SECRET_LABEL, NakedHeaderButtonTheme)
-                .with_size(ButtonSize::AgentInputButton)
-                .with_menu(true)
-                .with_icon(Icon::Key)
-                .with_tooltip(BUTTON_TOOLTIP)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AuthSecretSelectorAction::ToggleMenu);
-                })
+        let button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "terminal.auth_secret.inherit_from_environment"),
+                NakedHeaderButtonTheme,
+            )
+            .with_size(ButtonSize::AgentInputButton)
+            .with_menu(true)
+            .with_icon(Icon::Key)
+            .with_tooltip(localization::text_for_app(
+                ctx,
+                "terminal.auth_secret.api_key",
+            ))
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AuthSecretSelectorAction::ToggleMenu);
+            })
         });
 
         let menu = ctx.add_typed_action_view(|_ctx| {
@@ -263,12 +260,13 @@ impl AuthSecretSelector {
         let Some(hovered_index) = hovered_index else {
             return;
         };
+        let new_label = localization::text_for_app(ctx, "terminal.auth_secret.new");
         let is_new_item = self.menu.read(ctx, |menu, _| {
             menu.items()
                 .get(hovered_index)
                 .map(|item| {
                     matches!(item,
-                    MenuItem::Item(fields) if fields.label() == NEW_ITEM_LABEL)
+                    MenuItem::Item(fields) if fields.label() == new_label)
                 })
                 .unwrap_or(false)
         });
@@ -288,7 +286,9 @@ impl AuthSecretSelector {
             .as_ref(ctx)
             .selected_harness_auth_secret_name()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| NO_SECRET_LABEL.to_string());
+            .unwrap_or_else(|| {
+                localization::text_for_app(ctx, "terminal.auth_secret.inherit_from_environment")
+            });
         self.button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);
         });
@@ -307,6 +307,7 @@ impl AuthSecretSelector {
             availability.auth_secrets_for(harness),
             hover_background,
             header_text_color,
+            ctx,
         );
 
         self.menu.update(ctx, |menu, ctx| {
@@ -323,7 +324,7 @@ impl AuthSecretSelector {
         let border = Border::all(1.).with_border_fill(theme.outline());
 
         let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-        let items = build_sidecar_items(harness, hover_background, header_text_color);
+        let items = build_sidecar_items(harness, hover_background, header_text_color, ctx);
         self.new_type_sidecar.update(ctx, |menu, ctx| {
             menu.set_border(Some(border));
             menu.set_items(items, ctx);
@@ -390,13 +391,17 @@ fn build_main_menu_items(
     fetch_state: &AuthSecretFetchState,
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
+    app: &AppContext,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(6., MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(localization::text_for_app(
+            app,
+            "terminal.auth_secret.api_key",
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(6., MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };
@@ -404,11 +409,14 @@ fn build_main_menu_items(
     let mut items = vec![header];
 
     items.push(MenuItem::Item(
-        MenuItemFields::new(NO_SECRET_LABEL)
-            .with_font_size_override(ITEM_FONT_SIZE)
-            .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-            .with_override_hover_background_color(hover_background)
-            .with_on_select_action(AuthSecretSelectorAction::ClearSecret),
+        MenuItemFields::new(localization::text_for_app(
+            app,
+            "terminal.auth_secret.inherit_from_environment",
+        ))
+        .with_font_size_override(ITEM_FONT_SIZE)
+        .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_override_hover_background_color(hover_background)
+        .with_on_select_action(AuthSecretSelectorAction::ClearSecret),
     ));
 
     match fetch_state {
@@ -426,7 +434,7 @@ fn build_main_menu_items(
         }
         AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Loading…")
+                MenuItemFields::new(localization::text_for_app(app, "common.loading"))
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_disabled(true)
@@ -435,17 +443,20 @@ fn build_main_menu_items(
         }
         AuthSecretFetchState::Failed(_) => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Unable to load secrets")
-                    .with_font_size_override(ITEM_FONT_SIZE)
-                    .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_disabled(true)
-                    .with_override_text_color(header_text_color),
+                MenuItemFields::new(localization::text_for_app(
+                    app,
+                    "terminal.auth_secret.unable_to_load",
+                ))
+                .with_font_size_override(ITEM_FONT_SIZE)
+                .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                .with_disabled(true)
+                .with_override_text_color(header_text_color),
             ));
         }
     }
 
     items.push(MenuItem::Item(
-        MenuItemFields::new(NEW_ITEM_LABEL)
+        MenuItemFields::new(localization::text_for_app(app, "terminal.auth_secret.new"))
             .with_font_size_override(ITEM_FONT_SIZE)
             .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
             .with_override_hover_background_color(hover_background)
@@ -461,13 +472,17 @@ fn build_sidecar_items(
     harness: Harness,
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
+    app: &AppContext,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(SIDECAR_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(6., MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(localization::text_for_app(
+            app,
+            "terminal.auth_secret.choose_type",
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(6., MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };

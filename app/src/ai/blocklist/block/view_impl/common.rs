@@ -141,7 +141,6 @@ pub const LOAD_OUTPUT_MESSAGE_FOR_SUMMARIZING_CONVERSATION: &str = "Summarizing 
 pub const LOAD_OUTPUT_MESSAGE_FOR_SUMMARIZING_TOOL_CALL_RESULT: &str =
     "Summarizing command output...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE: &str = "Searching codebase...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_READING_FILES: &str = "Reading files...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_GREP: &str = "Grepping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_FILE_GLOB: &str = "Finding files...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_RUNNING_COMMAND: &str = "Executing command...";
@@ -161,6 +160,50 @@ pub const BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE: &str =
     "Grant access to the following repository?";
 pub const BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB: &str =
     "OK if I search the files in this directory?";
+
+pub fn default_warping_message(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(app, "agent.warping.status.default", LOAD_OUTPUT_MESSAGE)
+}
+
+pub fn waiting_for_user_input_message(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(
+        app,
+        "agent.warping.status.waiting_for_user_input",
+        WAITING_FOR_USER_INPUT_MESSAGE,
+    )
+}
+
+pub fn blocked_action_message_for_write_to_long_running_shell_command(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(
+        app,
+        "agent.cli.blocked_action.write_to_long_running_shell_command",
+        BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
+    )
+}
+
+pub fn blocked_action_message_for_reading_files(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(
+        app,
+        "agent.cli.blocked_action.reading_files",
+        BLOCKED_ACTION_MESSAGE_FOR_READING_FILES,
+    )
+}
+
+pub fn blocked_action_message_for_searching_codebase(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(
+        app,
+        "agent.cli.blocked_action.searching_codebase",
+        BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+    )
+}
+
+pub fn blocked_action_message_for_grep_or_file_glob(app: &AppContext) -> String {
+    crate::localization::text_for_app_or(
+        app,
+        "agent.cli.blocked_action.grep_or_file_glob",
+        BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
+    )
+}
 
 const BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
 const INLINE_IMAGE_HEIGHT: f32 = 164.;

@@ -22,7 +22,7 @@ use crate::{
         buffer_location::LocalOrRemotePath,
         lsp_telemetry::{LspControlActionType, LspEnablementSource, LspTelemetryEvent},
     },
-    send_telemetry_from_ctx,
+    localization, send_telemetry_from_ctx,
     settings::{AISettings, CodeSettings},
     terminal::general_settings::GeneralSettings,
     ui_components::{
@@ -101,7 +101,6 @@ const INDEXING_DISABLED_ADMIN_TEXT: &str = "Team admins have disabled codebase i
 const INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT: &str = "Team admins have enabled codebase indexing.";
 const INDEXING_DISABLED_GLOBAL_AI_TEXT: &str =
     "AI Features must be enabled to use codebase indexing.";
-const CODEBASE_INDEX_LIMIT_REACHED: &str = "You have reached the maximum number of codebase indices for your plan. Delete existing indices to auto-index new codebases.";
 #[cfg(not(target_family = "wasm"))]
 const REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE: &str =
     "maximum number of codebase indexes has been reached";
@@ -1088,7 +1087,7 @@ impl CodePageWidget {
         {
             rows.push(self.render_settings_subtext(
                 false,
-                CODEBASE_INDEX_LIMIT_REACHED,
+                localization::text_for_app(app, "settings.code.auto_index.limit_reached"),
                 appearance,
             ));
         }
@@ -1152,7 +1151,7 @@ impl CodePageWidget {
     fn render_settings_subtext(
         &self,
         _active: bool,
-        description: &'static str,
+        description: impl Into<Cow<'static, str>>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
@@ -1160,7 +1159,7 @@ impl CodePageWidget {
 
         // Per Figma: subtext uses disabled_ui_text_color (#9b9b9b)
         ui_builder
-            .paragraph(description)
+            .paragraph(description.into().into_owned())
             .with_style(UiComponentStyles {
                 font_color: Some(theme.disabled_ui_text_color().into()),
                 ..Default::default()
@@ -1432,6 +1431,7 @@ impl CodePageWidget {
                 resync_mouse,
                 delete_mouse,
                 appearance,
+                app,
             ));
         }
 
@@ -1544,6 +1544,7 @@ impl CodePageWidget {
             resync_mouse,
             delete_mouse,
             appearance,
+            app,
         ));
 
         // LSP Servers section (if any servers known)
@@ -1569,6 +1570,7 @@ impl CodePageWidget {
         resync_mouse: MouseStateHandle,
         delete_mouse: MouseStateHandle,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut workspace_content = Flex::column().with_spacing(MAIN_SECTION_MARGIN);
 
@@ -1580,11 +1582,12 @@ impl CodePageWidget {
         ));
 
         workspace_content.add_child(self.render_indexing_subsection_for_target(
-            self.remote_indexing_status_presentation(&entry.status, appearance),
+            self.remote_indexing_status_presentation(&entry.status, appearance, app),
             Some(LocalOrRemotePath::Remote(entry.remote_path.clone())),
             resync_mouse,
             delete_mouse,
             appearance,
+            app,
         ));
 
         self.render_workspace_row_container(workspace_content.finish(), appearance)
@@ -1647,13 +1650,15 @@ impl CodePageWidget {
         resync_mouse: MouseStateHandle,
         delete_mouse: MouseStateHandle,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         self.render_indexing_subsection_for_target(
-            self.local_indexing_status_presentation(index_status, appearance),
+            self.local_indexing_status_presentation(index_status, appearance, app),
             Some(LocalOrRemotePath::Local(workspace_path.to_path_buf())),
             resync_mouse,
             delete_mouse,
             appearance,
+            app,
         )
     }
 
@@ -1664,6 +1669,7 @@ impl CodePageWidget {
         resync_mouse: MouseStateHandle,
         delete_mouse: MouseStateHandle,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
@@ -1671,7 +1677,10 @@ impl CodePageWidget {
         let mut column = Flex::column().with_spacing(SUB_SECTION_MARGIN);
         column.add_child(
             ui_builder
-                .span("INDEXING")
+                .span(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.subsection.indexing",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(11.0),
                     font_weight: Some(Weight::Semibold),
@@ -1706,11 +1715,15 @@ impl CodePageWidget {
         &self,
         index_state: Option<&CodebaseIndexStatus>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> IndexingStatusPresentation {
         let theme = appearance.theme();
         let Some(index_state) = index_state else {
             return IndexingStatusPresentation {
-                text: Cow::from("No index created"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.no_index_created",
+                )),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: None,
@@ -1721,13 +1734,27 @@ impl CodePageWidget {
         if index_state.has_pending() {
             let text = match index_state.sync_progress() {
                 Some(SyncProgress::Discovering { total_nodes }) => {
-                    Cow::from(format!("Discovered {total_nodes} chunks"))
+                    Cow::from(localization::text_for_app_with_args(
+                        app,
+                        "settings.code.indexing.status.discovered",
+                        &[("value", &total_nodes.to_string())],
+                    ))
                 }
                 Some(SyncProgress::Syncing {
                     completed_nodes,
                     total_nodes,
-                }) => Cow::from(format!("Syncing - {completed_nodes} / {total_nodes}")),
-                None => Cow::from("Syncing..."),
+                }) => Cow::from(localization::text_for_app_with_args(
+                    app,
+                    "settings.code.indexing.status.syncing_progress",
+                    &[
+                        ("completed", &completed_nodes.to_string()),
+                        ("total", &total_nodes.to_string()),
+                    ],
+                )),
+                None => Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.syncing",
+                )),
             };
 
             return IndexingStatusPresentation {
@@ -1741,25 +1768,33 @@ impl CodePageWidget {
 
         if let Some(completed_successfully) = index_state.last_sync_successful() {
             let (text, color, icon) = if completed_successfully {
-                ("Synced", theme.ansi_fg_green(), Icon::Check)
+                (
+                    localization::text_for_app(app, "settings.code.indexing.status.synced"),
+                    theme.ansi_fg_green(),
+                    Icon::Check,
+                )
             } else if let Some(CodebaseIndexFinishedStatus::Failed(
                 CodebaseIndexingError::ExceededMaxFileLimit
                 | CodebaseIndexingError::MaxDepthExceeded,
             )) = index_state.last_sync_result()
             {
                 (
-                    "Codebase too large",
+                    localization::text_for_app(app, "settings.code.indexing.status.too_large"),
                     theme.ui_warning_color(),
                     Icon::AlertTriangle,
                 )
             } else if index_state.has_synced_version() {
                 (
-                    "Stale",
+                    localization::text_for_app(app, "settings.code.indexing.status.stale"),
                     theme.nonactive_ui_detail().into_solid(),
                     Icon::ClockRefresh,
                 )
             } else {
-                ("Failed", theme.ui_error_color(), Icon::AlertTriangle)
+                (
+                    localization::text_for_app(app, "settings.code.indexing.status.failed"),
+                    theme.ui_error_color(),
+                    Icon::AlertTriangle,
+                )
             };
 
             return IndexingStatusPresentation {
@@ -1773,7 +1808,10 @@ impl CodePageWidget {
 
         log::warn!("No index state for codebase");
         IndexingStatusPresentation {
-            text: Cow::from("No index built"),
+            text: Cow::from(localization::text_for_app(
+                app,
+                "settings.code.indexing.status.not_built",
+            )),
             color: theme.nonactive_ui_text_color().into_solid(),
             icon: None,
             refresh_action: None,
@@ -1786,12 +1824,16 @@ impl CodePageWidget {
         &self,
         status: &RemoteCodebaseIndexStatus,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> IndexingStatusPresentation {
         let theme = appearance.theme();
 
         match status.state {
             RemoteCodebaseIndexState::NotEnabled => IndexingStatusPresentation {
-                text: Cow::from("No index created"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.no_index_created",
+                )),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: Some(IndexingRefreshAction::RequestRemote),
@@ -1801,9 +1843,12 @@ impl CodePageWidget {
                 let limit_reached = remote_codebase_index_limit_reached(status);
                 IndexingStatusPresentation {
                     text: Cow::from(if limit_reached {
-                        "Index limit reached"
+                        localization::text_for_app(
+                            app,
+                            "settings.code.indexing.status.limit_reached",
+                        )
                     } else {
-                        "Unavailable"
+                        localization::text_for_app(app, "settings.code.indexing.status.unavailable")
                     }),
                     color: if limit_reached {
                         theme.ui_warning_color()
@@ -1820,14 +1865,20 @@ impl CodePageWidget {
                 }
             }
             RemoteCodebaseIndexState::Disabled => IndexingStatusPresentation {
-                text: Cow::from("Disabled"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.disabled",
+                )),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: Some(IndexingRefreshAction::RequestRemote),
                 show_delete: true,
             },
             RemoteCodebaseIndexState::Queued => IndexingStatusPresentation {
-                text: Cow::from("Queued"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.queued",
+                )),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: None,
                 refresh_action: None,
@@ -1836,11 +1887,29 @@ impl CodePageWidget {
             RemoteCodebaseIndexState::Indexing => {
                 let text = match (status.progress_completed, status.progress_total) {
                     (Some(completed), Some(total)) => {
-                        Cow::from(format!("Indexing - {completed} / {total}"))
+                        Cow::from(localization::text_for_app_with_args(
+                            app,
+                            "settings.code.indexing.status.indexing_progress",
+                            &[
+                                ("completed", &completed.to_string()),
+                                ("total", &total.to_string()),
+                            ],
+                        ))
                     }
-                    (Some(completed), None) => Cow::from(format!("Indexing - {completed}")),
-                    (None, Some(total)) => Cow::from(format!("Indexing - 0 / {total}")),
-                    (None, None) => Cow::from("Indexing..."),
+                    (Some(completed), None) => Cow::from(localization::text_for_app_with_args(
+                        app,
+                        "settings.code.indexing.status.indexing_completed",
+                        &[("completed", &completed.to_string())],
+                    )),
+                    (None, Some(total)) => Cow::from(localization::text_for_app_with_args(
+                        app,
+                        "settings.code.indexing.status.indexing_progress",
+                        &[("completed", "0"), ("total", &total.to_string())],
+                    )),
+                    (None, None) => Cow::from(localization::text_for_app(
+                        app,
+                        "settings.code.indexing.status.indexing",
+                    )),
                 };
 
                 IndexingStatusPresentation {
@@ -1852,21 +1921,30 @@ impl CodePageWidget {
                 }
             }
             RemoteCodebaseIndexState::Ready => IndexingStatusPresentation {
-                text: Cow::from("Synced"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.synced",
+                )),
                 color: theme.ansi_fg_green(),
                 icon: Some(Icon::Check),
                 refresh_action: Some(IndexingRefreshAction::Resync),
                 show_delete: true,
             },
             RemoteCodebaseIndexState::Stale => IndexingStatusPresentation {
-                text: Cow::from("Stale"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.stale",
+                )),
                 color: theme.nonactive_ui_detail().into_solid(),
                 icon: Some(Icon::ClockRefresh),
                 refresh_action: Some(IndexingRefreshAction::Resync),
                 show_delete: true,
             },
             RemoteCodebaseIndexState::Failed => IndexingStatusPresentation {
-                text: Cow::from("Failed"),
+                text: Cow::from(localization::text_for_app(
+                    app,
+                    "settings.code.indexing.status.failed",
+                )),
                 color: theme.ui_error_color(),
                 icon: Some(Icon::AlertTriangle),
                 refresh_action: Some(IndexingRefreshAction::Resync),
@@ -2511,6 +2589,7 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
         };
 
         content.add_child(render_body_item::<CodeSettingsPageAction>(
+            app,
             CODEBASE_INDEXING_LABEL.into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2525,6 +2604,7 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
             let auto_indexing_enabled = *CodeSettings::as_ref(app).auto_indexing_enabled;
 
             content.add_child(render_body_item::<CodeSettingsPageAction>(
+                app,
                 AUTO_INDEX_FEATURE_NAME.into(),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -2544,7 +2624,10 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
             if !CodebaseIndexManager::as_ref(app).can_create_new_indices() {
                 content.add_child(
                     ui_builder
-                        .paragraph(CODEBASE_INDEX_LIMIT_REACHED)
+                        .paragraph(localization::text_for_app(
+                            app,
+                            "settings.code.auto_index.limit_reached",
+                        ))
                         .with_style(UiComponentStyles {
                             font_color: Some(appearance.theme().disabled_ui_text_color().into()),
                             ..Default::default()
@@ -2623,6 +2706,7 @@ impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
     ) -> Box<dyn Element> {
         let general_settings = GeneralSettings::as_ref(app);
         render_body_item::<CodeSettingsPageAction>(
+            app,
             "Auto open code review panel".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2700,6 +2784,7 @@ impl SettingsWidget for CodeReviewPanelToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
+            app,
             "Show code review button".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2743,6 +2828,7 @@ impl SettingsWidget for CodeReviewDiffStatsToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
+            app,
             "Show diff stats on code review button".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2785,6 +2871,7 @@ impl SettingsWidget for ProjectExplorerToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
+            app,
             "Project explorer".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2828,6 +2915,7 @@ impl SettingsWidget for GlobalSearchToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
+            app,
             "Global file search".into(),
             None,
             LocalOnlyIconState::Hidden,

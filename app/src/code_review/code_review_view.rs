@@ -312,7 +312,11 @@ const CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO: f32 = 1.4;
 /// Extra scroll buffer (in pixels) added when scrolling to a line that has a comment editor below it.
 const COMMENT_EDITOR_SCROLL_BUFFER: f32 = 200.0;
 
-pub const CODE_REVIEW_TOOLTIP_TEXT: &str = "View changes";
+pub const CODE_REVIEW_TOOLTIP_KEY: &str = "code_review.tooltip.view_changes";
+
+pub(crate) fn code_review_text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
 const REMOTE_TEXT: &str = "Diffs only work for local workspaces.";
 const DISABLED_TEXT: &str = "Diffs only work for git repositories.";
 const WSL_TEXT: &str = "Diffs don't currently work in WSL.";
@@ -7533,7 +7537,7 @@ impl BackingView for CodeReviewView {
                 .on_save_changes(handle_save_intent(PendingSaveIntent::Save))
                 .on_discard_changes(handle_save_intent(PendingSaveIntent::Discard))
                 .on_cancel(handle_save_intent(PendingSaveIntent::Cancel))
-                .build();
+                .build(ctx);
 
             if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
                 AppContext::show_native_platform_modal(ctx, dialog);

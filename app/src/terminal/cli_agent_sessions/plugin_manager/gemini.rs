@@ -106,22 +106,6 @@ impl CliAgentPluginManager for GeminiPluginManager {
         Ok(())
     }
 
-    fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please restart Gemini CLI to activate."
-    }
-
-    fn install_success_message_key(&self) -> &'static str {
-        "agent.input_footer.plugin_installed_restart_gemini"
-    }
-
-    fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please restart Gemini CLI to activate."
-    }
-
-    fn update_success_message_key(&self) -> &'static str {
-        "agent.input_footer.plugin_updated_restart_gemini"
-    }
-
     fn install_instructions(&self) -> &'static PluginInstructions {
         &INSTALL_INSTRUCTIONS
     }

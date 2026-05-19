@@ -15,6 +15,7 @@ use warpui::{Action, AppContext, Element, Entity, ModelHandle};
 
 use super::mixer::{AsyncDataSource, BoxFuture};
 use super::{item::SearchItem, mixer::DataSourceRunErrorWrapper};
+use crate::localization;
 
 lazy_static! {
     static ref HISTORY_FILTER_ATOM: FilterAtom = FilterAtom {
@@ -262,6 +263,10 @@ impl QueryFilter {
         }
     }
 
+    pub fn localized_placeholder_text(&self, app: &AppContext) -> String {
+        localization::text_for_app_or(app, self.placeholder_key(), self.placeholder_text())
+    }
+
     /// Returns text that is used to represent the filter as a filter 'atom' in the search input.
     pub fn filter_atom(&self) -> &'static FilterAtom {
         match self {
@@ -323,6 +328,78 @@ impl QueryFilter {
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
             QueryFilter::CurrentDirectoryConversations => "current directory conversations",
+        }
+    }
+
+    pub fn localized_display_name(&self, app: &AppContext) -> String {
+        localization::text_for_app_or(app, self.display_name_key(), self.display_name())
+    }
+
+    fn display_name_key(&self) -> &'static str {
+        match self {
+            QueryFilter::History => "search.filter.display.history",
+            QueryFilter::Workflows => "search.filter.display.workflows",
+            QueryFilter::AgentModeWorkflows => "search.filter.display.agent_mode_workflows",
+            QueryFilter::Notebooks => "search.filter.display.notebooks",
+            QueryFilter::Plans => "search.filter.display.plans",
+            QueryFilter::NaturalLanguage => "search.filter.display.natural_language",
+            QueryFilter::Actions => "search.filter.display.actions",
+            QueryFilter::Sessions => "search.filter.display.sessions",
+            QueryFilter::Tabs => "search.filter.display.tabs",
+            QueryFilter::Conversations => "search.filter.display.conversations",
+            QueryFilter::LaunchConfigurations => "search.filter.display.launch_configurations",
+            QueryFilter::Drive => "search.filter.display.drive",
+            QueryFilter::EnvironmentVariables => "search.filter.display.environment_variables",
+            QueryFilter::PromptHistory => "search.filter.display.prompt_history",
+            QueryFilter::Files => "search.filter.display.files",
+            QueryFilter::Commands => "search.filter.display.commands",
+            QueryFilter::Blocks => "search.filter.display.blocks",
+            QueryFilter::Code => "search.filter.display.code",
+            QueryFilter::Rules => "search.filter.display.rules",
+            QueryFilter::Repos => "search.filter.display.repos",
+            QueryFilter::DiffSets => "search.filter.display.diff_sets",
+            QueryFilter::StaticSlashCommands => "search.filter.display.static_slash_commands",
+            QueryFilter::Skills => "search.filter.display.skills",
+            QueryFilter::BaseModels => "search.filter.display.base_models",
+            QueryFilter::FullTerminalUseModels => "search.filter.display.full_terminal_use_models",
+            QueryFilter::CurrentDirectoryConversations => {
+                "search.filter.display.current_directory_conversations"
+            }
+        }
+    }
+
+    fn placeholder_key(&self) -> &'static str {
+        match self {
+            QueryFilter::History => "search.filter.placeholder.history",
+            QueryFilter::Workflows => "search.filter.placeholder.workflows",
+            QueryFilter::AgentModeWorkflows => "search.filter.placeholder.agent_mode_workflows",
+            QueryFilter::Notebooks => "search.filter.placeholder.notebooks",
+            QueryFilter::Plans => "search.filter.placeholder.plans",
+            QueryFilter::NaturalLanguage => "search.filter.placeholder.natural_language",
+            QueryFilter::Actions => "search.filter.placeholder.actions",
+            QueryFilter::Sessions => "search.filter.placeholder.sessions",
+            QueryFilter::Tabs => "search.filter.placeholder.tabs",
+            QueryFilter::Conversations => "search.filter.placeholder.conversations",
+            QueryFilter::LaunchConfigurations => "search.filter.placeholder.launch_configurations",
+            QueryFilter::Drive => "search.filter.placeholder.drive",
+            QueryFilter::EnvironmentVariables => "search.filter.placeholder.environment_variables",
+            QueryFilter::PromptHistory => "search.filter.placeholder.prompt_history",
+            QueryFilter::Files => "search.filter.placeholder.files",
+            QueryFilter::Commands => "search.filter.placeholder.commands",
+            QueryFilter::Blocks => "search.filter.placeholder.blocks",
+            QueryFilter::Code => "search.filter.placeholder.code",
+            QueryFilter::Rules => "search.filter.placeholder.rules",
+            QueryFilter::Repos => "search.filter.placeholder.repos",
+            QueryFilter::DiffSets => "search.filter.placeholder.diff_sets",
+            QueryFilter::StaticSlashCommands => "search.filter.placeholder.static_slash_commands",
+            QueryFilter::Skills => "search.filter.placeholder.skills",
+            QueryFilter::BaseModels => "search.filter.placeholder.base_models",
+            QueryFilter::FullTerminalUseModels => {
+                "search.filter.placeholder.full_terminal_use_models"
+            }
+            QueryFilter::CurrentDirectoryConversations => {
+                "search.filter.placeholder.current_directory_conversations"
+            }
         }
     }
 

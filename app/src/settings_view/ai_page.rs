@@ -21,6 +21,7 @@ use crate::cloud_object::JsonObjectType;
 use crate::cloud_object::ObjectType;
 
 use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
+use crate::localization;
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::InputSettings;
 use crate::settings::{
@@ -325,7 +326,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     ThinkingDisplayMode::NeverShow => flags::THINKING_DISPLAY_NEVER_SHOW,
                 };
                 FixedBinding::empty(
-                    mode.command_palette_description(),
+                    localization::text_for_app(app, mode.command_palette_description_key()),
                     builder(SettingsAction::AI(
                         AISettingsPageAction::SetThinkingDisplayMode(mode),
                     )),
@@ -3500,6 +3501,7 @@ fn render_ai_setting_toggle<S: Setting>(
     let appearance = Appearance::as_ref(app);
     build_toggle_element(
         render_body_item_label::<AISettingsPageAction>(
+            app,
             label.into(),
             Some(styles::header_font_color(is_setting_toggleable, app)),
             None,
@@ -3532,6 +3534,7 @@ fn render_ai_setting_label<S: Setting>(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     Container::new(render_body_item_label::<AISettingsPageAction>(
+        app,
         label.into(),
         Some(styles::header_font_color(is_setting_toggleable, app)),
         None,
@@ -4594,7 +4597,8 @@ impl AgentsWidget {
         let max = cw.max;
 
         let label = Container::new(render_body_item_label::<AISettingsPageAction>(
-            "Context window (tokens)".to_string(),
+            app,
+            localization::text_for_app(app, "settings.ai.agents.context_window.label"),
             None,
             None,
             LocalOnlyIconState::Hidden,
@@ -4861,6 +4865,7 @@ impl AgentsWidget {
         app: &warpui::AppContext,
     ) -> Box<dyn Element> {
         let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
+            app,
             header_text.into(),
             header_icon,
             Some(styles::header_font_color(
@@ -4924,6 +4929,7 @@ impl AgentsWidget {
         let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(app);
         let mut tooltip_idx = 0usize;
         let list = render_input_list(
+            app,
             None,
             command_denylist
                 .into_iter()
@@ -4973,6 +4979,7 @@ impl AgentsWidget {
     ) -> Box<dyn Element> {
         let disabled = !ai_settings.is_command_allowlist_editable(app);
         let list = render_input_list(
+            app,
             None,
             command_allowlist
                 .into_iter()
@@ -5008,6 +5015,7 @@ impl AgentsWidget {
     ) -> Box<dyn Element> {
         let disabled = !ai_settings.is_directory_allowlist_editable(app);
         let list = render_input_list(
+            app,
             None,
             directory_allowlist
                 .clone()
@@ -5089,12 +5097,14 @@ impl AgentsWidget {
             .finish()
         };
 
+        let base_model_label = localization::text_for_app(app, "settings.ai.base_model.label");
+        let base_model_description =
+            localization::text_for_app(app, "settings.ai.base_model.description");
         render_dropdown_item(
+            app,
             appearance,
-            "Base model",
-            Some(
-                "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
-            ),
+            &base_model_label,
+            Some(&base_model_description),
             Some(show_in_prompt_checkbox),
             LocalOnlyIconState::Hidden,
             (!ai_settings.is_any_ai_enabled(app))
@@ -5180,7 +5190,8 @@ impl AgentsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
-            "Call MCP servers".into(),
+            app,
+            localization::text_for_app(app, "settings.ai.agents.mcp.label"),
             Icon::Dataflow,
             Some(styles::header_font_color(
                 ai_settings.is_any_ai_enabled(app),
@@ -5263,7 +5274,7 @@ impl AgentsWidget {
             BlocklistAIPermissions::as_ref(app).get_mcp_permissions_setting(app, None);
 
         let permission_setting = self.render_execution_profile_dropdown(
-            "Call MCP servers",
+            &localization::text_for_app(app, "settings.ai.agents.mcp.label"),
             Icon::Dataflow,
             current_mcp_setting.description(),
             &view.mcp_permissions_dropdown_menu,
@@ -5332,6 +5343,7 @@ impl AgentsWidget {
                     Shrinkable::new(
                         1.0,
                         Container::new(render_dropdown_item_label(
+                            app,
                             title.to_string(),
                             Some(description.to_string()),
                             LocalOnlyIconState::Hidden,
@@ -5352,6 +5364,7 @@ impl AgentsWidget {
 
         let disabled = !ai_settings.is_any_ai_enabled(app);
         let items = render_input_list(
+            app,
             None,
             items
                 .into_iter()
@@ -5997,10 +6010,17 @@ impl VoiceWidget {
         );
 
         if ai_settings.is_voice_input_enabled(app) {
+            let activation_key_label =
+                localization::text_for_app(app, "settings.ai.voice_input.activation_key.label");
+            let activation_key_description = localization::text_for_app(
+                app,
+                "settings.ai.voice_input.activation_key.description",
+            );
             column.add_child(render_dropdown_item(
+                app,
                 appearance,
-                "Key for Activating Voice Input",
-                Some("Press and hold to activate."),
+                &activation_key_label,
+                Some(&activation_key_description),
                 None,
                 LocalOnlyIconState::for_setting(
                     VoiceInputToggleKey::storage_key(),
@@ -6148,7 +6168,7 @@ impl SettingsWidget for OtherAIWidget {
         }
 
         column.add_child(render_ai_setting_toggle::<ShowConversationHistory>(
-            "Show conversation history in tools panel",
+            localization::text_for_app(app, "settings.ai.other.conversation_history.label"),
             AISettingsPageAction::ToggleShowConversationHistory,
             *ai_settings.show_conversation_history,
             is_toggleable,
@@ -6157,10 +6177,14 @@ impl SettingsWidget for OtherAIWidget {
             app,
         ));
 
+        let thinking_label = localization::text_for_app(app, "settings.ai.other.thinking.label");
+        let thinking_description =
+            localization::text_for_app(app, "settings.ai.other.thinking.description");
         column.add_child(render_dropdown_item(
+            app,
             appearance,
-            "Agent thinking display",
-            Some("Controls how reasoning/thinking traces are displayed."),
+            &thinking_label,
+            Some(&thinking_description),
             None,
             LocalOnlyIconState::for_setting(
                 ThinkingDisplayMode::storage_key(),
@@ -6178,9 +6202,12 @@ impl SettingsWidget for OtherAIWidget {
         if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
             use crate::util::file::external_editor::settings::OpenConversationLayoutPreference;
 
+            let conversation_layout_label =
+                localization::text_for_app(app, "settings.ai.other.conversation_layout.label");
             column.add_child(render_dropdown_item(
+                app,
                 appearance,
-                "Preferred layout when opening existing agent conversations",
+                &conversation_layout_label,
                 None,
                 None,
                 LocalOnlyIconState::for_setting(
@@ -6292,15 +6319,20 @@ impl SettingsWidget for CLIAgentWidget {
             if FeatureFlag::CLIAgentRichInput.is_enabled() {
                 // Setting 1: Auto show/hide rich input based on agent status
                 let auto_show_toggle_label = render_body_item_label::<AISettingsPageAction>(
-                    "Auto show/hide Rich Input based on agent status".into(),
+                    app,
+                    localization::text_for_app(
+                        app,
+                        "settings.ai.cli_agent_toolbar.auto_toggle_rich_input.label",
+                    ),
                     Some(styles::header_font_color(true, app)),
                     Some(AdditionalInfo {
                         mouse_state: self.auto_toggle_rich_input_info_tooltip.clone(),
                         on_click_action: None,
                         secondary_text: None,
-                        tooltip_override_text: Some(
-                            "Requires the Warp plugin for your coding agent".to_owned(),
-                        ),
+                        tooltip_override_text: Some(localization::text_for_app(
+                            app,
+                            "settings.ai.cli_agent_toolbar.requires_plugin.tooltip",
+                        )),
                     }),
                     LocalOnlyIconState::for_setting(
                         AutoToggleRichInput::storage_key(),
@@ -6547,7 +6579,7 @@ impl SettingsWidget for AgentAttributionWidget {
                 .switch(self.toggle.clone())
                 .check(state.is_enabled)
                 .with_tooltip(TooltipConfig {
-                    text: "This option is enforced by your organization's settings and cannot be customized.".to_string(),
+                    text: localization::text_for_app(app, "settings.tooltip.organization_enforced"),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -6573,7 +6605,8 @@ impl SettingsWidget for AgentAttributionWidget {
 
         let toggle_row = build_toggle_element(
             render_body_item_label::<AISettingsPageAction>(
-                "Enable agent attribution".to_string(),
+                app,
+                localization::text_for_app(app, "settings.ai.agent_attribution.enable"),
                 Some(styles::header_font_color(!state.is_disabled, app)),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -6590,7 +6623,7 @@ impl SettingsWidget for AgentAttributionWidget {
             .with_child(
                 build_sub_header(
                     appearance,
-                    "Agent Attribution",
+                    localization::text_for_app(app, "settings.ai.agent_attribution.section"),
                     Some(styles::header_font_color(is_any_ai_enabled, app)),
                 )
                 .with_padding_bottom(HEADER_PADDING)
@@ -6598,7 +6631,7 @@ impl SettingsWidget for AgentAttributionWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Oz can add attribution to commit messages and pull requests it creates",
+                localization::text_for_app(app, "settings.ai.agent_attribution.description"),
                 !state.is_disabled,
                 app,
             ))
@@ -6648,7 +6681,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
                 .switch(self.toggle.clone())
                 .check(is_checked)
                 .with_tooltip(TooltipConfig {
-                    text: "This option is enforced by your organization's settings and cannot be customized.".to_string(),
+                    text: localization::text_for_app(app, "settings.tooltip.organization_enforced"),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -6676,7 +6709,8 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 
         let toggle_row = build_toggle_element(
             render_body_item_label::<AISettingsPageAction>(
-                "Computer use in Cloud Agents".to_string(),
+                app,
+                localization::text_for_app(app, "settings.ai.cloud_agent_computer_use.label"),
                 Some(styles::header_font_color(!is_disabled, app)),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -6693,7 +6727,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             .with_child(
                 build_sub_header(
                     appearance,
-                    "Experimental",
+                    localization::text_for_app(app, "settings.ai.cloud_agent_computer_use.section"),
                     Some(styles::header_font_color(is_any_ai_enabled, app)),
                 )
                 .with_padding_bottom(HEADER_PADDING)
@@ -6701,7 +6735,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Enable computer use in cloud agent conversations started from the Warp app.",
+                localization::text_for_app(app, "settings.ai.cloud_agent_computer_use.description"),
                 !is_disabled,
                 app,
             ))
@@ -6746,9 +6780,12 @@ impl SettingsWidget for CloudHandoffWidget {
         let is_force_disabled = !is_any_ai_enabled || cloud_convos_off;
 
         let tooltip_text = if cloud_convos_off {
-            "Cloud handoff requires cloud conversations to be enabled."
+            localization::text_for_app(
+                app,
+                "settings.ai.cloud_handoff.requires_cloud_conversations",
+            )
         } else {
-            ""
+            String::new()
         };
 
         let ui_builder = appearance.ui_builder();
@@ -6757,7 +6794,7 @@ impl SettingsWidget for CloudHandoffWidget {
             let mut builder = ui_builder.switch(self.handoff_toggle.clone()).check(false);
             if !tooltip_text.is_empty() {
                 builder = builder.with_tooltip(TooltipConfig {
-                    text: tooltip_text.to_string(),
+                    text: tooltip_text,
                     styles: ui_builder.default_tool_tip_styles(),
                 });
             }
@@ -6775,7 +6812,8 @@ impl SettingsWidget for CloudHandoffWidget {
 
         let handoff_row = build_toggle_element(
             render_body_item_label::<AISettingsPageAction>(
-                "Cloud handoff".to_string(),
+                app,
+                localization::text_for_app(app, "settings.ai.cloud_handoff.label"),
                 Some(styles::header_font_color(!is_force_disabled, app)),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -6792,7 +6830,7 @@ impl SettingsWidget for CloudHandoffWidget {
             .with_child(
                 build_sub_header(
                     appearance,
-                    "Cloud Handoff",
+                    localization::text_for_app(app, "settings.ai.cloud_handoff.section"),
                     Some(styles::header_font_color(is_any_ai_enabled, app)),
                 )
                 .with_padding_bottom(HEADER_PADDING)
@@ -6800,7 +6838,7 @@ impl SettingsWidget for CloudHandoffWidget {
             )
             .with_child(handoff_row)
             .with_child(render_ai_setting_description(
-                "Hand off local agent conversations to a cloud agent.",
+                localization::text_for_app(app, "settings.ai.cloud_handoff.description"),
                 !is_force_disabled,
                 app,
             ));
@@ -6817,7 +6855,8 @@ impl SettingsWidget for CloudHandoffWidget {
 
             let ampersand_row = build_toggle_element(
                 render_body_item_label::<AISettingsPageAction>(
-                    "Use & to trigger handoff".to_string(),
+                    app,
+                    localization::text_for_app(app, "settings.ai.cloud_handoff.ampersand.label"),
                     Some(styles::header_font_color(true, app)),
                     None,
                     LocalOnlyIconState::Hidden,
@@ -6831,7 +6870,7 @@ impl SettingsWidget for CloudHandoffWidget {
 
             column.add_child(ampersand_row);
             column.add_child(render_ai_setting_description(
-                "Type & as the first character to enter cloud handoff compose mode.",
+                localization::text_for_app(app, "settings.ai.cloud_handoff.ampersand.description"),
                 true,
                 app,
             ));

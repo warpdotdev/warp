@@ -78,6 +78,10 @@ use use_agent_footer::UseAgentToolbar;
 
 use super::cli_agent;
 use super::CLIAgent;
+
+fn terminal_text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
@@ -814,6 +818,23 @@ pub enum NotificationsTrigger {
 }
 
 impl NotificationsTrigger {
+    pub fn discovery_banner_copy_key(&self) -> &'static str {
+        match self {
+            NotificationsTrigger::LongRunningCommand(..) => {
+                "terminal.inline_banner.notifications_discovery.long_running_command"
+            }
+            NotificationsTrigger::AgentTaskCompleted(..) => {
+                "terminal.inline_banner.notifications_discovery.agent_task_completed"
+            }
+            NotificationsTrigger::NeedsAttention => {
+                "terminal.inline_banner.notifications_discovery.needs_attention"
+            }
+            NotificationsTrigger::PasswordPrompt => {
+                "terminal.inline_banner.notifications_discovery.password_prompt"
+            }
+        }
+    }
+
     pub fn discovery_banner_copy(&self) -> &'static str {
         match self {
             NotificationsTrigger::LongRunningCommand(..) => {
@@ -10361,8 +10382,8 @@ impl TerminalView {
                 );
             };
 
-            let banner = ctx.add_typed_action_view(|ctx| {
-                shell_terminated_banner::ShellTerminatedBanner::new(termination_type, ctx)
+            let banner = ctx.add_typed_action_view(|_| {
+                shell_terminated_banner::ShellTerminatedBanner::new(termination_type)
             });
 
             self.insert_rich_content(
@@ -16123,9 +16144,11 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    items.extend(
-                        self.session_sharing_context_menu_items(&model, is_share_session_disabled),
-                    );
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        is_share_session_disabled,
+                        ctx,
+                    ));
                 }
 
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -16327,7 +16350,7 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    items.extend(self.session_sharing_context_menu_items(&model, false));
+                    items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
                 }
 
                 items
@@ -16587,7 +16610,7 @@ impl TerminalView {
         if pane_state.is_in_split_pane() {
             let is_maximized = pane_state.is_maximized();
             items.push(
-                MenuItemFields::toggle_pane_action(is_maximized)
+                MenuItemFields::toggle_pane_action(is_maximized, ctx)
                     .with_on_select_action(TerminalAction::ToggleMaximizePane)
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:toggle_maximize_pane",
@@ -16796,7 +16819,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.extend(self.session_sharing_context_menu_items(&model, false));
+            items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
         }
 
         // Section 2: AI Command Search, Ask Warp AI
@@ -17034,7 +17057,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            menu_items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
@@ -22620,6 +22643,7 @@ impl TerminalView {
                     state,
                     SessionSettings::as_ref(app).notifications.mode,
                     appearance,
+                    app,
                 ),
             );
         }
@@ -22645,6 +22669,7 @@ impl TerminalView {
                     state,
                     &self.inline_banners_state.notifications_error_banner.error,
                     appearance,
+                    app,
                 ),
             );
         }
@@ -22652,14 +22677,17 @@ impl TerminalView {
         for (banner_id, state) in &self.inline_banners_state.ssh_banners {
             inline_banners.insert(
                 *banner_id,
-                render_inline_ssh_wrapper_banner(state, appearance),
+                render_inline_ssh_wrapper_banner(state, appearance, app),
             );
         }
 
         if let AliasExpansionBanner::Open { state } =
             &self.inline_banners_state.alias_expansion_banner
         {
-            inline_banners.insert(state.id, render_alias_expansion_banner(state, appearance));
+            inline_banners.insert(
+                state.id,
+                render_alias_expansion_banner(state, appearance, app),
+            );
         }
 
         if let Some(ShellProcessTerminatedBanner {
@@ -22669,7 +22697,7 @@ impl TerminalView {
         {
             inline_banners.insert(
                 banner_id,
-                render_shell_process_terminated_banner(appearance, was_premature_termination),
+                render_shell_process_terminated_banner(appearance, app, was_premature_termination),
             );
         }
 
@@ -22729,28 +22757,28 @@ impl TerminalView {
         if let Some(open_in_warp_banner) = &self.inline_banners_state.open_in_warp_banner {
             inline_banners.insert(
                 open_in_warp_banner.id,
-                render_open_in_warp_banner(open_in_warp_banner, self.view_id, appearance),
+                render_open_in_warp_banner(open_in_warp_banner, self.view_id, appearance, app),
             );
         }
 
         if let Some(vim_banner_state) = &self.inline_banners_state.vim_banner_state {
             inline_banners.insert(
                 vim_banner_state.id,
-                render_vim_mode_banner(vim_banner_state, appearance),
+                render_vim_mode_banner(vim_banner_state, appearance, app),
             );
         }
 
         if let Some(banner_state) = &self.inline_banners_state.codebase_index_speedbump_banner {
             inline_banners.insert(
                 banner_state.id,
-                banner_state.render_codebase_index_speedbump_banner(appearance),
+                banner_state.render_codebase_index_speedbump_banner(appearance, app),
             );
         }
 
         if let Some(banner_state) = &self.inline_banners_state.agent_setup_speedbump_banner {
             inline_banners.insert(
                 banner_state.id,
-                render_agent_mode_setup_banner(banner_state, appearance),
+                render_agent_mode_setup_banner(banner_state, appearance, app),
             );
         }
 
@@ -22761,14 +22789,14 @@ impl TerminalView {
         if let Some(banner_state) = &self.inline_banners_state.aws_bedrock_login_banner {
             inline_banners.insert(
                 banner_state.id,
-                render_aws_bedrock_login_banner(banner_state, appearance),
+                render_aws_bedrock_login_banner(banner_state, appearance, app),
             );
         }
 
         if let Some(banner_state) = &self.inline_banners_state.aws_cli_not_installed_banner {
             inline_banners.insert(
                 banner_state.id,
-                render_aws_cli_not_installed_banner(banner_state, appearance),
+                render_aws_cli_not_installed_banner(banner_state, appearance, app),
             );
         }
 
@@ -25211,7 +25239,9 @@ impl TypedActionView for TerminalView {
             | StartLspServer => ActionAccessibilityContent::from_debug(),
             #[cfg(feature = "local_fs")]
             OpenCodeInWarp { .. } => ActionAccessibilityContent::from_debug(),
-            OpenInWarpBanner(action) => self.open_in_warp_banner_accessibility_content(*action),
+            OpenInWarpBanner(action) => {
+                self.open_in_warp_banner_accessibility_content(*action, ctx)
+            }
             OpenAIBlockAttachedBlocksMenu { .. } => Custom(AccessibilityContent::new_without_help(
                 "Open list of blocks attached as context to this AI query.".to_owned(),
                 WarpA11yRole::PopoverRole,
@@ -26582,6 +26612,7 @@ impl View for TerminalView {
                     self.render_input_request_edit_access_button(
                         input_request_edit_access_button_handle.clone(),
                         appearance,
+                        app,
                     ),
                     OffsetPositioning::offset_from_save_position_element(
                         self.input.as_ref(app).status_free_input_save_position_id(),
