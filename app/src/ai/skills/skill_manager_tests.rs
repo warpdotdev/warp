@@ -602,7 +602,12 @@ fn disabling_feedback_bundled_skill_does_not_hide_user_feedback_skill() {
         });
 
         handle.update(&mut app, |manager, _ctx| {
-            manager.handle_skills_added(vec![user_skill]);
+            manager
+                .directory_skills
+                .entry(repo.clone())
+                .or_default()
+                .insert(user_skill_path.clone());
+            manager.add_skill_for_testing(user_skill);
             manager.bundled_skills.insert(
                 "feedback".to_string(),
                 make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
