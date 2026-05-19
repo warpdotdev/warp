@@ -7062,6 +7062,16 @@ impl TerminalView {
         })
     }
 
+    /// Returns the active session's launch shell if bootstrap has completed, otherwise falls
+    /// back to the terminal model's active shell launch data captured before bootstrap.
+    pub fn active_or_pending_shell_launch_data<C: ModelAsRef>(
+        &self,
+        ctx: &C,
+    ) -> Option<ShellLaunchData> {
+        self.active_session_shell(ctx)
+            .or_else(|| self.model.lock().active_shell_launch_data().cloned())
+    }
+
     /// Returns the active session's WSL distribution information, if it exists.
     /// Returns None if there is no active session or if the current session is
     /// not a WSL session.

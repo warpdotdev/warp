@@ -12,7 +12,10 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use crate::user_config::load_workflows;
-use crate::{terminal::model::session::Session, user_config::WarpConfig};
+use crate::{
+    terminal::{model::session::Session, ShellLaunchData},
+    user_config::WarpConfig,
+};
 
 use super::{workflow::Workflow, WorkflowSource};
 
@@ -193,17 +196,39 @@ pub(super) fn load_project_workflows(path: &Path) -> Vec<Workflow> {
 
 /// Runs `tail` or equivalent command on the given path.
 /// Note: On Windows this may cause a lossy conversion if the path is not valid UTF-8.
-pub fn tail_command_for_shell(shell_family: ShellFamily, path: &PathBuf) -> String {
+pub fn tail_command_for_shell(
+    shell_family: ShellFamily,
+    path: &PathBuf,
+    shell_launch_data: Option<&ShellLaunchData>,
+) -> String {
+    let display_path = shell_launch_data
+        .and_then(|shell_launch_data| {
+            path.to_str().map(|path| match shell_launch_data {
+                ShellLaunchData::WSL { .. } => warp_util::path::convert_windows_path_to_wsl(path),
+                ShellLaunchData::MSYS2 { .. } => {
+                    warp_util::path::convert_windows_path_to_msys2(path)
+                }
+                ShellLaunchData::Executable { .. } | ShellLaunchData::DockerSandbox { .. } => {
+                    path.to_owned()
+                }
+            })
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.clone());
+
     match shell_family {
         // Use debug formatting for `PathBuf` so that any non-Unicode components of the path get
         // escaped.  This will also add quotes around the path, so there's no need to add them in
         // the format string.
-        ShellFamily::Posix => format!("tail -f {path:?}"),
+        ShellFamily::Posix => format!("tail -f {display_path:?}"),
         // We avoid the debug formatting here so that backslashes don't get escaped, which is not
         // desirable for PowerShell.  Note that this may be lossy conversion if the path is not
         // valid UTF-8.
         ShellFamily::PowerShell => {
-            format!("Get-Content -Wait -Tail 10 -Path \"{}\"", path.display())
+            format!(
+                "Get-Content -Wait -Tail 10 -Path \"{}\"",
+                display_path.display()
+            )
         }
     }
 }
@@ -216,7 +241,7 @@ pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflo
     let log_file_path = crate::context_chips::logging::log_file_path().ok()?;
     Some(Workflow::Command {
         name: "Tail prompt chip log".into(),
-        command: tail_command_for_shell(shell_family, &log_file_path),
+        command: tail_command_for_shell(shell_family, &log_file_path, None),
         tags: vec!["warp".into(), "debug".into()],
         description: Some(
             "Shows the diagnostic log of shell commands run by prompt context chips (dogfood only)"

@@ -1,4 +1,7 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use warp_terminal::shell::{ShellLaunchData, ShellType};
+use warp_util::path::ShellFamily;
 use warpui::App;
 
 use super::*;
@@ -53,4 +56,55 @@ fn test_workflow_by_command_name() {
             assert_eq!(workflow_source, WorkflowSource::Global);
         });
     });
+}
+
+#[test]
+fn tail_command_for_shell_converts_windows_log_paths_for_wsl_sessions() {
+    let shell_launch_data = ShellLaunchData::WSL {
+        distro: "Ubuntu".to_owned(),
+    };
+
+    let command = tail_command_for_shell(
+        ShellFamily::Posix,
+        &PathBuf::from(r"C:\Users\test\AppData\Roaming\Warp\logs\mcp\server.log"),
+        Some(&shell_launch_data),
+    );
+
+    assert_eq!(
+        command,
+        r#"tail -f "/mnt/c/Users/test/AppData/Roaming/Warp/logs/mcp/server.log""#
+    );
+}
+
+#[test]
+fn tail_command_for_shell_converts_windows_log_paths_for_msys2_sessions() {
+    let shell_launch_data = ShellLaunchData::MSYS2 {
+        executable_path: PathBuf::from(r"C:\msys64\usr\bin\bash.exe"),
+        shell_type: ShellType::Bash,
+    };
+
+    let command = tail_command_for_shell(
+        ShellFamily::Posix,
+        &PathBuf::from(r"C:\Users\test\AppData\Roaming\Warp\logs\mcp\server.log"),
+        Some(&shell_launch_data),
+    );
+
+    assert_eq!(
+        command,
+        r#"tail -f "/c/Users/test/AppData/Roaming/Warp/logs/mcp/server.log""#
+    );
+}
+
+#[test]
+fn tail_command_for_shell_leaves_windows_log_paths_for_powershell_sessions() {
+    let command = tail_command_for_shell(
+        ShellFamily::PowerShell,
+        &PathBuf::from(r"C:\Users\test\AppData\Roaming\Warp\logs\mcp\server.log"),
+        None,
+    );
+
+    assert_eq!(
+        command,
+        r#"Get-Content -Wait -Tail 10 -Path "C:\Users\test\AppData\Roaming\Warp\logs\mcp\server.log""#
+    );
 }
