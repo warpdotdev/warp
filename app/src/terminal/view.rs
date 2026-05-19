@@ -4864,29 +4864,16 @@ impl TerminalView {
     }
 
     /// Returns whether this terminal view should subscribe to git status
-    /// updates. We subscribe when:
-    /// 1. Agent mode is active and its chip list includes `GitDiffStats`, or
-    /// 2. Terminal mode with the Warp prompt enabled and the git stats chip
-    ///    configured.
+    /// updates.
+    ///
+    /// Always returns `true` when the local_fs feature is available — the
+    /// caller guards on `current_repo_path` being `Some`, so we only actually
+    /// subscribe when there is a git repository. The vertical tabs, status bar,
+    /// and code review panel all need accurate per-session branch and diff
+    /// metadata regardless of the toolbar chip selection.
     #[cfg(feature = "local_fs")]
-    fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
-        // Agent view: subscribe only when the configured agent footer includes git stats.
-        if self.agent_view_controller.as_ref(ctx).is_active() {
-            return SessionSettings::as_ref(ctx)
-                .agent_footer_chip_selection
-                .all_chips()
-                .contains(&ContextChipKind::GitDiffStats);
-        }
-
-        // Terminal prompt path: the Warp prompt is active when honor_ps1 is
-        // off, or when UDI overrides PS1. GitDiffStats must also be in the
-        // configured chip list.
-        let is_using_warp_prompt = !*SessionSettings::as_ref(ctx).honor_ps1
-            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
-        is_using_warp_prompt
-            && Prompt::as_ref(ctx)
-                .chip_kinds()
-                .contains(&ContextChipKind::GitDiffStats)
+    fn should_subscribe_to_git_status(&self, _ctx: &AppContext) -> bool {
+        true
     }
 
     /// No-op when the `local_fs` feature is disabled – git status is not

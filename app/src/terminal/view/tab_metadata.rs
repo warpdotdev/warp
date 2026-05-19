@@ -14,8 +14,8 @@ impl TerminalView {
 
     pub fn display_working_directory(&self, ctx: &AppContext) -> Option<String> {
         let raw = self
-            .prompt_chip_value(&ContextChipKind::WorkingDirectory, ctx)
-            .or_else(|| self.pwd())?;
+            .pwd()
+            .or_else(|| self.prompt_chip_value(&ContextChipKind::WorkingDirectory, ctx))?;
         let home_dir = self
             .active_block_session_id()
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
@@ -32,21 +32,18 @@ impl TerminalView {
             .unwrap_or(fallback_title)
     }
 
-    #[cfg_attr(not(feature = "local_fs"), allow(clippy::unnecessary_lazy_evaluations))]
     pub fn current_git_branch(&self, ctx: &AppContext) -> Option<String> {
+        #[cfg(feature = "local_fs")]
+        {
+            if let Some(branch) = self
+                .git_status_metadata(ctx)
+                .map(|metadata| metadata.current_branch_name.clone())
+                .filter(|branch| !branch.trim().is_empty())
+            {
+                return Some(branch);
+            }
+        }
         self.prompt_chip_value(&ContextChipKind::ShellGitBranch, ctx)
-            .or_else(|| {
-                #[cfg(feature = "local_fs")]
-                {
-                    self.git_status_metadata(ctx)
-                        .map(|metadata| metadata.current_branch_name.clone())
-                        .filter(|branch| !branch.trim().is_empty())
-                }
-                #[cfg(not(feature = "local_fs"))]
-                {
-                    None
-                }
-            })
     }
 
     pub fn last_completed_command_text(&self) -> Option<String> {
