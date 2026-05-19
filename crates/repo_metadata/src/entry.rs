@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 
+use crate::gitignore_cache::{cached_gitignore_global, cached_gitignore_new};
+
 /// Maximum file size allowed for treesitter parsing (3MB).
 const MAX_FILE_SIZE: usize = 3 * 1000 * 1000;
 
@@ -106,8 +108,7 @@ impl Entry {
 
         let gitignore_path = curr_path.join(".gitignore");
         if gitignore_path.exists() {
-            let (gitignore, _) = Gitignore::new(gitignore_path);
-            gitignores.push(gitignore);
+            gitignores.push(cached_gitignore_new(&gitignore_path));
         }
 
         let path_is_ignored = matches_gitignores(
@@ -536,10 +537,9 @@ pub fn gitignores_for_directory(directory_path: &Path) -> Vec<Gitignore> {
     let mut gitignores = Vec::new();
     let gitignore_path = directory_path.join(".gitignore");
     if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(&gitignore_path);
-        gitignores.push(gitignore);
+        gitignores.push(cached_gitignore_new(&gitignore_path));
     }
-    let (global_gitignore, _) = Gitignore::global();
+    let global_gitignore = cached_gitignore_global();
     if !global_gitignore.is_empty() {
         gitignores.push(global_gitignore);
     }
