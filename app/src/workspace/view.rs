@@ -5132,6 +5132,28 @@ impl Workspace {
         );
     }
 
+    pub fn rename_active_tab_with_fallback_title(
+        &mut self,
+        fallback_title: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active_tab_index) else {
+            log::warn!("Tried to rename active tab but active tab index was out of range");
+            return;
+        };
+        let title = tab
+            .pane_group
+            .as_ref(ctx)
+            .custom_title(ctx)
+            .unwrap_or_else(|| fallback_title.to_string());
+
+        self.rename_tab_internal(self.active_tab_index, &title, ctx);
+        send_telemetry_from_ctx!(
+            TelemetryEvent::TabRenamed(TabRenameEvent::OpenedEditor),
+            ctx
+        );
+    }
+
     fn set_active_tab_name(&mut self, title: &str, ctx: &mut ViewContext<Self>) {
         let Some(pane_group) = self
             .tabs
@@ -5317,6 +5339,21 @@ impl Workspace {
         });
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+    }
+
+    pub fn rename_pane_by_id(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        let Some(locator) = self.tabs.iter().find_map(|tab| {
+            let pane_group = tab.pane_group.as_ref(ctx);
+            pane_group.pane_by_id(pane_id).map(|_| PaneViewLocator {
+                pane_group_id: tab.pane_group.id(),
+                pane_id,
+            })
+        }) else {
+            log::warn!("Tried to rename a missing pane");
+            return;
+        };
+
+        self.rename_pane(locator, ctx);
     }
 
     pub fn rename_pane(&mut self, locator: PaneViewLocator, ctx: &mut ViewContext<Self>) {
@@ -20921,8 +20958,12 @@ impl TypedActionView for Workspace {
             RenameTab(index) => self.rename_tab(*index, ctx),
             ResetTabName(index) => self.clear_tab_name(*index, ctx),
             RenamePane(locator) => self.rename_pane(*locator, ctx),
+            RenamePaneById(pane_id) => self.rename_pane_by_id(*pane_id, ctx),
             ResetPaneName(locator) => self.clear_pane_name(*locator, ctx),
             RenameActiveTab => self.rename_tab(self.active_tab_index, ctx),
+            RenameActiveTabWithFallbackTitle(fallback_title) => {
+                self.rename_active_tab_with_fallback_title(fallback_title, ctx)
+            }
             RenameActivePane => {
                 let pane_group = self.active_tab_pane_group().clone();
                 let pane_group_id = pane_group.id();

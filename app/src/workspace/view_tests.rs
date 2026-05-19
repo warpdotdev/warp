@@ -874,6 +874,45 @@ fn test_set_active_tab_name() {
 }
 
 #[test]
+fn test_rename_active_tab_with_fallback_title() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::RenameActiveTabWithFallbackTitle("Pane title".to_string()),
+                ctx,
+            );
+            assert_eq!(
+                workspace
+                    .tab_rename_editor
+                    .read(ctx, |editor, ctx| editor.selected_text(ctx)),
+                "Pane title"
+            );
+
+            workspace.handle_action(
+                &WorkspaceAction::SetActiveTabName("Custom tab title".to_string()),
+                ctx,
+            );
+            workspace.handle_action(
+                &WorkspaceAction::RenameActiveTabWithFallbackTitle(
+                    "Different pane title".to_string(),
+                ),
+                ctx,
+            );
+            assert_eq!(
+                workspace
+                    .tab_rename_editor
+                    .read(ctx, |editor, ctx| editor.selected_text(ctx)),
+                "Custom tab title"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_set_active_tab_name_clears_active_rename_editor_state() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

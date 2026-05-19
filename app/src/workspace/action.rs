@@ -13,7 +13,7 @@ use crate::auth::auth_manager::LoginGatedFeature;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
 use crate::palette::PaletteMode;
-use crate::pane_group::PaneGroup;
+use crate::pane_group::{PaneGroup, PaneId};
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
 use crate::server::ids::SyncId;
@@ -110,8 +110,10 @@ pub enum WorkspaceAction {
     RenameTab(usize),
     ResetTabName(usize),
     RenamePane(PaneViewLocator),
+    RenamePaneById(PaneId),
     ResetPaneName(PaneViewLocator),
     RenameActiveTab,
+    RenameActiveTabWithFallbackTitle(String),
     /// Renames the focused pane in the active tab. Mirrors `RenameActiveTab`
     /// so the action is reachable from the binding registry / Command Palette
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
@@ -748,8 +750,10 @@ impl WorkspaceAction {
             | RenameTab(_)
             | ResetTabName(_)
             | RenamePane(_)
+            | RenamePaneById(_)
             | ResetPaneName(_)
             | RenameActiveTab
+            | RenameActiveTabWithFallbackTitle(_)
             | RenameActivePane
             | SetActiveTabName(_)
             | SetActiveTabColor(_)

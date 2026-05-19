@@ -147,8 +147,8 @@ pub struct TabData {
     pub detached: bool,
 }
 
-const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
-const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
+pub(crate) const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
+pub(crate) const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
 
 impl TabData {
     pub fn new(pane_group: ViewHandle<PaneGroup>) -> Self {
