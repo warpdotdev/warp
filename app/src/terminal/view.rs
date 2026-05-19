@@ -4813,10 +4813,6 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             input.update_repo_path(None, ctx);
         });
-        // Redraw on repo exit so the code review button drops its diff annotation immediately.
-        self.refresh_pane_header(ctx);
-        ctx.emit(Event::TerminalViewStateChanged);
-        ctx.notify();
     }
 
     /// Helper to read metadata from the per-repo sub-model.
