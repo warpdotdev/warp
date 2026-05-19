@@ -6,14 +6,7 @@ use super::{
     view_impl::common::{
         render_switch_control_to_user_button, render_warping_indicator,
         render_warping_indicator_base, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
-        WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
-    },
-};
-use crate::{
-    ai::agent_tips::AITipModel,
-    terminal::{
-        input::buffer_model::InputBufferUpdateEvent,
-        view::ambient_agent::is_cloud_agent_pre_first_exchange,
+        WarpingIndicatorProps, WarpingProps, WAITING_FOR_USER_INPUT_MESSAGE,
     },
 };
 use crate::{
@@ -28,6 +21,13 @@ use crate::{
         slash_command_model::SlashCommandModel,
         suggestions_mode_model::InputSuggestionsModeModel,
         HandoffComposeState,
+    },
+};
+use crate::{
+    ai::{agent_tips::AITipModel, loading::WarpingVerbSelector},
+    terminal::{
+        input::buffer_model::InputBufferUpdateEvent,
+        view::ambient_agent::is_cloud_agent_pre_first_exchange,
     },
 };
 use warp_multi_agent_api as api;
@@ -132,8 +132,11 @@ pub struct BlocklistAIStatusBar {
     /// Handle for the 1-second periodic timer that refreshes the "Last read …" suffix in
     /// the warping indicator while the active block has a recorded LRC snapshot.
     last_read_refresh_handle: Option<SpawnedFutureHandle>,
-
+    /// The most recent response stream and the exchanges it appended. A single
+    /// backend response can append multiple exchanges as subtasks stream in, so
+    /// the spinner verb should key on the stream rather than each exchange.
     latest_response_stream_id: Option<ResponseStreamId>,
+    latest_response_stream_exchange_ids: HashSet<AIAgentExchangeId>,
 
     /// Agent tip to display below the warping indicator.
     current_tip: Option<AgentTip>,
@@ -141,6 +144,11 @@ pub struct BlocklistAIStatusBar {
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
     agent_message_bar: ViewHandle<AgentMessageBar>,
     child_agent_status_card: ViewHandle<ChildAgentStatusCard>,
+
+    /// Picks and caches a verb for the default "Warping..." spinner state.
+    /// Falls back to the built-in "Warping..." display when the custom verb list is
+    /// empty or the feature flag is off.
+    warping_verb_selector: WarpingVerbSelector,
 }
 
 impl BlocklistAIStatusBar {
@@ -180,12 +188,18 @@ impl BlocklistAIStatusBar {
                     ..
                 } => {
                     if let Some(response_stream_id) = response_stream_id.clone() {
-                        me.latest_response_stream_id = Some(response_stream_id);
+                        if me.latest_response_stream_id.as_ref() != Some(&response_stream_id) {
+                            me.latest_response_stream_exchange_ids.clear();
+                            me.latest_response_stream_id = Some(response_stream_id.clone());
+                        }
+                        me.latest_response_stream_exchange_ids.insert(*exchange_id);
                     }
                     me.reset_model_for_exchange(*exchange_id, *conversation_id, ctx);
                 }
                 BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
                     me.active_exchange_model = None;
+                    me.latest_response_stream_id = None;
+                    me.latest_response_stream_exchange_ids.clear();
                     ctx.notify();
                 }
                 BlocklistAIHistoryEvent::ClearedActiveConversation {
@@ -394,6 +408,7 @@ impl BlocklistAIStatusBar {
             hide_cli_responses_keystroke,
             summarization_cancel_dialog,
             latest_response_stream_id: None,
+            latest_response_stream_exchange_ids: HashSet::new(),
             is_summarization_cancel_dialog_open: false,
             summarization_timer_handle: None,
             summarization_start_time: None,
@@ -403,6 +418,7 @@ impl BlocklistAIStatusBar {
             ephemeral_message_model,
             agent_message_bar,
             child_agent_status_card,
+            warping_verb_selector: WarpingVerbSelector::new(),
         }
     }
 
@@ -815,10 +831,20 @@ impl BlocklistAIStatusBar {
             model.as_ref(),
             app,
         );
-        let default_warping_text = fallback_warping_text
-            .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
+        let default_warping_text = if let Some(fallback) = fallback_warping_text.as_deref() {
+            fallback.to_owned()
+        } else {
+            // Use the custom verbs list (or the built-in "Warping..." display when the
+            // list is empty). Prefer the active response stream key so a single
+            // verb is sticky even when one backend response appends multiple
+            // exchange IDs while streaming.
+            let session_key = warping_verb_session_key_for_exchange(
+                model.exchange_id(app),
+                self.latest_response_stream_id.as_ref(),
+                &self.latest_response_stream_exchange_ids,
+            );
+            self.warping_verb_selector.resolve(&session_key, app)
+        };
         let secondary_element = if fallback_warping_text.is_some() {
             Some(render_fallback_explanation(model.as_ref(), app))
         } else {
@@ -1094,11 +1120,27 @@ fn render_fallback_explanation<V: View>(
     .finish()
 }
 
+fn warping_verb_session_key_for_exchange(
+    exchange_id: Option<AIAgentExchangeId>,
+    latest_response_stream_id: Option<&ResponseStreamId>,
+    latest_response_stream_exchange_ids: &HashSet<AIAgentExchangeId>,
+) -> String {
+    let Some(exchange_id) = exchange_id else {
+        return String::new();
+    };
+    if latest_response_stream_exchange_ids.contains(&exchange_id) {
+        if let Some(response_stream_id) = latest_response_stream_id {
+            return format!("response_stream:{}", response_stream_id.as_str());
+        }
+    }
+    format!("exchange:{exchange_id}")
+}
+
 /// If the current exchange is using a fallback model, returns the warping message to display
 /// (e.g. "Warping with Claude 3.5 Haiku."). When the current exchange's output doesn't have
 /// model info yet (the ModelUsed message hasn't arrived), we check the most recent previous
 /// exchange as a best guess — if the conversation already fell back, the next exchange likely
-/// will too. This avoids a flicker from "Warping..." to "Warping with {name}." on follow-ups.
+/// will too. This avoids a flicker from "warping" to "Warping with {name}." on follow-ups.
 ///
 /// We skip the lookback for new user queries because the underlying model may have recovered
 /// since the previous exchange. For agent-initiated follow-up exchanges (action results, etc.)
@@ -1321,6 +1363,52 @@ impl View for BlocklistAIStatusBar {
         }
 
         container.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warping_verb_session_key_uses_same_stream_for_exchanges_from_same_output() {
+        let response_stream_id = ResponseStreamId::new_for_test();
+        let first_exchange_id = AIAgentExchangeId::new();
+        let second_exchange_id = AIAgentExchangeId::new();
+        let mut exchange_ids = HashSet::new();
+        exchange_ids.insert(first_exchange_id);
+        exchange_ids.insert(second_exchange_id);
+
+        assert_eq!(
+            warping_verb_session_key_for_exchange(
+                Some(first_exchange_id),
+                Some(&response_stream_id),
+                &exchange_ids,
+            ),
+            warping_verb_session_key_for_exchange(
+                Some(second_exchange_id),
+                Some(&response_stream_id),
+                &exchange_ids,
+            )
+        );
+    }
+
+    #[test]
+    fn warping_verb_session_key_falls_back_to_exchange_for_untracked_exchange() {
+        let response_stream_id = ResponseStreamId::new_for_test();
+        let tracked_exchange_id = AIAgentExchangeId::new();
+        let untracked_exchange_id = AIAgentExchangeId::new();
+        let mut exchange_ids = HashSet::new();
+        exchange_ids.insert(tracked_exchange_id);
+
+        assert_eq!(
+            warping_verb_session_key_for_exchange(
+                Some(untracked_exchange_id),
+                Some(&response_stream_id),
+                &exchange_ids,
+            ),
+            format!("exchange:{untracked_exchange_id}")
+        );
     }
 }
 

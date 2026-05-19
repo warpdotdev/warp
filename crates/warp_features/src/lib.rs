@@ -859,6 +859,10 @@ pub enum FeatureFlag {
     /// snapshot attached. Requires `OzHandoff` to also be enabled.
     HandoffLocalCloud,
 
+    /// Enables a user-editable list of custom "warping" spinner verbs that
+    /// replace the default "Warping..." spinner when the Warp agent or an Oz
+    /// cloud agent is in the generic in-progress state.
+    CustomWarpingVerbs,
     /// Enables creating API keys scoped to named agents in the API key
     /// management UI. When enabled the "Team" option in the key-type
     /// selector is replaced with "Agent" and users can pick which agent
@@ -940,6 +944,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::CustomWarpingVerbs,
     FeatureFlag::SoloUserByok,
     FeatureFlag::CustomInferenceEndpoints,
     FeatureFlag::RemoteCodebaseIndexing,

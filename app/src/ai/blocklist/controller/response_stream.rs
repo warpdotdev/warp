@@ -29,6 +29,10 @@ impl ResponseStreamId {
         Self(format!("{}-{}", init_event.request_id, Uuid::new_v4()))
     }
 
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         Self(Uuid::new_v4().to_string())

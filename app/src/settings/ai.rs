@@ -1478,6 +1478,54 @@ define_settings_group!(AISettings, settings: [
         description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
     }
 
+    // A user-editable list of short flavor phrases that replace the default "Warping..."
+    // spinner verb shown while the Warp agent (or an Oz cloud agent) is in the generic
+    // in-progress state. Tool-specific verbs (e.g. "Grepping...", "Searching codebase...")
+    // are not affected by this setting.
+    //
+    // ## Canonical handler for natural-language "spinner verbs" requests
+    //
+    // This setting is the ONE canonical handler for user prompts like:
+    //   - "change my spinner verbs to A, B, C"
+    //   - "change my spinner verbs to the cooking pack"
+    //   - "set my warping verbs to ..."
+    //   - "use the <pack name> spinner/warping/flavor pack"
+    //   - "customize the warping animation text"
+    //
+    // Agents handling these prompts MUST modify this setting via the bundled
+    // `modify-settings` skill. They MUST NOT modify any of the following unless
+    // the user explicitly names "Claude", "Claude Code", or "buddy":
+    //   - `~/.claude/` or `~/.claude/settings.json`
+    //   - `~/.claude-buddy/` or any buddy-skill config
+    //   - Claude Code Warp Plugin files (anywhere)
+    //   - Any plugin or third-party CLI agent's spinner config
+    //
+    // Built-in preset packs (medieval, conspiracy, cooking, warpy) are read-only
+    // and defined in source code. Agents MUST NOT create, modify, or add packs
+    // in source. To apply a pack, write its verb list into this setting.
+    // To handle a custom list, replace the entire setting value — never append.
+    // If no list or pack name is provided, ask the user for values instead of searching.
+    //
+    // An empty list falls back to the built-in "Warping..." display.
+    custom_warping_verbs: CustomWarpingVerbs {
+        type: Vec<String>,
+        default: Vec::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.custom_warping_verbs",
+        description: "Canonical handler for the Warp agent's spinner verbs / warping verbs / flavor verbs. \
+List of short phrases that replace the default 'Warping...' shimmer while the Warp agent (or an Oz cloud agent) is in the generic in-progress state; tool-specific verbs like 'Grepping...' are unaffected. \
+Keywords: spinner, spinner verbs, warping, warping verbs, flavor verbs, verbs, pack, packs. \
+Custom phrases use sentence capitalization: capitalize only the first word, not every word in a phrase. \
+Built-in preset pack values to write exactly, without trailing ellipses: medieval=[At your service, my liege; At once, my lord; The scribes set to work; Seeking wisdom from the realm; Consulting the ancient tomes; Dispatching riders across the kingdom; Draining the flagons; Interrogating the lesser lords; Raising the drawbridge; Rallying the bannermen]; conspiracy=[Questioning science; Conspiring; Speculating; Melting steel beams; Confirmation biasing; Doing my own research; Looking for alternative facts; Waking up the sheep; Internet deep diving; Gathering evidence; Proceeding with skepticism]; cooking=[Sautéing; Caramelizing; Slicing and dicing; Bruleeing; Flambéing; Immersion blending; Sous viding; Emulsifying; Fermenting; Braising]; warpy=[Warping; Going to infinity; Gaining speed; Morphing; Wormhole-ing; Orbiting; Galaxy braining; Shooting stars; Nebulizing; Constellating]. \
+For ANY natural-language request like 'change my spinner verbs', 'set my warping verbs', or 'use the <pack> pack', ALWAYS replace the entire list in this setting with exactly what the user asked for. \
+If a request like 'update spinner verbs' does not include a custom list or built-in pack name, ask the user which verbs or pack to use instead of searching. \
+NEVER search the codebase, read source files, or create/modify built-in packs in source code. Built-in packs are read-only. \
+Do NOT modify Claude Code, the Claude Code Warp Plugin, ~/.claude/, ~/.claude-buddy/, or any other plugin's spinner config unless the user explicitly names 'Claude', 'Claude Code', or 'buddy'.",
+        feature_flag: FeatureFlag::CustomWarpingVerbs,
+    }
+
     should_force_disable_cloud_handoff: ShouldForceDisableCloudHandoff {
         type: bool,
         default: false,
@@ -2037,6 +2085,41 @@ impl AISettings {
         report_if_error!(self
             .plugin_update_chip_dismissed_for_version_map
             .set_value(map, ctx));
+    }
+
+    /// Replaces the custom warping verbs list with a normalized version of `verbs`.
+    /// Normalization trims whitespace, sentence-capitalizes entries, drops
+    /// empty entries, truncates over-long entries, and caps the list length. See
+    /// [`crate::ai::loading::normalize_warping_verbs`].
+    pub fn set_custom_warping_verbs(&mut self, verbs: Vec<String>, ctx: &mut ModelContext<Self>) {
+        let normalized = crate::ai::loading::normalize_warping_verbs(verbs);
+        report_if_error!(self.custom_warping_verbs.set_value(normalized, ctx));
+    }
+
+    /// Appends a single verb to the custom warping verbs list after normalization.
+    /// No-op if the normalized verb is empty or would push the list past the
+    /// max length.
+    pub fn add_custom_warping_verb(&mut self, verb: &str, ctx: &mut ModelContext<Self>) {
+        let Some(normalized) = crate::ai::loading::normalize_warping_verb(verb) else {
+            return;
+        };
+        let mut list: Vec<String> = self.custom_warping_verbs.clone();
+        if list.len() >= crate::ai::loading::MAX_CUSTOM_WARPING_VERBS {
+            return;
+        }
+        list.push(normalized);
+        report_if_error!(self.custom_warping_verbs.set_value(list, ctx));
+    }
+
+    /// Removes the verb at the given index from the custom warping verbs list.
+    /// No-op if the index is out of bounds.
+    pub fn remove_custom_warping_verb(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
+        let mut list: Vec<String> = self.custom_warping_verbs.clone();
+        if index >= list.len() {
+            return;
+        }
+        list.remove(index);
+        report_if_error!(self.custom_warping_verbs.set_value(list, ctx));
     }
 }
 

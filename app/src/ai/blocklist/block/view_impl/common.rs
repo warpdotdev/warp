@@ -130,7 +130,9 @@ const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
 const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
 const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 
-pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
+// The default "Warping..." display is owned by `crate::ai::loading::DEFAULT_WARPING_VERB`
+// and picked at render time by `WarpingVerbSelector`, which honors the user's
+// `AISettings::custom_warping_verbs` list.
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN: &str = "Generating fix...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF: &str = "Creating diff...";
@@ -535,7 +537,7 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
-/// Helper function to render text in the "warping..." footer.
+/// Helper function to render text in the "warping" footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
 /// without the animation resetting.
