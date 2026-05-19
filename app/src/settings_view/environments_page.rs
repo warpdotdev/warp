@@ -577,6 +577,23 @@ impl EnvironmentsPageView {
     pub fn pane_configuration(&self) -> ModelHandle<crate::pane_group::pane::PaneConfiguration> {
         self.pane_configuration.clone()
     }
+
+    fn render_pane_header_content() -> HeaderContent {
+        HeaderContent::Standard(StandardHeader {
+            title: "Environments".to_string(),
+            title_secondary: None,
+            title_style: None,
+            title_clip_config: warpui::text_layout::ClipConfig::start(),
+            title_max_width: None,
+            left_of_title: None,
+            right_of_title: None,
+            left_of_overflow: None,
+            options: StandardHeaderOptions {
+                always_show_icons: true,
+                ..Default::default()
+            },
+        })
+    }
     pub fn set_github_auth_redirect_target(
         &mut self,
         target: GithubAuthRedirectTarget,
@@ -2045,7 +2062,7 @@ impl SettingsPageMeta for EnvironmentsPageView {
 use crate::pane_group::{
     focus_state::PaneFocusHandle,
     pane::{
-        view::{HeaderContent, HeaderRenderContext},
+        view::{HeaderContent, HeaderRenderContext, StandardHeader, StandardHeaderOptions},
         BackingView,
     },
 };
@@ -2078,7 +2095,7 @@ impl BackingView for EnvironmentsPageView {
         _ctx: &HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> HeaderContent {
-        HeaderContent::simple("Environments")
+        Self::render_pane_header_content()
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

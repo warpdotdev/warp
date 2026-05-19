@@ -840,6 +840,18 @@ fn test_set_github_auth_redirect_target_updates_form() {
 }
 
 #[test]
+fn test_environment_pane_header_always_shows_icons() {
+    let HeaderContent::Standard(header) = EnvironmentsPageView::render_pane_header_content() else {
+        panic!("Environment pane should use a standard header");
+    };
+
+    assert!(
+        header.options.always_show_icons,
+        "environment pane header icons should remain visible without hover"
+    );
+}
+
+#[test]
 fn test_render_empty_state_shows_github_remote_and_local_rows() {
     // Empty-state UI should include GitHub-remote (suggested) and agent-assisted local repos paths.
     App::test((), |mut app| async move {
