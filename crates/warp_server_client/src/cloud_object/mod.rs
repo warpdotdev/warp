@@ -25,6 +25,11 @@ use crate::{
     ids::{FolderId, ServerId, SyncId},
 };
 
+mod creation;
+mod update;
+
+pub use creation::*;
+pub use update::*;
 /// The type of object id each ObjectType corresponds to.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ObjectIdType {
@@ -132,6 +137,22 @@ pub const JSON_OBJECT_PREFIX: &str = "JSON_";
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum GenericStringObjectFormat {
     Json(JsonObjectType),
+}
+
+/// Represents a unique key for a generic string object. The server enforces that
+/// no two generic string objects have the same key.
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct GenericStringObjectUniqueKey {
+    /// The unique key. E.g. for cloud prefs this is the storage key of the pref.
+    pub key: String,
+
+    /// Whether this key is unique for all generic string objects, or unique per user.
+    pub unique_per: UniquePer,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum UniquePer {
+    User,
 }
 
 // Temporarily suppress clippy warnings about the `ToString` impl until we
@@ -784,6 +805,36 @@ pub enum CloudObjectEventEntrypoint {
     Unknown,
 }
 
+// A newtype for a serialized model that wraps a plain string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerializedModel(String);
+
+impl SerializedModel {
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    pub fn model_as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn take(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for SerializedModel {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevisionAndLastEditor {
+    pub revision: Revision,
+    pub last_editor_uid: Option<String>,
+}
+
 // GraphQL conversion impls.
 
 impl From<GenericStringObjectFormat>
@@ -836,6 +887,27 @@ impl From<CloudObjectEventEntrypoint> for warp_graphql::object::CloudObjectEvent
             CloudObjectEventEntrypoint::ImportModal => GraphQLEntrypoint::ImportModal,
             CloudObjectEventEntrypoint::Onboarding => GraphQLEntrypoint::Onboarding,
             CloudObjectEventEntrypoint::Unknown => GraphQLEntrypoint::Unknown,
+        }
+    }
+}
+
+impl From<GenericStringObjectUniqueKey>
+    for warp_graphql::generic_string_object::GenericStringObjectUniqueKey
+{
+    fn from(key: GenericStringObjectUniqueKey) -> Self {
+        use warp_graphql::generic_string_object::GenericStringObjectUniqueKey as GraphQLKey;
+        GraphQLKey {
+            key: key.key,
+            unique_per: key.unique_per.into(),
+        }
+    }
+}
+
+impl From<UniquePer> for warp_graphql::generic_string_object::UniquePer {
+    fn from(unique_per: UniquePer) -> Self {
+        use warp_graphql::generic_string_object::UniquePer as GraphQLUniquePer;
+        match unique_per {
+            UniquePer::User => GraphQLUniquePer::User,
         }
     }
 }
