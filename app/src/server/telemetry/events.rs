@@ -2548,10 +2548,9 @@ pub enum TelemetryEvent {
         action: AgentModeSetupCreateEnvironmentActionType,
     },
     InputBufferSubmitted {
-        input: Option<String>,
         input_type: input_classifier::InputType,
         is_locked: bool,
-        decision_source: Option<InputDecisionSource>,
+        nld_decision_source: Option<InputDecisionSource>,
         was_lock_set_with_empty_buffer: bool,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
@@ -4411,16 +4410,14 @@ impl TelemetryEvent {
                 "exit_code": exit_code,
             })),
             TelemetryEvent::InputBufferSubmitted {
-                input,
                 input_type,
                 is_locked,
-                decision_source,
+                nld_decision_source,
                 was_lock_set_with_empty_buffer,
             } => Some(json!({
-                "input": input,
                 "input_type": input_type,
                 "is_locked": is_locked,
-                "decision_source": decision_source,
+                "nld_decision_source": nld_decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
@@ -4686,6 +4683,7 @@ impl TelemetryEvent {
             TelemetryEvent::AgentExitedShellProcess { .. } => true,
             TelemetryEvent::CreateProjectPromptSubmitted { .. } => false,
             TelemetryEvent::CreateProjectPromptSubmittedContent { .. } => true,
+            TelemetryEvent::InputBufferSubmitted { .. } => false,
             TelemetryEvent::AgentModePrediction {
                 actual_next_command_run,
                 history_based_autosuggestion_state,
@@ -4700,7 +4698,6 @@ impl TelemetryEvent {
                     || generate_ai_input_suggestions_response.is_some()
             }
             TelemetryEvent::AgentModeChangedInputType { input, .. } => input.is_some(),
-            TelemetryEvent::InputBufferSubmitted { input, .. } => input.is_some(),
             TelemetryEvent::UnitTestSuggestionAccepted { query, .. } => query.is_some(),
             TelemetryEvent::AgentModePotentialAutoDetectionFalsePositive(payload) => {
                 // For internal dogfood users, the payload contains UGC.
