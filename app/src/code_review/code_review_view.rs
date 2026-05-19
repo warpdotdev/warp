@@ -7216,6 +7216,16 @@ impl TypedActionView for CodeReviewView {
                 self.save_files(unsaved_files.as_slice(), ctx);
             }
             CodeReviewAction::RefreshGitState => {
+                // Immediately transition the view to the loading state so the
+                // user sees a spinner while the retry is in progress. Without
+                // this, the view stays stuck on the error UI until the async
+                // diff load completes — which looks like the retry did nothing
+                // when the same error recurs.
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.state = CodeReviewViewState::None;
+                }
+                ctx.notify();
+
                 self.diff_state_model.update(ctx, |model, ctx| {
                     model.load_diffs_for_current_repo(false, ctx);
                     model.refresh_metadata_and_pr_info(ctx);
