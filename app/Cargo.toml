@@ -477,7 +477,6 @@ default = [
     "full_screen_zen_mode",
     "workflow_aliases",
     "ligatures",
-    "dynamic_workflow_enums",
     "rect_selection",
     "reload_stale_conversation_files",
     "loginless_conversion",
@@ -649,7 +648,6 @@ default = [
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
 dhat_heap_profiling = ["dep:dhat"]
-dynamic_workflow_enums = []
 editable_markdown_mermaid = []
 default_adeberry_theme = []
 drag_tabs_to_windows = []

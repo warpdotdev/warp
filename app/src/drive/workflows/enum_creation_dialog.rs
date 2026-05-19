@@ -2,12 +2,12 @@ use std::rc::Rc;
 
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, IntoStaticStr};
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::NavigationKey;
 use warpui::{
     elements::{
         Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Empty, Fill, Flex, MainAxisAlignment, MainAxisSize,
+        CornerRadius, CrossAxisAlignment, Fill, Flex, MainAxisAlignment, MainAxisSize,
         MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable,
     },
     ui_components::{
@@ -644,48 +644,38 @@ impl EnumCreationDialog {
     }
 
     fn render_toggle_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
-        if FeatureFlag::DynamicWorkflowEnums.is_enabled() {
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .toggle_menu(
-                        self.enum_type_handles.enum_type_mouse_states.clone(),
-                        self.enum_type_options
-                            .iter()
-                            .map(|arg_type| {
-                                let label: &'static str = arg_type.into();
-                                ToggleMenuItem::new(label)
-                            })
-                            .collect(),
-                        self.enum_type_handles.enum_type_state_handle.clone(),
-                        Some(0),
-                        Some(appearance.theme().background()),
-                        Some(appearance.theme().surface_2()),
-                        Some(appearance.theme().surface_3()),
-                        appearance.ui_font_size(),
-                        Rc::new(|_, _, _| {}),
-                    )
-                    .build()
-                    .finish(),
-            )
-            .with_horizontal_margin(CONTAINER_PADDING)
-            .with_margin_bottom(ROW_MARGIN)
-            .finish()
-        } else {
-            Empty::new().finish()
-        }
+        Container::new(
+            appearance
+                .ui_builder()
+                .toggle_menu(
+                    self.enum_type_handles.enum_type_mouse_states.clone(),
+                    self.enum_type_options
+                        .iter()
+                        .map(|arg_type| {
+                            let label: &'static str = arg_type.into();
+                            ToggleMenuItem::new(label)
+                        })
+                        .collect(),
+                    self.enum_type_handles.enum_type_state_handle.clone(),
+                    Some(0),
+                    Some(appearance.theme().background()),
+                    Some(appearance.theme().surface_2()),
+                    Some(appearance.theme().surface_3()),
+                    appearance.ui_font_size(),
+                    Rc::new(|_, _, _| {}),
+                )
+                .build()
+                .finish(),
+        )
+        .with_horizontal_margin(CONTAINER_PADDING)
+        .with_margin_bottom(ROW_MARGIN)
+        .finish()
     }
 
     fn render_variants_section(&self, appearance: &Appearance) -> Box<dyn Element> {
         match self.get_selected_type() {
             EnumType::Static => self.render_static_section(appearance),
-            EnumType::Dynamic => {
-                if FeatureFlag::DynamicWorkflowEnums.is_enabled() {
-                    self.render_dynamic_section(appearance)
-                } else {
-                    self.render_static_section(appearance)
-                }
-            }
+            EnumType::Dynamic => self.render_dynamic_section(appearance),
         }
     }
 

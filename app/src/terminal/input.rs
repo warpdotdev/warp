@@ -7713,21 +7713,19 @@ impl Input {
                 variants
             }
             EnumVariants::Dynamic(command) => {
-                if FeatureFlag::DynamicWorkflowEnums.is_enabled() {
-                    self.suggestions_mode_model.update(ctx, |m, ctx| {
-                        m.set_mode(
-                            InputSuggestionsMode::DynamicWorkflowEnumSuggestions {
-                                suggestions: vec![],
-                                menu_position: TabCompletionsMenuPosition::AtFirstCursor,
-                                selected_ranges,
-                                cursor_point: position,
-                                dynamic_enum_status: DynamicEnumSuggestionStatus::Unapproved,
-                                command,
-                            },
-                            ctx,
-                        );
-                    });
-                }
+                self.suggestions_mode_model.update(ctx, |m, ctx| {
+                    m.set_mode(
+                        InputSuggestionsMode::DynamicWorkflowEnumSuggestions {
+                            suggestions: vec![],
+                            menu_position: TabCompletionsMenuPosition::AtFirstCursor,
+                            selected_ranges,
+                            cursor_point: position,
+                            dynamic_enum_status: DynamicEnumSuggestionStatus::Unapproved,
+                            command,
+                        },
+                        ctx,
+                    );
+                });
                 vec![]
             }
         };

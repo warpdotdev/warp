@@ -2595,8 +2595,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RectSelection,
         #[cfg(feature = "alacritty_settings_import")]
         FeatureFlag::AlacrittySettingsImport,
-        #[cfg(feature = "dynamic_workflow_enums")]
-        FeatureFlag::DynamicWorkflowEnums,
         #[cfg(feature = "shared_with_me")]
         FeatureFlag::SharedWithMe,
         #[cfg(feature = "am_workflows")]

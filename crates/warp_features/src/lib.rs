@@ -120,9 +120,6 @@ pub enum FeatureFlag {
     /// Adds Alacritty as a supported terminal to import settings from.
     AlacrittySettingsImport,
 
-    /// Enable dynamic enum parameter types for workflow arguments
-    DynamicWorkflowEnums,
-
     /// Enables next action prediction within Warp, powered by AI.
     AgentPredict,
 
