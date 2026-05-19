@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
+use cloud_object_models::JsonSerializer;
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
 use warp_core::features::FeatureFlag;
@@ -21,7 +22,6 @@ use crate::{
                 ObjectActions,
             },
             generic_string_model::GenericStringObjectId,
-            json_model::JsonSerializer,
             persistence::{CloudModel, CloudModelEvent, UpdateSource},
         },
         BulkCreateCloudObjectResult, CloudModelType, CloudObjectEventEntrypoint, CloudObjectGuest,
@@ -29,8 +29,8 @@ use crate::{
         GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectDeleteResult,
         ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, Owner,
         Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerGuestSubject,
-        ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow, ServerWorkflowEnum,
-        Space, UpdateCloudObjectResult,
+        ServerNotebook, ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow,
+        ServerWorkflowEnum, Space, UpdateCloudObjectResult,
     },
     drive::{
         folders::{CloudFolder, CloudFolderModel, FolderId},
@@ -47,7 +47,7 @@ use crate::{
             },
             update_manager::{
                 get_duplicate_object_name, FetchSingleObjectOption, GenericStringObjectInput,
-                InitiatedBy, ServerMetadata, ServerNotebook, ServerPermissions,
+                InitiatedBy, ServerMetadata, ServerPermissions,
             },
         },
         ids::{ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId},

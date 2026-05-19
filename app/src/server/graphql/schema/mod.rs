@@ -1,4 +1,5 @@
 pub mod util;
+pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
 
 use crate::{
     cloud_object::{

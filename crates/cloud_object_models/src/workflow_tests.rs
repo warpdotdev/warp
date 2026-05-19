@@ -1,8 +1,17 @@
-use crate::{
-    cloud_object::model::generic_string_model::GenericStringObjectId,
-    server::ids::{ClientId, HashableId, ServerId, SyncId},
-    workflows::workflow::{Argument, ArgumentType, Workflow},
-};
+use cloud_objects::ids::{ClientId, GenericStringObjectId, HashableId, ServerId, SyncId};
+
+use super::{Argument, ArgumentType, Workflow};
+
+fn server_id(id: &str) -> ServerId {
+    ServerId::try_from(id).expect("test server ID should be valid")
+}
+
+fn assert_workflow_roundtrips(workflow: &Workflow) {
+    let serialized = serde_json::to_string(workflow).expect("Serialized workflow.");
+    let deserialized =
+        serde_json::from_str::<Workflow>(&serialized).expect("Deserialized workflow.");
+    assert_eq!(&deserialized, workflow);
+}
 
 #[test]
 fn test_workflow_serialization_with_enum_params() {
@@ -19,7 +28,9 @@ fn test_workflow_serialization_with_enum_params() {
             Argument {
                 name: "server id enum".to_string(),
                 arg_type: ArgumentType::Enum {
-                    enum_id: SyncId::from(GenericStringObjectId::from(ServerId::from(123))),
+                    enum_id: SyncId::from(GenericStringObjectId::from(server_id(
+                        "test_uid00000000000123",
+                    ))),
                 },
                 description: Some("description".to_string()),
                 default_value: None,
@@ -85,4 +96,36 @@ fn test_agent_mode_workflow_serialization() {
         serde_json::from_str(serialized.as_str()).expect("failed to deserialized");
 
     assert_eq!(deserialized, workflow);
+}
+
+#[test]
+fn test_serialize_cloud_workflow() {
+    let sample_workflow = Workflow::new("Test name", "Command name");
+    assert_workflow_roundtrips(&sample_workflow);
+
+    let arguments = vec![Argument {
+        name: "Argument".to_string(),
+        description: Some("no".to_string()),
+        default_value: None,
+        arg_type: Default::default(),
+    }];
+    let arguments_workflow = sample_workflow.clone().with_arguments(arguments);
+    assert_workflow_roundtrips(&arguments_workflow);
+
+    let description_workflow = sample_workflow.with_description("cool description".to_string());
+    assert_workflow_roundtrips(&description_workflow);
+
+    let workflow_with_additional_fields = Workflow::Command {
+        name: "Test".to_string(),
+        command: "Command".to_string(),
+        tags: vec![],
+        description: None,
+        arguments: vec![],
+        source_url: Some("url".to_string()),
+        author: Some("author_name".to_string()),
+        author_url: None,
+        shells: vec![],
+        environment_variables: Some(SyncId::ServerId(server_id("test_uid00000000000123"))),
+    };
+    assert_workflow_roundtrips(&workflow_with_additional_fields);
 }

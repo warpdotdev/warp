@@ -1,6 +1,12 @@
 use std::fmt;
 
+use cloud_objects::{
+    cloud_object::{GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType},
+    ids::GenericStringObjectId,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::{JsonModel, JsonSerializer};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
@@ -41,8 +47,7 @@ pub struct GcpProviderConfig {
     pub project_number: String,
     pub workload_identity_federation_pool_id: String,
     pub workload_identity_federation_provider_id: String,
-    /// Service account email for impersonation. When set, the federated token
-    /// is exchanged for a service account access token.
+    /// Service account email for impersonation. When set, the federated token is exchanged for a service account access token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_account_email: Option<String>,
 }
@@ -66,7 +71,7 @@ impl ProvidersConfig {
     }
 }
 
-/// An AmbientAgentEnvironment represents an environment that we would run a Warp agent in.
+/// An ambient agent environment represents an environment that we would run a Warp agent in.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AmbientAgentEnvironment {
     /// Environment name.
@@ -107,3 +112,20 @@ impl AmbientAgentEnvironment {
         }
     }
 }
+
+impl JsonModel for AmbientAgentEnvironment {
+    fn json_object_type() -> JsonObjectType {
+        JsonObjectType::CloudEnvironment
+    }
+}
+
+pub type CloudAmbientAgentEnvironment =
+    GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
+pub type CloudAmbientAgentEnvironmentModel =
+    GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
+pub type ServerAmbientAgentEnvironment =
+    GenericServerObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
+
+#[cfg(test)]
+#[path = "cloud_environment_tests.rs"]
+mod tests;

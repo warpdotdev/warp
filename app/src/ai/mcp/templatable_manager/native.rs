@@ -34,7 +34,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     ai::mcp::{
         logs, templatable::CloudTemplatableMCPServer, templatable_installation::VariableValue,
-        MCPServer, StaticEnvVar, TemplatableMCPServerInstallation, TransportType,
+        MCPServer, MCPServerExt, StaticEnvVar, TemplatableMCPServerInstallation, TransportType,
     },
     cloud_object::{GenericStringObjectFormat, JsonObjectType},
     drive::CloudObjectTypeAndId,

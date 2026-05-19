@@ -6,7 +6,7 @@ use memo_map::MemoMap;
 use warpui::{AppContext, AssetProvider, SingletonEntity};
 
 use crate::{
-    env_vars::EnvVar,
+    env_vars::{EnvVar, EnvVarExt},
     terminal::{session_settings::SessionSettings, shell::ShellType},
 };
 

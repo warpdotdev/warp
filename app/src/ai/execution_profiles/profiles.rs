@@ -27,7 +27,8 @@ use crate::{
 };
 
 use super::{
-    AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
+    create_default_from_legacy_settings, AIExecutionProfile, ActionPermission,
+    CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
@@ -171,7 +172,7 @@ impl AIExecutionProfilesModel {
                         }
                         None => DefaultProfileState::Unsynced {
                             id: ClientProfileId::new(),
-                            profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                            profile: create_default_from_legacy_settings(ctx),
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
@@ -187,7 +188,7 @@ impl AIExecutionProfilesModel {
                     // exhaustively.
                     LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
-                        profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                        profile: create_default_from_legacy_settings(ctx),
                     },
                 };
             }

@@ -1,4 +1,10 @@
+use cloud_objects::{
+    cloud_object::{GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType},
+    ids::GenericStringObjectId,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::{JsonModel, JsonSerializer};
 
 /// Data model for a workflow enum, one type of argument that can be inserted into a workflow.
 /// A workflow enum can either be static or dynamic, as determined by the type of `EnumVariants` it uses.
@@ -22,3 +28,13 @@ pub enum EnumVariants {
     /// Contains the value of the shell command associated with the dynamic enum.
     Dynamic(String),
 }
+
+impl JsonModel for WorkflowEnum {
+    fn json_object_type() -> JsonObjectType {
+        JsonObjectType::WorkflowEnum
+    }
+}
+
+pub type CloudWorkflowEnum = GenericCloudObject<GenericStringObjectId, CloudWorkflowEnumModel>;
+pub type CloudWorkflowEnumModel = GenericStringModel<WorkflowEnum, JsonSerializer>;
+pub type ServerWorkflowEnum = GenericServerObject<GenericStringObjectId, CloudWorkflowEnumModel>;

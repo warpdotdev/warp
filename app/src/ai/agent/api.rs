@@ -30,7 +30,7 @@ use crate::{
 
 use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{profiles::AIExecutionProfilesModel, AIExecutionProfileAppExt};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::settings::AISettings;

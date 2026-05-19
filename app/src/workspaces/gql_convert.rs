@@ -1,6 +1,5 @@
 use super::{
     team::{DiscoverableTeam, MembershipRole, Team, TeamMember},
-    user_profiles::UserProfileWithUID,
     user_workspaces::WorkspacesMetadataResponse,
     workspace::{
         AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
@@ -22,7 +21,6 @@ use crate::{
     ai::execution_profiles::{ActionPermission, ComputerUsePermission, WriteToPtyPermission},
     ai::{BonusGrant, BonusGrantScope},
     auth::UserUid,
-    cloud_object::{ServerAIExecutionProfile, ServerAIFact},
     report_error,
     server::experiments::ServerExperiment,
     server::ids::ServerId,
@@ -34,13 +32,8 @@ use crate::{
     },
 };
 use crate::{
-    cloud_object::{
-        ServerAmbientAgentEnvironment, ServerCloudObject, ServerEnvVarCollection, ServerFolder,
-        ServerMCPServer, ServerNotebook, ServerPreference, ServerScheduledAmbientAgent,
-        ServerTemplatableMCPServer, ServerWorkflow, ServerWorkflowEnum, TryFromGql,
-    },
-    convert_to_server_experiment,
-    server::cloud_objects::listener::ObjectUpdateMessage,
+    convert_to_server_experiment, server::cloud_objects::listener::ObjectUpdateMessage,
+    server::graphql::schema::object_action_history_from_gql,
 };
 use anyhow::{anyhow, bail, Result};
 use regex::Regex;
@@ -67,12 +60,11 @@ use warp_graphql::{
         UsageVisibilityGranularity as GqlUsageVisibilityGranularity,
         UsageVisibilityPolicy as GqlUsageVisibilityPolicy, WarpAiPolicy as GqlWarpAiPolicy,
     },
-    object::CloudObjectWithDescendants,
     queries::{
         get_conversation_usage as gql_usage, get_workspaces_metadata_for_user::User as GqlUser,
     },
     subscriptions::get_warp_drive_updates::WarpDriveUpdate,
-    user::{DiscoverableTeamData as GqlDiscoverableTeamData, PublicUserProfile},
+    user::DiscoverableTeamData as GqlDiscoverableTeamData,
     workspace::{
         AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
         AiPermissionsSettings as GqlAiPermissionsSettings,
@@ -1068,168 +1060,51 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
     }
 }
 
-impl From<PublicUserProfile> for UserProfileWithUID {
-    fn from(value: PublicUserProfile) -> Self {
-        UserProfileWithUID {
-            firebase_uid: UserUid::new(&value.uid),
-            display_name: value.display_name,
-            email: value.email.unwrap_or_default(),
-            photo_url: value.photo_url.unwrap_or_default(),
+pub fn object_update_message_from_gql(value: WarpDriveUpdate) -> Result<ObjectUpdateMessage> {
+    match value {
+        WarpDriveUpdate::ObjectActionOccurred(message) => {
+            Ok(ObjectUpdateMessage::ObjectActionOccurred {
+                history: object_action_history_from_gql(message.history)?,
+            })
         }
-    }
-}
-
-impl TryFrom<WarpDriveUpdate> for ObjectUpdateMessage {
-    type Error = anyhow::Error;
-
-    fn try_from(value: WarpDriveUpdate) -> Result<Self, Self::Error> {
-        match value {
-            WarpDriveUpdate::ObjectActionOccurred(message) => {
-                Ok(ObjectUpdateMessage::ObjectActionOccurred {
-                    history: message.history.try_into()?,
-                })
-            }
-            WarpDriveUpdate::ObjectContentUpdated(message) => {
-                let server_object = message.object.try_into()?;
-                let last_editor = message.last_editor.map(|e| e.into());
-                Ok(ObjectUpdateMessage::ObjectContentChanged {
-                    server_object: Box::new(server_object),
-                    last_editor,
-                })
-            }
-            WarpDriveUpdate::ObjectDeleted(message) => Ok(ObjectUpdateMessage::ObjectDeleted {
+        WarpDriveUpdate::ObjectContentUpdated(message) => {
+            let server_object = message.object.try_into()?;
+            let last_editor = message.last_editor.map(|e| e.into());
+            Ok(ObjectUpdateMessage::ObjectContentChanged {
+                server_object: Box::new(server_object),
+                last_editor,
+            })
+        }
+        WarpDriveUpdate::ObjectDeleted(message) => Ok(ObjectUpdateMessage::ObjectDeleted {
+            object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
+        }),
+        WarpDriveUpdate::ObjectMetadataUpdated(message) => {
+            Ok(ObjectUpdateMessage::ObjectMetadataChanged {
+                metadata: message.metadata.try_into()?,
+            })
+        }
+        WarpDriveUpdate::ObjectPermissionsUpdated(message) => {
+            Ok(ObjectUpdateMessage::ObjectPermissionsChangedV2 {
                 object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
-            }),
-            WarpDriveUpdate::ObjectMetadataUpdated(message) => {
-                Ok(ObjectUpdateMessage::ObjectMetadataChanged {
-                    metadata: message.metadata.try_into()?,
-                })
-            }
-            WarpDriveUpdate::ObjectPermissionsUpdated(message) => {
-                Ok(ObjectUpdateMessage::ObjectPermissionsChangedV2 {
-                    object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
-                    user_profiles: message
-                        .user_profiles
-                        .into_iter()
-                        .flatten()
-                        .map(Into::into)
-                        .collect(),
-                    permissions: message.permissions.try_into()?,
-                })
-            }
-            WarpDriveUpdate::TeamMembershipsChanged(_) => {
-                Ok(ObjectUpdateMessage::TeamMembershipsChanged)
-            }
-            WarpDriveUpdate::AmbientTaskUpdated(message) => {
-                Ok(ObjectUpdateMessage::AmbientTaskUpdated {
-                    task_id: message.task_id.inner().to_string(),
-                    timestamp: message.task_updated_ts.utc(),
-                })
-            }
-            WarpDriveUpdate::Unknown => bail!("Unexpected WarpDriveUpdate variant"),
+                user_profiles: message
+                    .user_profiles
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into)
+                    .collect(),
+                permissions: message.permissions.try_into()?,
+            })
         }
-    }
-}
-
-impl TryFrom<warp_graphql::object::CloudObject> for ServerCloudObject {
-    type Error = anyhow::Error;
-
-    fn try_from(value: warp_graphql::object::CloudObject) -> Result<Self, Self::Error> {
-        match value {
-            warp_graphql::object::CloudObject::AIConversation(_) => Err(anyhow::anyhow!(
-                "AIConversation is not a supported object type for this operation"
-            )),
-            warp_graphql::object::CloudObject::Folder(folder) => Ok(ServerCloudObject::Folder(
-                ServerFolder::try_from_gql(folder)?,
-            )),
-            warp_graphql::object::CloudObject::GenericStringObject(gso) => {
-                match gso.format.clone() {
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
-                        Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
-                        Ok(ServerCloudObject::Preference(ServerPreference::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
-                        Ok(ServerCloudObject::WorkflowEnum(ServerWorkflowEnum::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
-                        Ok(ServerCloudObject::AIFact(ServerAIFact::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
-                        Ok(ServerCloudObject::MCPServer(ServerMCPServer::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
-                        Ok(ServerCloudObject::AIExecutionProfile(ServerAIExecutionProfile::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                        Ok(ServerCloudObject::TemplatableMCPServer(ServerTemplatableMCPServer::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
-                        Ok(ServerCloudObject::AmbientAgentEnvironment(ServerAmbientAgentEnvironment::try_from_gql(gso)?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                        Ok(ServerCloudObject::ScheduledAmbientAgent(ServerScheduledAmbientAgent::try_from_gql(gso)?))
-                    }
-                }
-            }
-            warp_graphql::object::CloudObject::Notebook(notebook) => Ok(
-                ServerCloudObject::Notebook(ServerNotebook::try_from_gql(notebook)?),
-            ),
-            warp_graphql::object::CloudObject::Workflow(workflow) => Ok(
-                ServerCloudObject::Workflow(Box::new(ServerWorkflow::try_from_gql(workflow)?)),
-            ),
-            warp_graphql::object::CloudObject::Unknown => {
-                Err(anyhow::anyhow!("Unable to convert cloud object type"))
-            }
+        WarpDriveUpdate::TeamMembershipsChanged(_) => {
+            Ok(ObjectUpdateMessage::TeamMembershipsChanged)
         }
-    }
-}
-
-impl TryFrom<CloudObjectWithDescendants> for ServerCloudObject {
-    type Error = anyhow::Error;
-
-    fn try_from(value: CloudObjectWithDescendants) -> Result<Self, Self::Error> {
-        match value {
-            CloudObjectWithDescendants::AIConversation(_) => {
-                Err(anyhow::anyhow!("AIConversation is not a supported object type for this operation"))
-            }
-            CloudObjectWithDescendants::FolderWithDescendants(fwd) => {
-                Ok(ServerCloudObject::Folder(ServerFolder::try_from_gql(fwd.folder)?))
-            }
-            CloudObjectWithDescendants::GenericStringObject(gso) => match gso.format.clone() {
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
-                    Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
-                    Ok(ServerCloudObject::Preference(ServerPreference::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
-                    Ok(ServerCloudObject::WorkflowEnum(ServerWorkflowEnum::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
-                    Ok(ServerCloudObject::AIFact(ServerAIFact::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
-                    Ok(ServerCloudObject::MCPServer(ServerMCPServer::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
-                    Ok(ServerCloudObject::AIExecutionProfile(ServerAIExecutionProfile::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                    Ok(ServerCloudObject::TemplatableMCPServer(ServerTemplatableMCPServer::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
-                    Ok(ServerCloudObject::AmbientAgentEnvironment(ServerAmbientAgentEnvironment::try_from_gql(gso)?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                    Ok(ServerCloudObject::ScheduledAmbientAgent(ServerScheduledAmbientAgent::try_from_gql(gso)?))
-                }
-            }
-            CloudObjectWithDescendants::Notebook(notebook) => Ok(ServerCloudObject::Notebook(ServerNotebook::try_from_gql(notebook)?)),
-            CloudObjectWithDescendants::Workflow(workflow) => Ok(ServerCloudObject::Workflow(Box::new(ServerWorkflow::try_from_gql(workflow)?))),
-            CloudObjectWithDescendants::Unknown => Err(anyhow::anyhow!("Unable to convert cloud object with descendants type")),
+        WarpDriveUpdate::AmbientTaskUpdated(message) => {
+            Ok(ObjectUpdateMessage::AmbientTaskUpdated {
+                task_id: message.task_id.inner().to_string(),
+                timestamp: message.task_updated_ts.utc(),
+            })
         }
+        WarpDriveUpdate::Unknown => bail!("Unexpected WarpDriveUpdate variant"),
     }
 }
 

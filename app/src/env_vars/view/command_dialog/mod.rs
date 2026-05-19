@@ -1,18 +1,11 @@
-use serde::{Deserialize, Serialize};
-
 use warpui::ViewContext;
 
 use super::env_var_collection::{EnvVarCollectionView, VariableRowIndex};
 use crate::env_vars::{active_env_var_collection_data::SavingStatus, EnvVarValue};
+pub use cloud_object_models::EnvVarSecretCommand;
 
 mod command_dialog_view;
 pub(super) use command_dialog_view::{EnvVarCommandDialog, EnvVarCommandDialogEvent};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EnvVarSecretCommand {
-    pub name: String,
-    pub command: String,
-}
 
 impl EnvVarCollectionView {
     pub(super) fn display_command_dialog(

@@ -2,7 +2,7 @@ use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::{
     profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId},
-    AIExecutionProfile, ActionPermission, WriteToPtyPermission,
+    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,

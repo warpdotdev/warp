@@ -200,6 +200,7 @@ use warpui::fonts::Properties;
 use warpui::{ViewHandle, WeakModelHandle};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::env_vars::EnvVarExt;
 
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
