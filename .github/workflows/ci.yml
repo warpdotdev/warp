@@ -73,7 +73,7 @@ jobs:
       - name: Determine macOS runner type
         id: mac_runner_type
         run: |
-          RUNNER_TYPE='["namespace-profile-mac-ci"]'
+          RUNNER_TYPE='["macos-latest"]'
           echo "value=$RUNNER_TYPE" >> $GITHUB_OUTPUT
 
       - name: Determine wasm runner type

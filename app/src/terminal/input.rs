@@ -12245,7 +12245,21 @@ impl Input {
                 suggestions.select_next(ctx);
             });
         } else if is_tab_bound_to_open_completions && self.cursor_positioned_for_completion(ctx) {
-            self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+            // Check if there's an active inline autosuggestion (gray hint).
+            // If so, accept it directly instead of opening the completion menu.
+            let has_autosuggestion = self
+                .editor
+                .read(ctx, |editor, _| editor.active_autosuggestion());
+
+            if has_autosuggestion {
+                // Accept the inline autosuggestion directly
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.insert_full_autosuggestion(ctx);
+                });
+            } else {
+                // No inline suggestion → open completion menu
+                self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+            }
         } else {
             // Otherwise, pass the tab down to the editor
             self.editor.update(ctx, |input, ctx| input.handle_tab(ctx));

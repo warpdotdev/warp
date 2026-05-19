@@ -5874,7 +5874,7 @@ impl EditorView {
     }
 
     /// Wrapper method around insert_autosuggestion to accept the whole suggestion.
-    fn insert_full_autosuggestion(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn insert_full_autosuggestion(&mut self, ctx: &mut ViewContext<Self>) {
         self.insert_autosuggestion(|text| text.chars().count(), ctx);
     }
 
