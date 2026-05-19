@@ -14487,6 +14487,7 @@ dependencies = [
  "sysinfo",
  "tabwriter",
  "tantivy",
+ "tar",
  "tempfile",
  "thiserror 2.0.17",
  "thousands",
