@@ -36,7 +36,10 @@ use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::{
-    content::{buffer::ShouldAutoscroll, selection_model::BufferSelectionModel},
+    content::{
+        buffer::ShouldAutoscroll, mermaid_diagram::strip_mermaid_frontmatter,
+        selection_model::BufferSelectionModel,
+    },
     model::BufferUpdateWrapper,
     render::model::{BlockItem, StyleUpdateAction},
 };
@@ -154,7 +157,8 @@ fn mermaid_image_html(svg: &[u8]) -> String {
 }
 
 fn render_mermaid_clipboard_html(source: &str) -> Option<String> {
-    let svg = mermaid_to_svg::render_mermaid_to_svg(source, Some(&MermaidTheme::light()))
+    let source = strip_mermaid_frontmatter(source);
+    let svg = mermaid_to_svg::render_mermaid_to_svg(source.as_ref(), Some(&MermaidTheme::light()))
         .ok()?
         .into_bytes();
     Some(mermaid_image_html(&svg))

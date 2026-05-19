@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
 };
@@ -24,8 +25,56 @@ struct MermaidDiagramAsset;
 
 impl AsyncAssetType for MermaidDiagramAsset {}
 
+/// Strip a leading Mermaid YAML frontmatter block (delimited by `---` lines
+/// on their own) from `source`, leaving the diagram body untouched when no
+/// frontmatter is present.
+///
+/// Mermaid 11 supports a `---\nconfig:\n  ...\n---` block at the top of a
+/// diagram for per-diagram configuration. The pinned `mermaid_to_svg`
+/// renderer's diagram-type detection treats the first non-empty,
+/// non-`%%`-prefixed line as the diagram token; with frontmatter that token
+/// becomes `---` instead of the actual diagram type (e.g. `xychart-beta`),
+/// and the renderer fails to dispatch to the right parser. Warp passes a
+/// hardcoded [`MermaidTheme::light`] anyway and does not honor any of the
+/// frontmatter config keys, so stripping is lossless. See
+/// warpdotdev/warp#10676.
+pub fn strip_mermaid_frontmatter(source: &str) -> Cow<'_, str> {
+    fn next_line_end(s: &str, start: usize) -> usize {
+        s[start..]
+            .find('\n')
+            .map(|p| start + p + 1)
+            .unwrap_or(s.len())
+    }
+
+    let mut cursor = 0;
+    while cursor < source.len() {
+        let end = next_line_end(source, cursor);
+        let line = source[cursor..end].trim();
+        if line.is_empty() {
+            cursor = end;
+            continue;
+        }
+        if line != "---" {
+            return Cow::Borrowed(source);
+        }
+        let mut scan = end;
+        while scan < source.len() {
+            let scan_end = next_line_end(source, scan);
+            if source[scan..scan_end].trim() == "---" {
+                return Cow::Owned(source[scan_end..].to_string());
+            }
+            scan = scan_end;
+        }
+        // Unterminated frontmatter — leave the source so the renderer's own
+        // error surfaces rather than silently dropping content.
+        return Cow::Borrowed(source);
+    }
+
+    Cow::Borrowed(source)
+}
+
 pub fn mermaid_asset_source(source: &str) -> AssetSource {
-    let source = source.to_string();
+    let source = strip_mermaid_frontmatter(source).into_owned();
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
     let id = format!("light:{:x}", hasher.finish());
