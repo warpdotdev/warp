@@ -599,7 +599,8 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
-        let setup_events = SetupClientEventReporter::new(task_id, server_api.clone());
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        let setup_events = SetupClientEventReporter::new(task_id, server_api.clone(), background);
         setup_events
             .post_instant(SetupStep::WorkerContainerReady)
             .await;

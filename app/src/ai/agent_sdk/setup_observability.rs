@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
@@ -10,11 +11,20 @@ use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
 pub(crate) struct SetupClientEventReporter {
     run_id: Option<AmbientAgentTaskId>,
     ai_client: Arc<dyn AIClient>,
+    background: Arc<Background>,
 }
 
 impl SetupClientEventReporter {
-    pub(crate) fn new(run_id: Option<AmbientAgentTaskId>, ai_client: Arc<dyn AIClient>) -> Self {
-        Self { run_id, ai_client }
+    pub(crate) fn new(
+        run_id: Option<AmbientAgentTaskId>,
+        ai_client: Arc<dyn AIClient>,
+        background: Arc<Background>,
+    ) -> Self {
+        Self {
+            run_id,
+            ai_client,
+            background,
+        }
     }
 
     pub(crate) async fn record_result<T, E>(
@@ -25,8 +35,7 @@ impl SetupClientEventReporter {
         let start_timestamp = Utc::now();
         let result = future.await;
         let finish_timestamp = Utc::now();
-        self.post(step, start_timestamp, finish_timestamp, result.is_err())
-            .await;
+        self.post_best_effort(step, start_timestamp, finish_timestamp, result.is_err());
         result
     }
 
@@ -38,14 +47,41 @@ impl SetupClientEventReporter {
         let start_timestamp = Utc::now();
         let value = future.await;
         let finish_timestamp = Utc::now();
-        self.post(step, start_timestamp, finish_timestamp, false)
-            .await;
+        self.post_best_effort(step, start_timestamp, finish_timestamp, false);
         value
     }
 
+    /// Posts an instant event to the server
     pub(crate) async fn post_instant(&self, step: SetupStep) {
         let timestamp = Utc::now();
         self.post(step, timestamp, timestamp, false).await;
+    }
+
+    fn post_best_effort(
+        &self,
+        step: SetupStep,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+
+        let ai_client = self.ai_client.clone();
+        self.background
+            .spawn(async move {
+                Self::post_to_server(
+                    run_id,
+                    ai_client,
+                    step,
+                    start_timestamp,
+                    finish_timestamp,
+                    is_error,
+                )
+                .await;
+            })
+            .detach();
     }
 
     async fn post(
@@ -58,6 +94,25 @@ impl SetupClientEventReporter {
         let Some(run_id) = self.run_id else {
             return;
         };
+        Self::post_to_server(
+            run_id,
+            self.ai_client.clone(),
+            step,
+            start_timestamp,
+            finish_timestamp,
+            is_error,
+        )
+        .await;
+    }
+
+    async fn post_to_server(
+        run_id: AmbientAgentTaskId,
+        ai_client: Arc<dyn AIClient>,
+        step: SetupStep,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+    ) {
         let request = match step {
             SetupStep::WorkerContainerReady => {
                 AgentRunClientEventRequest::timeline_event(step.as_event_type(), finish_timestamp)
@@ -69,8 +124,7 @@ impl SetupClientEventReporter {
                 is_error,
             ),
         };
-        if let Err(err) = self
-            .ai_client
+        if let Err(err) = ai_client
             .post_agent_run_client_event(&run_id, request)
             .await
         {

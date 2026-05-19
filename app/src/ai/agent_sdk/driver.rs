@@ -1625,6 +1625,7 @@ impl AgentDriver {
                 SetupClientEventReporter::new(
                     me.task_id,
                     ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+                    ctx.background_executor(),
                 )
             })
             .await?;
