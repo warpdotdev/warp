@@ -1,8 +1,6 @@
-use crate::date_time::parse_rfc3339;
+use crate::{SortOrderArg, date_time::parse_rfc3339, json_filter::JsonOutput};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand, ValueEnum};
-
-use crate::json_filter::JsonOutput;
 
 /// Task-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -188,7 +186,7 @@ pub struct ListTasksArgs {
 
     /// Sort direction.
     #[arg(long = "sort-order", value_enum, value_name = "DIR")]
-    pub sort_order: Option<RunSortOrderArg>,
+    pub sort_order: Option<SortOrderArg>,
 
     /// Opaque pagination cursor from a previous list response.
     ///
@@ -281,15 +279,6 @@ pub enum RunSortByArg {
     Title,
     #[value(name = "agent")]
     Agent,
-}
-
-/// Sort-order values accepted by `--sort-order`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum RunSortOrderArg {
-    #[value(name = "asc")]
-    Asc,
-    #[value(name = "desc")]
-    Desc,
 }
 
 #[derive(Debug, Clone, Args)]

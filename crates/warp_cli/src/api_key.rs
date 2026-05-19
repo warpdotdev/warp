@@ -1,8 +1,6 @@
-use crate::date_time::parse_rfc3339;
+use crate::{SortOrderArg, date_time::parse_rfc3339, json_filter::JsonOutput};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand, ValueEnum};
-
-use crate::json_filter::JsonOutput;
 
 /// API key-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -24,7 +22,7 @@ pub struct ListApiKeysArgs {
 
     /// Sort direction.
     #[arg(long = "sort-order", value_enum, value_name = "DIR")]
-    pub sort_order: Option<ApiKeySortOrderArg>,
+    pub sort_order: Option<SortOrderArg>,
 
     /// JSON formatting configuration.
     #[command(flatten)]
@@ -93,15 +91,6 @@ pub enum ApiKeySortByArg {
     ExpiresAt,
     #[value(name = "scope")]
     Scope,
-}
-
-/// Sort-order values accepted by `--sort-order`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ApiKeySortOrderArg {
-    #[value(name = "asc")]
-    Asc,
-    #[value(name = "desc")]
-    Desc,
 }
 
 #[cfg(test)]

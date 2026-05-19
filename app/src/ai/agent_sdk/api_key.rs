@@ -12,10 +12,10 @@ use serde::Serialize;
 use warp_cli::{
     agent::OutputFormat,
     api_key::{
-        ApiKeyCommand, ApiKeyExpirationArgs, ApiKeySortByArg, ApiKeySortOrderArg, CreateApiKeyArgs,
-        ExpireApiKeyArgs, ListApiKeysArgs,
+        ApiKeyCommand, ApiKeyExpirationArgs, ApiKeySortByArg, CreateApiKeyArgs, ExpireApiKeyArgs,
+        ListApiKeysArgs,
     },
-    GlobalOptions,
+    GlobalOptions, SortOrderArg,
 };
 use warp_graphql::{
     mutations::{expire_api_key::ExpireApiKeyResult, generate_api_key::GenerateApiKeyResult},
@@ -369,12 +369,12 @@ struct ExpiredApiKeyInfo {
 fn sort_api_keys(
     keys: &mut [ApiKeyInfo],
     sort_by: Option<ApiKeySortByArg>,
-    sort_order: Option<ApiKeySortOrderArg>,
+    sort_order: Option<SortOrderArg>,
 ) {
     let Some(sort_by) = sort_by else {
         return;
     };
-    let descending = matches!(sort_order, Some(ApiKeySortOrderArg::Desc));
+    let descending = matches!(sort_order, Some(SortOrderArg::Desc));
     match sort_by {
         ApiKeySortByArg::Name => {
             if descending {

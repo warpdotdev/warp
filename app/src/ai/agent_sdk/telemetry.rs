@@ -22,6 +22,16 @@ pub(super) enum CliTelemetryEvent {
     AgentProfileList,
     /// Executing `warp agent list`
     AgentList,
+    /// Executing `warp agent get`
+    AgentGet,
+    /// Executing `warp agent create`
+    AgentCreate,
+    /// Executing `warp agent update`
+    AgentUpdate,
+    /// Executing `warp agent delete`
+    AgentDelete,
+    /// Executing `warp agent skills`
+    AgentSkills,
     /// Executing `warp environment list`
     EnvironmentList,
     /// Executing `warp environment create`
@@ -145,6 +155,11 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::AgentRunAmbient => None,
             CliTelemetryEvent::AgentProfileList => None,
             CliTelemetryEvent::AgentList => None,
+            CliTelemetryEvent::AgentGet => None,
+            CliTelemetryEvent::AgentCreate => None,
+            CliTelemetryEvent::AgentUpdate => None,
+            CliTelemetryEvent::AgentDelete => None,
+            CliTelemetryEvent::AgentSkills => None,
             CliTelemetryEvent::EnvironmentList => None,
             CliTelemetryEvent::EnvironmentCreate => None,
             CliTelemetryEvent::EnvironmentDelete => None,
@@ -227,6 +242,11 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::AgentRunAmbient => "CLI.Execute.Agent.RunAmbient",
             CliTelemetryEventDiscriminants::AgentProfileList => "CLI.Execute.Agent.Profile.List",
             CliTelemetryEventDiscriminants::AgentList => "CLI.Execute.Agent.List",
+            CliTelemetryEventDiscriminants::AgentGet => "CLI.Execute.Agent.Get",
+            CliTelemetryEventDiscriminants::AgentCreate => "CLI.Execute.Agent.Create",
+            CliTelemetryEventDiscriminants::AgentUpdate => "CLI.Execute.Agent.Update",
+            CliTelemetryEventDiscriminants::AgentDelete => "CLI.Execute.Agent.Delete",
+            CliTelemetryEventDiscriminants::AgentSkills => "CLI.Execute.Agent.Skills",
             CliTelemetryEventDiscriminants::EnvironmentList => "CLI.Execute.Environment.List",
             CliTelemetryEventDiscriminants::EnvironmentCreate => "CLI.Execute.Environment.Create",
             CliTelemetryEventDiscriminants::EnvironmentDelete => "CLI.Execute.Environment.Delete",
@@ -305,6 +325,11 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
                 "Listed agent profiles from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::AgentList => "Listed agents from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentGet => "Got agent details from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentCreate => "Created an agent from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentUpdate => "Updated an agent from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentDelete => "Deleted an agent from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentSkills => "Listed agent skills from the Warp CLI",
             CliTelemetryEventDiscriminants::EnvironmentList => {
                 "Listed cloud environments from the Warp CLI"
             }
