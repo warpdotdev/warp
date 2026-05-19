@@ -805,12 +805,35 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 }
             }
             AIAgentContext::Git { head, branch } => {
-                api_context.git = Some(api::input_context::Git {
-                    head,
-                    branch: branch.unwrap_or_default(),
-                    repository: None,   // TODO: populate?
-                    pull_request: None, // TODO: populate?
-                });
+                let git_context = api_git_context(&mut api_context);
+                git_context.head = head;
+                git_context.branch = branch.unwrap_or_default();
+            }
+            AIAgentContext::Repository { name, owner } => {
+                api_git_context(&mut api_context).repository =
+                    Some(api::input_context::git::Repository {
+                        name,
+                        owner: owner.unwrap_or_default(),
+                    });
+            }
+            AIAgentContext::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+            } => {
+                if number <= 0 {
+                    continue;
+                }
+                let Some(state) = api_pull_request_state(&state, draft) else {
+                    continue;
+                };
+                api_git_context(&mut api_context).pull_request =
+                    Some(api::input_context::git::PullRequest {
+                        number,
+                        state: state as i32,
+                        base_branch,
+                    });
             }
             AIAgentContext::Skills { skills } => {
                 api_context.updated_skills_context = Some(api::input_context::SkillsContext {
@@ -829,6 +852,29 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
         }
     }
     api_context
+}
+
+fn api_git_context(api_context: &mut api::InputContext) -> &mut api::input_context::Git {
+    api_context.git.get_or_insert_with(Default::default)
+}
+
+/// Maps a GitHub PR state plus draft flag to the proto `State` enum.
+///
+/// Returns `None` for unknown states so the caller can skip emitting a
+/// `pull_request` sub-message rather than sending `STATE_UNSPECIFIED` to the
+/// server.
+fn api_pull_request_state(
+    state: &str,
+    draft: bool,
+) -> Option<api::input_context::git::pull_request::State> {
+    use api::input_context::git::pull_request::State;
+    match state.to_ascii_uppercase().as_str() {
+        "OPEN" if draft => Some(State::OpenDraft),
+        "OPEN" => Some(State::Open),
+        "CLOSED" => Some(State::Closed),
+        "MERGED" => Some(State::Merged),
+        _ => None,
+    }
 }
 
 impl From<Suggestions> for api::Suggestions {

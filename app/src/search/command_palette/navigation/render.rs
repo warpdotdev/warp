@@ -163,6 +163,7 @@ fn render_prompt_udi(snapshot: &PromptSnapshot, appearance: &Appearance) -> Box<
                     };
                     parsed
                 }
+                ChipValue::GithubPullRequest(_) => continue,
             };
             let font_size = udi_font_size(appearance);
             let content = render_git_diff_stats_content(

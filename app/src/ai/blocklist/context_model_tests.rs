@@ -114,6 +114,56 @@ fn has_locking_attachment_is_false_with_only_pending_block_id() {
     });
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_handles_https_remote() {
+    assert_eq!(
+        super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal.git"),
+        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_handles_ssh_remote() {
+    assert_eq!(
+        super::parse_repo_name_and_owner("git@github.com:warpdotdev/warp-internal.git"),
+        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+    );
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_handles_url_style_ssh_remote() {
+    assert_eq!(
+        super::parse_repo_name_and_owner("ssh://git@github.com/warpdotdev/warp-internal.git"),
+        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_falls_back_to_name_only() {
+    assert_eq!(
+        super::parse_repo_name_and_owner("warp-internal.git"),
+        ("warp-internal".to_owned(), None)
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_ignores_extra_path_segments() {
+    // Defensive: malformed remote URLs with extra path segments should not encode
+    // the trailing segments into the repository name.
+    assert_eq!(
+        super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal/extra"),
+        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+    );
+    assert_eq!(
+        super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal?ref=main"),
+        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+    );
+}
+
 #[test]
 fn has_locking_attachment_is_false_with_only_pending_selected_text() {
     // Selected text alone is *not* a locking attachment: the user could be selecting shell

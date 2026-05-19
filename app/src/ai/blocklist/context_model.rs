@@ -25,7 +25,7 @@ use crate::{
         agent::todos::AIAgentTodoList,
         agent::{
             conversation::{AIConversation, AIConversationId},
-            AIAgentAttachment, AIAgentContext, ImageContext,
+            AIAgentAttachment, AIAgentContext, ImageContext, PullRequestContext,
         },
         document::ai_document_model::AIDocumentId,
         llms::{LLMPreferences, LLMPreferencesEvent},
@@ -149,6 +149,12 @@ pub struct BlocklistAIContextModel {
     /// instead of sending it immediately.
     /// Persists across exchanges in the same conversation (like fast-forward).
     queue_next_prompt_enabled: bool,
+
+    /// Metadata for the GitHub pull request associated with the current branch,
+    /// if one exists. Populated by the TerminalView when the GithubPullRequest
+    /// prompt chip value changes. The URL itself is intentionally not stored in
+    /// AI context.
+    cached_pull_request: Option<PullRequestContext>,
 }
 
 pub fn block_context_from_terminal_model(
@@ -315,6 +321,7 @@ impl BlocklistAIContextModel {
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
             queue_next_prompt_enabled: false,
+            cached_pull_request: None,
         }
     }
 
@@ -343,6 +350,7 @@ impl BlocklistAIContextModel {
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
             queue_next_prompt_enabled: false,
+            cached_pull_request: None,
         }
     }
 
@@ -460,6 +468,21 @@ impl BlocklistAIContextModel {
             context.push(AIAgentContext::Git {
                 head: head.unwrap_or_default(),
                 branch,
+            });
+        }
+
+        // Include repository info from the origin remote URL if available.
+        if let Some(repo_context) = self.repository_context() {
+            context.push(repo_context);
+        }
+
+        // Include the associated pull request metadata if it has been cached.
+        if let Some(pull_request) = &self.cached_pull_request {
+            context.push(AIAgentContext::PullRequest {
+                number: pull_request.number,
+                state: pull_request.state.clone(),
+                draft: pull_request.draft,
+                base_branch: pull_request.base_branch.clone(),
             });
         }
 
@@ -995,6 +1018,31 @@ impl BlocklistAIContextModel {
         }
     }
 
+    /// Updates the cached GitHub pull request metadata for the current branch.
+    ///
+    /// Called by the `TerminalView` whenever the `GithubPullRequest` prompt chip value changes.
+    /// Passing `None` clears any previously cached PR metadata.
+    pub fn set_cached_pull_request(&mut self, pull_request: Option<PullRequestContext>) {
+        self.cached_pull_request = pull_request;
+    }
+
+    /// Builds an `AIAgentContext::Repository` from the current working directory's git remote
+    /// metadata, if available. Only available on non-WASM targets (git2 is not available on WASM).
+    #[cfg(not(target_family = "wasm"))]
+    fn repository_context(&self) -> Option<AIAgentContext> {
+        let pwd = self.current_pwd()?;
+        let repo = git2::Repository::discover(&pwd).ok()?;
+        let remote = repo.find_remote("origin").ok()?;
+        let raw_url = remote.url()?.to_string();
+        let (name, owner) = parse_repo_name_and_owner(&raw_url);
+        Some(AIAgentContext::Repository { name, owner })
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn repository_context(&self) -> Option<AIAgentContext> {
+        None
+    }
+
     /// Clears all pending attachments.
     pub fn clear_pending_attachments(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.pending_attachments.is_empty() {
@@ -1005,6 +1053,68 @@ impl BlocklistAIContextModel {
             });
         }
         self.pending_attachments.clear();
+    }
+}
+
+/// Parses a repository name and optional owner from a git remote URL.
+#[cfg(not(target_family = "wasm"))]
+fn parse_repo_name_and_owner(url: &str) -> (String, Option<String>) {
+    let url = url.trim().trim_end_matches(".git");
+    // SSH format: git@github.com:owner/repo
+    if let Some(path) = url
+        .strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':').map(|(_, p)| p))
+    {
+        if let Some((name, owner)) = parse_repo_name_and_owner_from_path(path) {
+            return (name, owner);
+        }
+    }
+
+    // URL format: https://github.com/owner/repo or ssh://git@github.com/owner/repo
+    if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("ssh://") {
+        // Collect path segments after the host.
+        if let Some(path) = url
+            .split_once("://")
+            .and_then(|(_, rest)| rest.split_once('/').map(|(_, p)| p))
+        {
+            if let Some((name, owner)) = parse_repo_name_and_owner_from_path(path) {
+                return (name, owner);
+            }
+        }
+    }
+
+    // Fallback: use the last path component as the name.
+    let name = url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(url)
+        .to_string();
+    (name, None)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn parse_repo_name_and_owner_from_path(path: &str) -> Option<(String, Option<String>)> {
+    let path = path.trim_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+
+    // Take only the first two path segments.
+    let mut segments = path.splitn(3, '/');
+    let first = segments.next()?;
+    let second = segments.next();
+
+    match second {
+        Some(repo) if !first.is_empty() && !repo.is_empty() => {
+            let repo = repo.split(['?', '#']).next().unwrap_or(repo);
+            if repo.is_empty() {
+                return None;
+            }
+            Some((repo.to_string(), Some(first.to_string())))
+        }
+        Some(_) => None,
+        None => Some((first.to_string(), None)),
     }
 }
 

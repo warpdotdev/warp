@@ -8,7 +8,7 @@ $remoteUrl = git remote get-url origin 2>$null
 if ($LASTEXITCODE -ne 0) { exit 0 }
 if ($remoteUrl -notmatch '^(git@github\.com:|https?://github\.com/|ssh://git@github\.com/)') { exit 0 }
 
-$output = gh pr view --json url --jq .url 2>&1 | Out-String
+$output = gh pr view --json url,number,state,isDraft,baseRefName --jq '{url: .url, number: .number, state: .state, draft: .isDraft, base_branch: .baseRefName}' 2>&1 | Out-String
 $exitCode = $LASTEXITCODE
 $output = $output.TrimEnd()
 

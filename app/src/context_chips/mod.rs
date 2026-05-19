@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use context_chip::PromptGenerator;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use smol_str::SmolStr;
 use warpui::{
     color::ColorU,
@@ -46,6 +46,7 @@ use self::{
 pub enum ChipValue {
     Text(String),
     GitDiffStats(display_chip::GitLineChanges),
+    GithubPullRequest(GithubPullRequestChipValue),
 }
 
 impl ChipValue {
@@ -53,6 +54,7 @@ impl ChipValue {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ChipValue::Text(s) => Some(s),
+            ChipValue::GithubPullRequest(pr) => Some(&pr.url),
             ChipValue::GitDiffStats(_) => None,
         }
     }
@@ -61,7 +63,14 @@ impl ChipValue {
     pub fn as_git_diff_stats(&self) -> Option<&display_chip::GitLineChanges> {
         match self {
             ChipValue::GitDiffStats(g) => Some(g),
-            ChipValue::Text(_) => None,
+            ChipValue::Text(_) | ChipValue::GithubPullRequest(_) => None,
+        }
+    }
+
+    pub fn as_github_pull_request(&self) -> Option<&GithubPullRequestChipValue> {
+        match self {
+            ChipValue::GithubPullRequest(pr) => Some(pr),
+            ChipValue::Text(_) | ChipValue::GitDiffStats(_) => None,
         }
     }
 }
@@ -76,6 +85,7 @@ impl std::fmt::Display for ChipValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ChipValue::Text(s) => f.write_str(s),
+            ChipValue::GithubPullRequest(pr) => f.write_str(&pr.url),
             ChipValue::GitDiffStats(g) => {
                 write!(
                     f,
@@ -87,16 +97,99 @@ impl std::fmt::Display for ChipValue {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubPullRequestChipValue {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default, deserialize_with = "deserialize_github_pr_number")]
+    pub number: i32,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, alias = "isDraft")]
+    pub draft: bool,
+    #[serde(default, alias = "baseRefName")]
+    pub base_branch: String,
+}
+
+impl GithubPullRequestChipValue {
+    pub fn from_text(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+
+        let mut value = serde_json::from_str::<Self>(text)
+            .ok()
+            .or_else(|| Self::from_url(text))?;
+        if value.number <= 0 {
+            value.number = github_pr_number_from_url(&value.url)?;
+        }
+        (value.number > 0).then_some(value)
+    }
+
+    pub fn from_url(url: &str) -> Option<Self> {
+        let number = github_pr_number_from_url(url)?;
+        Some(Self {
+            url: url.trim().to_string(),
+            number,
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
+        })
+    }
+}
+
+pub(crate) fn github_pull_request_from_chip_value(
+    value: &ChipValue,
+) -> Option<GithubPullRequestChipValue> {
+    match value {
+        ChipValue::GithubPullRequest(pr) if pr.number > 0 => Some(pr.clone()),
+        ChipValue::GithubPullRequest(pr) => GithubPullRequestChipValue::from_url(&pr.url),
+        ChipValue::Text(text) => GithubPullRequestChipValue::from_text(text),
+        ChipValue::GitDiffStats(_) => None,
+    }
+}
+
+fn deserialize_github_pr_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::String(s) => Ok(parse_github_pr_number(&s).unwrap_or_default()),
+        serde_json::Value::Number(n) => {
+            let Some(number) = n.as_i64() else {
+                return Ok(0);
+            };
+            Ok(i32::try_from(number)
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        value => Err(serde::de::Error::custom(format!(
+            "expected string or number for pull request number, got {value}"
+        ))),
+    }
+}
+
 impl From<String> for ChipValue {
     fn from(s: String) -> Self {
         ChipValue::Text(s)
     }
 }
 
-pub(crate) fn github_pr_number_from_url(url: &str) -> Option<&str> {
+pub(crate) fn github_pr_number_from_url(url: &str) -> Option<i32> {
     let (_, tail) = url.trim().rsplit_once("/pull/")?;
     let number = tail.split(['/', '?', '#']).next()?;
-    (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).then_some(number)
+    parse_github_pr_number(number)
+}
+
+fn parse_github_pr_number(number: &str) -> Option<i32> {
+    if !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    number.parse::<i32>().ok().filter(|number| *number > 0)
 }
 
 pub(crate) fn github_pr_display_text_from_url(url: &str) -> Option<String> {
@@ -589,6 +682,11 @@ pub fn git_line_changes_from_chips(chips: &[ChipResult]) -> Option<display_chip:
                         lines_added: 0,
                         lines_removed: 0,
                     }),
+                ChipValue::GithubPullRequest(_) => display_chip::GitLineChanges {
+                    files_changed: 0,
+                    lines_added: 0,
+                    lines_removed: 0,
+                },
             })
         } else {
             None
@@ -725,3 +823,7 @@ pub fn render_text_from_kind(
         _ => (),
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

@@ -1989,6 +1989,14 @@ pub struct MCPServer {
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRequestContext {
+    #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+    pub number: i32,
+    pub state: String,
+    pub draft: bool,
+    pub base_branch: String,
+}
 
 /// Contains context that may be attached to a user query.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2035,6 +2043,30 @@ pub enum AIAgentContext {
         branch: Option<String>,
     },
 
+    /// Information about the git repository in the current working directory.
+    Repository {
+        /// The repository name (e.g. "warp-internal").
+        name: String,
+        /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
+        owner: Option<String>,
+    },
+
+    /// Information about the GitHub pull request associated with the current branch.
+    PullRequest {
+        /// The pull request number.
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
+        #[serde(default)]
+        state: String,
+        /// Whether the pull request is marked as draft.
+        #[serde(default)]
+        draft: bool,
+        /// The pull request's base branch.
+        #[serde(default)]
+        base_branch: String,
+    },
+
     /// List of available skills is provided to the agent during initialization
     /// or when updated.
     Skills {
@@ -2043,6 +2075,37 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::String(s) => {
+            if !s.chars().all(|c| c.is_ascii_digit()) {
+                return Ok(0);
+            }
+            Ok(s.parse()
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        serde_json::Value::Number(n) => {
+            let Some(number) = n.as_i64() else {
+                return Ok(0);
+            };
+            Ok(i32::try_from(number)
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        value => Err(serde::de::Error::custom(format!(
+            "expected string or number for pull request number, got {value}"
+        ))),
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]

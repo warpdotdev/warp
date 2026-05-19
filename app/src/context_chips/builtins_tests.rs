@@ -149,6 +149,10 @@ fn test_github_pull_request_url_command_avoids_zsh_status_assignment() {
         .for_shell(ShellType::Zsh)
         .expect("zsh command should exist");
     assert!(command.contains("exit_code=$?"));
+    assert!(command.contains("--json url,number,state,isDraft,baseRefName"));
+    assert!(command.contains("number: .number"));
+    assert!(!command.contains("number: (.number | tostring)"));
+    assert!(command.contains("base_branch"));
     assert!(!command.contains("status=$?"));
     assert!(!command.contains("status=$?;"));
 }

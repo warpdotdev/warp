@@ -555,6 +555,12 @@ fn test_github_pr_chip_empty_success_does_not_set_failure_suppression() {
                     environment: Environment::default(),
                 });
                 current_prompt.update_states_with_new_context(ctx);
+                let state = current_prompt
+                    .states
+                    .get(&ContextChipKind::GithubPullRequest)
+                    .expect("expected github pr state");
+                assert_eq!(state.last_computed_value, None);
+                assert_eq!(state.update_status, ChipUpdateStatus::Loading);
                 current_prompt.await_generators(ctx)
             })
             .await;
@@ -650,6 +656,12 @@ fn test_github_pr_chip_revisiting_empty_result_directory_reruns_and_clears_previ
                     environment: Environment::default(),
                 });
                 current_prompt.update_states_with_new_context(ctx);
+                let state = current_prompt
+                    .states
+                    .get(&ContextChipKind::GithubPullRequest)
+                    .expect("expected github pr state");
+                assert_eq!(state.last_computed_value, None);
+                assert_eq!(state.update_status, ChipUpdateStatus::Loading);
                 current_prompt.await_generators(ctx)
             })
             .await;
@@ -674,6 +686,12 @@ fn test_github_pr_chip_revisiting_empty_result_directory_reruns_and_clears_previ
                     environment: Environment::default(),
                 });
                 current_prompt.update_states_with_new_context(ctx);
+                let state = current_prompt
+                    .states
+                    .get(&ContextChipKind::GithubPullRequest)
+                    .expect("expected github pr state");
+                assert_eq!(state.last_computed_value, None);
+                assert_eq!(state.update_status, ChipUpdateStatus::Loading);
                 current_prompt.await_generators(ctx)
             })
             .await;
@@ -701,6 +719,12 @@ fn test_github_pr_chip_revisiting_empty_result_directory_reruns_and_clears_previ
                     environment: Environment::default(),
                 });
                 current_prompt.update_states_with_new_context(ctx);
+                let state = current_prompt
+                    .states
+                    .get(&ContextChipKind::GithubPullRequest)
+                    .expect("expected github pr state");
+                assert_eq!(state.last_computed_value, None);
+                assert_eq!(state.update_status, ChipUpdateStatus::Loading);
                 current_prompt.await_generators(ctx)
             })
             .await;
