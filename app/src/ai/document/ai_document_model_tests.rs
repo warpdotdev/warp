@@ -681,3 +681,53 @@ fn test_streamed_agent_update_matches_reset_with_markdown_for_code_block() {
         }
     });
 }
+
+/// Backs the `Copy as Markdown` dropdown action (issue #9214). The view-level
+/// handler reads `markdown_unescaped` through the same accessor exercised here,
+/// so this asserts that a representative plan with headings, ordered steps,
+/// nested list items, and a fenced code block round-trips intact into the
+/// string that gets written to the clipboard.
+#[test]
+fn test_copy_as_markdown_preserves_plan_structure() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+
+        let plan_markdown = "# Migration Plan\n## Steps\n1. Audit the call sites\n   - Inventory each module\n   - Note breaking changes\n2. Land the refactor\n3. Verify with `cargo test`\n```rust path=null start=null\nfn migrate() {\n    println!(\"done\");\n}\n```";
+
+        let doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document(
+                "Migration Plan",
+                plan_markdown,
+                AIConversationId::new(),
+                None,
+                ctx,
+            )
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            let content = model
+                .get_document_content(&doc_id, ctx)
+                .expect("plan should expose its markdown content");
+
+            // Headings preserved.
+            assert!(content.contains("# Migration Plan"));
+            assert!(content.contains("## Steps"));
+
+            // Ordered steps preserved with their numbering.
+            assert!(content.contains("1. Audit the call sites"));
+            assert!(content.contains("2. Land the refactor"));
+            assert!(content.contains("3. Verify with `cargo test`"));
+
+            // Nested bullets under the first step preserved.
+            assert!(content.contains("- Inventory each module"));
+            assert!(content.contains("- Note breaking changes"));
+
+            // Fenced code block preserved verbatim.
+            assert!(content.contains("```rust"));
+            assert!(content.contains("fn migrate() {"));
+            assert!(content.contains("println!(\"done\");"));
+            assert!(content.contains("```"));
+        });
+    });
+}
