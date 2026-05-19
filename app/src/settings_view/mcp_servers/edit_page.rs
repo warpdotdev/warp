@@ -27,6 +27,8 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use settings::Setting as _;
+
 use crate::{
     ai::{
         blocklist::secret_redaction::find_secrets_in_text,
@@ -52,12 +54,14 @@ use crate::{
         },
         style, ServerCardItemId,
     },
+    terminal::safe_mode_settings::SafeModeSettings,
     ui_components::{buttons::icon_button, icons::Icon},
     view_components::{
         action_button::{ActionButton, DangerNakedTheme, DangerSecondaryTheme, PrimaryTheme},
         DismissibleToast,
     },
     workspace::ToastStack,
+    workspaces::user_workspaces::UserWorkspaces,
     GlobalResourceHandlesProvider,
 };
 
@@ -534,22 +538,26 @@ impl MCPServersEditPageView {
         ctx: &mut ViewContext<Self>,
         templatable_mcp_server: &TemplatableMCPServer,
     ) -> Result<(), String> {
+        let safe_mode_enabled = *SafeModeSettings::as_ref(ctx).safe_mode_enabled.value();
+        let enterprise_enforced =
+            UserWorkspaces::as_ref(ctx).is_enterprise_secret_redaction_enabled();
         let contains_secrets =
             !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty();
 
-        if contains_secrets {
-            let window_id = ctx.window_id();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string()),
-                    window_id,
-                    ctx,
-                );
-            });
-            return Err("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string());
+        if !should_block_save_for_secrets(safe_mode_enabled, enterprise_enforced, contains_secrets)
+        {
+            return Ok(());
         }
 
-        Ok(())
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string()),
+                window_id,
+                ctx,
+            );
+        });
+        Err("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string())
     }
 
     fn parse_templatable_json(
@@ -950,5 +958,72 @@ impl TypedActionView for MCPServersEditPageView {
                 }
             }
         }
+    }
+}
+
+/// Decide whether to block saving an MCP server config because secret
+/// redaction is in force AND the parsed config contains secret-shaped strings.
+///
+/// We block only when redaction is actually active — either the user-level
+/// Settings > Privacy > Secret redaction toggle is on, or the user's workspace
+/// has enterprise enforcement enabled. With both off, the user has explicitly
+/// opted to embed secrets in the config and we save it as written (#8761).
+fn should_block_save_for_secrets(
+    safe_mode_enabled: bool,
+    enterprise_enforced: bool,
+    contains_secrets: bool,
+) -> bool {
+    (safe_mode_enabled || enterprise_enforced) && contains_secrets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_block_save_for_secrets;
+
+    /// #8761: with redaction disabled and no enterprise enforcement, saving a
+    /// config that contains secrets must NOT be blocked.
+    #[test]
+    fn does_not_block_when_redaction_off_even_if_secrets_present() {
+        assert!(!should_block_save_for_secrets(false, false, true));
+    }
+
+    /// User-level toggle on AND secrets present → block. This is the case the
+    /// original check was written to catch; the redaction-aware predicate
+    /// must preserve it.
+    #[test]
+    fn blocks_when_user_redaction_on_and_secrets_present() {
+        assert!(should_block_save_for_secrets(true, false, true));
+    }
+
+    /// Enterprise enforcement alone is enough to gate the save, even if the
+    /// user toggled their personal redaction off — orgs that mandate redaction
+    /// must not be bypassed at the MCP-config layer.
+    #[test]
+    fn blocks_when_enterprise_enforced_and_secrets_present() {
+        assert!(should_block_save_for_secrets(false, true, true));
+    }
+
+    /// Configs without any detected secrets are never blocked, regardless of
+    /// the redaction-toggle state. The check is purely a guard against
+    /// accidentally persisting secrets — it has nothing to add when none exist.
+    #[test]
+    fn does_not_block_when_no_secrets_regardless_of_toggle() {
+        for safe_mode in [false, true] {
+            for enterprise in [false, true] {
+                assert!(
+                    !should_block_save_for_secrets(safe_mode, enterprise, false),
+                    "expected no block when contains_secrets=false \
+                     (safe_mode={safe_mode}, enterprise={enterprise})",
+                );
+            }
+        }
+    }
+
+    /// Both toggles on AND secrets present → block. Defensive: equivalent to
+    /// either one being on, but exhaustively pinned for the full 2x2x2 sweep
+    /// of (safe_mode, enterprise, contains_secrets).
+    #[test]
+    fn blocks_when_both_redactions_on_and_secrets_present() {
+        assert!(should_block_save_for_secrets(true, true, true));
     }
 }
