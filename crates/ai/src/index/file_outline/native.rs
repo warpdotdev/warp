@@ -1,5 +1,4 @@
 use futures::channel::oneshot;
-use ignore::gitignore::Gitignore;
 use rayon::prelude::*;
 use repo_metadata::entry::is_file_parsable;
 use repo_metadata::RepositoryUpdate;
@@ -34,15 +33,14 @@ pub async fn build_outline(
     let mut gitignores = vec![];
 
     // Add global gitignore, if it exists
-    let (global_gitignore, _) = Gitignore::global();
+    let global_gitignore = repo_metadata::cached_gitignore_global();
     if !global_gitignore.is_empty() {
         gitignores.push(global_gitignore);
     }
 
     let gitignore_path = path.join(".gitignore");
     if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(gitignore_path);
-        gitignores.push(gitignore);
+        gitignores.push(repo_metadata::cached_gitignore_new(&gitignore_path));
     }
 
     // First traverse the repo path to retrieve all files we want to parse.

@@ -907,14 +907,12 @@ impl CodebaseIndex {
 
     fn construct_initial_ignores(repo_path: &Path) -> Vec<Gitignore> {
         let mut gitignores = vec![];
-        let (global_gitignore, _) = Gitignore::global();
-        gitignores.push(global_gitignore);
+        gitignores.push(repo_metadata::cached_gitignore_global());
 
         for option in SUPPORTED_IGNORES {
             let gitignore_path = repo_path.join(option);
             if gitignore_path.exists() {
-                let (gitignore, _) = Gitignore::new(gitignore_path);
-                gitignores.push(gitignore);
+                gitignores.push(repo_metadata::cached_gitignore_new(&gitignore_path));
             }
         }
 
@@ -2139,8 +2137,7 @@ impl CodebaseIndex {
                 // Populate gitignores if there is a .gitignore file in the current directory
                 let gitignore_path = curr_path.join(".gitignore");
                 if gitignore_path.exists() {
-                    let (gitignore, _) = Gitignore::new(gitignore_path);
-                    gitignores.push(gitignore);
+                    gitignores.push(repo_metadata::cached_gitignore_new(&gitignore_path));
                 }
 
                 let entries = std::fs::read_dir(&curr_path)?;
@@ -2285,8 +2282,7 @@ impl CodebaseIndex {
             if is_dir {
                 let gitignore_path = path.join(".gitignore");
                 if gitignore_path.exists() {
-                    let (gitignore, _) = Gitignore::new(gitignore_path);
-                    gitignores.push(gitignore);
+                    gitignores.push(repo_metadata::cached_gitignore_new(&gitignore_path));
                 }
 
                 let entries = std::fs::read_dir(path)?;
