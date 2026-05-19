@@ -3,6 +3,8 @@
 #![allow(deprecated)]
 
 use cocoa::base::{id, nil};
+use core_foundation::base::{CFGetTypeID, CFTypeRef, TCFType};
+use core_foundation::boolean::CFBoolean;
 use objc::{class, msg_send, rc::StrongPtr, sel, sel_impl};
 
 /// A user preferences store backed by macOS user defaults (`NSUserDefaults`).
@@ -61,6 +63,22 @@ impl super::UserPreferences for UserDefaultsPreferencesStorage {
     fn read_value(&self, key: &str) -> Result<Option<String>, super::Error> {
         unsafe {
             let key = util::make_nsstring(key);
+
+            // Check for NSNumber-typed booleans before calling stringForKey:. When a value
+            // is written via `defaults write -bool false`, it is stored as NSNumber(BOOL).
+            // stringForKey: coerces that to "0"/"1", which serde_json cannot parse as bool
+            // and silently falls back to the setting's default. Return canonical JSON instead.
+            //
+            // BOOL is toll-free bridged with the kCFBooleanTrue/kCFBooleanFalse singletons,
+            // so CFGetTypeID is the only safe way to discriminate a real BOOL from a
+            // char-valued NSNumber (which shares ObjC encoding "c" on x86_64). Char-valued
+            // and other numeric NSNumbers carry CFNumber's type ID and fall through.
+            let raw: id = msg_send![*self.user_defaults, objectForKey: *key];
+            if raw != nil && CFGetTypeID(raw as CFTypeRef) == CFBoolean::type_id() {
+                let b: bool = msg_send![raw, boolValue];
+                return Ok(Some(b.to_string()));
+            }
+
             let value: id = msg_send![*self.user_defaults, stringForKey: *key];
             if value != nil {
                 Ok(Some(

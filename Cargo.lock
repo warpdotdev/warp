@@ -15216,6 +15216,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "cocoa 0.26.0",
+ "core-foundation 0.10.1",
  "gloo-storage",
  "log",
  "objc",
