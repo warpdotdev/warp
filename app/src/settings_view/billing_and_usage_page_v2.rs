@@ -80,8 +80,10 @@ const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your personal balance.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 const MANAGED_AUTO_RELOAD_TOOLTIP: &str = "Managed by your admin";
-const MANAGED_AUTO_RELOAD_DESCRIPTION: &str = "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase 1,000 credits for $20 and add them to your balance.";
 
+const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
+    "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
+const AUTO_RELOAD_NON_ADMIN_DELINQUENT_WARNING_STRING: &str = "Restricted due to billing issue. Contact your team admin to update their payment method.";
 const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -156,7 +158,10 @@ struct AddonCreditsState {
 }
 enum AddonCreditsPanelState {
     IneligiblePlan(AddonCreditsRestriction),
-    AutoreloadNonAdmin,
+    AutoreloadNonAdmin {
+        description_text: String,
+        warning_text: Option<&'static str>,
+    },
     Purchase(AddonCreditsPurchaseState),
 }
 
@@ -1050,9 +1055,14 @@ impl BillingAndUsagePageV2View {
             AddonCreditsPanelState::IneligiblePlan(restriction) => {
                 self.render_addon_credits_ineligible_plan_card(restriction, appearance)
             }
-            AddonCreditsPanelState::AutoreloadNonAdmin => {
-                self.render_addon_credits_non_admin_auto_reload_card(appearance)
-            }
+            AddonCreditsPanelState::AutoreloadNonAdmin {
+                description_text,
+                warning_text,
+            } => self.render_addon_credits_non_admin_auto_reload_card(
+                appearance,
+                description_text,
+                warning_text,
+            ),
             AddonCreditsPanelState::Purchase(state) => {
                 self.render_addon_credits_purchase_card(workspace, team_uid, state, appearance)
             }
@@ -1079,17 +1089,9 @@ impl BillingAndUsagePageV2View {
                     AddonCreditsRestriction::ContactTeamAdmin,
                 );
             } else if can_upgrade {
-                let is_legacy = UserWorkspaces::as_ref(app)
-                    .current_team()
-                    .is_some_and(|t| t.billing_metadata.is_on_legacy_paid_plan());
-                let link_text = if is_legacy {
-                    "Switch to Build"
-                } else {
-                    "Upgrade to Build"
-                };
                 return AddonCreditsPanelState::IneligiblePlan(
                     AddonCreditsRestriction::UpgradeToBuild {
-                        link_text,
+                        link_text: "Upgrade to Build",
                         url: UserWorkspaces::upgrade_link_for_team(team_uid),
                     },
                 );
@@ -1147,7 +1149,9 @@ impl BillingAndUsagePageV2View {
             "When any member on your team’s credit balance reaches 100 credits remaining, \
             automatically purchase {auto_reload_credit_amount}."
         );
-        let warning_text = if workspace
+        let warning_text = if delinquent {
+            Some(AUTO_RELOAD_DELINQUENT_WARNING_STRING)
+        } else if workspace
             .billing_metadata
             .has_failed_addon_credit_auto_reload_status()
         {
@@ -1172,7 +1176,33 @@ impl BillingAndUsagePageV2View {
         };
 
         if !has_admin_permissions && auto_reload_enabled {
-            return AddonCreditsPanelState::AutoreloadNonAdmin;
+            let configured_auto_reload_option = workspace
+                .settings
+                .addon_credits_settings
+                .selected_auto_reload_credit_denomination
+                .and_then(|credits| {
+                    self.addon_credits
+                        .options
+                        .iter()
+                        .find(|option| option.credits == credits)
+                })
+                .or(selected_credit_option);
+            let description_text = match configured_auto_reload_option {
+                Some(option) => {
+                    let credits = option.credits.separate_with_commas();
+                    let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
+                    format!(
+                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                    )
+                }
+                None => {
+                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                }
+            };
+            return AddonCreditsPanelState::AutoreloadNonAdmin {
+                description_text,
+                warning_text: delinquent.then_some(AUTO_RELOAD_NON_ADMIN_DELINQUENT_WARNING_STRING),
+            };
         }
 
         AddonCreditsPanelState::Purchase(AddonCreditsPurchaseState {
@@ -1264,6 +1294,8 @@ impl BillingAndUsagePageV2View {
     fn render_addon_credits_non_admin_auto_reload_card(
         &self,
         appearance: &Appearance,
+        description_text: String,
+        warning_text: Option<&'static str>,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg = theme.background();
@@ -1294,15 +1326,19 @@ impl BillingAndUsagePageV2View {
             .finish();
         let auto_reload_description = appearance
             .ui_builder()
-            .paragraph(MANAGED_AUTO_RELOAD_DESCRIPTION)
+            .paragraph(description_text)
             .with_style(UiComponentStyles {
                 font_color: Some(theme.sub_text_color(bg).into()),
                 ..Default::default()
             })
             .build()
             .finish();
+        let mut card_children = vec![auto_reload_header, auto_reload_description];
+        if let Some(warning_text) = warning_text {
+            card_children.push(self.render_warning_row(appearance, warning_text.to_string()));
+        }
         let card = Flex::column()
-            .with_children([auto_reload_header, auto_reload_description])
+            .with_children(card_children)
             .with_spacing(8.)
             .finish();
 
