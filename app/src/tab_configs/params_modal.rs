@@ -35,6 +35,17 @@ use crate::{
     },
 };
 
+/// Marker added to the modal's keymap context when no `Text` param is present.
+/// Gates the modal-level Space binding so it only fires in dropdown-only
+/// configurations — in mixed configs the Space must reach the focused text
+/// editor so the user can type spaces (see issue #11138).
+///
+/// `ContextPredicate` evaluation in keystroke dispatch is per-view, not
+/// chain-wide, so a `!id!("EditorView")` guard on the modal-level binding
+/// does not work: the modal's own context never contains `"EditorView"` even
+/// when a descendant editor is focused, and the guard becomes a no-op.
+const DROPDOWN_ONLY_FLAG: &str = "TabConfigParamsModalDropdownOnly";
+
 pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings(vec![
         FixedBinding::new(
@@ -42,19 +53,19 @@ pub fn init(app: &mut AppContext) {
             TabConfigParamsModalAction::Escape,
             id!("TabConfigParamsModal"),
         ),
-        // Enter and Space only fire when no EditorView descendant is focused.
-        // When a text field or picker filter editor has focus, the editor
-        // consumes these keys and the modal handles them via event
-        // subscriptions instead (see handle_editor_event).
         FixedBinding::new(
             "enter",
             TabConfigParamsModalAction::Submit,
             id!("TabConfigParamsModal") & !id!("EditorView"),
         ),
+        // Space only fires in dropdown-only configs. When a text param is
+        // present the modal does not advertise the dropdown-only flag, so
+        // this binding does not match and Space falls through to the focused
+        // text editor as a literal character.
         FixedBinding::new(
             "space",
             TabConfigParamsModalAction::ToggleDropdown,
-            id!("TabConfigParamsModal") & !id!("EditorView"),
+            id!(DROPDOWN_ONLY_FLAG),
         ),
     ]);
 }
@@ -448,6 +459,20 @@ impl TabConfigParamsModal {
         }
     }
 
+    /// Composes the modal's keymap context from a single flag.
+    ///
+    /// Starts from the default (which already inserts the modal's `ui_name`,
+    /// so the Enter/Escape bindings keep matching) and adds
+    /// [`DROPDOWN_ONLY_FLAG`] when the caller's param set has no `Text`
+    /// entry — which is what gates the modal-level Space binding.
+    fn build_keymap_context(has_text_fields: bool) -> warpui::keymap::Context {
+        let mut context = <Self as View>::default_keymap_context();
+        if !has_text_fields {
+            context.set.insert(DROPDOWN_ONLY_FLAG);
+        }
+        context
+    }
+
     fn handle_editor_event(
         &mut self,
         index: usize,
@@ -501,6 +526,10 @@ impl Entity for TabConfigParamsModal {
 impl View for TabConfigParamsModal {
     fn ui_name() -> &'static str {
         "TabConfigParamsModal"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        Self::build_keymap_context(self.has_text_fields())
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
