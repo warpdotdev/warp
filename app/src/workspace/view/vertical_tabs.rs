@@ -1055,6 +1055,19 @@ impl VerticalTabsPanelState {
                         )
                     }
                     VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => {
+                        let custom_group_title_matches =
+                            uses_outer_group_container(display_granularity)
+                                && pane_group
+                                    .custom_title(app)
+                                    .as_deref()
+                                    .is_some_and(|title| {
+                                        title.to_lowercase().contains(&query_lower)
+                                    });
+
+                        if custom_group_title_matches {
+                            return true;
+                        }
+
                         pane_ids_for_display_granularity(
                             &visible_pane_ids,
                             pane_group.focused_pane_id(app),
@@ -1599,6 +1612,12 @@ fn render_groups(
                         .then_some((tab_index, None))
                     }
                     VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => {
+                        let custom_group_title_matches = uses_outer_group_container
+                            && pane_group
+                                .custom_title(app)
+                                .as_deref()
+                                .is_some_and(|title| title.to_lowercase().contains(&query_lower));
+
                         let title_override = (!uses_outer_group_container)
                             .then(|| pane_group.custom_title(app))
                             .flatten();
@@ -1667,7 +1686,11 @@ fn render_groups(
                         })
                         .collect();
 
-                        (!matching_ids.is_empty()).then_some((tab_index, Some(matching_ids)))
+                        if custom_group_title_matches {
+                            Some((tab_index, None))
+                        } else {
+                            (!matching_ids.is_empty()).then_some((tab_index, Some(matching_ids)))
+                        }
                     }
                 }
             })
