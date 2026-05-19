@@ -5,6 +5,8 @@ use cloud_objects::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
 /// Serialized representation of a notebook for sync queue requests.
 #[derive(Serialize, Deserialize)]
 pub struct SerializedNotebook {

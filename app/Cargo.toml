@@ -279,6 +279,7 @@ wgpu.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true
+cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
 diesel = { workspace = true, features = ["sqlite", "chrono"] }

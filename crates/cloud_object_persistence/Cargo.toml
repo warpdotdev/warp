@@ -1,0 +1,23 @@
+[package]
+name = "cloud_object_persistence"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bincode.workspace = true
+chrono.workspace = true
+cloud_objects.workspace = true
+diesel = { workspace = true, features = ["sqlite", "chrono"] }
+log.workspace = true
+persistence.workspace = true
+serde.workspace = true
+warp_core.workspace = true
+warp_graphql.workspace = true
+
+[dev-dependencies]
+lazy_static.workspace = true
+session-sharing-protocol.workspace = true

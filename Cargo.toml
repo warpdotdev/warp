@@ -38,6 +38,7 @@ command = { path = "crates/command" }
 command-signatures-v2 = { path = "crates/command-signatures-v2" }
 cloud_objects = { path = "crates/cloud_objects" }
 cloud_object_client = { path = "crates/cloud_object_client" }
+cloud_object_persistence = { path = "crates/cloud_object_persistence" }
 cloud_object_models = { path = "crates/cloud_object_models" }
 computer_use = { path = "crates/computer_use" }
 field_mask = { path = "crates/field_mask" }

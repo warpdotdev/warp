@@ -2,6 +2,8 @@ use cloud_objects::{
     cloud_object::{GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel},
     ids::FolderId,
 };
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
 
 /// The model for a cloud folder.
 #[derive(Clone, Debug, PartialEq)]

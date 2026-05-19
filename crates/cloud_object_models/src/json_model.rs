@@ -6,6 +6,8 @@ use cloud_objects::cloud_object::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
 /// A JSON-backed cloud object payload.
 pub trait JsonModel: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static {
     /// Returns the JSON object type used by the generic string object API.

@@ -34,5 +34,10 @@ warp_core.workspace = true
 warp_graphql.workspace = true
 warp_util.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+cloud_object_persistence.workspace = true
+diesel = { workspace = true, features = ["sqlite", "chrono"] }
+persistence.workspace = true
+
 [dev-dependencies]
 cloud_objects = { workspace = true, features = ["test-util"] }

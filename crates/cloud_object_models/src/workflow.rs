@@ -4,6 +4,8 @@ use cloud_objects::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
 
 /// Workflow model used by Warp and warp-internal.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
