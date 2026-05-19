@@ -397,14 +397,19 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
 
 /// Baseline Sentry client options.
 fn sentry_client_options() -> sentry::ClientOptions {
+    sentry_client_options_for_dsn(ChannelState::sentry_url())
+}
+
+fn sentry_client_options_for_dsn(dsn: impl IntoDsn) -> sentry::ClientOptions {
     sentry::ClientOptions {
-        dsn: ChannelState::sentry_url()
-            .into_dsn()
-            .expect("Invalid Sentry DSN"),
+        dsn: dsn.into_dsn().expect("Invalid Sentry DSN"),
 
         release: Some(release_version().into()),
         environment: Some(get_environment()),
-        auto_session_tracking: true,
+        // Crash reporting should not phone home for ordinary app session
+        // start/stop events. Only explicit crash/error captures should reach
+        // Sentry when the user enables this setting.
+        auto_session_tracking: false,
         session_mode: SessionMode::Application,
         ..Default::default()
     }
@@ -615,3 +620,7 @@ impl ToSentryTags for &AntivirusInfo {
         )]
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

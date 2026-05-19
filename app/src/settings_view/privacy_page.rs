@@ -87,11 +87,15 @@ const USER_SECRET_REGEX_DESCRIPTION: &str =
     to make it case-insensitive.";
 const TELEMETRY_DESCRIPTION_OLD: &str =
     "App analytics help us make the product better for you. We only collect \
-    app usage metadata, never console input or output.";
+    app usage metadata, never console input or output. Turning this off stops \
+    analytics telemetry, but does not disable network requests required for \
+    account, settings, updates, team, AI, or other product functionality.";
 const TELEMETRY_TITLE: &str = "Help improve Warp";
 const TELEMETRY_DESCRIPTION: &str =
     "App analytics help us make the product better for you. We may collect \
-    certain console interactions to improve Warp's AI capabilities.";
+    certain console interactions to improve Warp's AI capabilities. Turning this \
+    off stops analytics telemetry, but does not disable network requests required \
+    for account, settings, updates, team, AI, or other product functionality.";
 const TELEMETRY_FREE_TIER_NOTE: &str =
     "On the free tier, analytics must be enabled to use AI features.";
 const TELEMETRY_DOCS_URL: &str =
@@ -1607,7 +1611,7 @@ impl SettingsWidget for CrashReportsWidget {
     type View = PrivacyPageView;
 
     fn search_terms(&self) -> &str {
-        "telemetry crash reports stability data collection"
+        "telemetry crash error reports stability data collection"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
@@ -1630,7 +1634,7 @@ impl SettingsWidget for CrashReportsWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                "Send crash reports".into(),
+                "Send crash and error reports".into(),
                 None,
                 // Crash report state is always synced to cloud, so no need to show local only icon.
                 LocalOnlyIconState::Hidden,
@@ -1649,7 +1653,9 @@ impl SettingsWidget for CrashReportsWidget {
             .with_child(
                 ui_builder
                     .paragraph(
-                        "Crash reports assist with debugging and stability improvements."
+                        "Crash and internal error reports assist with debugging and stability \
+                        improvements. This does not include app analytics or normal session \
+                        tracking."
                             .to_owned(),
                     )
                     .with_style(UiComponentStyles {

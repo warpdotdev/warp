@@ -111,7 +111,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         private: false,
         storage_key: "CrashReportingEnabled",
         toml_path: "privacy.crash_reporting_enabled",
-        description: "Whether crash reports are sent.",
+        description: "Whether crash and internal error reports are sent.",
     },
     is_cloud_conversation_storage_enabled: IsCloudConversationStorageEnabled {
         type: bool,
