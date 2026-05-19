@@ -415,6 +415,8 @@ pub enum Attr {
     Underline,
     /// Underlined twice.
     DoubleUnderline,
+    /// Curly underline text.
+    CurlyUnderline,
     /// Blink cursor slowly.
     BlinkSlow,
     /// Blink cursor fast.
@@ -433,6 +435,10 @@ pub enum Attr {
     CancelItalic,
     /// Cancel all underlines.
     CancelUnderline,
+    /// Set underline color.
+    UnderlineColor(Color),
+    /// Reset underline color.
+    ResetUnderlineColor,
     /// Cancel blink.
     CancelBlink,
     /// Cancel inversion.
@@ -522,7 +528,9 @@ pub fn attrs_from_sgr_parameters(params: &mut ParamsIter<'_>) -> Vec<Option<Attr
             [2] => Some(Attr::Dim),
             [3] => Some(Attr::Italic),
             [4, 0] => Some(Attr::CancelUnderline),
+            [4, 1] => Some(Attr::Underline),
             [4, 2] => Some(Attr::DoubleUnderline),
+            [4, 3] => Some(Attr::CurlyUnderline),
             [4, ..] => Some(Attr::Underline),
             [5] => Some(Attr::BlinkSlow),
             [6] => Some(Attr::BlinkFast),
@@ -577,6 +585,18 @@ pub fn attrs_from_sgr_parameters(params: &mut ParamsIter<'_>) -> Vec<Option<Attr
                 parse_sgr_color(&mut iter).map(Attr::Background)
             }
             [49] => Some(Attr::Background(Color::Named(NamedColor::Background))),
+            [58] => {
+                let mut iter = params.map(|param| param[0]);
+                parse_sgr_color(&mut iter).map(Attr::UnderlineColor)
+            }
+            [58, params @ ..] => {
+                let rgb_start = if params.len() > 4 { 2 } else { 1 };
+                let rgb_iter = params[rgb_start..].iter().copied();
+                let mut iter = iter::once(params[0]).chain(rgb_iter);
+
+                parse_sgr_color(&mut iter).map(Attr::UnderlineColor)
+            }
+            [59] => Some(Attr::ResetUnderlineColor),
             [90] => Some(Attr::Foreground(Color::Named(NamedColor::BrightBlack))),
             [91] => Some(Attr::Foreground(Color::Named(NamedColor::BrightRed))),
             [92] => Some(Attr::Foreground(Color::Named(NamedColor::BrightGreen))),

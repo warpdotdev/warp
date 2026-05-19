@@ -1210,6 +1210,68 @@ fn test_serializing_string() {
     n.fg = Color::Named(NamedColor::Red);
     n.flags = Flags::DIM;
     assert_eq!(GridHandler::cell_to_string(&n), "\x1b[31;2mn\x1b[0m");
+
+    // o, undercurl
+    let mut o = Cell::from('o');
+    o.flags = Flags::CURLY_UNDERLINE;
+    assert_eq!(GridHandler::cell_to_string(&o), "\x1b[4:3mo\x1b[0m");
+
+    // p, underline color
+    let mut p = Cell::from('p');
+    p.set_underline_color(Color::Spec(ColorU::new(255, 0, 0, 255)));
+    assert_eq!(
+        GridHandler::cell_to_string(&p),
+        "\x1b[58;2;255;0;0mp\x1b[0m"
+    );
+
+    // q, undercurl with indexed underline color
+    let mut q = Cell::from('q');
+    q.flags = Flags::CURLY_UNDERLINE;
+    q.set_underline_color(Color::Indexed(45));
+    assert_eq!(GridHandler::cell_to_string(&q), "\x1b[4:3;58;5;45mq\x1b[0m");
+}
+
+#[test]
+fn test_parsing_undercurl_and_underline_color() {
+    let mut grid = GridHandler::new_for_test(1, 10);
+    let mut parser = ansi::Processor::new();
+
+    parser.parse_bytes(
+        &mut grid,
+        b"\x1b[4:3;58:2::255:0:0mX\x1b[59mY\x1b[24mZ",
+        &mut std::io::sink(),
+    );
+
+    let x = &grid.grid_storage()[VisibleRow(0)][0];
+    assert_eq!(x.c, 'X');
+    assert!(x.flags().contains(Flags::CURLY_UNDERLINE));
+    assert!(!x
+        .flags()
+        .intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE));
+    assert_eq!(
+        x.underline_color(),
+        Some(Color::Spec(ColorU::new(255, 0, 0, 255)))
+    );
+
+    let y = &grid.grid_storage()[VisibleRow(0)][1];
+    assert_eq!(y.c, 'Y');
+    assert!(y.flags().contains(Flags::CURLY_UNDERLINE));
+    assert_eq!(y.underline_color(), None);
+
+    let z = &grid.grid_storage()[VisibleRow(0)][2];
+    assert_eq!(z.c, 'Z');
+    assert!(!z
+        .flags()
+        .intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::CURLY_UNDERLINE));
+    assert_eq!(z.underline_color(), None);
+
+    let mut grid = GridHandler::new_for_test(1, 1);
+    parser.parse_bytes(&mut grid, b"\x1b[4;3mI", &mut std::io::sink());
+
+    let i = &grid.grid_storage()[VisibleRow(0)][0];
+    assert_eq!(i.c, 'I');
+    assert!(i.flags().contains(Flags::UNDERLINE | Flags::ITALIC));
+    assert!(!i.flags().contains(Flags::CURLY_UNDERLINE));
 }
 
 #[test]

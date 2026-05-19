@@ -27,6 +27,7 @@ const STYLE_MASK: cell::Flags = cell::Flags::from_bits_truncate(
         | cell::Flags::ITALIC.bits()
         | cell::Flags::UNDERLINE.bits()
         | cell::Flags::DOUBLE_UNDERLINE.bits()
+        | cell::Flags::CURLY_UNDERLINE.bits()
         | cell::Flags::DIM.bits()
         | cell::Flags::HIDDEN.bits()
         | cell::Flags::STRIKEOUT.bits(),
@@ -39,6 +40,9 @@ pub struct BgAndStyle {
 
     /// Additional styling-related flags.
     pub flags: cell::Flags,
+
+    /// The underline color for a cell.
+    pub underline_color: Option<ansi::Color>,
 }
 
 impl Default for BgAndStyle {
@@ -46,6 +50,7 @@ impl Default for BgAndStyle {
         Self {
             bg: ansi::Color::Named(ansi::NamedColor::Background),
             flags: cell::Flags::empty(),
+            underline_color: None,
         }
     }
 }
@@ -57,12 +62,15 @@ impl From<&cell::Cell> for BgAndStyle {
         Self {
             bg: value.bg,
             flags: value.flags & STYLE_MASK,
+            underline_color: value.underline_color(),
         }
     }
 }
 
 impl PartialEq<&cell::Cell> for BgAndStyle {
     fn eq(&self, other: &&cell::Cell) -> bool {
-        self.bg == other.bg && self.flags == (other.flags & STYLE_MASK)
+        self.bg == other.bg
+            && self.flags == (other.flags & STYLE_MASK)
+            && self.underline_color == other.underline_color()
     }
 }

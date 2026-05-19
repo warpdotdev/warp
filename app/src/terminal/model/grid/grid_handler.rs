@@ -87,6 +87,7 @@ const DEFAULT_BG_CODE: u8 = 49;
 /// the SGR (Select Graphic Rendition) parameters for 256-color and true-color
 const FG_SGR_PARAM: u8 = 38;
 const BG_SGR_PARAM: u8 = 48;
+const UNDERLINE_COLOR_SGR_PARAM: u8 = 58;
 
 lazy_static! {
     pub static ref FILE_LINK_SEPARATORS: HashSet<char> =
@@ -632,6 +633,16 @@ impl GridHandler {
         }
     }
 
+    fn color_to_underline_escape_sequence(color: Color) -> Option<String> {
+        match color {
+            Color::Named(_) => None,
+            Color::Indexed(v) => Some(format!("{UNDERLINE_COLOR_SGR_PARAM};5;{v}")),
+            Color::Spec(ColorU { r, g, b, .. }) => {
+                Some(format!("{UNDERLINE_COLOR_SGR_PARAM};2;{r};{g};{b}"))
+            }
+        }
+    }
+
     pub fn grapheme_cursor_from(
         &self,
         point: Point,
@@ -833,12 +844,16 @@ impl GridHandler {
             | Flags::STRIKEOUT
             | Flags::INVERSE
             | Flags::HIDDEN
-            | Flags::DOUBLE_UNDERLINE;
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::CURLY_UNDERLINE;
         let contains_style = cell.flags.intersects(style_checker);
+        let underline_color_sequence = cell
+            .underline_color()
+            .and_then(Self::color_to_underline_escape_sequence);
 
         let color_sequence = match (cell.fg, cell.bg) {
             (Color::Named(NamedColor::Foreground), Color::Named(NamedColor::Background))
-                if !contains_style =>
+                if !contains_style && underline_color_sequence.is_none() =>
             {
                 return cell_content.to_string();
             }
@@ -877,6 +892,9 @@ impl GridHandler {
             if cell.flags().contains(Flags::DOUBLE_UNDERLINE) {
                 attributes.push("4:2");
             }
+            if cell.flags().contains(Flags::CURLY_UNDERLINE) {
+                attributes.push("4:3");
+            }
             if cell.flags().contains(Flags::INVERSE) {
                 attributes.push("7");
             }
@@ -888,8 +906,21 @@ impl GridHandler {
             }
 
             Some(attributes.join(";"))
+        } else if underline_color_sequence.is_some() {
+            Some(String::new())
         } else {
             None
+        };
+
+        let style_sequence = match (style_sequence, underline_color_sequence) {
+            (Some(style_sequence), Some(underline_color_sequence)) if style_sequence.is_empty() => {
+                Some(underline_color_sequence)
+            }
+            (Some(style_sequence), Some(underline_color_sequence)) => {
+                Some(format!("{style_sequence};{underline_color_sequence}"))
+            }
+            (style_sequence, None) => style_sequence,
+            (None, Some(underline_color_sequence)) => Some(underline_color_sequence),
         };
 
         match (color_sequence, style_sequence) {

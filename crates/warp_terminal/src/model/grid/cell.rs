@@ -56,9 +56,10 @@ bitflags! {
         /// Set on cells which are the locations of cursor points and should be
         /// tracked through grid resizes.
         const HAS_CURSOR                = 0b0001_0000_0000_0000;
+        const CURLY_UNDERLINE           = 0b0010_0000_0000_0000;
         /// Equivalent to the union of all of the following: Flags::UNDERLINE,
-        /// Flags::STRIKEOUT, Flags::DOUBLE_UNDERLINE.
-        const CELL_DECORATIONS          = 0b0000_1010_0000_1000;
+        /// Flags::STRIKEOUT, Flags::DOUBLE_UNDERLINE, Flags::CURLY_UNDERLINE.
+        const CELL_DECORATIONS          = 0b0010_1010_0000_1000;
     }
 }
 
@@ -115,8 +116,12 @@ struct CellExtra {
     /// Zerowidth characters stored in this cell WITH the base character at the start. This helps
     /// optimize reads on this data structure (we don't need to allocate a new string to join the
     /// base character and zerowidth characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     cell_with_zero_width: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     end_of_prompt: Option<EndOfPromptMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    underline_color: Option<Color>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -170,6 +175,35 @@ impl Cell {
         self.extra
             .as_ref()
             .and_then(|extra| extra.cell_with_zero_width.as_deref())
+    }
+
+    #[inline]
+    pub fn underline_color(&self) -> Option<Color> {
+        self.extra.as_ref()?.underline_color
+    }
+
+    #[inline]
+    pub fn set_underline_color(&mut self, color: Color) {
+        self.extra.get_or_insert_with(Box::default).underline_color = Some(color);
+    }
+
+    #[inline]
+    pub fn clear_underline_color(&mut self) {
+        if let Some(extra) = self.extra.as_mut() {
+            extra.underline_color = None;
+        }
+        self.drop_empty_extra();
+    }
+
+    #[inline]
+    fn drop_empty_extra(&mut self) {
+        if self.extra.as_ref().is_some_and(|extra| {
+            extra.cell_with_zero_width.is_none()
+                && extra.end_of_prompt.is_none()
+                && extra.underline_color.is_none()
+        }) {
+            self.extra = None;
+        }
     }
 
     /// Returns the content of the cell that should be used for display
@@ -301,6 +335,7 @@ impl Cell {
                 Flags::INVERSE
                     | Flags::UNDERLINE
                     | Flags::DOUBLE_UNDERLINE
+                    | Flags::CURLY_UNDERLINE
                     | Flags::STRIKEOUT
                     | Flags::WRAPLINE
                     | Flags::WIDE_CHAR_SPACER

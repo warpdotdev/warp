@@ -106,13 +106,18 @@ fn test_push_rows_with_color() {
     red_cell.c = 'r';
     red_cell.fg = ansi::Color::Named(ansi::NamedColor::Red);
 
+    let mut undercurl_cell = Cell::default();
+    undercurl_cell.c = 'u';
+    undercurl_cell.flags = Flags::CURLY_UNDERLINE;
+    undercurl_cell.set_underline_color(ansi::Color::Indexed(45));
+
     let row = Row::from_vec(
         vec![
             Cell::default(),
             Cell::default(),
             red_cell.clone(),
             red_cell,
-            Cell::default(),
+            undercurl_cell,
         ],
         5,
     );

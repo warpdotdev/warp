@@ -76,7 +76,11 @@ impl Iterator for RowIterator<'_> {
             // iterator returned by `AttributeMap` shouldn't actually implement
             // `Iterator` and should provide its own `next(&Grapheme)` function.
             let fg = next_attribute(&mut fg_color_iter, &grapheme);
-            let BgAndStyle { bg, flags } = next_attribute(&mut bg_and_style_iter, &grapheme);
+            let BgAndStyle {
+                bg,
+                flags,
+                underline_color,
+            } = next_attribute(&mut bg_and_style_iter, &grapheme);
 
             let cell_width = grapheme.cell_width();
             if cell_width == 0 {
@@ -115,6 +119,9 @@ impl Iterator for RowIterator<'_> {
             cell.fg = fg;
             cell.bg = bg;
             cell.flags = flags;
+            if let Some(underline_color) = underline_color {
+                cell.set_underline_color(underline_color);
+            }
 
             match self.storage.end_of_prompt_marker {
                 Some(EndOfPromptMarker {

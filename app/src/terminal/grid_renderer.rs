@@ -2,7 +2,7 @@ mod cell_glyph_cache;
 mod cell_type;
 
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
-use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
+use crate::terminal::model::ansi::{color_index, Color, CursorShape, CursorStyle, NamedColor};
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::{color, SizeInfo};
 
@@ -147,6 +147,12 @@ struct DecorationData {
     origin: Vector2F,
     size: Vector2F,
     color: ColorU,
+    kind: DecorationKind,
+}
+
+enum DecorationKind {
+    Solid,
+    Curly { thickness: f32 },
 }
 
 /// Holds data necessary to draw a "native" glyph - a character that we render
@@ -865,9 +871,7 @@ fn render_grid_without_ligatures<'a>(
         render_native_glyph(native_glyph, ctx, app);
     }
     for data in cell_decorations {
-        ctx.scene
-            .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
-            .with_background(Fill::Solid(data.color));
+        render_cell_decoration(data, ctx);
     }
 }
 
@@ -953,6 +957,8 @@ fn render_cell(
         grid_origin,
         glyph_offset,
         cell_colors.foreground_color,
+        colors,
+        override_colors,
         obfuscate_mode,
     ));
     // We move this in and then return it to avoid an extra copy in `maybe_draw_background`.
@@ -1227,6 +1233,8 @@ fn render_grid_with_ligatures<'a>(
                         grid_origin,
                         glyph_offset,
                         cell_colors.foreground_color,
+                        colors,
+                        override_colors,
                         obfuscate_secrets,
                     ));
 
@@ -1376,6 +1384,8 @@ fn render_grid_with_ligatures<'a>(
                 grid_origin,
                 glyph_offset,
                 cell_colors.foreground_color,
+                colors,
+                override_colors,
                 obfuscate_secrets,
             ));
 
@@ -1485,9 +1495,37 @@ fn render_grid_with_ligatures<'a>(
         render_native_glyph(native_glyph, ctx, app);
     }
     for data in cell_decorations {
-        ctx.scene
-            .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
-            .with_background(Fill::Solid(data.color));
+        render_cell_decoration(data, ctx);
+    }
+}
+
+fn render_cell_decoration(data: DecorationData, ctx: &mut PaintContext) {
+    match data.kind {
+        DecorationKind::Solid => {
+            ctx.scene
+                .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
+                .with_background(Fill::Solid(data.color));
+        }
+        DecorationKind::Curly { thickness } => {
+            let segment_width = thickness.max(1.).ceil();
+            let wave_height = data.size.y();
+            let mut x = 0.;
+            let mut high = true;
+
+            while x < data.size.x() {
+                let width = segment_width.min(data.size.x() - x);
+                let y = if high { 0. } else { wave_height - thickness };
+                ctx.scene
+                    .draw_rect_without_hit_recording(RectF::new(
+                        data.origin + vec2f(x, y),
+                        vec2f(width, thickness),
+                    ))
+                    .with_background(Fill::Solid(data.color));
+
+                high = !high;
+                x += segment_width;
+            }
+        }
     }
 }
 
@@ -2271,6 +2309,8 @@ fn calculate_cell_decorations(
     grid_origin: Vector2F,
     glyph_offset: Vector2F,
     foreground_color: ColorU,
+    colors: &color::List,
+    override_colors: &color::OverrideList,
     obfuscate_mode: ObfuscateSecrets,
 ) -> Option<DecorationData> {
     let is_secret_in_highlight_mode = matches!(obfuscate_mode, ObfuscateSecrets::Strikethrough)
@@ -2292,14 +2332,41 @@ fn calculate_cell_decorations(
     let should_strikethrough_secret =
         is_unhovered_secret && is_in_strikethrough_mode && !cell_type.is_url();
 
+    let underline_color = cell
+        .underline_color()
+        .map(|color| terminal_color_to_rgb(colors, override_colors, color))
+        .unwrap_or(foreground_color);
+
     let decoration_rect_data = if cell.flags.intersects(Flags::DOUBLE_UNDERLINE) {
-        Some((thickness * 2., cell_size.y(), foreground_color))
+        Some((
+            thickness * 2.,
+            cell_size.y(),
+            underline_color,
+            DecorationKind::Solid,
+        ))
+    } else if cell.flags.intersects(Flags::CURLY_UNDERLINE) {
+        Some((
+            thickness * 3.,
+            cell_size.y(),
+            underline_color,
+            DecorationKind::Curly { thickness },
+        ))
     } else if cell.flags.intersects(Flags::UNDERLINE) {
-        Some((thickness, cell_size.y(), foreground_color))
+        Some((
+            thickness,
+            cell_size.y(),
+            underline_color,
+            DecorationKind::Solid,
+        ))
     } else if cell.flags.intersects(Flags::STRIKEOUT) || should_strikethrough_secret {
-        Some((thickness, cell_size.y() / 2., foreground_color))
+        Some((
+            thickness,
+            cell_size.y() / 2.,
+            foreground_color,
+            DecorationKind::Solid,
+        ))
     } else if cell_type.is_url() {
-        Some((thickness, cell_size.y(), *URL_COLOR))
+        Some((thickness, cell_size.y(), *URL_COLOR, DecorationKind::Solid))
     } else {
         None
     };
@@ -2309,11 +2376,34 @@ fn calculate_cell_decorations(
     } else {
         cell_size
     };
-    decoration_rect_data.map(|(thickness, y, color)| DecorationData {
+    decoration_rect_data.map(|(thickness, y, color, kind)| DecorationData {
         origin: grid_origin + glyph_offset + vec2f(0., y - thickness),
         size: vec2f(actual_cell_size.x(), thickness),
         color,
+        kind,
     })
+}
+
+fn terminal_color_to_rgb(
+    colors: &color::List,
+    override_colors: &color::OverrideList,
+    terminal_color: Color,
+) -> ColorU {
+    match terminal_color {
+        Color::Spec(rgb) => rgb,
+        Color::Named(named_color) => {
+            let color_index = match named_color {
+                NamedColor::Foreground => color_index::FOREGROUND,
+                NamedColor::Background => color_index::BACKGROUND,
+                _ => named_color.into_color_index(),
+            };
+
+            cell_type::get_override_color(colors, override_colors, color_index)
+        }
+        Color::Indexed(index) => {
+            cell_type::get_override_color(colors, override_colors, index as usize)
+        }
+    }
 }
 
 fn calculate_cursor_origin(

@@ -49,6 +49,7 @@ fn test_contains_cell_decorations() {
     assert!(Flags::UNDERLINE.intersects(Flags::CELL_DECORATIONS));
     assert!(Flags::STRIKEOUT.intersects(Flags::CELL_DECORATIONS));
     assert!(Flags::DOUBLE_UNDERLINE.intersects(Flags::CELL_DECORATIONS));
+    assert!(Flags::CURLY_UNDERLINE.intersects(Flags::CELL_DECORATIONS));
 }
 
 #[test]
