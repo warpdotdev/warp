@@ -255,6 +255,7 @@ use crate::env_vars::{
     env_var_collection_block::{EnvVarCollectionBlock, EnvVarCollectionBlockEvent},
     CloudEnvVarCollection, EnvVar,
 };
+use crate::notification::should_emit_desktop_notification;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::persistence::{self, FinishedCommandMetadata};
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -12160,7 +12161,7 @@ impl TerminalView {
                     }
                 }
 
-                if self.is_navigated_away_from_window(ctx) {
+                if should_emit_desktop_notification(ctx) {
                     let notification_title =
                         title.clone().unwrap_or_else(|| "Notification".to_string());
                     let notification = BlockNotification {
@@ -12704,7 +12705,7 @@ impl TerminalView {
         }
 
         // Desktop notifications — only when navigated away and not in-progress.
-        if !self.is_navigated_away_from_window(ctx)
+        if !should_emit_desktop_notification(ctx)
             || matches!(status, CLIAgentSessionStatus::InProgress)
         {
             return;
@@ -15132,7 +15133,7 @@ impl TerminalView {
                     // if the banner is not yet open, but there is some trigger,
                     // we were likely waiting on the block to finish so insert it now
                     self.insert_notifications_discovery_banner(trigger, ctx);
-                } else if self.is_navigated_away_from_window(ctx)
+                } else if should_emit_desktop_notification(ctx)
                     && block_duration >= *DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION
                 {
                     // otherwise, if the user is navigated away when the block completes
@@ -15150,7 +15151,7 @@ impl TerminalView {
                     .banner_type
                 {
                     self.insert_notifications_error_banner(ctx);
-                } else if self.is_navigated_away_from_window(ctx)
+                } else if should_emit_desktop_notification(ctx)
                     && notification_settings.is_long_running_enabled
                     && block_duration >= notification_settings.long_running_threshold
                 {
@@ -15189,7 +15190,7 @@ impl TerminalView {
         conversation_id: &AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !self.is_navigated_away_from_window(ctx) {
+        if !should_emit_desktop_notification(ctx) {
             return;
         }
 
@@ -20312,14 +20313,13 @@ impl TerminalView {
         ctx.notify();
     }
 
-    fn is_navigated_away_from_window(&self, ctx: &mut ViewContext<Self>) -> bool {
-        let active_window = ctx.windows().active_window();
-        Some(ctx.window_id()) != active_window
-    }
-
     fn is_block_active_and_running(&self, model: &TerminalModel, block_index: BlockIndex) -> bool {
         let active_block = model.block_list().active_block();
         active_block.index() == block_index && active_block.is_active_and_long_running()
+    }
+
+    fn is_navigated_away_from_window(&self, ctx: &mut ViewContext<Self>) -> bool {
+        ctx.windows().active_window() != Some(ctx.window_id())
     }
 
     /// If password notification settings enabled, send a notification.
@@ -20336,7 +20336,9 @@ impl TerminalView {
 
         // The active block could have changed before we send the notification
         // so double check before sending
-        if self.is_block_active_and_running(&model, block_index) {
+        if self.is_block_active_and_running(&model, block_index)
+            && should_emit_desktop_notification(ctx)
+        {
             match notification_settings.mode {
                 NotificationsMode::Enabled if notification_settings.is_needs_attention_enabled => {
                     let password_trigger = NotificationsTrigger::NeedsAttention;

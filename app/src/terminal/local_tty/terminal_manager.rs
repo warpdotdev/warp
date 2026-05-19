@@ -28,6 +28,7 @@ use session_sharing_protocol::sharer::{
 
 use crate::editor::CrdtOperation;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
+use crate::notification::should_emit_desktop_notification;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::presence_manager::PresenceManager;
@@ -1209,10 +1210,8 @@ impl TerminalManager {
                     // when the password prompt appears. If the password prompt appears and they
                     // are not navigated away, don't poll again since we would then send a notification
                     // for something the user already knows.
-                    let is_navigated_away_from_window =
-                        ctx.windows().active_window() != Some(view.window_id(ctx));
                     let password_notification_setting_on = show_password_notifications(ctx);
-                    if is_navigated_away_from_window && password_notification_setting_on {
+                    if should_emit_desktop_notification(ctx) && password_notification_setting_on {
                         if let Some(block_index) = block_index_clone.borrow_mut().take() {
                             view.update(ctx, |view, ctx| {
                                 view.maybe_send_password_notification(block_index, ctx);
