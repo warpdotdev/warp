@@ -37,6 +37,7 @@ impl WslCommandExecutor {
             ShellType::Zsh => "-f",
             ShellType::Bash => "--norc",
             ShellType::Fish => "--no-config",
+            ShellType::Nushell => "--no-config-file",
             ShellType::PowerShell => "-NoProfile",
         };
 

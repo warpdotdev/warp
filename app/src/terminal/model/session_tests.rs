@@ -5,7 +5,12 @@ use warpui::{
     TypedActionView, View, ViewContext,
 };
 
-use super::{SessionId, Sessions, SessionsEvent};
+use crate::terminal::shell::ShellType;
+
+use super::{
+    command_name_vec_from_shell_output, command_names_from_shell_output, SessionId, Sessions,
+    SessionsEvent,
+};
 
 struct TestView {
     events: Vec<SessionsEvent>,
@@ -68,6 +73,34 @@ fn test_set_env_var_emits_event() {
             }
         });
     });
+}
+
+#[test]
+fn nushell_command_names_include_top_level_for_multiword_commands() {
+    let command_names =
+        command_names_from_shell_output(ShellType::Nushell, "str join\npath exists\nrandom\n");
+
+    assert!(command_names.contains("str join"));
+    assert!(command_names.contains("str"));
+    assert!(command_names.contains("path exists"));
+    assert!(command_names.contains("path"));
+    assert!(command_names.contains("random"));
+}
+
+#[test]
+fn command_names_do_not_split_multiword_commands_for_other_shells() {
+    let command_names = command_names_from_shell_output(ShellType::Bash, "str join\n");
+
+    assert!(command_names.contains("str join"));
+    assert!(!command_names.contains("str"));
+}
+
+#[test]
+fn command_name_vec_preserves_first_seen_order() {
+    let command_names =
+        command_name_vec_from_shell_output(ShellType::Nushell, "str join\nstr trim\n");
+
+    assert_eq!(command_names, vec!["str join", "str", "str trim"]);
 }
 
 #[test]

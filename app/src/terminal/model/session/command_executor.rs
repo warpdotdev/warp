@@ -394,7 +394,8 @@ pub mod testing {
         ) -> Result<CommandOutput> {
             let mut command_process = Command::new(match shell.shell_type() {
                 ShellType::PowerShell => "pwsh",
-                _ => "bash",
+                ShellType::Nushell => "nu",
+                ShellType::Bash | ShellType::Zsh | ShellType::Fish => "bash",
             });
 
             // Set environment variables, including $PATH.

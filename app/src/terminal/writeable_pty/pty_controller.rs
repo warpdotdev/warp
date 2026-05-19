@@ -494,6 +494,13 @@ impl<T: EventLoopSender> PtyController<T> {
                 self.write_bytes(b" . ", ctx);
                 self.write_bytes(escaped.into_bytes(), ctx);
             }
+            ShellType::Nushell => {
+                let path_str = String::from_utf8_lossy(&path_to_script);
+                let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+                self.write_bytes(b" source \"", ctx);
+                self.write_bytes(escaped.into_bytes(), ctx);
+                self.write_bytes(b"\"", ctx);
+            }
             _ => {
                 self.write_bytes(b" source '", ctx);
                 self.write_bytes(path_to_script, ctx);

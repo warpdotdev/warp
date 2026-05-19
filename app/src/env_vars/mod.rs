@@ -80,6 +80,11 @@ impl EnvVar {
     }
 
     pub fn get_initialization_string(&self, shell_type: ShellType) -> String {
+        if shell_type == ShellType::Nushell {
+            let name = nushell_env_var_name(&self.name);
+            let value = get_nushell_init_command_for_env_var(&self.value);
+            return format!("$env.{name} = {value};");
+        }
         let shell_family = ShellFamily::from(shell_type);
         let name = shell_family.escape(&self.name);
         let value = get_init_command_for_env_var(&self.value, shell_family);
@@ -91,6 +96,7 @@ impl EnvVar {
             ShellType::Fish => {
                 format!("set -x {name} {value};")
             }
+            ShellType::Nushell => unreachable!("handled before shell-family escaping"),
             ShellType::PowerShell => {
                 format!("$env:{name} = {value};")
             }
@@ -111,6 +117,45 @@ fn get_init_command_for_env_var(value: &EnvVarValue, shell_family: ShellFamily) 
     }
 }
 
+fn get_nushell_init_command_for_env_var(value: &EnvVarValue) -> String {
+    match value {
+        EnvVarValue::Constant(val) => nushell_string_literal(val),
+        EnvVarValue::Command(cmd) => format!("({})", cmd.command),
+        EnvVarValue::Secret(secret) => {
+            format!(
+                "({})",
+                secret.get_secret_extraction_command(ShellFamily::Posix)
+            )
+        }
+    }
+}
+
+fn nushell_env_var_name(name: &str) -> String {
+    if name
+        .chars()
+        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+    {
+        name.to_owned()
+    } else {
+        nushell_string_literal(name)
+    }
+}
+
+fn nushell_string_literal(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    )
+}
 /// Defines the data model for a cloud synced collection of environment variables.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct EnvVarCollection {
@@ -255,12 +300,29 @@ pub fn serialize_variables_for_shell<'s, I: IntoIterator<Item = (&'s str, &'s En
         ShellType::Bash | ShellType::Zsh => {
             serialize_variables_internal(pairs, "", "=", "", " ", shell_type.into())
         }
+        ShellType::Nushell => serialize_nushell_variables_internal(pairs, " "),
         ShellType::PowerShell => {
             serialize_variables_internal(pairs, "$env:", " = ", ";", " ", shell_type.into())
         }
     }
 }
 
+fn serialize_nushell_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s EnvVarValue)>>(
+    pairs: I,
+    delimiter: &str,
+) -> String {
+    pairs
+        .into_iter()
+        .map(|(name, value)| {
+            format!(
+                "$env.{} = {};",
+                nushell_env_var_name(name),
+                get_nushell_init_command_for_env_var(value)
+            )
+        })
+        .collect_vec()
+        .join(delimiter)
+}
 // Prefix — what's prepended to each variable
 // Separator — what separates the variable name from the value
 // Postfix — what's appended to the end of each variable

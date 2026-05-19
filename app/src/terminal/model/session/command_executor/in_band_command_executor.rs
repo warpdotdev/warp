@@ -331,6 +331,15 @@ impl InBandCommandExecutor {
                     ShellType::PowerShell => {
                         format!("Warp-Run-GeneratorCommand {id} '{escaped_command}' -ErrorAction Ignore")
                     }
+                    ShellType::Nushell => {
+                        let escaped_command = command
+                            .replace('\\', "\\\\")
+                            .replace('"', "\\\"")
+                            .replace('\n', "\\n")
+                            .replace('\r', "\\r")
+                            .replace('\t', "\\t");
+                        format!("warp_run_generator_command {id} \"{escaped_command}\"")
+                    }
                     ShellType::Fish => {
                         // Add a leading space for in-band commands in fish, which omits them from
                         // history. Unlike bash and zsh, fish does not have a mechanism for

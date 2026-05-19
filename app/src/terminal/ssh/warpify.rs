@@ -172,7 +172,8 @@ pub fn warpify_ssh_session_command(
             bundled_asset!("ssh/bash_zsh/warpify_ssh_session.sh")
         }
         (_, ShellType::Fish) => bundled_asset!("ssh/fish/warpify_ssh_session.sh"),
-        // PowerShell is not supported yet.
+        // PowerShell and Nushell are not supported yet.
+        (_, ShellType::Nushell) => return None,
         (_, ShellType::PowerShell) => return None,
     };
 

@@ -92,6 +92,7 @@ impl LocalCommandExecutor {
             ShellType::Zsh => "-f",
             ShellType::Bash => "--norc",
             ShellType::Fish => "--no-config",
+            ShellType::Nushell => "--no-config-file",
             ShellType::PowerShell => "-NoProfile",
         };
 
@@ -113,6 +114,7 @@ impl LocalCommandExecutor {
     ) -> Result<CommandOutput> {
         let shell_config_flag = match self.shell_type {
             ShellType::Bash | ShellType::Zsh | ShellType::Fish => "-l",
+            ShellType::Nushell => "--login",
             ShellType::PowerShell => "-Login",
         };
 

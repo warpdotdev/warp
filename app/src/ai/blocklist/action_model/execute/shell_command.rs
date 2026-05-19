@@ -200,6 +200,8 @@ impl ShellCommandExecutor {
             // Fish doesn't have grouping characters. We need to use begin; and end; to ensure the command
             // gets evaluated first.
             Some(ShellType::Fish) => format!("begin; {command} ;end | command cat"),
+            // Nushell uses blocks for grouping pipelines.
+            Some(ShellType::Nushell) => format!("do {{ {command} }} | ^cat"),
             // For powershell, we use Out-Host to send paged output to the
             // console. Add a backslash to avoid executing an alias.
             Some(ShellType::PowerShell) => format!("({command}) | \\Out-Host"),

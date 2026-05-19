@@ -106,6 +106,7 @@ impl LocalShellState {
         let command = match shell_type {
             ShellType::Bash | ShellType::Zsh => "echo $PATH",
             ShellType::Fish => "env | grep PATH",
+            ShellType::Nushell => "$env.PATH | str join (char esep)",
             ShellType::PowerShell => "echo $Env:PATH",
         };
 
@@ -248,6 +249,7 @@ async fn capture_interactive_shell_env(
     let command_str = match shell_type {
         ShellType::Bash | ShellType::Zsh => "echo $PATH",
         ShellType::Fish => "string join : $PATH",
+        ShellType::Nushell => "$env.PATH | str join (char esep)",
         ShellType::PowerShell => "echo $Env:PATH",
     };
 
@@ -275,6 +277,9 @@ async fn capture_interactive_shell_env(
         }
         ShellType::Fish => {
             command.args(["-i", "-l", "-c", command_str]);
+        }
+        ShellType::Nushell => {
+            command.args(["--login", "--commands", command_str]);
         }
         ShellType::PowerShell => {
             // Note: we intentionally omit `-Login` here. PowerShell 5.1

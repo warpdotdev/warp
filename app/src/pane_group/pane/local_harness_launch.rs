@@ -39,6 +39,10 @@ pub(super) fn normalize_local_child_harness(harness_type: &str) -> Option<Harnes
 pub(super) fn validate_local_harness_shell(shell_type: Option<ShellType>) -> Result<(), String> {
     match shell_type {
         Some(ShellType::Bash) | Some(ShellType::Zsh) | Some(ShellType::Fish) => Ok(()),
+        Some(ShellType::Nushell) => Err(
+            "Local child harnesses currently require bash, zsh, or fish; Nushell is not supported."
+                .to_string(),
+        ),
         Some(ShellType::PowerShell) => Err(
             "Local child harnesses currently require bash, zsh, or fish; PowerShell is not supported."
                 .to_string(),

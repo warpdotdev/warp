@@ -486,6 +486,8 @@ impl WslShellStarter {
             ShellType::Zsh
         } else if shell_path.contains("fish") {
             ShellType::Fish
+        } else if shell_path.contains("nu") {
+            ShellType::Nushell
         } else {
             log::warn!("The shell {shell_path:#} is not yet supported in WSL");
             return None;
@@ -645,6 +647,12 @@ fn arguments_for_session_spawning_command(
                 .into(),
             ]
         }
+        ShellType::Nushell => {
+            vec![
+                "--execute".to_owned().into(),
+                init_shell_script_for_shell(ShellType::Nushell, &crate::ASSETS).into(),
+            ]
+        }
         ShellType::PowerShell => vec![
             // When PowerShell starts a session, it writes "PowerShell <version>" to the PTY. This
             // option suppresses that message.
@@ -679,7 +687,7 @@ fn wsl_arguments_for_session_spawning_command(
     // Note we typically go through bash so that we can launch the user's shell
     // with a leading '-', making it a login shell.
     match shell_type {
-        ShellType::Bash | ShellType::Zsh | ShellType::Fish => {
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish | ShellType::Nushell => {
             args.extend(arguments_for_session_spawning_command(
                 shell_path, shell_type,
             ));
@@ -706,6 +714,7 @@ fn msys2_arguments_for_session_spawning_command(shell_type: ShellType) -> Vec<Os
                 "--no-config".to_string().into(),
             ]
         }
+        ShellType::Nushell => panic!("MSYS2 not supported for Nushell"),
         ShellType::PowerShell => panic!("MSYS2 not supported for PowerShell"),
     }
 }

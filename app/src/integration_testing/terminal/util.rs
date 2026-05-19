@@ -68,6 +68,14 @@ pub fn current_shell_starter_and_version() -> (DirectShellStarter, String) {
                 .stdout;
             String::from_utf8_lossy(&stdout).into_owned()
         }
+        shell::ShellType::Nushell => {
+            let stdout = Command::new(starter.logical_shell_path())
+                .args(["-c", "version | get version"])
+                .output()
+                .expect("version command should run")
+                .stdout;
+            String::from_utf8_lossy(&stdout).into_owned()
+        }
         shell::ShellType::PowerShell => {
             let stdout = Command::new(starter.logical_shell_path())
                 .args(["-Version"])
@@ -86,6 +94,7 @@ pub fn current_shell_starter_and_version() -> (DirectShellStarter, String) {
 pub fn default_histfile_directory(shell: &ShellType, home_dir: &Path) -> PathBuf {
     match shell {
         ShellType::Fish => home_dir.join(".local/share/fish"),
+        ShellType::Nushell => home_dir.join(".local/share/nushell"),
         #[cfg(not(windows))]
         ShellType::PowerShell => home_dir.join(".local/share/powershell/PSReadLine"),
         #[cfg(windows)]

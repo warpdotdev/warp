@@ -120,6 +120,7 @@ impl AvailableShell {
                 "bash" => Cow::from("Bash"),
                 "zsh" => Cow::from("Zsh"),
                 "fish" => Cow::from("Fish"),
+                "nu" | "nu.exe" => Cow::from("Nushell"),
                 "pwsh" | "pwsh.exe" => Cow::from("PowerShell"),
                 "powershell" | "powershell.exe" => Cow::from("Windows PowerShell"),
                 _ => Cow::from(command),
@@ -631,6 +632,7 @@ impl AvailableShells {
                 StartupShell::Zsh,
                 StartupShell::Bash,
                 StartupShell::Fish,
+                StartupShell::Nushell,
                 StartupShell::PowerShell,
             ]
             .into_iter()
@@ -699,12 +701,14 @@ impl AvailableShells {
                 (ShellType::Zsh, "zsh.exe"),
                 (ShellType::Bash, "bash.exe"),
                 (ShellType::Fish, "fish.exe"),
+                (ShellType::Nushell, "nu.exe"),
             ]
         } else {
             vec![
                 (ShellType::Zsh, "zsh"),
                 (ShellType::Bash, "bash"),
                 (ShellType::Fish, "fish"),
+                (ShellType::Nushell, "nu"),
                 (ShellType::PowerShell, "pwsh"),
             ]
         }

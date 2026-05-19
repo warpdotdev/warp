@@ -35,7 +35,7 @@ impl TryFrom<&ShellLaunchData> for ShellIndicatorType {
         match shell_launch_data {
             ShellLaunchData::Executable { shell_type, .. } => match shell_type {
                 ShellType::PowerShell => Ok(Self::Powershell),
-                _ => Err(()),
+                ShellType::Bash | ShellType::Zsh | ShellType::Fish | ShellType::Nushell => Err(()),
             },
             ShellLaunchData::MSYS2 { .. } => Ok(Self::GitBash),
             ShellLaunchData::WSL { distro } => match distro.as_str() {

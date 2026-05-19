@@ -20,9 +20,15 @@ where
     S: AsRef<str>,
 {
     let mut builder = tempfile::Builder::new();
-    // PowerShell will only source a file with the "ps1" extension.
-    if shell_type == ShellType::PowerShell {
-        builder.suffix(".ps1");
+    // PowerShell and Nushell will only source files with their script extensions.
+    match shell_type {
+        ShellType::PowerShell => {
+            builder.suffix(".ps1");
+        }
+        ShellType::Nushell => {
+            builder.suffix(".nu");
+        }
+        ShellType::Zsh | ShellType::Bash | ShellType::Fish => {}
     }
 
     match TempBootstrapFile::new(

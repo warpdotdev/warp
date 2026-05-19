@@ -561,6 +561,51 @@ impl HostInfo {
     }
 }
 
+fn command_names_from_shell_output(shell_type: ShellType, output: &str) -> HashSet<SmolStr> {
+    let mut command_names = HashSet::new();
+    for line in output.lines() {
+        insert_command_name_variants(shell_type, line, |name| {
+            command_names.insert(name.into());
+        });
+    }
+    command_names
+}
+
+fn command_name_vec_from_shell_output(shell_type: ShellType, output: &str) -> Vec<SmolStr> {
+    let mut seen = HashSet::new();
+    let mut command_names = Vec::new();
+    for line in output.lines() {
+        insert_command_name_variants(shell_type, line, |name| {
+            let name = SmolStr::from(name);
+            if seen.insert(name.clone()) {
+                command_names.push(name);
+            }
+        });
+    }
+    command_names
+}
+
+fn insert_command_name_variants(
+    shell_type: ShellType,
+    command_name: &str,
+    mut insert: impl FnMut(&str),
+) {
+    let command_name = command_name.trim();
+    if command_name.is_empty() {
+        return;
+    }
+
+    insert(command_name);
+
+    if shell_type == ShellType::Nushell {
+        if let Some(top_level_command) = command_name.split_whitespace().next() {
+            if top_level_command != command_name {
+                insert(top_level_command);
+            }
+        }
+    }
+}
+
 /// Session information sent from the shell to the Rust app after bootstrap.
 ///
 /// This is an intermediate abstraction between the [`BootstrappedValue`] read from the pty at
@@ -734,15 +779,17 @@ impl SessionInfo {
 
         let function_names = bootstrapped_value
             .function_names
-            .map(|function_names_output| function_names_output.lines().map(Into::into).collect());
+            .map(|function_names_output| {
+                command_names_from_shell_output(shell_type, &function_names_output)
+            });
 
         let builtins = bootstrapped_value
             .builtins
-            .map(|builtins_output| builtins_output.lines().map(Into::into).collect());
+            .map(|builtins_output| command_names_from_shell_output(shell_type, &builtins_output));
 
-        let keywords = bootstrapped_value
-            .keywords
-            .map(|keywords_output| keywords_output.lines().map(Into::into).collect());
+        let keywords = bootstrapped_value.keywords.map(|keywords_output| {
+            command_name_vec_from_shell_output(shell_type, &keywords_output)
+        });
 
         let env_var_names = bootstrapped_value.env_var_names.map(|names| {
             // In zsh the output of `echo ${(k)parameters[(R)*export*]}` is a single line separated
@@ -750,7 +797,7 @@ impl SessionInfo {
             // a separate line.
             let split = match &self.shell.shell_type() {
                 ShellType::Zsh | ShellType::PowerShell => names.split(' '),
-                ShellType::Bash | ShellType::Fish => names.split('\n'),
+                ShellType::Bash | ShellType::Fish | ShellType::Nushell => names.split('\n'),
             };
             split.map(Into::into).collect::<HashSet<_>>()
         });
@@ -961,7 +1008,9 @@ impl Session {
 
     pub fn path_separators(&self) -> PathSeparators {
         match self.shell().shell_type() {
-            ShellType::Zsh | ShellType::Bash | ShellType::Fish => PathSeparators::for_unix(),
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::Nushell => {
+                PathSeparators::for_unix()
+            }
             ShellType::PowerShell => PathSeparators::for_os(),
         }
     }

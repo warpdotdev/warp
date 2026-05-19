@@ -362,7 +362,7 @@ impl PackageManager {
                 distribution_update_disabled_repository,
             } => {
                 let dist_upgrade_fn = match shell_type {
-                    ShellType::Zsh | ShellType::Bash | ShellType::Fish => {
+                    ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::Nushell => {
                         "warp_handle_dist_upgrade"
                     }
                     ShellType::PowerShell => "Warp-Handle-DistUpgrade",
@@ -414,7 +414,9 @@ impl PackageManager {
         };
 
         let finish_update_fn = match shell_type {
-            ShellType::Zsh | ShellType::Bash | ShellType::Fish => "warp_finish_update",
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::Nushell => {
+                "warp_finish_update"
+            }
             ShellType::PowerShell => "Warp-Finish-Update",
         };
         format!("{base_command}{and}{finish_update_fn} {update_id}")

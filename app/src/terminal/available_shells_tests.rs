@@ -128,9 +128,11 @@ fn test_dedupe_symlinks_when_discovering_paths() {
 #[test]
 fn test_find_by_command_name_matches_known_shell() {
     let zsh_path = PathBuf::from("/bin/zsh");
+    let nu_path = PathBuf::from("/opt/homebrew/bin/nu");
     let pwsh_path = PathBuf::from("/opt/homebrew/bin/pwsh");
     let shells = make_available_shells(vec![
         AvailableShell::new_local_executable("zsh".to_string(), zsh_path.clone(), ShellType::Zsh),
+        AvailableShell::new_local_executable("nu".to_string(), nu_path.clone(), ShellType::Nushell),
         AvailableShell::new_local_executable(
             "pwsh".to_string(),
             pwsh_path.clone(),
@@ -145,6 +147,14 @@ fn test_find_by_command_name_matches_known_shell() {
         matched.id(),
         Some(format!("local:{}", pwsh_path.display()).as_str()),
     );
+    let matched = shells
+        .find_by_command_name("nu")
+        .expect("should find nu by command name");
+    assert_eq!(
+        matched.id(),
+        Some(format!("local:{}", nu_path.display()).as_str()),
+    );
+    assert_eq!(matched.short_name(), "Nushell");
 
     let matched = shells
         .find_by_command_name("zsh")
@@ -257,6 +267,8 @@ fn test_command_name_matches_windows() {
     assert!(command_name_matches("pwsh", "pwsh.exe", true));
     assert!(command_name_matches("pwsh.exe", "PWSH.EXE", true));
     assert!(command_name_matches("powershell.exe", "PowerShell", true));
+    assert!(command_name_matches("nu.exe", "nu", true));
+    assert!(command_name_matches("nu", "NU.EXE", true));
 
     // Distinct shells should not collide.
     assert!(!command_name_matches("pwsh", "powershell", true));

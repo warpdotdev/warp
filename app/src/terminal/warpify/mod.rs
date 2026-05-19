@@ -29,6 +29,7 @@ fn get_subshell_bootstrap_success_block_path(shell_type: ShellType) -> Option<&'
             Some("bundled/bootstrap/bash_zsh_subshell_bootstrap_block_output.txt")
         }
         ShellType::Fish => Some("bundled/bootstrap/fish_subshell_bootstrap_block_output.txt"),
+        ShellType::Nushell => None,
         ShellType::PowerShell => None,
     }
 }
