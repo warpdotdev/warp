@@ -366,6 +366,133 @@ fn install_script_avoids_pattern_substitution_for_tilde_expansion() {
     );
 }
 
+/// Regression: macOS CLI tarballs may include Swift runtime libraries
+/// in a `lib/` sidecar next to the standalone binary. The installer
+/// must preserve the binary's existing final path while installing the
+/// sidecar at `$install_dir/lib` using the production shell script.
+#[cfg(unix)]
+#[test]
+fn install_script_installs_lib_sidecar_without_changing_binary_path() {
+    use command::blocking::Command;
+    use std::{
+        fs,
+        io::Write,
+        path::{Path, PathBuf},
+        process::Stdio,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after UNIX epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "warp-remote-install-lib-sidecar-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("failed to create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    let temp = TempDir::new();
+    let fake_home = temp.path().join("home");
+    let package_dir = temp.path().join("package");
+    let lib_dir = package_dir.join("lib");
+    fs::create_dir_all(&lib_dir).expect("failed to create package lib dir");
+
+    let binary_path = package_dir.join("oz-test");
+    let mut binary = fs::File::create(&binary_path).expect("failed to create package binary");
+    writeln!(binary, "#!/bin/sh").expect("failed to write package binary");
+    writeln!(binary, "echo test").expect("failed to write package binary");
+
+    fs::write(lib_dir.join("libswiftCore.dylib"), "swift").expect("failed to write dylib");
+
+    let tarball_path = temp.path().join("oz.tar.gz");
+    let tar_output = Command::new("tar")
+        .arg("-czf")
+        .arg(&tarball_path)
+        .arg("-C")
+        .arg(&package_dir)
+        .arg(".")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run tar");
+    assert!(
+        tar_output.status.success(),
+        "tar failed with {:?}: stderr={}",
+        tar_output.status,
+        String::from_utf8_lossy(&tar_output.stderr),
+    );
+
+    fs::create_dir_all(&fake_home).expect("failed to create fake home");
+    let script = install_script(Some(
+        tarball_path
+            .to_str()
+            .expect("temp tarball path should be valid UTF-8"),
+    ));
+
+    let bash = if Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+    let output = Command::new(bash)
+        .arg("-c")
+        .arg(&script)
+        .env("HOME", &fake_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run install script");
+    assert!(
+        output.status.success(),
+        "install script failed with {:?}: stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let installed_binary = remote_server_binary().replacen(
+        '~',
+        fake_home
+            .to_str()
+            .expect("fake home path should be valid UTF-8"),
+        1,
+    );
+    assert!(
+        Path::new(&installed_binary).is_file(),
+        "expected binary at unchanged remote-server path: {installed_binary}",
+    );
+
+    let installed_lib = remote_server_dir().replacen(
+        '~',
+        fake_home
+            .to_str()
+            .expect("fake home path should be valid UTF-8"),
+        1,
+    ) + "/lib/libswiftCore.dylib";
+    assert!(
+        Path::new(&installed_lib).is_file(),
+        "expected Swift sidecar dylib at {installed_lib}",
+    );
+}
 #[test]
 fn version_hash_is_deterministic() {
     // version_hash uses the compile-time GIT_RELEASE_TAG which is typically

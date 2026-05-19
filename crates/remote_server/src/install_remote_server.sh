@@ -55,6 +55,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+install_lib_dir() {
+  extracted_lib_dir="$1"
+  staged_lib_dir="$install_dir/.lib.$(basename "$tmpdir")"
+  backup_lib_dir="$install_dir/.lib.previous.$(basename "$tmpdir")"
+
+  rm -rf "$staged_lib_dir" "$backup_lib_dir"
+  mv "$extracted_lib_dir" "$staged_lib_dir"
+
+  if [ -e "$install_dir/lib" ]; then
+    mv "$install_dir/lib" "$backup_lib_dir"
+  fi
+
+  if mv "$staged_lib_dir" "$install_dir/lib"; then
+    rm -rf "$backup_lib_dir"
+  else
+    if [ -e "$backup_lib_dir" ]; then
+      mv "$backup_lib_dir" "$install_dir/lib"
+    fi
+    rm -rf "$staged_lib_dir"
+    exit 1
+  fi
+}
+
 staging_tarball_path="{staging_tarball_path}"
 if [ -n "$staging_tarball_path" ]; then
   # SCP fallback: tarball already uploaded by the client.
@@ -82,4 +105,7 @@ tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
+if [ -d "$tmpdir/lib" ]; then
+  install_lib_dir "$tmpdir/lib"
+fi
 mv "$bin" "$install_dir/{binary_name}{version_suffix}"

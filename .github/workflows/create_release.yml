@@ -464,7 +464,9 @@ jobs:
       - name: Package CLI binary
         run: |
           mv ${{ steps.bundle_cli.outputs.binary_path }} oz-${{ steps.get-config.outputs.channel }}
-          tar czf oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz oz-${{ steps.get-config.outputs.channel }} -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources
+          tar czf oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz \
+            oz-${{ steps.get-config.outputs.channel }} \
+            -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources lib
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}

@@ -92,6 +92,53 @@ function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
 }
 
+function add_rpath_if_missing() {
+  local binary_path="$1"
+  local rpath="$2"
+
+  if otool -l "$binary_path" | awk -v rpath="$rpath" '
+    /LC_RPATH/ { in_rpath = 1; next }
+    in_rpath && $1 == "path" {
+      if ($2 == rpath) { found = 1 }
+      in_rpath = 0
+    }
+    END { exit found ? 0 : 1 }
+  '; then
+    echo "$binary_path already has rpath $rpath"
+  else
+    echo "Adding rpath $rpath to $binary_path"
+    install_name_tool -add_rpath "$rpath" "$binary_path"
+  fi
+}
+
+function copy_swift_stdlibs_for_cli() {
+  local binary_path="$1"
+  local destination="$2"
+  local swift_stdlib_tool_output
+  swift_stdlib_tool_output="$(mktemp -d -t swift-stdlib-tool-XXXXXXXXXX)"
+
+  rm -rf "$destination"
+
+  mkdir -p "$destination"
+  echo "Copying Swift runtime libraries required by $binary_path into $destination"
+  xcrun swift-stdlib-tool \
+    --copy \
+    --scan-executable "$binary_path" \
+    --platform macosx \
+    --destination "$swift_stdlib_tool_output"
+
+  find "$swift_stdlib_tool_output" -type f -name 'libswift*.dylib' -maxdepth 3 -print0 | while IFS= read -r -d '' dylib_path; do
+    cp -p "$dylib_path" "$destination/"
+  done
+  # Do not rewrite /usr/lib/swift load commands to @rpath. Xcode's x86_64
+  # backward-deployment Swift 5.0 dylibs are only valid before macOS 10.14.4
+  # and abort on newer macOS when loaded directly. Keeping the system Swift
+  # load commands preserves modern runtime behavior while still packaging the
+  # stdlibs swift-stdlib-tool reports for the archive layout.
+
+  rm -rf "$swift_stdlib_tool_output"
+}
+
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
@@ -587,6 +634,10 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 
   echo "Copying binary into $OUT_DIR/$WARP_BIN"
   cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" "$OUT_DIR/$WARP_BIN"
+  # Prefer system Swift libraries on macOS versions that provide them, and fall
+  # back to the sidecar lib directory on older systems.
+  add_rpath_if_missing "$OUT_DIR/$WARP_BIN" "/usr/lib/swift"
+  add_rpath_if_missing "$OUT_DIR/$WARP_BIN" "@executable_path/lib"
 
   if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
     echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
@@ -596,6 +647,8 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  CLI_SWIFT_STDLIB_DIR="$OUT_DIR/lib"
+  copy_swift_stdlibs_for_cli "$OUT_DIR/$WARP_BIN" "$CLI_SWIFT_STDLIB_DIR"
 
 
   # Set the primary binary path to output.
@@ -839,6 +892,10 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then
     echo "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$GITHUB_OUTPUT"
+  fi
+
+  if [[ -n "$CLI_SWIFT_STDLIB_DIR" ]]; then
+    echo "cli_swift_stdlib_dir=$CLI_SWIFT_STDLIB_DIR" >> "$GITHUB_OUTPUT"
   fi
   
   echo "::echo::off"
