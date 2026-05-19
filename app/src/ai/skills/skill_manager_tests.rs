@@ -630,6 +630,82 @@ fn disabling_feedback_bundled_skill_does_not_hide_user_feedback_skill() {
     });
 }
 
+#[test]
+fn disabling_feedback_bundled_skill_blocks_active_reference_lookup_only_for_bundled_feedback() {
+    let user_skill_path = PathBuf::from("/repo/.agents/skills/feedback/SKILL.md");
+    let user_skill = ParsedSkill {
+        name: "feedback".to_string(),
+        description: "User feedback skill".to_string(),
+        path: user_skill_path.clone(),
+        content: "# User feedback".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        handle.update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(user_skill);
+            manager.bundled_skills.insert(
+                "feedback".to_string(),
+                make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
+            );
+            manager.bundled_skills.insert(
+                "pr-comments".to_string(),
+                make_bundled_skill("pr-comments", BundledSkillActivation::Always),
+            );
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .feedback_bundled_skill_enabled
+                .load_value(false, true, ctx)
+                .expect("test setting update should succeed");
+        });
+
+        let (
+            raw_feedback_bundled_reference_resolves,
+            active_feedback_bundled_reference_resolves,
+            active_pr_comments_bundled_reference_resolves,
+            active_user_feedback_path_reference_resolves,
+        ) = handle.read(&app, |manager, ctx| {
+            (
+                manager
+                    .skill_by_reference(&SkillReference::BundledSkillId("feedback".to_string()))
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(
+                        &SkillReference::BundledSkillId("feedback".to_string()),
+                        ctx,
+                    )
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(
+                        &SkillReference::BundledSkillId("pr-comments".to_string()),
+                        ctx,
+                    )
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(&SkillReference::Path(user_skill_path), ctx)
+                    .is_some(),
+            )
+        });
+
+        assert!(raw_feedback_bundled_reference_resolves);
+        assert!(!active_feedback_bundled_reference_resolves);
+        assert!(active_pr_comments_bundled_reference_resolves);
+        assert!(active_user_feedback_path_reference_resolves);
+    });
+}
+
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================

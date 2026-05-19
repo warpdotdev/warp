@@ -344,6 +344,22 @@ impl SkillManager {
         }
     }
 
+    /// Get the definition of a skill only if it is currently available for invocation.
+    ///
+    /// Path-based user skills are always controlled by normal path scoping. Bundled
+    /// skills additionally respect their runtime activation state so stale references
+    /// cannot invoke disabled bundled skills.
+    pub fn active_skill_by_reference(
+        &self,
+        reference: &SkillReference,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        match reference {
+            SkillReference::Path(path) => self.skill_by_path(path),
+            SkillReference::BundledSkillId(id) => self.active_bundled_skill(id, ctx),
+        }
+    }
+
     /// Returns a bundled skill by ID only if its activation condition is met.
     pub fn active_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
         let bundled = self.bundled_skills.get(id)?;

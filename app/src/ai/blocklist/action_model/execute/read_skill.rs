@@ -2,7 +2,6 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 use crate::send_telemetry_from_ctx;
 use ai::agent::action_result::AnyFileContent;
-use ai::skills::SkillReference;
 use warpui::{ModelContext, SingletonEntity};
 
 use crate::ai::agent::AIAgentActionType;
@@ -39,13 +38,7 @@ impl ReadSkillExecutor {
             return ActionExecution::<ReadSkillResult>::InvalidAction;
         };
 
-        let skill_manager = SkillManager::as_ref(ctx);
-        let skill = match skill_ref {
-            SkillReference::Path(path) => skill_manager.skill_by_path(path),
-            SkillReference::BundledSkillId(id) => skill_manager.active_bundled_skill(id, ctx),
-        };
-
-        match skill {
+        match SkillManager::as_ref(ctx).active_skill_by_reference(skill_ref, ctx) {
             Some(skill) => {
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {
