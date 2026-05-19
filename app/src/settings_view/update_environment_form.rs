@@ -2322,6 +2322,7 @@ impl UpdateEnvironmentForm {
             appearance.ui_font_family(),
             appearance.ui_font_size() * 0.85,
         )
+        .soft_wrap(true)
         .with_color(theme.nonactive_ui_text_color().into())
         .finish();
 
@@ -2335,14 +2336,13 @@ impl UpdateEnvironmentForm {
             // "Missing a repo? Configure access on GitHub" text with link
             let install_link = app_install_link.clone();
 
-            // Build as a row with plain text + link
-            let mut text_row = Flex::row()
+            // Build "Missing a repo?" + link as an inner row
+            let mut missing_repo_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(4.);
 
-            text_row.add_child(helper);
             // Plain text part
-            text_row.add_child(
+            missing_repo_row.add_child(
                 Text::new(
                     "Missing a repo?",
                     appearance.ui_font_family(),
@@ -2377,9 +2377,16 @@ impl UpdateEnvironmentForm {
             })
             .finish();
 
-            text_row.add_child(link);
+            missing_repo_row.add_child(link);
 
-            text_row.finish()
+            // Stack helper text and "Missing a repo?" row in a column so the
+            // helper text can softwrap without truncating the link.
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_spacing(2.)
+                .with_child(helper)
+                .with_child(missing_repo_row.finish())
+                .finish()
         }
 
         #[cfg(target_family = "wasm")]
