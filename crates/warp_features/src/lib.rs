@@ -942,7 +942,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::SoloUserByok,
     FeatureFlag::CustomInferenceEndpoints,
-    FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::RemoteCodeReview,
 ];
 

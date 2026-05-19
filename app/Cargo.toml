@@ -646,6 +646,7 @@ default = [
     "cloud_mode_input_v2",
     "cloud_mode_setup_v2",
     "handoff_cloud_cloud",
+    "remote_codebase_indexing",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
