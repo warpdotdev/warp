@@ -12843,18 +12843,43 @@ impl Workspace {
                 line_and_column_arg,
             } => {
                 #[cfg(feature = "local_fs")]
-                self.open_code(
-                    CodeSource::Link {
-                        path: path.clone().into(),
-                        range_start: None,
-                        range_end: None,
-                    },
-                    *EditorSettings::as_ref(ctx).open_file_layout.value(),
-                    *line_and_column_arg,
-                    false, // preview
-                    &[],
-                    ctx,
-                );
+                {
+                    // Build a LocalOrRemotePath for the file. For remote sessions
+                    // the host_id comes from the active working directory.
+                    let location = {
+                        let window_id = ctx.window_id();
+                        ActiveSession::as_ref(ctx)
+                            .working_directory(window_id)
+                            .and_then(|wd| match wd {
+                                LocalOrRemotePath::Remote(remote) => {
+                                    let std_path =
+                                        warp_util::standardized_path::StandardizedPath::try_new(
+                                            path,
+                                        )
+                                        .ok()?;
+                                    Some(LocalOrRemotePath::Remote(
+                                        warp_util::remote_path::RemotePath::new(
+                                            remote.host_id.clone(),
+                                            std_path,
+                                        ),
+                                    ))
+                                }
+                                LocalOrRemotePath::Local(_) => None,
+                            })
+                            .unwrap_or_else(|| LocalOrRemotePath::Local(PathBuf::from(path)))
+                    };
+
+                    let code_source = CodeSource::CommandPalette { location };
+
+                    self.open_code(
+                        code_source,
+                        *EditorSettings::as_ref(ctx).open_file_layout.value(),
+                        *line_and_column_arg,
+                        false, // preview
+                        &[],
+                        ctx,
+                    );
+                }
             }
             CommandPaletteEvent::OpenDirectory { path } => {
                 let active_terminal_view = self
