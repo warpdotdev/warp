@@ -169,6 +169,7 @@ impl Input {
 
         // We don't show input command decorations in AI mode, but we keep slash command prefix highlighting.
         let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        self.set_ai_input_current_buffer_text(buffer_text.clone(), ctx);
         if self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
             || (FeatureFlag::AgentView.is_enabled()
                 && self
