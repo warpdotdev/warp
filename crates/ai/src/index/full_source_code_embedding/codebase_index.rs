@@ -1679,6 +1679,8 @@ impl CodebaseIndex {
         fragments: Vec<Fragment>,
         context_lines: usize,
     ) -> HashSet<CodeContextLocation> {
+        // Keep local and remote search aligned by using the same fragment-to-context expansion
+        // helper for range merging, deduping, and context-line handling.
         fragments_to_context_locations(
             fragments,
             |content_hash| {

@@ -13,15 +13,12 @@ use super::manager::{
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
-};
-use crate::ai::codebase_context_policy::{
-    remote_codebase_auto_indexing_enabled, remote_codebase_indexing_enabled,
+    auto_index_candidate_roots, should_auto_index_codebase, should_use_codebase_indexing,
+    CodebaseAutoIndexingSurface,
 };
 use crate::server::telemetry::{
     RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
 };
-use crate::settings::CodeSettings;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
@@ -190,7 +187,7 @@ impl RemoteCodebaseIndexModel {
         explicit_repo_path: Option<&str>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        if !should_use_remote_codebase_indexing(ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
             return false;
         }
         let Some(host_id) = session_context.host_id() else {
@@ -237,7 +234,7 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn request_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
-        if !should_use_remote_codebase_indexing(ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
             return;
         }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -252,7 +249,7 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn resync_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
-        if !should_use_remote_codebase_indexing(ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
             return;
         }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -294,7 +291,7 @@ impl RemoteCodebaseIndexModel {
     ) {
         match event {
             RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { host_id, statuses } => {
-                if !should_use_remote_codebase_indexing(ctx) {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
                     return;
                 }
                 let (changed, telemetry_updates) =
@@ -317,7 +314,7 @@ impl RemoteCodebaseIndexModel {
                 mutation_kind,
                 session_id: _,
             } => {
-                if !should_use_remote_codebase_indexing(ctx) {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
                     return;
                 }
                 if let Some(update) =
@@ -406,7 +403,7 @@ impl RemoteCodebaseIndexModel {
     }
 
     fn handle_codebase_context_enablement_changed(&mut self, ctx: &mut ModelContext<Self>) {
-        if !should_use_remote_codebase_indexing(ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
             let remote_paths = self.clear_remote_codebase_indexing_state();
             if !remote_paths.is_empty() {
                 ctx.emit(RemoteCodebaseIndexModelEvent::SettingsEntriesChanged);
@@ -419,11 +416,13 @@ impl RemoteCodebaseIndexModel {
             return;
         }
 
-        if !should_auto_index_remote_codebase(ctx) {
+        let remote_paths = self.active_git_repo_paths_needing_auto_index();
+        if remote_paths.is_empty()
+            || !should_auto_index_codebase(CodebaseAutoIndexingSurface::Remote, ctx)
+        {
             return;
         }
 
-        let remote_paths = self.active_git_repo_paths_needing_auto_index();
         emit_auto_index_requested_telemetry(
             RemoteCodebaseAutoIndexTrigger::CodebaseContextEnablementChanged,
             remote_paths.len(),
@@ -444,10 +443,8 @@ impl RemoteCodebaseIndexModel {
     }
 
     fn clear_remote_codebase_indexing_state(&mut self) -> Vec<RemotePath> {
-        let remote_paths = self.statuses.keys().cloned().collect::<Vec<_>>();
-        self.statuses.clear();
-        self.active_repos_by_host.clear();
-        remote_paths
+        let statuses = std::mem::take(&mut self.statuses);
+        statuses.into_keys().collect()
     }
     fn should_request_auto_index_for_navigated_git_repo(&self, remote_path: &RemotePath) -> bool {
         let Some(status) = self.status_for_repo(remote_path) else {
@@ -849,16 +846,6 @@ fn search_availability_for_status(
                 .unwrap_or_else(|| "Remote codebase search is not available.".to_string()),
         },
     }
-}
-
-fn should_auto_index_remote_codebase(ctx: &mut ModelContext<RemoteCodebaseIndexModel>) -> bool {
-    remote_codebase_auto_indexing_enabled(
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
-        *CodeSettings::as_ref(ctx).auto_indexing_enabled,
-    )
-}
-fn should_use_remote_codebase_indexing(ctx: &mut ModelContext<RemoteCodebaseIndexModel>) -> bool {
-    remote_codebase_indexing_enabled(UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx))
 }
 fn emit_status_changed_telemetry(
     update: RemoteCodebaseIndexStatusTelemetryUpdate,

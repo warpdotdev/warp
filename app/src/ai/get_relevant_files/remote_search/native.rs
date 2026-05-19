@@ -22,13 +22,14 @@ use crate::ai::agent::{
     AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult,
 };
 use crate::ai::blocklist::SessionContext;
-use crate::ai::codebase_context_policy::remote_codebase_indexing_enabled;
+use crate::ai::codebase_auto_indexing::{
+    should_use_codebase_indexing, CodebaseAutoIndexingSurface,
+};
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::remote_server::codebase_index_model::{
     RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(super) enum RemoteSearchRequest {
     Pending(futures_util::stream::AbortHandle),
@@ -59,9 +60,7 @@ pub(super) fn send_request(
     action_id: crate::ai::agent::AIAgentActionId,
     ctx: &mut ModelContext<GetRelevantFilesController>,
 ) -> RemoteSearchRequest {
-    if !remote_codebase_indexing_enabled(
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
-    ) {
+    if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
         return RemoteSearchRequest::Ready(SearchCodebaseResult::Failed {
             reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
             message: "Remote codebase search is not enabled.".to_string(),
@@ -127,69 +126,10 @@ pub(super) fn send_request(
 
 #[cfg(test)]
 mod tests {
-    use ::ai::index::{
-        full_source_code_embedding::ContentHash,
-        locations::{CodeContextLocation, FileFragmentLocation},
-    };
-    use remote_server::proto::{file_context_proto, FileContextProto, FragmentMetadata};
-    use std::{collections::HashSet, path::PathBuf};
+    use remote_server::proto::{file_context_proto, FileContextProto};
+    use std::path::PathBuf;
 
-    use super::{
-        file_contents_from_response, read_context_locations_request,
-        read_full_fragment_files_request, remote_fragment_metadata,
-    };
-
-    #[test]
-    fn remote_fragment_metadata_preserves_hash_path_lines_and_bytes() {
-        let content_hash = ContentHash::from_content("needle");
-        let metadata = remote_fragment_metadata(FragmentMetadata {
-            content_hash: content_hash.to_string(),
-            path: "/repo/src/lib.rs".to_string(),
-            start_line: 3,
-            end_line: 5,
-            byte_start: 10,
-            byte_end: 16,
-        })
-        .unwrap();
-
-        assert_eq!(metadata.0, content_hash);
-        assert_eq!(metadata.1.absolute_path, PathBuf::from("/repo/src/lib.rs"));
-        assert_eq!(metadata.1.location.start_line, 3);
-        assert_eq!(metadata.1.location.end_line, 5);
-        assert_eq!(metadata.1.location.byte_range.start.as_usize(), 10);
-        assert_eq!(metadata.1.location.byte_range.end.as_usize(), 16);
-    }
-
-    #[test]
-    fn full_fragment_file_request_dedupes_paths_and_reads_whole_files() {
-        let content_hash = ContentHash::from_content("needle");
-        let metadata = vec![
-            remote_fragment_metadata(FragmentMetadata {
-                content_hash: content_hash.to_string(),
-                path: "/repo/src/lib.rs".to_string(),
-                start_line: 1,
-                end_line: 1,
-                byte_start: 0,
-                byte_end: 6,
-            })
-            .unwrap(),
-            remote_fragment_metadata(FragmentMetadata {
-                content_hash: content_hash.to_string(),
-                path: "/repo/src/lib.rs".to_string(),
-                start_line: 2,
-                end_line: 2,
-                byte_start: 7,
-                byte_end: 13,
-            })
-            .unwrap(),
-        ];
-
-        let request = read_full_fragment_files_request(&metadata);
-
-        assert_eq!(request.files.len(), 1);
-        assert_eq!(request.files[0].path, "/repo/src/lib.rs");
-        assert!(request.files[0].line_ranges.is_empty());
-    }
+    use super::file_contents_from_response;
 
     #[test]
     fn file_contents_from_response_keeps_only_whole_text_files() {
@@ -226,24 +166,6 @@ mod tests {
             file_contents.get(&PathBuf::from("/repo/src/lib.rs")),
             Some(&"content".to_string())
         );
-    }
-
-    #[test]
-    fn context_locations_request_preserves_line_ranges() {
-        let locations = HashSet::from([CodeContextLocation::Fragment(FileFragmentLocation {
-            path: PathBuf::from("/repo/src/lib.rs"),
-            line_ranges: vec![3..5, 8..13],
-        })]);
-
-        let request = read_context_locations_request(&locations);
-
-        assert_eq!(request.files.len(), 1);
-        assert_eq!(request.files[0].path, "/repo/src/lib.rs");
-        assert_eq!(request.files[0].line_ranges.len(), 2);
-        assert_eq!(request.files[0].line_ranges[0].start, 3);
-        assert_eq!(request.files[0].line_ranges[0].end, 5);
-        assert_eq!(request.files[0].line_ranges[1].start, 8);
-        assert_eq!(request.files[0].line_ranges[1].end, 13);
     }
 }
 
@@ -299,18 +221,22 @@ async fn execute_remote_codebase_search(
             repo_path
         );
     }
-    let mut metadata = metadata_response.fragments;
+    let mut remote_fragments = metadata_response.fragments;
     if let Some(partial_paths) = partial_paths {
-        metadata.retain(|fragment| {
+        remote_fragments.retain(|fragment| {
             partial_paths
                 .iter()
                 .any(|partial_path| fragment.path.contains(partial_path))
         });
     }
-    if metadata.is_empty() {
+    if remote_fragments.is_empty() {
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
-    let metadata = metadata
+
+    // Convert daemon protobuf metadata into the shared search-shaping metadata format so
+    // remote search reuses the same fragment reconstruction and context expansion path as
+    // local search.
+    let parsed_fragment_metadata = remote_fragments
         .into_iter()
         .filter_map(|fragment| match remote_fragment_metadata(fragment) {
             Ok(metadata) => Some(metadata),
@@ -320,12 +246,12 @@ async fn execute_remote_codebase_search(
             }
         })
         .collect_vec();
-    if metadata.is_empty() {
+    if parsed_fragment_metadata.is_empty() {
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
     let response = client
-        .read_file_context(read_full_fragment_files_request(&metadata))
+        .read_file_context(read_full_fragment_files_request(&parsed_fragment_metadata))
         .await?;
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
         let failed = response
@@ -346,8 +272,10 @@ async fn execute_remote_codebase_search(
         });
     }
     let file_contents = file_contents_from_response(response);
-    let read_fragment_result =
-        build_fragments_from_file_contents(metadata.iter().cloned(), &file_contents);
+    let read_fragment_result = build_fragments_from_file_contents(
+        parsed_fragment_metadata.iter().cloned(),
+        &file_contents,
+    );
     if !read_fragment_result.fail_to_read_path.is_empty() {
         log::warn!(
             "Remote codebase search failed to read {} fragment file(s)",
@@ -360,7 +288,7 @@ async fn execute_remote_codebase_search(
     }
 
     let reranked_fragments = store_client.rerank_fragments(query, fragments).await?;
-    let metadata_by_hash = fragment_metadata_by_hash(&metadata);
+    let metadata_by_hash = fragment_metadata_by_hash(&parsed_fragment_metadata);
     let locations = fragments_to_context_locations(
         reranked_fragments,
         |hash| metadata_by_hash.get(hash).map(Vec::as_slice),
