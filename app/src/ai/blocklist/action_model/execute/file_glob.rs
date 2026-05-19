@@ -33,14 +33,16 @@ use super::{
 /// Both `target_path` and `patterns` are agent-controlled; without shell
 /// escaping a pattern containing `'` could close the surrounding single-quote
 /// pair and append a second command. Each joined path is escaped with
-/// `ShellFamily::Posix::escape` (no tilde preservation, since these are
-/// pathspecs rather than user paths).
+/// `ShellFamily::escape` (no tilde preservation, since these are pathspecs
+/// rather than user paths) for the session's shell family — `git ls-files`
+/// runs under PowerShell too, so we cannot hard-code POSIX backslash escapes.
 pub(crate) fn build_git_ls_files_command(
     patterns: &[String],
     target_path: &str,
     shell_launch_data: Option<&ShellLaunchData>,
+    shell_type: ShellType,
 ) -> String {
-    let shell_family = warp_util::path::ShellFamily::Posix;
+    let shell_family = warp_util::path::ShellFamily::from(shell_type);
     let pattern_args = patterns
         .iter()
         .flat_map(|pattern| {
@@ -279,6 +281,7 @@ async fn run_file_glob(
             &absolute_path,
             session.as_ref(),
             shell_launch_data,
+            session.shell().shell_type(),
         )
         .await
     } else if session.shell().shell_type() == ShellType::PowerShell {
@@ -294,8 +297,10 @@ async fn run_git_ls_files_command(
     target_path: &str,
     session: &Session,
     shell_launch_data: Option<ShellLaunchData>,
+    shell_type: ShellType,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let command = build_git_ls_files_command(patterns, target_path, shell_launch_data.as_ref());
+    let command =
+        build_git_ls_files_command(patterns, target_path, shell_launch_data.as_ref(), shell_type);
 
     let command_output = session
         .execute_command(

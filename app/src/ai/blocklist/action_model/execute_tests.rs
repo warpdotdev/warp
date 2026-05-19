@@ -367,6 +367,7 @@ mod file_glob_shell_quoting {
     use super::super::file_glob::{
         build_find_command, build_git_ls_files_command, build_powershell_get_childitem_command,
     };
+    use crate::terminal::shell::ShellType;
 
     #[test]
     fn find_plain_posix() {
@@ -404,11 +405,12 @@ mod file_glob_shell_quoting {
     }
 
     #[test]
-    fn git_ls_files_neutralises_pattern_embedded_single_quote() {
+    fn git_ls_files_neutralises_pattern_embedded_single_quote_posix() {
         let cmd = build_git_ls_files_command(
             &["foo';rm -rf ~;echo '".to_string()],
             "/repo",
             None,
+            ShellType::Bash,
         );
         assert!(
             !cmd.contains("';rm") && !cmd.contains("rf ~"),
@@ -417,13 +419,41 @@ mod file_glob_shell_quoting {
     }
 
     #[test]
-    fn git_ls_files_neutralises_pattern_substitution() {
+    fn git_ls_files_neutralises_pattern_substitution_posix() {
         let cmd = build_git_ls_files_command(
             &["$(touch ~/PWNED)".to_string()],
             "/repo",
             None,
+            ShellType::Bash,
         );
         assert!(!cmd.contains("$(touch"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_ls_files_neutralises_pattern_substitution_powershell() {
+        // `git ls-files` runs under PowerShell sessions too — the previous
+        // hard-coded POSIX escaping left `$(...)` reachable there.
+        let cmd = build_git_ls_files_command(
+            &["$(rm -rf ~)".to_string()],
+            "C:\\repo",
+            None,
+            ShellType::PowerShell,
+        );
+        assert!(!cmd.contains("$(rm"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_ls_files_neutralises_pattern_embedded_single_quote_powershell() {
+        let cmd = build_git_ls_files_command(
+            &["foo';rm -rf ~;echo '".to_string()],
+            "C:\\repo",
+            None,
+            ShellType::PowerShell,
+        );
+        assert!(
+            !cmd.contains("';rm") && !cmd.contains("rf ~"),
+            "got: {cmd}",
+        );
     }
 
     #[test]
