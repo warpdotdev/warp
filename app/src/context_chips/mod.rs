@@ -317,7 +317,16 @@ impl ContextChipKind {
                     ],
                 )
                 .with_suppress_on_failure()
-                .with_invalidate_on_commands(["git", "gh", "gt"]);
+                .with_invalidate_on_commands([
+                    "git push",
+                    "gh pr create",
+                    "gh pr close",
+                    "gh pr reopen",
+                    "gh pr edit",
+                    "gh pr merge",
+                    "gt submit",
+                    "gt create",
+                ]);
                 Some(ContextChip::shell_builtin_with_runtime_policy(
                     "GitHub Pull Request",
                     generator,

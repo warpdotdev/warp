@@ -235,8 +235,12 @@ pub struct ChipRuntimePolicy {
     /// fingerprint and skips re-execution on future fetches — including periodic refreshes —
     /// until the fingerprint changes (e.g. branch or directory change).
     suppress_on_failure: bool,
-    /// Top-level command names (e.g. `["git", "gh", "gt"]`) whose execution should
-    /// invalidate this chip's fingerprint. Pair with `ChipFingerprintInput::InvalidatingCommandCount`.
+    /// Command patterns whose execution should invalidate this chip's fingerprint.
+    /// Each pattern is a whitespace-tokenized prefix of the alias-resolved command line:
+    /// `"git"` matches every `git ...` invocation, while `"gh pr create"` matches
+    /// `gh pr create ...` but not `gh pr view`. Use multi-token patterns to avoid
+    /// invalidating on read-only subcommands. Pair with
+    /// `ChipFingerprintInput::InvalidatingCommandCount`.
     invalidate_on_commands: Vec<String>,
 }
 

@@ -47,7 +47,7 @@ use crate::{
 use repo_metadata::DirectoryWatcher;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
-use super::{ChipUpdateStatus, CurrentPrompt, PromptContext};
+use super::{command_matches_invalidation_pattern, ChipUpdateStatus, CurrentPrompt, PromptContext};
 
 #[test]
 fn test_context_menu_items() {
@@ -345,11 +345,74 @@ fn test_github_pr_chip_runtime_policy_configuration() {
     );
     assert_eq!(
         policy.invalidate_on_commands(),
-        &["git".to_string(), "gh".to_string(), "gt".to_string()]
+        &[
+            "git push".to_string(),
+            "gh pr create".to_string(),
+            "gh pr close".to_string(),
+            "gh pr reopen".to_string(),
+            "gh pr edit".to_string(),
+            "gh pr merge".to_string(),
+            "gt submit".to_string(),
+            "gt create".to_string(),
+        ]
     );
     assert!(policy
         .fingerprint_inputs()
         .contains(&ChipFingerprintInput::InvalidatingCommandCount));
+}
+
+#[test]
+fn test_github_pr_chip_does_not_invalidate_on_read_only_commands() {
+    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
+    let chip = ContextChipKind::GithubPullRequest
+        .to_chip()
+        .expect("github pr chip should exist");
+    let patterns = chip.runtime_policy().invalidate_on_commands();
+
+    let matches_any = |command: &str| {
+        patterns
+            .iter()
+            .any(|p| command_matches_invalidation_pattern(command, p))
+    };
+
+    for cmd in [
+        "git status",
+        "git diff",
+        "git diff --cached",
+        "git log --oneline -20",
+        "git fetch",
+        "git show HEAD",
+        "git rev-parse HEAD",
+        "gh pr view",
+        "gh pr view --json url",
+        "gh pr list",
+        "gh pr diff",
+        "gh repo view",
+        "gt log",
+    ] {
+        assert!(
+            !matches_any(cmd),
+            "read-only command should not invalidate PR chip: {cmd}"
+        );
+    }
+
+    for cmd in [
+        "git push",
+        "git push origin main",
+        "git push --force-with-lease",
+        "gh pr create --title 'x' --body 'y'",
+        "gh pr close 123",
+        "gh pr reopen 123",
+        "gh pr edit --title 'x'",
+        "gh pr merge --squash",
+        "gt submit",
+        "gt create --message 'x'",
+    ] {
+        assert!(
+            matches_any(cmd),
+            "mutating command should invalidate PR chip: {cmd}"
+        );
+    }
 }
 
 #[test]
