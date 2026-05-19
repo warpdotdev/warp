@@ -10,40 +10,33 @@ use warpui::r#async::executor::{Background, BackgroundTask};
 
 pub mod manager;
 
-/// Shared state for a [`SimpleLogger`].
-///
-/// When all [`SimpleLogger`] clones are dropped, this is dropped too, which closes
-/// the logging channel and lets the background writing task finish.
-///
-/// We also support explicit shutdown via [`SimpleLogger::close`]. That allows a
-/// caller to mark a log stream as finished immediately, even if some incidental
-/// clones are still alive briefly in background tasks or callback state.
+const MAX_LOG_FILE_SIZE: u64 = 50 * 1024 * 1024;
+const MAX_ROTATED_FILES: usize = 5;
+const MAX_LOG_LINE_BYTES: usize = 1024 * 1024;
+
+fn rotated_path(path: &PathBuf, index: usize) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(format!(".old.{}", index));
+    PathBuf::from(s)
+}
+
 pub(crate) struct LogFileWriter {
     log_tx: Sender<String>,
     _logging_task: BackgroundTask,
 }
 
 impl LogFileWriter {
-    /// Returns true if the underlying channel has been closed.
-    ///
-    /// A closed writer is logically dead even if some [`Arc`] handles still
-    /// exist, because it can no longer accept new log lines.
     pub(crate) fn is_closed(&self) -> bool {
         self.log_tx.is_closed()
     }
 }
 
-/// A simple file-based logger for server stderr output.
-/// Writes timestamped log entries to a file asynchronously.
 #[derive(Clone)]
 pub struct SimpleLogger {
-    // Cheaply cloneable reference to the log file writer.
     writer: Arc<LogFileWriter>,
 }
 
 impl SimpleLogger {
-    /// Creates a new logger that writes to the specified file path.
-    /// The file is truncated on creation.
     pub(crate) fn new(log_path: PathBuf, executor: Arc<Background>) -> Self {
         let (log_tx, log_rx) = async_channel::unbounded::<String>();
 
@@ -65,21 +58,55 @@ impl SimpleLogger {
                     return;
                 }
             };
+            let mut bytes_written: u64 = 0;
             loop {
                 match log_rx.recv().await {
                     Ok(log_line) => {
-                        let _ = log_file
-                            .write_all(
-                                format!(
-                                    "{} | {}\n",
-                                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                                    log_line
-                                )
-                                .as_bytes(),
-                            )
-                            .await;
-                        // Flush after each line to ensure logs are visible immediately
-                        let _ = log_file.flush().await;
+                        let line = format!(
+                            "{} | {}\n",
+                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                            log_line
+                        );
+                        let line_bytes = line.len() as u64;
+                        if bytes_written + line_bytes > MAX_LOG_FILE_SIZE {
+                            let _ = log_file.flush().await;
+                            drop(log_file);
+                            let largest = MAX_ROTATED_FILES.saturating_sub(1);
+                            let _ = std::fs::remove_file(rotated_path(&log_path, largest));
+                            for i in (0..largest).rev() {
+                                let _ =
+                                    std::fs::rename(rotated_path(&log_path, i), rotated_path(&log_path, i + 1));
+                            }
+                            let _ = std::fs::rename(&log_path, rotated_path(&log_path, 0));
+                            log_file = match OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .truncate(true)
+                                .open(&log_path)
+                                .await
+                            {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    log::warn!(
+                                        "Could not reopen log file after rotation: {:?}. {:?}",
+                                        &log_path,
+                                        e
+                                    );
+                                    return;
+                                }
+                            };
+                            bytes_written = 0;
+                        }
+                        if line_bytes > MAX_LOG_LINE_BYTES as u64 {
+                            let _ = log_file.write_all(&line.as_bytes()[..MAX_LOG_LINE_BYTES]).await;
+                            let _ = log_file.write_all(b"... [truncated]\n").await;
+                            let _ = log_file.flush().await;
+                            bytes_written += MAX_LOG_LINE_BYTES as u64 + 16;
+                        } else {
+                            let _ = log_file.write_all(line.as_bytes()).await;
+                            let _ = log_file.flush().await;
+                            bytes_written += line_bytes;
+                        }
                     }
                     Err(e) => {
                         log::warn!("SimpleLogger: channel closed: {e}");
@@ -88,7 +115,6 @@ impl SimpleLogger {
                 }
             }
 
-            // Final flush
             let _ = log_file.flush().await;
         });
 
@@ -100,27 +126,14 @@ impl SimpleLogger {
         }
     }
 
-    /// Log a message to the file.
     pub fn log(&self, message: String) {
         let _ = self.writer.log_tx.try_send(message);
     }
 
-    /// Explicitly close the logger channel before all clones are dropped.
-    ///
-    /// This is useful when the caller wants "this log stream is finished" to be
-    /// a first-class state, rather than waiting for every clone to be dropped.
-    /// For example, a failed connection attempt may want to write a final error
-    /// line, close the stream immediately, and let a later retry reclaim the
-    /// same log path even if some transient clones have not been dropped yet.
-    ///
-    /// This is a no-op if the channel is already closed. Shutdown also happens
-    /// automatically when the last [`SimpleLogger`] clone is dropped.
     pub fn close(&self) {
         self.writer.log_tx.close();
     }
 
-    /// Returns a weak reference to the shared writer, used by [`manager::LogManager`]
-    /// to track liveness without preventing shutdown.
     pub(crate) fn downgrade(&self) -> Weak<LogFileWriter> {
         Arc::downgrade(&self.writer)
     }
