@@ -211,16 +211,23 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
         "Set Warp as Default Terminal",
         move |ctx| {
             DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
-                default_terminal.make_warp_default(ctx)
+                if default_terminal.is_warp_default() {
+                    default_terminal.restore_macos_terminal_as_default(ctx)
+                } else {
+                    default_terminal.make_warp_default(ctx)
+                }
             });
         },
         move |_props, ctx| {
             let default_terminal = DefaultTerminal::handle(ctx).as_ref(ctx);
+            let is_warp_default = default_terminal.is_warp_default();
             MenuItemPropertyChanges {
-                disabled: Some(
-                    !DefaultTerminal::can_warp_become_default()
-                        || default_terminal.is_warp_default(),
-                ),
+                name: Some(if is_warp_default {
+                    "Restore macOS Terminal as Default".to_string()
+                } else {
+                    "Set Warp as Default Terminal".to_string()
+                }),
+                disabled: Some(!DefaultTerminal::can_warp_become_default()),
                 ..Default::default()
             }
         },
