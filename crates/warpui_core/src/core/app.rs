@@ -4403,6 +4403,14 @@ impl AppContext {
             .map(|view| view.ui_name())
     }
 
+    pub(crate) fn structural_view_parents(
+        &self,
+    ) -> impl Iterator<Item = (EntityId, EntityId)> + '_ {
+        self.structural_child_to_parent
+            .iter()
+            .map(|(child_id, parent_id)| (*child_id, *parent_id))
+    }
+
     /// Returns all the views of type `T` within `window_id`.
     pub fn views_of_type<T: View>(&self, window_id: WindowId) -> Option<Vec<ViewHandle<T>>> {
         let ref_counts = &self.ref_counts;

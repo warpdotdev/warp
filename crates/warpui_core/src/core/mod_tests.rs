@@ -1159,6 +1159,51 @@ fn test_nested_focus_with_unrendered_view() {
 }
 
 #[test]
+fn test_layout_clears_stale_parent_links_for_hidden_views() {
+    App::test((), |mut app| async move {
+        let events: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec![]));
+        let app = &mut app;
+        let (window_id, view_1) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            NestedView::new("View 1".to_string(), vec![], events.clone())
+        });
+        let view_3 = app.add_view(window_id, |_| {
+            NestedView::new("View 3".to_string(), vec![], events.clone())
+        });
+        let view_2 = app.add_view(window_id, |_| {
+            NestedView::new("View 2".to_string(), vec![view_3.clone()], events.clone())
+        });
+
+        view_1.update(app, |view_1, ctx| {
+            view_1.set_children(vec![view_2.clone()], ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.presenter(window_id)
+                    .expect("presenter should exist")
+                    .borrow()
+                    .ancestors(view_3.id()),
+                vec![view_1.id(), view_2.id(), view_3.id()],
+            );
+        });
+
+        view_1.update(app, |view_1, ctx| {
+            view_1.set_children(vec![], ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.presenter(window_id)
+                    .expect("presenter should exist")
+                    .borrow()
+                    .ancestors(view_3.id()),
+                vec![view_3.id()],
+            );
+        });
+    })
+}
+
+#[test]
 fn test_spawn_stream_local_from_view() {
     #[derive(Default)]
     struct View {
