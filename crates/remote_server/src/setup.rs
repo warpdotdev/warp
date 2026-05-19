@@ -1,6 +1,10 @@
 mod glibc;
+pub mod install_error;
 
 pub use glibc::{GlibcVersion, RemoteLibc};
+pub use install_error::{
+    classify_install_failure, classify_install_failure_with_timeout, InstallFailureCategory,
+};
 
 use std::time::Duration;
 
