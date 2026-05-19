@@ -1271,7 +1271,7 @@ impl BillingAndUsagePageV2View {
                 .finish(),
             AddonCreditsRestriction::ContactTeamAdmin => appearance
                 .ui_builder()
-                .paragraph("Contact a team admin to purchase add-on credits.")
+                .paragraph("Contact a team admin to enable add-on credits.")
                 .with_style(UiComponentStyles {
                     font_color: Some(theme.sub_text_color(bg).into()),
                     ..Default::default()
