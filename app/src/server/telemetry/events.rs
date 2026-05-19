@@ -5582,7 +5582,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CopiedSharedSessionLink => EnablementState::Always,
             Self::WebSessionOpenedOnDesktop => EnablementState::Always,
             Self::WebCloudObjectOpenedOnDesktop => EnablementState::Always,
-            Self::ToggleShowBlockDividers => EnablementState::Flag(FeatureFlag::MinimalistUI),
+            Self::ToggleShowBlockDividers => EnablementState::Always,
             Self::DriveSharingOnboardingBlockShown => EnablementState::Always,
             Self::SharedObjectLimitHitBannerViewPlansButtonClicked => EnablementState::Always,
             Self::ResourceUsageStats => EnablementState::Always,

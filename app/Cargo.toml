@@ -472,7 +472,6 @@ default = [
     "session_sharing_acls",
     "external_agent_mode_context",
     "shell_selector",
-    "minimalist_ui",
     "avatar_in_tab_bar",
     "full_screen_zen_mode",
     "workflow_aliases",
@@ -809,7 +808,6 @@ shell_selector = []
 shared_session_long_running_commands = []
 blocklist_markdown_table_rendering = []
 blocklist_markdown_images = []
-minimalist_ui = []
 loginless_conversion = []
 external_agent_mode_context = []
 avatar_in_tab_bar = []

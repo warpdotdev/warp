@@ -1321,13 +1321,11 @@ impl AppearanceSettingsPageView {
             ],
         ));
 
-        let mut block_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
+        let block_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(CompactModeWidget::default()),
             Box::new(JumpToBottomOfBlockWidget::default()),
+            Box::new(ShowBlockDividersWidget::default()),
         ];
-        if FeatureFlag::MinimalistUI.is_enabled() {
-            block_settings_widgets.push(Box::new(ShowBlockDividersWidget::default()));
-        }
         categories.push(Category::new("Blocks", block_settings_widgets));
 
         let font_settings = FontSettings::as_ref(ctx);

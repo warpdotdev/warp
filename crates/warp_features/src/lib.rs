@@ -158,9 +158,6 @@ pub enum FeatureFlag {
     /// tab.
     FullScreenZenMode,
 
-    /// Playground for reducing Warp UI clutter.
-    MinimalistUI,
-
     /// Enables support for using native shell completions to supplement our
     /// completion specs.
     NativeShellCompletions,

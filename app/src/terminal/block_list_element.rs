@@ -115,18 +115,10 @@ struct SelectionBorderWidth {
 
 impl Default for SelectionBorderWidth {
     fn default() -> Self {
-        if FeatureFlag::MinimalistUI.is_enabled() {
-            Self {
-                single: 0.0,
-                tail_multi: 0.0,
-                reg_multi: 0.0,
-            }
-        } else {
-            Self {
-                single: 2.0,
-                tail_multi: 3.0,
-                reg_multi: 1.5,
-            }
+        Self {
+            single: 0.0,
+            tail_multi: 0.0,
+            reg_multi: 0.0,
         }
     }
 }

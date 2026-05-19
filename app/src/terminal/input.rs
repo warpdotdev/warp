@@ -430,11 +430,7 @@ const SHORT_CIRCUIT_HIGHLIGHTING_ACTIONS: [Option<PlainTextEditorViewAction>; 7]
 
 /// Border width for the line at the top of the input box in pixels
 pub fn get_input_box_top_border_width() -> f32 {
-    if FeatureFlag::MinimalistUI.is_enabled() {
-        0.0
-    } else {
-        1.0
-    }
+    0.0
 }
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;

@@ -26825,8 +26825,7 @@ impl View for TerminalView {
 
         // Add a border above the input view when there's an overhanging block (or below in input at the top
         // mode).
-        if ((viewport.overhanging_bottom_block(app).is_some()
-            && FeatureFlag::MinimalistUI.is_enabled())
+        if (viewport.overhanging_bottom_block(app).is_some()
             || *BlockListSettings::as_ref(app).show_block_dividers.value())
             && self.is_input_box_visible(&model, app)
             && !self
