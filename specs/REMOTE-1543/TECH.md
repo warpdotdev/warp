@@ -1,130 +1,105 @@
 # Queued Prompts UI — Technical Spec
-See `specs/REMOTE-1543/PRODUCT.md` for user-visible behavior. This document covers implementation only.
+See `specs/REMOTE-1543/PRODUCT.md` for user-visible behavior. This document covers the implementation that supports that behavior.
 ## Context
-`QueueSlashCommand` remains the rollout gate for regular Agent Mode prompt queueing. That includes `/queue`, the auto-queue toggle / button / keybinding, and the related regular prompt enqueueing paths. The new queued prompts panel is the regular prompt queue UI for those rows; it does not have a separate rollout flag.
+Regular Agent Mode queued prompts are implemented as a terminal-owned queue subsystem rather than as pending-user-query rich content. That architecture keeps the rendered panel close to the input that hosts it, while queue rows remain scoped to the conversation they were filed against.
 
-Cloud Mode prompt placeholders and compact follow-up prompts are compatibility paths, not regular Agent Mode queue rows. Cloud Mode initial / follow-up placeholder handling, `/compact-and`, and `/fork-and-compact` stay on the legacy pending-user-query UI unconditionally for now.
-The implementation should therefore be additive and narrowly scoped:
-- Keep `QueueSlashCommand` as the only regular prompt queue feature gate.
-- Keep the new multi-row queue model and input-adjacent panel focused on regular Agent Mode queued prompts.
-- Restore the prior Cloud Mode and compact follow-up pending-query codepaths where practical instead of inventing replacement queue-model logic.
-- Remove Cloud Mode / compact-only panel or model accommodations from this workstream so the regular queue architecture stays narrow.
-## Feature gating
-Do not add `NewQueuedPromptUI`, a `new_queued_prompt_ui` Cargo feature, or any parallel rollout switch for the panel.
+The implementation spans five ownership layers:
+- `app/src/ai/blocklist/history_model.rs (643-684)` owns the terminal-scoped `QueuedQueryModel` registry and clears queue state when terminal or conversation history is removed.
+- `app/src/ai/blocklist/queued_query.rs (90-365)` owns queue data, edit/collapse state, row identity, reorder behavior, and auto-fire pop semantics.
+- `app/src/terminal/view.rs (3707-4370, 5074-5181)` wires the queue model into `Input`, constructs the panel, receives panel events that need input mutation, and drains queued prompts when conversations finish.
+- `app/src/ai/blocklist/queued_prompts_panel.rs (1-284, 485-841)` owns panel rendering and row-level interactions: collapse, edit, delete, drag reorder, and panel telemetry.
+- `app/src/terminal/input.rs (13121-13319)` and `app/src/terminal/input/slash_commands/mod.rs (1032-1085)` route regular queue trigger surfaces into the shared queue model.
 
-`FeatureFlag::QueueSlashCommand` gates the regular Agent Mode queue experience:
-- `/queue <prompt>`
-- the auto-queue toggle / button / keybinding
-- `WorkspaceAction::QueuePromptForConversation`
-- related regular prompt enqueueing paths that feed the same Agent Mode queue
+Cloud Mode placeholders and compact follow-up placeholders remain on the legacy pending-user-query path. They still use the rich-content machinery in `app/src/terminal/view/pending_user_query.rs`, `app/src/terminal/view/rich_content.rs`, and related terminal selection plumbing because their lifecycle is driven by cloud setup or summarize/fork workflows rather than by regular Agent Mode queue draining.
+## Proposed changes
+### Queue ownership and data model
+`BlocklistAIHistoryModel` stores one `QueuedQueryModel` per terminal view and hands that model to `TerminalView::new` through `queued_query_model_for_terminal_view` (`app/src/ai/blocklist/history_model.rs (643-684)`). The model is terminal-owned because the panel and input are terminal-owned UI, but its rows are keyed by `AIConversationId` so switching conversations hides or reveals the correct queue without moving state into `TerminalView`.
 
-When `QueueSlashCommand` is enabled, regular Agent Mode queued prompts append to `QueuedQueryModel` and render in `QueuedPromptsPanelView`. When it is disabled, those regular queue trigger surfaces remain unavailable as they do today. Cloud Mode placeholder handling and compact follow-up placeholders do not branch on this feature gate.
-## Rollout behavior
-The rollout matrix is:
-- `QueueSlashCommand` off: regular Agent Mode queue trigger surfaces stay disabled, and the regular queue panel has no feature-enabled rows to render. Cloud Mode and compact follow-up placeholder flows continue to use the legacy pending-user-query UI.
-- `QueueSlashCommand` on: regular Agent Mode queue trigger surfaces append to `QueuedQueryModel`, and `QueuedPromptsPanelView` renders those queued rows. Cloud Mode and compact follow-up placeholder flows still use the legacy pending-user-query UI.
+`QueuedQueryModel` is the source of truth for regular queued prompts (`app/src/ai/blocklist/queued_query.rs (90-365)`):
+- `queues: HashMap<AIConversationId, Vec<QueuedQuery>>` stores FIFO queue contents per conversation.
+- `QueuedQueryId` gives each row stable identity across edit, delete, and reorder.
+- `QueuedQueryOrigin` distinguishes `/queue` rows from auto-queue rows for telemetry without affecting firing semantics.
+- `editing: Option<EditingRow>` enforces one active inline edit globally within the model.
+- `collapsed: HashSet<AIConversationId>` preserves per-conversation panel collapse state while that queue exists.
+- `queue_next_prompt_enabled` moves the queue-next toggle state out of `BlocklistAIContextModel` and into the same model that handles regular queued prompt behavior.
 
-`PendingUserQueryIndicator` and the legacy pending-user-query rich-content path remain compatibility infrastructure for the legacy placeholder flows below. They are not rollout switches for the regular queued prompts panel.
-## Regular Agent Mode queue path
-Regular Agent Mode queued prompts use the new queue model and panel:
-- `QueuedQueryModel` in `app/src/ai/blocklist/queued_query.rs`
-- `QueuedPromptsPanelView` in `app/src/ai/blocklist/queued_prompts_panel.rs`
-- `Input::queued_prompts_panel` in `app/src/terminal/input.rs`
-- `TerminalView::drain_queued_prompts` in `app/src/terminal/view.rs`
+The model emits `QueuedQueryEvent`s for append/remove/replace/reorder/edit/collapse/clear transitions. Views consume those events to refresh UI state without owning queue data themselves.
+### Trigger routing and enqueue flow
+All regular queue entry points converge on `QueuedQueryModel::append`:
+- The auto-queue path in `Input::maybe_queue_input_for_in_progress_conversation` verifies that the flag is enabled, AI input is active, the selected conversation is in progress or blocked, and the prompt is non-empty before appending an `AutoQueueToggle` row (`app/src/terminal/input.rs (13154-13263)`).
+- `/queue <prompt>` appends a `QueueSlashCommand` row while the conversation is active, and otherwise falls back to normal queued-prompt submission (`app/src/terminal/input/slash_commands/mod.rs (1032-1085)`).
+- `WorkspaceAction::QueuePromptForConversation` routes button/keybinding-driven enqueue requests through `TerminalView::enqueue_prompt`, preserving a single append API at the terminal layer (`app/src/workspace/view.rs (22648-22663)`, `app/src/terminal/view.rs (5074-5099)`).
 
-`QueuedPromptsPanelView::should_render` must require:
-- `FeatureFlag::QueueSlashCommand.is_enabled()`
-- an active conversation with regular Agent Mode queued rows
+`FeatureFlag::QueueSlashCommand` remains the single gate for the regular queue experience. It covers the trigger surfaces above and the panel attachment/render path; there is no separate panel-specific rollout switch.
+### Panel composition and interaction ownership
+`TerminalView::new` constructs `QueuedPromptsPanelView` when the regular queue feature is available, subscribes to its emitted events, and stores the panel handle on `Input` (`app/src/terminal/view.rs (4338-4367)`, `app/src/terminal/input.rs (3697-3718)`). The input render tree places the panel between the status bar and the editor (`app/src/terminal/input/agent.rs (329-341)`), matching the product placement contract.
 
-It should not require `PendingUserQueryIndicator`, and it must not depend on a separate queued-prompt UI feature flag.
-### `QueuedQueryModel`
-`QueuedQueryModel` owns regular Agent Mode prompt queueing:
-- `queues: HashMap<AIConversationId, Vec<QueuedQuery>>`
-- `editing: Option<EditingRow>`
-- `collapsed: HashSet<AIConversationId>`
-- `queue_next_prompt_enabled: bool`
+`QueuedPromptsPanelView` intentionally owns only queue-panel concerns:
+- It renders the queue header, expanded rows, hover controls, inline edit editor, and drag handles (`app/src/ai/blocklist/queued_prompts_panel.rs (485-841)`).
+- It mutates queue state through model methods such as `enter_edit_mode`, `remove_by_id`, `commit_edit`, `cancel_edit`, `reorder`, and `set_collapsed` (`app/src/ai/blocklist/queued_prompts_panel.rs (157-374)`).
+- It emits higher-level `QueuedPromptsPanelEvent`s when the host view must coordinate with input focus or buffer placement (`app/src/ai/blocklist/queued_prompts_panel.rs (82-112)`).
 
-The model should only describe regular user-managed queued prompts. Editing, deleting, reordering, collapsing, and queue draining belong here. Cloud Mode placeholder lifecycle and compact follow-up placeholder lifecycle do not.
-### Queue trigger routing
-Regular prompt trigger surfaces should append to `QueuedQueryModel` with regular queue origins:
-- `Input::maybe_queue_input_for_in_progress_conversation` appends `QueuedQueryOrigin::AutoQueueToggle`.
-- `/queue <prompt>` in `app/src/terminal/input/slash_commands/mod.rs` appends `QueuedQueryOrigin::QueueSlashCommand` while the selected conversation is in progress; the idle path still submits immediately.
-- `WorkspaceAction::QueuePromptForConversation` appends the regular auto-queue origin used by the button / keybinding path.
+`TerminalView::handle_queued_prompts_panel_event` owns the cross-component consequences the panel should not perform directly: focus restoration and placing deleted text into the main input when the input is empty (`app/src/terminal/view.rs (5103-5130)`).
+### Drain behavior and conversation lifecycle
+When the active conversation finishes, `TerminalView` decides how queued prompts advance; the queued prompts panel only renders and edits queued rows. `TerminalView::handle_ai_controller_event` invokes `drain_queued_prompts` before other completion callbacks run (`app/src/terminal/view.rs (4982-5072)`).
 
-`/compact-and <prompt>` and `/fork-and-compact <prompt>` are not regular queue trigger surfaces in this workstream. They stay on the legacy pending-user-query UI described below.
-## Legacy pending-user-query paths
-### Cloud Mode initial and follow-up placeholders
-Restore the old pending-query code as-is where practical and keep Cloud Mode initial / follow-up placeholder handling on it unconditionally:
-- `app/src/ai/blocklist/block/pending_user_query_block.rs`
-- `app/src/terminal/view/pending_user_query.rs`
-- `RichContentMetadata::PendingUserQuery` and `RichContent::is_pending_user_query` in `app/src/terminal/view/rich_content.rs`
-- `PendingUserQueryKind`, `pending_user_query_view_id`, and `pending_user_query_kind` in `app/src/terminal/view.rs`
-- selected-text plumbing for `PendingUserQueryBlock` in `app/src/terminal/model/blocks/selection.rs` and `TerminalView::pending_user_query_selected_text`
+`drain_queued_prompts` branches on `FinishReason` (`app/src/terminal/view.rs (5132-5181)`):
+- `Complete`: pop one queued row via `pop_for_autofire`; submit it through `Input::submit_queued_prompt`, or place it into the input if the row was first in queue and in edit mode.
+- `Error`, `Cancelled`, or `CancelledDuringRequestedCommandExecution`: if the input is empty, pop the first row and place its text into the input; otherwise leave the queue untouched.
 
-Do not restore the legacy single-slot queued prompt callback as the regular Agent Mode queueing implementation. Regular Agent Mode queued prompts belong in `QueuedQueryModel`; Cloud Mode placeholders remain separate rich-content UI.
+The model owns row-removal details and queue-empty cleanup, while the terminal owns submission and input mutation. This division keeps queue semantics testable in `queued_query_tests.rs` while preserving terminal-specific side effects in `queued_prompts_test.rs`.
 
-Legacy Cloud Mode behavior:
-- Cloud Mode initial prompt setup and follow-up placeholder handling show the old pending user query block.
-- The old Cloud Mode block has no dismiss or send-now affordances; the cloud run lifecycle owns removal.
-- When the real shared-session transcript content, auth, cancellation, or non-setup-v2 failure path takes over, the old block is removed by the restored legacy removal helper.
-- For `CloudModeSetupV2` failures, keep the old block visible above the failure/tombstone state so the user can still see the prompt that was submitted.
-Cloud Mode lifecycle handlers in `app/src/terminal/view/ambient_agent/view_impl.rs` should keep calling the restored legacy insertion / removal helpers. They should not create `QueuedQueryModel` rows or panel-specific Cloud Mode state in this workstream.
-### `/compact-and` and `/fork-and-compact`
-Restore the prior `/compact-and` and `/fork-and-compact` pending-user-query codepaths where practical:
-- `Workspace::summarize_active_ai_conversation`
-- `Workspace::handle_forked_conversation_prompts`
+Queue state is cleared along the same lifecycle boundaries that remove the conversation or exit Agent View:
+- Removing a conversation clears that conversation’s rows (`app/src/ai/blocklist/history_model.rs (1735-1741)`).
+- Clearing conversations in a terminal clears all queues for that terminal (`app/src/ai/blocklist/history_model.rs (1631-1637)`).
+- Exiting Agent View clears terminal queue state through `BlocklistAIContextModel`’s agent-view subscription (`app/src/ai/blocklist/context_model.rs (274-290)`).
+### Compatibility boundary for legacy pending placeholders
+The regular queue subsystem does not absorb placeholder flows whose lifecycle is unrelated to conversation-completion draining:
+- Cloud Mode initial/follow-up placeholders continue using pending-user-query rich content.
+- `/compact-and` and `/fork-and-compact` continue using the summarize/fork placeholder path.
 
-These commands should keep their legacy placeholder behavior after starting the summarize / fork-and-summarize work. They should not append `QueuedQueryModel` rows, add panel-only follow-up logic, or invent a new queue-model lifecycle for compact follow-up prompts.
-## Out of scope for the regular queue panel / model
-Any panel or model behavior added solely to migrate Cloud Mode placeholders or compact follow-up prompts into the new regular queue UI is no longer part of this workstream. Keep it out of the regular queue design rather than preserving it behind hidden conditions:
-- no `QueuedQueryOrigin::InitialCloudMode`
-- no `QueuedQueryOrigin::CompactAnd`
-- no `QueuedQueryOrigin::ForkAndCompact`
-- no `AmbientAgentViewModel::cloud_mode_queued_query_id`
-- no non-user-managed queue-panel rows or retention / removal rules that only exist for Cloud Mode or compact placeholder migration
-## Terminal view wiring
-`TerminalView::new` should construct and attach `QueuedPromptsPanelView` as part of the `QueueSlashCommand`-enabled regular queue experience. When `QueueSlashCommand` is disabled, `Input::queued_prompts_panel` stays `None`.
-
-`TerminalView::handle_ai_controller_event` should call `drain_queued_prompts(conversation_id, finish_reason, ctx)` for regular Agent Mode queued prompts. That drain is model-owned behavior, not panel-owned behavior, and it is unrelated to legacy pending-user-query placeholders.
-
-When an active AI block is detected for a different conversation, keep the restored legacy guard only for the pending-user-query placeholder path so stale Cloud Mode placeholder UI is cleared correctly. Regular Agent Mode queued prompts should rely on `QueuedQueryModel` conversation scoping.
-## Rich content and selection
-Because the legacy pending-user-query UI remains for Cloud Mode placeholders and compact follow-up prompts, restore the rich-content metadata and selection support:
-- `RichContentMetadata::PendingUserQuery { pending_user_query_block_handle }`
-- `RichContent::is_pending_user_query`
-- `read_selected_text_from_pending_user_query_block`
-- `TerminalView::pending_user_query_selected_text`
-This code should be used by the legacy placeholder paths only, but it can remain compiled unconditionally to minimize churn and keep the restored code close to the old implementation.
-## Telemetry
-New panel-specific telemetry should be emitted only from `QueuedPromptsPanelView`, which exists for the `QueueSlashCommand`-enabled regular queue experience:
+This boundary matters architecturally because these placeholders are owned by cloud or summarize/fork workflows, not by `QueuedQueryModel`. Keeping them separate avoids forcing prompt placeholders into queue APIs whose responsibilities are append, inspect, edit, reorder, and drain regular Agent Mode follow-ups.
+### Telemetry
+Panel-only interaction telemetry is emitted from `QueuedPromptsPanelView`, where the interaction actually occurs:
 - `QueuedPrompt.Edited`
 - `QueuedPrompt.Deleted`
 - `QueuedPrompt.Reordered`
 - `QueuedPrompt.PanelCollapseToggled`
-If those telemetry events record feature enablement, use `FeatureFlag::QueueSlashCommand`; there is no separate queued-prompt UI feature flag. Regular queueing should keep existing telemetry behavior from slash-command acceptance and prompt submission paths. Do not add new telemetry to the restored legacy placeholder flows.
-## Tests
-Update tests to cover the single regular queue gate and the legacy placeholder regressions.
-Regular queue feature-gate tests:
-- With `QueueSlashCommand` disabled, regular queue trigger surfaces remain unavailable and the regular queue panel is not attached.
-- With `QueueSlashCommand` enabled, `/queue`, the regular queue workspace action, and the auto-queue flow append to `QueuedQueryModel`.
-- With `QueueSlashCommand` enabled and regular queued rows present, `QueuedPromptsPanelView` renders those rows.
-- `drain_queued_prompts` runs model drain behavior for regular queued prompts.
 
-Legacy placeholder regression tests:
-- Cloud Mode initial / follow-up prompt placeholders use the old pending user query block and never append Cloud Mode rows to `QueuedQueryModel`.
-- Cloud Mode lifecycle removal removes the old block when transcript / harness handoff arrives, and keeps it visible across `CloudModeSetupV2` failure tombstones where that was already required.
-- `/compact-and` and `/fork-and-compact` restore their legacy pending-user-query placeholder behavior and do not append queue-panel rows.
-- Legacy `pending_user_query_view_id` remains confined to pending-user-query placeholder flows, not regular queue rows.
+`app/src/server/telemetry/events.rs (1205-1228, 2947-2971, 5848-5859)` mirrors queue-row origin into telemetry payloads and associates these events with `FeatureFlag::QueueSlashCommand`.
+## End-to-end flow
+```mermaid
+flowchart LR
+    A["Input auto-queue or /queue"] --> B["QueuedQueryModel::append"]
+    C["WorkspaceAction::QueuePromptForConversation"] --> D["TerminalView::enqueue_prompt"]
+    D --> B
+    B --> E["Queued prompts panel renders queue state"]
+    E --> F["Panel edits / deletes / reorders / collapses rows"]
+    F --> G["QueuedQueryModel updates existing queue state"]
+    G --> E
+    H["Conversation finishes"] --> I["TerminalView::drain_queued_prompts"]
+    I --> J["QueuedQueryModel pops the next row"]
+    J --> K["Submit queued prompt"]
+    J --> L["Restore text into input when behavior requires it"]
+```
+## Testing and validation
+Map tests directly to the product behavior in `specs/REMOTE-1543/PRODUCT.md`:
+- Behaviors 4-11: regular queue gating, `/queue`, auto-queue, and shell-mode exclusion should stay covered by terminal/input-level tests plus slash-command coverage.
+- Behaviors 12-30: row rendering, collapse/edit/delete/reorder semantics belong in `app/src/terminal/view/queued_prompts_test.rs` and `app/src/ai/blocklist/queued_query_tests.rs`.
+- Behaviors 31-37: sequential firing, edit-mode drain handling, and cancellation/error restoration belong in `TerminalView::drain_queued_prompts` coverage in `app/src/terminal/view/queued_prompts_test.rs`.
+- Behaviors 38-40: conversation/terminal/Agent View cleanup belong in queue-model lifecycle tests plus history/context model integration coverage.
+- Behavior 43: telemetry payload/origin plumbing should be covered where telemetry event serialization or event wiring already has local test patterns.
 
-Do not add tests for `NewQueuedPromptUI`; it is not part of the intended architecture.
-## Validation
-Run:
+Validation for this implementation should use:
 - `cargo fmt`
-- A targeted compile/test pass for the touched client code, preferably the queued prompt and terminal view tests.
-- Full presubmit before PR submission.
+- Targeted compile/test coverage for queued prompt model and terminal view queue behavior
+- Full presubmit before PR submission
+
 Do not run the app as part of this change.
+## Parallelization
+Parallel child agents are not especially helpful for implementing this feature because the queue model, panel, input routing, and terminal drain semantics share tight ownership boundaries and must remain consistent across one architectural thread. Review and validation can be parallelized later, but the primary implementation should stay in a single workstream to avoid churn across the same types and event contracts.
 ## Risks and mitigations
-- **Accidentally reintroducing a second queue UI rollout flag**: keep `QueueSlashCommand` as the only regular prompt queue feature gate and do not add `NewQueuedPromptUI`.
-- **Migrating compatibility placeholders into the regular queue model**: Cloud Mode placeholders, `/compact-and`, and `/fork-and-compact` stay on restored legacy pending-user-query codepaths.
-- **Broadening panel/model scope during restore work**: omit Cloud Mode / compact-only origins, model fields, and non-user-managed panel behavior from this workstream.
-- **Mixing regular queue rows with legacy placeholder lifecycle**: `QueuedQueryModel` owns regular Agent Mode prompt queues; pending-user-query rich content owns Cloud Mode and compact follow-up placeholder UI.
+- **Queue lifecycle drifting from conversation lifecycle**: centralize cleanup in `BlocklistAIHistoryModel` and the Agent View exit hook rather than relying on panel teardown.
+- **Panel owning terminal/input side effects**: keep focus restoration and input-buffer placement in `TerminalView::handle_queued_prompts_panel_event`.
+- **Drain behavior losing edit-mode or cancellation semantics**: keep firing policy in `TerminalView::drain_queued_prompts` and row-removal mechanics in `QueuedQueryModel`.
+- **Compatibility placeholders leaking into regular queue abstractions**: keep Cloud Mode and compact follow-up placeholders on their existing pending-user-query path because their ownership and removal semantics differ.
