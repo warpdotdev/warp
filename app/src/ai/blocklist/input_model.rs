@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use futures::stream::AbortHandle;
 use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_language_word};
+use input_classifier::InputClassificationDecision;
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::InputType;
+pub use input_classifier::{InputType, NldDecisionSource};
 
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::BlocklistAIContextModel;
@@ -139,6 +140,8 @@ pub struct BlocklistAIInputModel {
     /// The timestamp of the last time the input mode was switched, if the switch was to AI mode and
     /// it was autodetected. Else, `None`.
     last_ai_autodetection_ts: Option<Instant>,
+    /// The source of the final input decision upon submission
+    nld_decision_source: Option<NldDecisionSource>,
 
     /// Timestamp of the last time the input type was explicitly set.
     last_explicit_input_type_set_at: Option<Instant>,
@@ -214,6 +217,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_enabled,
                                 input_type: InputType::AI,
                             },
+                            (!is_nld_enabled).then_some(NldDecisionSource::SettingDisabled),
                             ctx,
                         );
                     }
@@ -229,6 +233,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_autodetection_enabled,
                             ..me.input_config()
                         },
+                        (!is_autodetection_enabled).then_some(NldDecisionSource::SettingDisabled),
                         ctx,
                     );
                 }
@@ -242,6 +247,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_nld_enabled,
                             input_type: InputType::Shell,
                         },
+                        (!is_nld_enabled).then_some(NldDecisionSource::SettingDisabled),
                         ctx,
                     );
                 }
@@ -262,6 +268,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
+                            Some(NldDecisionSource::ManualToggle),
                             ctx,
                         );
                     } else if matches!(origin, AgentViewEntryOrigin::ClearBuffer) {
@@ -272,6 +279,8 @@ impl BlocklistAIInputModel {
                                 input_type: me.input_config().input_type,
                                 is_locked: !is_autodetection_enabled,
                             },
+                            (!is_autodetection_enabled)
+                                .then_some(NldDecisionSource::SettingDisabled),
                             ctx,
                         );
                     } else if me.has_locking_attachment(ctx) {
@@ -284,6 +293,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
+                            Some(NldDecisionSource::AttachmentForcedAi),
                             ctx,
                         );
                     } else {
@@ -302,6 +312,8 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: !is_autodetection_enabled,
                             },
+                            (!is_autodetection_enabled)
+                                .then_some(NldDecisionSource::SettingDisabled),
                             ctx,
                         );
                     }
@@ -320,6 +332,8 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::Shell,
                                 is_locked: !is_nld_in_terminal_enabled,
                             },
+                            (!is_nld_in_terminal_enabled)
+                                .then_some(NldDecisionSource::SettingDisabled),
                             ctx,
                         );
                     }
@@ -333,6 +347,8 @@ impl BlocklistAIInputModel {
         } else {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         };
+        let initial_nld_decision_source =
+            (!is_autodetection_enabled).then_some(NldDecisionSource::SettingDisabled);
         Self {
             input_config: InputConfig {
                 input_type: InputType::Shell,
@@ -342,6 +358,7 @@ impl BlocklistAIInputModel {
             ai_context_model,
             terminal_view_id,
             last_ai_autodetection_ts: None,
+            nld_decision_source: initial_nld_decision_source,
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
             autodetect_abort_handle: None,
@@ -372,6 +389,9 @@ impl BlocklistAIInputModel {
     pub fn input_config(&self) -> InputConfig {
         self.input_config
     }
+    pub fn nld_decision_source(&self) -> Option<NldDecisionSource> {
+        self.nld_decision_source
+    }
 
     pub fn last_ai_autodetection_ts(&self) -> Option<Instant> {
         self.last_ai_autodetection_ts
@@ -394,7 +414,7 @@ impl BlocklistAIInputModel {
         if !matches!(input_type, InputBoxType::Classic) {
             return;
         }
-        self.set_input_config_internal(new_config, ctx);
+        self.set_input_config_internal(new_config, None, ctx);
     }
 
     /// Swaps between Agent/Shell input types while preserving lock state. Temporarily disables
@@ -402,13 +422,18 @@ impl BlocklistAIInputModel {
     pub fn set_input_type(&mut self, input_type: InputType, ctx: &mut ModelContext<Self>) {
         self.temporarily_disable_autodetection();
         let current_config = self.input_config();
-        self.set_input_config_internal(current_config.with_input_type(input_type), ctx);
+        self.set_input_config_internal(
+            current_config.with_input_type(input_type),
+            Some(NldDecisionSource::ManualToggle),
+            ctx,
+        );
     }
 
     /// Does not disable autodetection.
     fn set_input_config_internal(
         &mut self,
         new_config: InputConfig,
+        decision_source: Option<NldDecisionSource>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         // When `AgentView` is enabled, AI input mode can only be set in the top-level terminal
@@ -427,6 +452,7 @@ impl BlocklistAIInputModel {
         }
 
         if self.input_config == new_config {
+            self.nld_decision_source = decision_source;
             return false;
         }
 
@@ -448,6 +474,7 @@ impl BlocklistAIInputModel {
         }
 
         self.input_config = new_config;
+        self.nld_decision_source = decision_source;
 
         // Emit specific events for what actually changed
         if old_config.input_type != new_config.input_type {
@@ -468,8 +495,18 @@ impl BlocklistAIInputModel {
         is_input_buffer_empty: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.set_input_config_with_source(new_config, is_input_buffer_empty, None, ctx);
+    }
+
+    pub fn set_input_config_with_source(
+        &mut self,
+        new_config: InputConfig,
+        is_input_buffer_empty: bool,
+        decision_source: Option<NldDecisionSource>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.temporarily_disable_autodetection();
-        self.set_input_config_internal(new_config, ctx);
+        self.set_input_config_internal(new_config, decision_source, ctx);
         if new_config.is_locked {
             self.abort_in_progress_detection();
         }
@@ -485,7 +522,7 @@ impl BlocklistAIInputModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.temporarily_disable_autodetection();
-        self.set_input_config_internal(new_config, ctx);
+        self.set_input_config_internal(new_config, None, ctx);
         self.abort_in_progress_detection();
         self.was_lock_set_with_empty_buffer = was_lock_set_with_empty_buffer;
     }
@@ -547,6 +584,7 @@ impl BlocklistAIInputModel {
                 input_type,
                 is_locked: false,
             },
+            None,
             ctx,
         );
         // The goal of this function is to allow autodetection to run, but if we
@@ -652,6 +690,7 @@ impl BlocklistAIInputModel {
                     input_type: InputType::Shell,
                     ..self.input_config()
                 },
+                Some(NldDecisionSource::Denylist),
                 ctx,
             );
             return;
@@ -700,14 +739,20 @@ impl BlocklistAIInputModel {
                     if matches!(current_input_type, InputType::AI)
                         && is_one_off_natural_language_word(first_token_str.to_lowercase().as_str())
                     {
-                        return InputType::AI;
+                        return InputClassificationDecision::new(
+                            InputType::AI,
+                            NldDecisionSource::OneOffWhitelist,
+                        );
                     }
 
                     // If this is clearly intended to be a follow-up to an AI block, classify it as AI.
                     if is_agent_follow_up
                         && is_agent_follow_up_input(&buffer_cloned.trim().to_lowercase())
                     {
-                        return InputType::AI;
+                        return InputClassificationDecision::new(
+                            InputType::AI,
+                            NldDecisionSource::AgentFollowUp,
+                        );
                     }
 
                     // If we have history entries (i.e., a live session), check for
@@ -720,7 +765,10 @@ impl BlocklistAIInputModel {
                         )
                         .await
                         {
-                            return InputType::Shell;
+                            return InputClassificationDecision::new(
+                                InputType::Shell,
+                                NldDecisionSource::HistoryMatch,
+                            );
                         }
                     }
 
@@ -737,14 +785,15 @@ impl BlocklistAIInputModel {
                         current_input_type,
                         is_agent_follow_up,
                     };
-                    let new_input_type =
-                        classifier.detect_input_type(input.clone(), &context).await;
+                    let input_decision = classifier
+                        .detect_input_decision(input.clone(), &context)
+                        .await;
 
                     futures_lite::future::yield_now().await;
 
-                    new_input_type
+                    input_decision
                 },
-                move |me, new_input_type, ctx| {
+                move |me, input_decision, ctx| {
                     // In theory, we shouldn't need to check this, as we only run autodetection if the input
                     // is not locked, and we should abort the autodetect future if the input is locked, but
                     // we do it anyway out of an abundance of caution.
@@ -757,11 +806,13 @@ impl BlocklistAIInputModel {
                     if me.autodetect_abort_handle.is_none() {
                         return;
                     }
+                    let new_input_type = input_decision.input_type;
                     me.set_input_config_internal(
                         InputConfig {
                             input_type: new_input_type,
                             ..me.input_config()
                         },
+                        Some(input_decision.source),
                         ctx,
                     );
                     if current_input_type != new_input_type {
