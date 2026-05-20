@@ -648,13 +648,7 @@ pub struct CodeReviewView {
     code_review_footer: Option<ViewHandle<CodeFooterView>>,
     /// Active git-operation dialog overlay (commit / push / publish), if open.
     git_dialog: Option<ViewHandle<GitDialog>>,
-    /// Direct handle to the per-repo git status model.
-    ///
-    /// Owned by the view (not borrowed through `TerminalView`) so PR info
-    /// access is decoupled from the terminal's subscription lifecycle. The
-    /// handle is created in [`on_open`] and dropped in [`on_close`]; we also
-    /// register the view as a `pr_info` consumer so the model performs the
-    /// `gh pr view` lookup on our behalf.
+    /// Per-repo git status model for the current repository, if any.
     #[cfg(feature = "local_fs")]
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
 }
@@ -6333,16 +6327,11 @@ impl CodeReviewView {
         let Some(handle) = self.git_repo_status.as_ref() else {
             return;
         };
-        let view_id = ctx.view_id();
         handle.update(ctx, |model, ctx| {
-            // Re-register ourselves in case the per-repo model was recreated
-            // after we last subscribed (e.g. when its strong-handle count
-            // dropped to zero). `set_pr_info_consumer` may kick off its own
-            // refresh when transitioning empty → non-empty; the explicit
-            // `force = true` call below is idempotent for the current
-            // branch, so the double call coalesces into one fetch.
-            model.set_pr_info_consumer(view_id, true, ctx);
-            model.refresh_pr_info(true, ctx);
+            // We registered as a consumer in `subscribe_to_git_repo_status`
+            // and remain registered until `on_close`, so the gate is already
+            // open for this explicit "user just ran a git/gh operation" path.
+            model.refresh_pr_info(ctx);
         });
     }
 

@@ -4840,11 +4840,11 @@ impl TerminalView {
             .and_then(|h| h.as_ref(ctx).metadata())
     }
 
-    /// Returns whether this terminal view should subscribe to git status
-    /// updates. We subscribe when this terminal's prompt or footer needs git
-    /// branch, diff stats, or PR info from the repo-scoped status model.
-    /// Other views (e.g. `CodeReviewView`) subscribe independently via
-    /// [`GitStatusUpdateModel`].
+    /// Returns whether this terminal view should subscribe to git status updates.
+    /// We subscribe when:
+    /// 1. Agent mode is active and its chip list includes `GitDiffStats` or `GithubPullRequest`, or
+    /// 2. Terminal mode with the Warp prompt enabled and the git stats chip
+    ///    configured.
     #[cfg(feature = "local_fs")]
     fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
         let uses_git_status = |chips: Vec<ContextChipKind>| {
@@ -4856,8 +4856,8 @@ impl TerminalView {
             })
         };
 
-        // Agent view: subscribe when the configured agent footer includes git
-        // stats or PR info.
+        // Agent view: subscribe when the configured agent footer includes
+        // git stats or PR info.
         if self.agent_view_controller.as_ref(ctx).is_active() {
             return uses_git_status(
                 SessionSettings::as_ref(ctx)
@@ -4921,7 +4921,7 @@ impl TerminalView {
         FeatureFlag::GithubPrPromptChip.is_enabled()
             && settings.github_pr_chip_default_validation.is_suppressed()
             && matches!(
-                settings.saved_prompt.clone(),
+                *settings.saved_prompt,
                 crate::context_chips::prompt::PromptSelection::Default
             )
     }
@@ -4944,9 +4944,8 @@ impl TerminalView {
     /// Triggers a PR info refresh after a `gh`/`gt` command completes.
     ///
     /// These commands don't touch `.git/` so the filesystem watcher won't
-    /// catch them; we refresh explicitly. The `force = true` call bypasses
-    /// the consumer gate so the retry runs even when the PR chip is hidden
-    /// or suppressed and no consumer is currently registered.
+    /// catch them; we refresh explicitly while an active PR-info consumer is
+    /// registered for this terminal.
     #[cfg(feature = "local_fs")]
     fn refresh_pr_info_after_gh_or_gt_command(&mut self, ctx: &mut ViewContext<Self>) {
         // Ensure we have a subscription to the per-repo status model.
@@ -4960,7 +4959,7 @@ impl TerminalView {
             return;
         };
         handle.update(ctx, |model, ctx| {
-            model.refresh_pr_info(true, ctx);
+            model.refresh_pr_info(ctx);
         });
     }
 

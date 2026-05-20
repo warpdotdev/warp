@@ -249,7 +249,7 @@ impl GitRepoStatusModel {
             ctx.spawn_stream_local(
                 pr_tick_rx,
                 |me, _: (), ctx| {
-                    me.refresh_pr_info(false, ctx);
+                    me.refresh_pr_info(ctx);
                 },
                 |_, _| {},
             );
@@ -303,7 +303,7 @@ impl GitRepoStatusModel {
         }
 
         if self.should_refresh_pr_info() && !was_enabled {
-            self.refresh_pr_info(false, ctx);
+            self.refresh_pr_info(ctx);
         } else if !self.should_refresh_pr_info() {
             if let Some(handle) = self.computing_pr_info_abort_handle.take() {
                 handle.abort();
@@ -339,18 +339,8 @@ impl GitRepoStatusModel {
     /// commands. Missing/auth setup failures suppress the default chip, but
     /// polling continues so the chip can recover after the user's `gh` setup
     /// changes.
-    ///
-    /// When `force` is `false`, the call is a no-op if no consumer has
-    /// registered interest via [`set_pr_info_consumer`]. Pass `true` for
-    /// explicit one-shot refreshes (e.g. after the user runs `gh`/`gt`) so
-    /// the fetch runs even when the chip is hidden/suppressed and no
-    /// consumer is currently registered.
-    ///
-    /// Idempotent: if a fetch is already in flight for the same branch, this
-    /// is a no-op. If a fetch is in flight for a different branch, the old
-    /// fetch is aborted and a new one is started.
-    pub(crate) fn refresh_pr_info(&mut self, force: bool, ctx: &mut ModelContext<Self>) {
-        if !force && !self.should_refresh_pr_info() {
+    pub(crate) fn refresh_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.should_refresh_pr_info() {
             return;
         }
 
@@ -478,7 +468,7 @@ impl GitRepoStatusModel {
             if self.pr_info.take().is_some() {
                 ctx.emit(GitRepoStatusEvent::PrInfoChanged);
             }
-            self.refresh_pr_info(false, ctx);
+            self.refresh_pr_info(ctx);
         }
     }
 

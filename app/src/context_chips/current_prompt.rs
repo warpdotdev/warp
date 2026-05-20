@@ -1141,13 +1141,10 @@ impl CurrentPrompt {
             self.update_states_with_new_context(ctx);
         }
         if let SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } = event {
-            let github_pr_chip_loading = self
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .is_some_and(|state| state.update_status == ChipUpdateStatus::Loading);
-            if !github_pr_chip_loading {
-                self.update_states_with_new_context(ctx);
-            }
+            // Re-resolve the default prompt's chip list (which gates the
+            // PR chip on `is_suppressed()`) and re-run chips with the new
+            // suppression state.
+            self.update_states_with_new_context(ctx);
         }
 
         if let SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } = event {
