@@ -1338,15 +1338,28 @@ Thumbs.db
 
     // ── WatchFilter system-dir exclusion tests (Windows only) ─────────────────
 
+    /// Build a path under the real `%USERPROFILE%\AppData` for use in positive
+    /// exclusion tests.  Panics if `USERPROFILE` is not set (should never happen
+    /// in a normal Windows environment).
+    #[cfg(target_os = "windows")]
+    fn real_appdata_path(subpath: &str) -> std::path::PathBuf {
+        let profile = std::env::var("USERPROFILE")
+            .expect("USERPROFILE must be set on Windows for system-dir exclusion tests");
+        std::path::PathBuf::from(profile)
+            .join("AppData")
+            .join(subpath)
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_watch_filter_excludes_appdata_local_temp_windows() {
         use crate::local_model::is_system_dir_excluded;
-        use std::path::Path;
 
-        let temp_path = Path::new(r"C:\Users\TestUser\AppData\Local\Temp\foo.tmp");
+        // Construct the path using the real %USERPROFILE% so that the anchored
+        // check in `is_system_dir_excluded_windows` matches correctly.
+        let temp_path = real_appdata_path(r"Local\Temp\foo.tmp");
         assert!(
-            is_system_dir_excluded(temp_path),
+            is_system_dir_excluded(&temp_path),
             "AppData\\Local\\Temp should be excluded"
         );
     }
@@ -1355,27 +1368,31 @@ Thumbs.db
     #[test]
     fn test_watch_filter_case_insensitive_windows() {
         use crate::local_model::is_system_dir_excluded;
-        use std::path::Path;
 
         // Lowercase variant — NTFS is case-insensitive so this is valid.
-        let temp_path = Path::new(r"C:\Users\TestUser\appdata\LOCAL\temp\foo.tmp");
+        // Construct via real_appdata_path and then lowercase the sub-components
+        // by building the path manually with mixed case from the real profile root.
+        let profile = std::env::var("USERPROFILE").expect("USERPROFILE must be set on Windows");
+        let appdata_root = std::path::PathBuf::from(&profile).join("AppData");
+
+        // lower-cased sub-path under the real AppData root
+        let temp_path = appdata_root.join(r"local\temp\foo.tmp");
         assert!(
-            is_system_dir_excluded(temp_path),
-            "Case-insensitive AppData\\Local\\Temp should be excluded"
+            is_system_dir_excluded(&temp_path),
+            "Case-insensitive AppData\\local\\temp should be excluded"
         );
 
         // AppData\LocalLow
-        let local_low_path = Path::new(r"C:\Users\TestUser\AppData\LocalLow\somecache\data");
+        let local_low_path = real_appdata_path(r"LocalLow\somecache\data");
         assert!(
-            is_system_dir_excluded(local_low_path),
+            is_system_dir_excluded(&local_low_path),
             "AppData\\LocalLow should be excluded"
         );
 
         // AppData\Local\Microsoft\Windows
-        let win_path =
-            Path::new(r"C:\Users\TestUser\AppData\Local\Microsoft\Windows\Caches\file.dat");
+        let win_path = real_appdata_path(r"Local\Microsoft\Windows\Caches\file.dat");
         assert!(
-            is_system_dir_excluded(win_path),
+            is_system_dir_excluded(&win_path),
             "AppData\\Local\\Microsoft\\Windows should be excluded"
         );
     }
@@ -1384,20 +1401,67 @@ Thumbs.db
     #[test]
     fn test_watch_filter_does_not_match_substring_false_positives() {
         use crate::local_model::is_system_dir_excluded;
-        use std::path::Path;
 
         // "Tempest" is NOT "Temp" — component-wise matching must not substring-match.
-        let tempest_path = Path::new(r"C:\Users\TestUser\AppData\Local\Tempest\foo.txt");
+        // Construct via the real AppData root so the anchor check passes; the
+        // sub-path "Local\Tempest" must still be NOT excluded.
+        let tempest_path = real_appdata_path(r"Local\Tempest\foo.txt");
         assert!(
-            !is_system_dir_excluded(tempest_path),
+            !is_system_dir_excluded(&tempest_path),
             "AppData\\Local\\Tempest must NOT be excluded (false positive guard)"
         );
 
         // A normal project directory should also not be excluded.
-        let project_path = Path::new(r"C:\Users\TestUser\Projects\my-app\src\main.rs");
+        let project_path = std::path::Path::new(r"C:\Users\TestUser\Projects\my-app\src\main.rs");
         assert!(
             !is_system_dir_excluded(project_path),
             "A normal project path must not be excluded"
+        );
+    }
+
+    /// Regression test for oz-bot review suggestion on PR #11448:
+    /// A workspace subtree whose path *contains* the AppData segment sequence
+    /// but is **not** inside the user's real AppData root must NOT be excluded.
+    ///
+    /// Previously `is_system_dir_excluded_windows` scanned anywhere in the path
+    /// component list, so `fixtures\AppData\Local\Temp` (a test-fixture dir)
+    /// would silently suppress watcher events.  After the fix the function is
+    /// anchored to `%USERPROFILE%\AppData`, so only paths that literally start
+    /// with the user's AppData directory are excluded.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_watch_filter_workspace_appdata_subtree_not_excluded() {
+        use crate::local_model::is_system_dir_excluded;
+        use std::path::Path;
+
+        // A workspace fixture directory whose path *contains* "AppData\Local\Temp"
+        // as a middle segment.  This is not the user's real AppData — it must
+        // NOT be filtered out.
+        let fixture_temp =
+            Path::new(r"C:\workspace\my-project\fixtures\AppData\Local\Temp\sample.tmp");
+        assert!(
+            !is_system_dir_excluded(fixture_temp),
+            "A fixture path containing AppData\\Local\\Temp as a middle segment \
+             must NOT be excluded — it is not the user's real AppData directory"
+        );
+
+        // Same check for the LocalLow pattern.
+        let fixture_locallow =
+            Path::new(r"C:\workspace\my-project\fixtures\AppData\LocalLow\cache\data");
+        assert!(
+            !is_system_dir_excluded(fixture_locallow),
+            "A fixture path containing AppData\\LocalLow as a middle segment \
+             must NOT be excluded"
+        );
+
+        // And for the Microsoft\Windows pattern.
+        let fixture_win = Path::new(
+            r"C:\workspace\my-project\fixtures\AppData\Local\Microsoft\Windows\Caches\file.dat",
+        );
+        assert!(
+            !is_system_dir_excluded(fixture_win),
+            "A fixture path containing AppData\\Local\\Microsoft\\Windows as a \
+             middle segment must NOT be excluded"
         );
     }
 

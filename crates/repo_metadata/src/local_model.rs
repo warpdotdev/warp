@@ -1186,15 +1186,18 @@ impl warpui::Entity for LocalRepoMetadataModel {
 ///
 /// ## Windows
 ///
-/// Matching is **case-insensitive and component-aware** (NTFS is case-insensitive,
+/// Matching is **anchored to the user's real `AppData` root** (`%USERPROFILE%\AppData`)
+/// and is **case-insensitive and component-aware** (NTFS is case-insensitive,
 /// and Office/Windows writes these paths in mixed case).  The implementation
 /// compares each individual path component rather than the full string, so a
-/// folder named `Tempest` next to `Temp` does *not* match.
+/// folder named `Tempest` next to `Temp` does *not* match, and a workspace
+/// subtree like `fixtures\AppData\Local\Temp` that is not inside the user's
+/// real AppData directory is also not excluded.
 ///
 /// The excluded subtrees are:
-/// - `AppData\Local\Temp`
-/// - `AppData\Local\Microsoft\Windows`
-/// - `AppData\LocalLow`
+/// - `%USERPROFILE%\AppData\Local\Temp`
+/// - `%USERPROFILE%\AppData\Local\Microsoft\Windows`
+/// - `%USERPROFILE%\AppData\LocalLow`
 ///
 /// ## Other platforms
 ///
@@ -1214,26 +1217,56 @@ pub(crate) fn is_system_dir_excluded(path: &Path) -> bool {
 
 /// Windows-specific implementation of [`is_system_dir_excluded`].
 ///
-/// Checks whether any contiguous subsequence of `path`'s components matches
-/// one of the hard-coded exclude patterns (case-insensitive). For example,
-/// the pattern `["AppData", "Local", "Temp"]` matches
-/// `C:\Users\alice\AppData\Local\Temp\foo.tmp` but NOT
-/// `C:\Users\alice\AppData\Local\Tempest\foo.txt` (component-wise comparison,
-/// not substring).
+/// Checks whether `path` is rooted inside the user's real `AppData` directory
+/// **and** matches one of the known high-noise/high-churn subtrees:
+///
+/// - `%USERPROFILE%\AppData\Local\Temp`
+/// - `%USERPROFILE%\AppData\Local\Microsoft\Windows`
+/// - `%USERPROFILE%\AppData\LocalLow`
+///
+/// The anchoring step (checking that the path actually starts with the user's
+/// `AppData` root) is critical: without it, a workspace subtree whose path
+/// happens to contain the segment sequence `AppData\Local\Temp` (e.g.
+/// `C:\workspace\fixtures\AppData\Local\Temp`) would be silently excluded from
+/// file-tree watcher events.
+///
+/// The sub-path matching is **case-insensitive and component-aware** (NTFS is
+/// case-insensitive; Office/Windows writes these paths in mixed case).
+///
+/// If `%USERPROFILE%` is not set (unusual, but possible in some CI or service
+/// environments), the function falls back to the unanchored pattern scan so
+/// that real system directories are still excluded on best-effort.
 #[cfg(target_os = "windows")]
 fn is_system_dir_excluded_windows(path: &Path) -> bool {
-    /// Each entry is an ordered slice of component names that must appear
-    /// consecutively (case-insensitive) somewhere in the path's component list.
-    const WINDOWS_EXCLUDE_PATTERNS: &[&[&str]] = &[
+    // Resolve the user's AppData root from %USERPROFILE%.
+    // %USERPROFILE% is always set on Windows for interactive sessions and most
+    // service accounts; it expands to e.g. C:\Users\alice.
+    let appdata_root: Option<PathBuf> =
+        std::env::var_os("USERPROFILE").map(|profile| PathBuf::from(profile).join("AppData"));
+
+    // If we have an AppData root, require the path to start with it before
+    // doing the sub-pattern match. This prevents false positives for workspace
+    // subtrees like `fixtures\AppData\Local\Temp`.
+    if let Some(ref root) = appdata_root {
+        // `path` must be inside the user's AppData tree.
+        if !path.starts_with(root) {
+            return false;
+        }
+        // Strip the AppData prefix so the patterns below only need to name
+        // the portion after "AppData" (e.g. ["Local", "Temp"]).
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        return is_appdata_subpath_excluded(relative);
+    }
+
+    // Fallback (USERPROFILE unset): unanchored scan — same as the original
+    // implementation. Better to over-exclude than to miss a real system dir.
+    let components: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
+    const WINDOWS_EXCLUDE_PATTERNS_FULL: &[&[&str]] = &[
         &["AppData", "Local", "Temp"],
         &["AppData", "Local", "Microsoft", "Windows"],
         &["AppData", "LocalLow"],
     ];
-
-    let components: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
-
-    // Return true if ANY pattern matches a contiguous window of components.
-    WINDOWS_EXCLUDE_PATTERNS.iter().any(|pattern| {
+    WINDOWS_EXCLUDE_PATTERNS_FULL.iter().any(|pattern| {
         if components.len() < pattern.len() {
             return false;
         }
@@ -1248,6 +1281,39 @@ fn is_system_dir_excluded_windows(path: &Path) -> bool {
                         .unwrap_or(false)
                 })
         })
+    })
+}
+
+/// Returns `true` if `relative` (a path already stripped of the
+/// `%USERPROFILE%\AppData` prefix) matches one of the excluded subtrees.
+///
+/// Patterns are matched as an anchored prefix: `["Local", "Temp"]` matches
+/// `Local\Temp\foo.tmp` but not `SomeDir\Local\Temp\foo.tmp`.
+#[cfg(target_os = "windows")]
+fn is_appdata_subpath_excluded(relative: &Path) -> bool {
+    /// Patterns relative to `%USERPROFILE%\AppData\`.
+    const APPDATA_EXCLUDE_PATTERNS: &[&[&str]] = &[
+        &["Local", "Temp"],
+        &["Local", "Microsoft", "Windows"],
+        &["LocalLow"],
+    ];
+
+    let components: Vec<&std::ffi::OsStr> = relative.components().map(|c| c.as_os_str()).collect();
+
+    APPDATA_EXCLUDE_PATTERNS.iter().any(|pattern| {
+        if components.len() < pattern.len() {
+            return false;
+        }
+        // Anchored: only check the leading window.
+        components[..pattern.len()]
+            .iter()
+            .zip(pattern.iter())
+            .all(|(component, expected)| {
+                component
+                    .to_str()
+                    .map(|s| s.eq_ignore_ascii_case(expected))
+                    .unwrap_or(false)
+            })
     })
 }
 
