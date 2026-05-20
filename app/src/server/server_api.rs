@@ -1251,11 +1251,16 @@ impl ServerApi {
             }
         );
 
-        let ambient_workload_token = self
-            .get_or_create_ambient_workload_token()
-            .await
-            .map_err(Into::into)
-            .map_err(Arc::new)?;
+        let ambient_workload_token = if is_passive {
+            // Do not include cloud agent workload metadata in passive suggestion requests - they
+            // read from the main conversation, but cannot modify it.
+            None
+        } else {
+            self.get_or_create_ambient_workload_token()
+                .await
+                .map_err(Into::into)
+                .map_err(Arc::new)?
+        };
 
         let mut request_builder = self
             .client
