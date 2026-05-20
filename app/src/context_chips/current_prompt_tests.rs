@@ -313,45 +313,15 @@ fn test_github_pr_chip_runtime_policy_configuration() {
         .expect("github pr chip should exist");
     let policy = chip.runtime_policy();
 
-    // The chip keeps timeout, suppression, and fingerprinting for the
-    // shell-command fallback when `GitRepoStatusModel` is unavailable. On local
-    // sessions with the per-repo status model the value is populated externally
-    // and the shell command is skipped (see `CurrentPrompt::is_updated_externally`).
-    assert_eq!(
-        policy.required_executables(),
-        &["gh".to_string(), "git".to_string()]
-    );
-    assert_eq!(policy.shell_command_timeout(), Some(Duration::from_secs(5)));
-    assert!(policy.suppress_on_failure());
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::SessionId));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::WorkingDirectory));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::GitBranch));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::RequiredExecutablesPresence));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::InvalidatingCommandCount));
-    assert_eq!(
-        policy.invalidate_on_commands(),
-        &["git".to_string(), "gh".to_string(), "gt".to_string()]
-    );
-
-    // Not restricted to local sessions: the shell fallback is exercised on
-    // remote sessions where `GitRepoStatusModel` is unavailable.
-    assert_eq!(
-        chip.availability(&ChipRuntimeCapabilities {
-            session_is_local: Some(false),
-            ..Default::default()
-        }),
-        ChipAvailability::Enabled
-    );
+    assert!(matches!(
+        chip.generator(),
+        PromptGenerator::Contextual { .. }
+    ));
+    assert!(policy.required_executables().is_empty());
+    assert_eq!(policy.shell_command_timeout(), None);
+    assert!(!policy.suppress_on_failure());
+    assert!(policy.fingerprint_inputs().is_empty());
+    assert!(policy.invalidate_on_commands().is_empty());
 }
 
 #[test]

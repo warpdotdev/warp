@@ -158,10 +158,9 @@ pub struct CurrentPrompt {
     prompt_chip_logger: PromptChipLogger,
     update_tx: async_channel::Sender<()>,
 
-    /// When set, git-backed chip values are populated from `GitRepoStatusModel`
-    /// instead of shell fallback commands. `ShellGitBranch` and `GitDiffStats`
-    /// are driven by filesystem events; `GithubPullRequest` is driven by
-    /// `gh pr view` results from the per-repo status model.
+    /// When set, git-backed chip values are populated from `GitRepoStatusModel`.
+    /// `ShellGitBranch` and `GitDiffStats` are driven by filesystem events;
+    /// `GithubPullRequest` is driven by PR info from the per-repo status model.
     #[cfg(feature = "local_fs")]
     git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
 }
@@ -1365,8 +1364,8 @@ impl CurrentPrompt {
     }
 
     /// Set the per-repo git status model handle. When `Some`, subscribes to
-    /// metadata and PR info events so git-backed prompt chips are updated by
-    /// filesystem events instead of shell fallback commands.
+    /// metadata and PR info events so git-backed prompt chips are updated from
+    /// the per-repo status model.
     #[cfg(feature = "local_fs")]
     pub fn set_git_repo_status(
         &mut self,
