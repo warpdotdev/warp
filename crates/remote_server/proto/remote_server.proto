@@ -575,3 +575,18 @@ message ResolveConflictSuccess {}
 message BufferConflictDetected {
   string path = 1;
 }
+
+// ── Handoff snapshot upload ───────────────────────────────────────
+
+// Client → daemon: request the daemon gather a handoff snapshot and upload it.
+message UploadHandoffSnapshot {
+  repeated string paths = 1;
+  optional string working_directory = 2;
+}
+
+// Daemon → client: result of the handoff snapshot upload.
+message UploadHandoffSnapshotResponse {
+  optional string initial_snapshot_token = 1;
+  bool success = 2;
+  optional string error = 3;
+}

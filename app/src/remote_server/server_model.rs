@@ -47,10 +47,15 @@ use super::proto::{
     OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
     ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
     RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
+<<<<<<< HEAD
     SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, WriteFile, WriteFileResponse,
     WriteFileSuccess, client_message, delete_file_response, discard_files_response,
     get_diff_state_response, get_fragment_metadata_from_hash_response, resolve_conflict_response,
     run_command_response, save_buffer_response, server_message, write_file_response,
+=======
+    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
+    UploadHandoffSnapshotResponse, WriteFile, WriteFileResponse, WriteFileSuccess,
+>>>>>>> 0d3882ea (feat: daemon-side handler for SSH handoff snapshot upload)
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -72,6 +77,7 @@ use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::{ReadFileContextResult, read_local_file_context};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::features::FeatureFlag;
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
@@ -745,6 +751,7 @@ impl ServerModel {
             Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
                 self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
             }
+<<<<<<< HEAD
             Some(client_message::Message::UploadHandoffSnapshot(_)) => {
                 // TODO: server-side handler will be implemented by the daemon agent.
                 // For now, return an error so older daemons don't silently drop the request.
@@ -753,6 +760,10 @@ impl ServerModel {
                     message: "UploadHandoffSnapshot is not yet implemented on this server version"
                         .to_string(),
                 }))
+=======
+            Some(client_message::Message::UploadHandoffSnapshot(msg)) => {
+                self.handle_upload_handoff_snapshot(msg, &request_id, conn_id, ctx)
+>>>>>>> 0d3882ea (feat: daemon-side handler for SSH handoff snapshot upload)
             }
             None => {
                 log::warn!(
@@ -2444,6 +2455,91 @@ impl ServerModel {
                 }
             }
         }
+    }
+
+    /// Handles `UploadHandoffSnapshot` by gathering the workspace snapshot
+    /// from the daemon's local filesystem and uploading it to GCS.
+    ///
+    /// Extracts the `AIClient` and HTTP client from `ServerApiProvider`, then
+    /// spawns the async gather+upload pipeline. Returns an
+    /// `UploadHandoffSnapshotResponse` with the token on success.
+    fn handle_upload_handoff_snapshot(
+        &mut self,
+        msg: UploadHandoffSnapshot,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling UploadHandoffSnapshot ({} paths, cwd={:?}, request_id={request_id})",
+            msg.paths.len(),
+            msg.working_directory,
+        );
+
+        let server_api = ServerApiProvider::handle(ctx);
+        let ai_client = server_api.as_ref(ctx).get_ai_client();
+        let http = server_api.as_ref(ctx).get_http_client();
+
+        let paths = msg.paths;
+        let working_directory = msg.working_directory;
+        let request_id_for_response = request_id.clone();
+
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                super::handoff_snapshot::gather_and_upload_handoff_snapshot(
+                    paths,
+                    working_directory,
+                    ai_client,
+                    &http,
+                )
+                .await
+            },
+            move |me, result, _ctx| {
+                let response = match result {
+                    Ok(Some(token)) => {
+                        log::info!(
+                            "Handoff snapshot upload succeeded \
+                             (request_id={request_id_for_response})"
+                        );
+                        UploadHandoffSnapshotResponse {
+                            initial_snapshot_token: Some(token.as_str().to_string()),
+                            success: true,
+                            error: None,
+                        }
+                    }
+                    Ok(None) => {
+                        log::info!(
+                            "Handoff snapshot upload completed with no token \
+                             (request_id={request_id_for_response})"
+                        );
+                        UploadHandoffSnapshotResponse {
+                            initial_snapshot_token: None,
+                            success: true,
+                            error: None,
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Handoff snapshot upload failed \
+                             (request_id={request_id_for_response}): {e:#}"
+                        );
+                        UploadHandoffSnapshotResponse {
+                            initial_snapshot_token: None,
+                            success: false,
+                            error: Some(format!("{e:#}")),
+                        }
+                    }
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::UploadHandoffSnapshotResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Handles `GetBranches` — request/response.
