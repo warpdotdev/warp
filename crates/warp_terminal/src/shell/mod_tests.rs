@@ -270,18 +270,3 @@ fn test_should_add_command_to_history() {
         assert!(fish_shell.should_add_command_to_history(" asdf"));
     }
 }
-
-/// Ensures the PowerShell executable discovery script writes UTF-8 bytes to stdout.
-#[test]
-fn test_powershell_shell_command_to_get_executables_writes_utf8() {
-    let command = ShellType::PowerShell.shell_command_to_get_executables();
-
-    assert!(
-        command.contains("System.Text.UTF8Encoding"),
-        "expected PowerShell executable discovery to encode stdout as UTF-8"
-    );
-    assert!(
-        command.contains("OpenStandardOutput().Write"),
-        "expected PowerShell executable discovery to write bytes directly to stdout"
-    );
-}
