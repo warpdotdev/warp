@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::repositories::stub_git_repository;
-use crate::repository::RepositorySubscriber;
+use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
 use crate::watcher::{DirectoryWatcher, TaskQueue};
 use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
 use futures::channel::mpsc;
@@ -394,6 +394,124 @@ fn test_is_git_internal_path() {
     // Non-git files should not be detected
     assert!(!is_git_internal_path(Path::new("/repo/src/main.rs")));
     assert!(!is_git_internal_path(Path::new("/repo/README.md")));
+}
+
+#[test]
+fn test_remote_tracking_ref_routes_only_to_repos_tracking_that_ref() {
+    VirtualFS::test("remote_tracking_ref_routes", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+        vfs.mkdir("repo/.git/worktrees");
+        vfs.mkdir("repo/.git/worktrees/wt");
+        vfs.mkdir("repo/.git/refs/remotes");
+        vfs.mkdir("repo/.git/refs/remotes/origin");
+        vfs.mkdir("wt");
+        vfs.with_files(vec![
+            Stub::FileWithContent("repo/.git/refs/remotes/origin/main", "abc123"),
+            Stub::FileWithContent("repo/.git/refs/remotes/origin/feature", "def456"),
+            Stub::FileWithContent("repo/.git/worktrees/wt/HEAD", "ref: refs/heads/feature"),
+        ]);
+
+        let repo_path = dirs.tests().join("repo");
+        let worktree_path = dirs.tests().join("wt");
+        let external_git_dir = dirs.tests().join("repo/.git/worktrees/wt");
+        let main_remote_ref_path = dirs.tests().join("repo/.git/refs/remotes/origin/main");
+        let feature_remote_ref_path = dirs.tests().join("repo/.git/refs/remotes/origin/feature");
+
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+
+            let main_repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory(
+                        StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                        ctx,
+                    )
+                })
+                .unwrap();
+            let worktree_repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory_with_git_dir(
+                        StandardizedPath::from_local_canonicalized(&worktree_path).unwrap(),
+                        Some(
+                            StandardizedPath::from_local_canonicalized(&external_git_dir).unwrap(),
+                        ),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            main_repo_handle.update(&mut app, |repo, _| {
+                repo.update_tracked_remote_ref(TrackedRemoteRef::from_full_ref_name(
+                    "refs/remotes/origin/main",
+                ));
+            });
+            worktree_repo_handle.update(&mut app, |repo, _| {
+                repo.update_tracked_remote_ref(TrackedRemoteRef::from_full_ref_name(
+                    "refs/remotes/origin/feature",
+                ));
+            });
+
+            let main_affected = watcher_handle.update(&mut app, |watcher, ctx| {
+                watcher.find_repos_for_git_event(&main_remote_ref_path, ctx)
+            });
+            assert_eq!(main_affected, vec![main_repo_handle.clone()]);
+
+            let feature_affected = watcher_handle.update(&mut app, |watcher, ctx| {
+                watcher.find_repos_for_git_event(&feature_remote_ref_path, ctx)
+            });
+            assert_eq!(feature_affected, vec![worktree_repo_handle]);
+        });
+    });
+}
+
+#[test]
+fn test_common_config_routes_to_repos_sharing_common_git_dir() {
+    VirtualFS::test("common_config_routes", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+        vfs.mkdir("repo/.git/worktrees");
+        vfs.mkdir("repo/.git/worktrees/wt");
+        vfs.mkdir("wt");
+        vfs.with_files(vec![Stub::FileWithContent(
+            "repo/.git/worktrees/wt/HEAD",
+            "ref: refs/heads/feature",
+        )]);
+
+        let repo_path = dirs.tests().join("repo");
+        let worktree_path = dirs.tests().join("wt");
+        let external_git_dir = dirs.tests().join("repo/.git/worktrees/wt");
+        let common_config_path = dirs.tests().join("repo/.git/config");
+
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+
+            let main_repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory(
+                        StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                        ctx,
+                    )
+                })
+                .unwrap();
+            let worktree_repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory_with_git_dir(
+                        StandardizedPath::from_local_canonicalized(&worktree_path).unwrap(),
+                        Some(
+                            StandardizedPath::from_local_canonicalized(&external_git_dir).unwrap(),
+                        ),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            let affected = watcher_handle.update(&mut app, |watcher, ctx| {
+                watcher.find_repos_for_git_event(&common_config_path, ctx)
+            });
+            assert_eq!(affected.len(), 2);
+            assert!(affected.contains(&main_repo_handle));
+            assert!(affected.contains(&worktree_repo_handle));
+        });
+    });
 }
 
 #[test]

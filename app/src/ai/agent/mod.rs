@@ -83,6 +83,8 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
+    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
     FollowUpSubmitted {
@@ -107,6 +109,7 @@ impl Display for CancellationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CancellationReason::ManuallyCancelled => write!(f, "manual cancellation"),
+            CancellationReason::AutomaticCloudHandoff => write!(f, "automatic cloud handoff"),
             CancellationReason::FollowUpSubmitted { .. } => write!(f, "follow-up submission"),
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),
@@ -616,7 +619,10 @@ impl AIAgentOutput {
 /// Represents user visible errors.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum RenderableAIError {
-    QuotaLimit,
+    QuotaLimit {
+        #[serde(default)]
+        user_display_message: Option<String>,
+    },
     ServerOverloaded,
     InternalWarpError,
     ContextWindowExceeded(String),
@@ -660,7 +666,11 @@ impl RenderableAIError {
 impl From<&AIApiError> for RenderableAIError {
     fn from(value: &AIApiError) -> Self {
         match value {
-            AIApiError::QuotaLimit => Self::QuotaLimit,
+            AIApiError::QuotaLimit {
+                user_display_message,
+            } => Self::QuotaLimit {
+                user_display_message: user_display_message.clone(),
+            },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
@@ -674,7 +684,15 @@ impl From<&AIApiError> for RenderableAIError {
 impl Display for RenderableAIError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::QuotaLimit => write!(f, "Quota limit reached."),
+            Self::QuotaLimit {
+                user_display_message,
+            } => {
+                if let Some(message) = user_display_message {
+                    write!(f, "{message}")
+                } else {
+                    write!(f, "Quota limit reached.")
+                }
+            }
             Self::ServerOverloaded => {
                 write!(f, "Warp is currently overloaded. Please try again later.")
             }
@@ -738,6 +756,7 @@ impl ProgrammingLanguage {
                 "css" => Some("css"),
                 "c" => Some("c"),
                 "json" => Some("json"),
+                "jq" => Some("jq"),
                 "hcl" | "terraform" | "tf" => Some("hcl"),
                 "lua" => Some("lua"),
                 "ruby" | "rb" => Some("rb"),
@@ -1519,9 +1538,12 @@ pub enum SubagentType {
     Summarization,
     ConversationSearch {
         query: Option<String>,
-        /// The ID of the conversation being searched. None when searching the
-        /// current conversation.
+        /// Search targets are mutually exclusive; at most one of `conversation_id` or
+        /// `agent_run_id` should be populated for a single conversation search subagent.
+        /// The ID of the conversation being searched.
         conversation_id: Option<String>,
+        /// The ID of the agent run being searched.
+        agent_run_id: Option<String>,
     },
     WarpDocumentationSearch,
     Unknown,

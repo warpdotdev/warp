@@ -1,3 +1,4 @@
+use crate::date_time::parse_rfc3339;
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 
@@ -199,13 +200,6 @@ pub struct ListTasksArgs {
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
-}
-
-/// Parse an RFC 3339 timestamp into a UTC `DateTime`.
-fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, String> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| format!("invalid RFC 3339 timestamp '{s}': {e}"))
 }
 
 /// Run state values accepted by `--state`. Repeatable; multiple values match any of them.

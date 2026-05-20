@@ -3,6 +3,8 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use session_sharing_protocol::common::SessionId;
+use url::Url;
 use warp_cli::agent::Harness;
 use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
@@ -77,6 +79,16 @@ pub struct HarnessConfig {
     /// The model to use with this harness. None means use the harness default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Optional reasoning level for harnesses that support it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessModelConfig {
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<String>,
 }
 
 impl HarnessConfig {
@@ -85,8 +97,36 @@ impl HarnessConfig {
         Self {
             harness_type,
             model_id: None,
+            reasoning_level: None,
         }
     }
+
+    pub fn model_config(&self) -> Option<HarnessModelConfig> {
+        self.model_id
+            .as_ref()
+            .filter(|id| !id.is_empty())
+            .map(|model_id| HarnessModelConfig {
+                model_id: model_id.clone(),
+                reasoning_level: self.reasoning_level.clone(),
+            })
+    }
+}
+
+fn parse_session_id_from_link(session_link: &str) -> Option<SessionId> {
+    Url::parse(session_link).ok().and_then(|url| {
+        url.path_segments()
+            .into_iter()
+            .flatten()
+            .last()
+            .and_then(|segment| segment.parse().ok())
+    })
+}
+
+fn parse_execution_session_id(execution: RunExecution<'_>) -> Option<SessionId> {
+    execution
+        .session_id
+        .and_then(|id| id.parse().ok())
+        .or_else(|| execution.session_link.and_then(parse_session_id_from_link))
 }
 
 fn serialize_harness<S: Serializer>(harness: &Harness, serializer: S) -> Result<S::Ok, S::Error> {
@@ -107,6 +147,9 @@ pub struct HarnessAuthSecretsConfig {
     /// Name of a managed secret for Claude Code harness authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_auth_secret_name: Option<String>,
+    /// Name of a managed secret for Codex harness authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_auth_secret_name: Option<String>,
 }
 
 impl AgentConfigSnapshot {
@@ -243,7 +286,9 @@ pub struct AmbientAgentTask {
     pub source: Option<AgentSource>,
     pub session_id: Option<String>,
     pub session_link: Option<String>,
-    pub creator: Option<TaskCreatorInfo>,
+    pub creator: Option<TaskPrincipalInfo>,
+    #[serde(default)]
+    pub executor: Option<TaskPrincipalInfo>,
     pub conversation_id: Option<String>,
     pub request_usage: Option<RequestUsage>,
     pub is_sandbox_running: bool,
@@ -277,6 +322,17 @@ pub struct RunExecution<'a> {
     pub is_sandbox_running: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmbientAgentLiveSessionState {
+    /// The task does not currently have a running execution with a joinable session signal.
+    Inactive,
+    /// The task has a running execution, but this client does not have a parsed
+    /// shared-session id it can attach to.
+    ActiveUnattachable,
+    /// The task has a running execution and this client can attach to its shared session.
+    Attachable { session_id: SessionId },
+}
+
 impl RunExecution<'_> {
     pub fn has_joinable_session(&self) -> bool {
         self.session_id.is_some() || self.session_link.is_some()
@@ -304,9 +360,35 @@ pub struct TaskAttachment {
     pub mime_type: String,
 }
 
+/// Returns the trimmed orchestrator agent name, or `None` when empty / whitespace-only.
+pub fn normalize_orchestrator_agent_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 impl AmbientAgentTask {
     pub fn run_id(&self) -> AmbientAgentTaskId {
         self.task_id
+    }
+
+    /// Returns the short label for this task: trimmed `agent_config_snapshot.name`,
+    /// trimmed `title`, or `"Agent"`.
+    pub fn display_name(&self) -> &str {
+        if let Some(name) = self
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|c| c.name.as_deref())
+        {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+        let trimmed_title = self.title.trim();
+        if !trimmed_title.is_empty() {
+            return trimmed_title;
+        }
+        "Agent"
     }
 
     pub fn conversation_id(&self) -> Option<&str> {
@@ -331,6 +413,23 @@ impl AmbientAgentTask {
         }
     }
 
+    /// Returns the canonical live-session state for this task from the client's perspective.
+    ///
+    /// This separates task liveness from attachability: an in-progress task can have an active
+    /// execution without a usable shared-session id, and callers should not treat that as a
+    /// completed transcript/follow-up state.
+    pub fn active_live_session_state(&self) -> AmbientAgentLiveSessionState {
+        let execution = self.active_run_execution();
+        if self.state != AmbientAgentTaskState::InProgress || !execution.is_active() {
+            return AmbientAgentLiveSessionState::Inactive;
+        }
+
+        match parse_execution_session_id(execution) {
+            Some(session_id) => AmbientAgentLiveSessionState::Attachable { session_id },
+            None => AmbientAgentLiveSessionState::ActiveUnattachable,
+        }
+    }
+
     pub fn active_execution_conversation_id(&self) -> Option<&str> {
         if self.has_active_execution() {
             self.conversation_id()
@@ -351,11 +450,13 @@ impl AmbientAgentTask {
         self.is_terminal_run_state() && !self.has_active_execution()
     }
 
-    /// Total credits used (inference + compute).
+    /// Total credits used (inference + compute + platform).
     pub fn credits_used(&self) -> Option<f32> {
-        self.active_run_execution()
-            .request_usage
-            .map(|u| (u.inference_cost.unwrap_or(0.0) + u.compute_cost.unwrap_or(0.0)) as f32)
+        self.active_run_execution().request_usage.map(|u| {
+            (u.inference_cost.unwrap_or(0.0)
+                + u.compute_cost.unwrap_or(0.0)
+                + u.platform_cost.unwrap_or(0.0)) as f32
+        })
     }
 
     /// Duration from started_at to updated_at.
@@ -368,6 +469,11 @@ impl AmbientAgentTask {
     /// Creator's display name, if available.
     pub fn creator_display_name(&self) -> Option<String> {
         self.creator.as_ref().and_then(|c| c.display_name.clone())
+    }
+
+    /// Principal the run executed as, formatted for user-facing surfaces.
+    pub fn executor_display_name(&self) -> Option<String> {
+        self.executor.as_ref().and_then(|e| e.display_name.clone())
     }
 
     /// Returns true if the underlying session for the ambient agent is no longer running.
@@ -498,7 +604,7 @@ impl std::fmt::Display for AmbientAgentTaskState {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct TaskCreatorInfo {
+pub struct TaskPrincipalInfo {
     #[serde(rename = "type")]
     pub creator_type: String,
     pub uid: String,
@@ -508,12 +614,38 @@ pub struct TaskCreatorInfo {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct TaskStatusMessage {
     pub message: String,
+    #[serde(default, alias = "errorCode")]
+    pub error_code: Option<TaskStatusErrorCode>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatusErrorCode {
+    #[serde(alias = "ENVIRONMENT_SETUP_FAILED")]
+    EnvironmentSetupFailed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl TaskStatusErrorCode {
+    pub fn is_environment_setup_failure(&self) -> bool {
+        matches!(self, TaskStatusErrorCode::EnvironmentSetupFailed)
+    }
+}
+
+impl TaskStatusMessage {
+    pub fn is_environment_setup_failure(&self) -> bool {
+        self.error_code
+            .as_ref()
+            .is_some_and(TaskStatusErrorCode::is_environment_setup_failure)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct RequestUsage {
     pub inference_cost: Option<f64>,
     pub compute_cost: Option<f64>,
+    pub platform_cost: Option<f64>,
 }
 
 /// Cancel an ambient agent task and show a toast with the result.
@@ -537,3 +669,20 @@ pub fn cancel_task_with_toast<V: View>(task_id: AmbientAgentTaskId, ctx: &mut Vi
         },
     );
 }
+
+/// Cancel an ambient agent task without surfacing a toast to the user.
+pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut ViewContext<V>) {
+    let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+    ctx.spawn(
+        async move { ai_client.cancel_ambient_agent_task(&task_id).await },
+        move |_view, result, _| {
+            if let Err(e) = result {
+                log::error!("Failed to cancel task: {e}");
+            }
+        },
+    );
+}
+
+#[cfg(test)]
+#[path = "task_tests.rs"]
+mod tests;

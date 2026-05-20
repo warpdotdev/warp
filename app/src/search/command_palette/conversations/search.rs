@@ -178,36 +178,15 @@ pub trait ConversationSearcher {
     ) -> anyhow::Result<Vec<QueryResult<SearcherAction>>>;
 }
 
-#[derive(PartialEq)]
-pub enum ConversationType {
-    All,
-    Historical,
-}
-
-pub struct FuzzyConversationSearcher {
-    filter: ConversationType,
-}
+pub struct FuzzyConversationSearcher;
 
 impl FuzzyConversationSearcher {
     pub fn new() -> Self {
-        Self {
-            filter: ConversationType::All,
-        }
-    }
-
-    pub fn historical() -> Self {
-        Self {
-            filter: ConversationType::Historical,
-        }
+        Self
     }
 
     pub fn searchable_conversations(&self, app: &AppContext) -> Vec<ConversationNavigationData> {
-        match self.filter {
-            ConversationType::Historical => {
-                ConversationNavigationData::historical_conversations(app)
-            }
-            ConversationType::All => ConversationNavigationData::all_conversations(app),
-        }
+        ConversationNavigationData::all_conversations(app)
     }
 }
 

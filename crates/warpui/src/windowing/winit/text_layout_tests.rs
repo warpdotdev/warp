@@ -592,3 +592,146 @@ fn all_lines_bounded(frame: &TextFrame, frame_width: f32) -> bool {
         all_bounded && current_bounded
     })
 }
+
+#[test]
+fn test_softwrap_caret_positions_are_contiguous() -> Result<()> {
+    let (font_db, font_family) = init_fonts();
+
+    // A single paragraph (no newlines) long enough to soft-wrap at 200px.
+    let text = "The quick brown fox jumps over the lazy dog and then keeps running onward";
+    let frame = font_db.text_layout_system().layout_text(
+        text,
+        LineStyle {
+            font_size: FONT_SIZE,
+            line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+        },
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
+        )],
+        200.,
+        f32::MAX,
+        TextAlignment::Left,
+        None,
+    );
+
+    // Should wrap onto multiple lines.
+    assert!(
+        frame.lines().len() >= 2,
+        "Expected at least 2 lines but got {}",
+        frame.lines().len()
+    );
+
+    // Collect all caret position start_offsets across all lines.
+    let all_caret_starts: Vec<usize> = frame
+        .lines()
+        .iter()
+        .flat_map(|line| line.caret_positions.iter().map(|c| c.start_offset))
+        .collect();
+
+    // The caret positions should be monotonically non-decreasing across all lines.
+    // Before the fix, the second/third wrapped line's carets would reset to 0.
+    for window in all_caret_starts.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "Caret positions are not monotonically non-decreasing: {} > {} (all: {:?})",
+            window[0],
+            window[1],
+            all_caret_starts
+        );
+    }
+
+    // The first caret should start at 0 and the last should correspond to near the end of the text.
+    assert_eq!(
+        *all_caret_starts.first().unwrap(),
+        0,
+        "First caret should start at 0"
+    );
+    let last_caret = frame
+        .lines()
+        .last()
+        .unwrap()
+        .caret_positions
+        .last()
+        .unwrap();
+    assert!(
+        last_caret.last_offset > 0,
+        "Last caret offset should be > 0"
+    );
+
+    // Each wrapped line's first caret should pick up where the previous line left off.
+    for i in 1..frame.lines().len() {
+        let prev_line = &frame.lines()[i - 1];
+        let curr_line = &frame.lines()[i];
+        if let (Some(prev_last), Some(curr_first)) = (
+            prev_line.caret_positions.last(),
+            curr_line.caret_positions.first(),
+        ) {
+            assert!(
+                curr_first.start_offset > prev_last.start_offset,
+                "Line {}'s first caret ({}) should be after line {}'s last caret ({})",
+                i,
+                curr_first.start_offset,
+                i - 1,
+                prev_last.start_offset
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_softwrap_caret_positions_multi_paragraph() -> Result<()> {
+    let (font_db, font_family) = init_fonts();
+
+    // Two paragraphs, each long enough to soft-wrap.
+    let text = "The quick brown fox jumps over the lazy dog repeatedly\nAnother paragraph that \
+        also wraps around when narrow";
+    let frame = font_db.text_layout_system().layout_text(
+        text,
+        LineStyle {
+            font_size: FONT_SIZE,
+            line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+        },
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
+        )],
+        200.,
+        f32::MAX,
+        TextAlignment::Left,
+        None,
+    );
+
+    // Should have multiple lines from wrapping.
+    assert!(
+        frame.lines().len() >= 3,
+        "Expected at least 3 lines but got {}",
+        frame.lines().len()
+    );
+
+    // Caret positions should be monotonically non-decreasing across ALL lines (including across
+    // the paragraph boundary).
+    let all_caret_starts: Vec<usize> = frame
+        .lines()
+        .iter()
+        .flat_map(|line| line.caret_positions.iter().map(|c| c.start_offset))
+        .collect();
+
+    for window in all_caret_starts.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "Caret positions are not monotonically non-decreasing across paragraphs: {} > {} (all: {:?})",
+            window[0],
+            window[1],
+            all_caret_starts
+        );
+    }
+
+    Ok(())
+}

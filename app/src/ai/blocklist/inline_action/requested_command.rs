@@ -23,6 +23,7 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{AIAgentActionResult, AIAgentActionType};
 use warpui::{EntityId, EventContext};
 
@@ -1088,6 +1089,11 @@ impl RequestedCommandView {
                             appearance.theme().surface_2(),
                         ));
                     }
+                } else if requested_command_block.is_some_and(|block| block.finished()) {
+                    // If a finished command block exists but there's no action status,
+                    // treat the same as a finished command (normal text styling).
+                    title = self.get_header_title_text().into();
+                    font_override = Some(appearance.monospace_font_family());
                 } else {
                     // If there is no action status and response is not streaming, it was cancelled
                     // mid-flight.
@@ -1220,19 +1226,27 @@ impl RequestedCommandView {
                 ));
             }
             Some(AIActionStatus::Finished(result)) => {
-                // Determine if command should be expandable based on whether it actually executed
-                let should_be_expandable = match &result.result {
-                    AIAgentActionResultType::RequestCommandOutput(command_result) => {
-                        match command_result {
-                            // All completed commands are expandable (including interrupted ones)
-                            RequestCommandOutputResult::Completed { .. } => true,
-                            // Cancelled before execution are not expandable
-                            RequestCommandOutputResult::CancelledBeforeExecution => false,
-                            _ => result.result.is_successful() || result.result.is_failed(),
+                // Determine if command should be expandable based on whether it actually executed.
+                // If a finished command block exists for this action, the command definitely ran,
+                // so it should be expandable regardless of the action result type. This handles
+                // cases where the action result is stale (e.g. a LongRunningCommandSnapshot
+                // converted to CancelledBeforeExecution on restore, even though the command
+                // completed successfully).
+                let has_finished_command_block =
+                    requested_command_block.is_some_and(|block| block.finished());
+                let should_be_expandable = has_finished_command_block
+                    || match &result.result {
+                        AIAgentActionResultType::RequestCommandOutput(command_result) => {
+                            match command_result {
+                                // All completed commands are expandable (including interrupted ones)
+                                RequestCommandOutputResult::Completed { .. } => true,
+                                // Cancelled before execution are not expandable
+                                RequestCommandOutputResult::CancelledBeforeExecution => false,
+                                _ => result.result.is_successful() || result.result.is_failed(),
+                            }
                         }
-                    }
-                    _ => result.result.is_successful() || result.result.is_failed(),
-                };
+                        _ => result.result.is_successful() || result.result.is_failed(),
+                    };
 
                 if should_be_expandable {
                     config = config.with_interaction_mode(InteractionMode::ManuallyExpandable(
@@ -1255,7 +1269,15 @@ impl RequestedCommandView {
                     ));
                 }
             }
-            _ => (),
+            _ => {
+                // Even without a known action status, if a finished command block exists
+                // for this action, the command ran and the header should be expandable.
+                if requested_command_block.is_some_and(|block| block.finished()) {
+                    config = config.with_interaction_mode(InteractionMode::ManuallyExpandable(
+                        self.get_expansion_config(requested_command_block, app),
+                    ));
+                }
+            }
         };
 
         config.render(app)
@@ -1491,23 +1513,26 @@ impl View for RequestedCommandView {
         let should_remove_bottom_margin = is_rendered_above_expanded_command_block
             || ((self.action_type.is_requested_command() || self.action_type.is_mcp_tool())
                 && is_last_output_message_in_output
-                && BlocklistAIHistoryModel::as_ref(app)
+                && (BlocklistAIHistoryModel::as_ref(app)
                     .conversation(&self.client_ids.conversation_id)
                     .is_some_and(|conversation| {
-                        let mut exchanges = conversation.root_task_exchanges();
-                        while let Some(exchange) = exchanges.next() {
-                            if exchange.id == self.client_ids.client_exchange_id {
-                                // If the next exchange doesn't contain a user query, don't render bottom margin for continuity.
-                                return exchanges.next().is_some_and(|exchange| {
+                        // Prevents an issue where the bottom margin is removed when the requested command is the last message and we cancel it.
+                        // We want to keep the margin in this case so that there's visual separation between the cancelled command and footer.
+                        conversation.status() != &ConversationStatus::Cancelled
+                            // If the next exchange doesn't contain a user query, don't render bottom margin for continuity.
+                            && conversation
+                                .root_task_exchanges()
+                                .skip_while(|exchange| {
+                                    exchange.id != self.client_ids.client_exchange_id
+                                })
+                                .nth(1)
+                                .is_some_and(|exchange| {
                                     !exchange
                                         .input
                                         .iter()
                                         .any(|input| input.user_query().is_some())
-                                });
-                            }
-                        }
-                        false
-                    })
+                                })
+                    }))
                 && !is_input_pinned_to_top);
 
         let container = Container::new(content.finish())

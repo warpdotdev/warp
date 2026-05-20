@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::Duration;
 use warpui::{App, ModelHandle};
 
+use crate::auth::AuthStateProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
@@ -38,6 +39,16 @@ fn add_user_workspaces_with_workspace(app: &mut App, workspace: Workspace) {
 }
 
 fn add_request_usage_model(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    add_request_usage_model_without_auth(app)
+}
+
+fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
+    add_request_usage_model_without_auth(app)
+}
+
+fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
@@ -557,6 +568,37 @@ fn test_has_any_ai_remaining_true_with_byo_key_and_no_workspace() {
             assert!(
                 model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be true when user has a BYO key but no workspace",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::SoloUserByok.override_enabled(true);
+
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model_for_anonymous_users(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_openai_key(Some("test-key".to_string()), ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
+                "expected is_byo_api_key_enabled to be false for anonymous Firebase users even with SoloUserByok enabled",
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false for anonymous Firebase user even with BYO key and SoloUserByok enabled",
             );
         });
     });

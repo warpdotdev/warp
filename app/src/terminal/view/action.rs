@@ -455,9 +455,8 @@ pub enum TerminalAction {
     StopAgentConversation {
         conversation_id: AIConversationId,
     },
-    /// Kill a child agent conversation: stop it (if running), then remove
-    /// the conversation from local history. Cloud-side cleanup is intentionally
-    /// not done in V2 — the user is removing it from their local view.
+    /// Kill a child agent conversation: stop it if running, best-effort cancel
+    /// any backing cloud task, then remove the conversation from local history.
     /// Dispatched from the orchestration pill bar's 3-dot overflow menu
     /// ("Kill agent").
     KillAgentConversation {

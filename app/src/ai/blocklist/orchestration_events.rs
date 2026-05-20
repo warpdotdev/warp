@@ -101,6 +101,8 @@ pub enum OrchestrationEventServiceEvent {
 
 /// Synchronous state manager for orchestration event queuing, delivery
 /// tracking, lifecycle dispatch, and readiness detection.
+// TODO(QUALITY-733): Remove the legacy v1 orchestration event-service paths once v2 delivery no
+// longer reuses this service for local queueing and controller injection.
 pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
@@ -191,6 +193,65 @@ impl OrchestrationEventService {
             LifecycleEventType::Errored,
             result,
         );
+    }
+
+    pub fn emit_child_killed(
+        &mut self,
+        child_conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> SendEventResult {
+        let (source_agent_id, parent_conversation_id) = {
+            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(child_conversation) = history_model.conversation(&child_conversation_id)
+            else {
+                return SendEventResult::Error("Child conversation not found".to_string());
+            };
+            if !child_conversation.status().is_in_progress() {
+                return SendEventResult::LifecycleDropped;
+            }
+            let Some(source_agent_id) = child_conversation.orchestration_agent_id() else {
+                return SendEventResult::Error(
+                    "Child conversation has no agent identifier".to_string(),
+                );
+            };
+            let parent_conversation_id =
+                child_conversation.parent_conversation_id().or_else(|| {
+                    child_conversation
+                        .parent_agent_id()
+                        .and_then(|agent_id| history_model.conversation_id_for_agent_id(agent_id))
+                });
+            let Some(parent_conversation_id) = parent_conversation_id else {
+                return SendEventResult::LifecycleDropped;
+            };
+            (source_agent_id, parent_conversation_id)
+        };
+
+        let occurred_at = chrono::Utc::now();
+        let occurred_at_proto = prost_types::Timestamp {
+            seconds: occurred_at.timestamp(),
+            nanos: occurred_at.timestamp_subsec_nanos() as i32,
+        };
+        let event_id = Uuid::new_v4().to_string();
+        let event = build_lifecycle_event(
+            event_id.clone(),
+            source_agent_id.clone(),
+            LifecycleEventType::Cancelled,
+            occurred_at_proto,
+            &LifecycleEventDetailPayload::default(),
+        );
+        self.enqueue_lifecycle_event(
+            parent_conversation_id,
+            PendingEvent {
+                event_id,
+                source_agent_id,
+                attempt_count: 0,
+                detail: PendingEventDetail::Lifecycle { event },
+            },
+        );
+        ctx.emit(OrchestrationEventServiceEvent::EventsReady {
+            conversation_id: parent_conversation_id,
+        });
+        SendEventResult::LifecycleSent
     }
 
     fn dispatch_lifecycle_event(
@@ -430,6 +491,8 @@ impl OrchestrationEventService {
         source_conversation_id: AIConversationId,
         ctx: &ModelContext<Self>,
     ) {
+        // TODO(QUALITY-733): Remove restored v1 lifecycle subscriptions once legacy
+        // orchestration lifecycle dispatch is deleted.
         if FeatureFlag::OrchestrationV2.is_enabled() {
             return;
         }
@@ -496,6 +559,8 @@ impl OrchestrationEventService {
         if FeatureFlag::OrchestrationV2.is_enabled() {
             return;
         }
+        // TODO(QUALITY-733): Remove legacy v1 lifecycle dispatch once all child-agent lifecycle
+        // events are delivered through the v2 event log.
 
         #[allow(deprecated)]
         match (previous_status.as_ref(), &current_status) {

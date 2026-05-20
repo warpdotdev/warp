@@ -11,6 +11,7 @@ use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
 use itertools::Itertools;
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::THREADPOOL;
@@ -231,7 +232,8 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
     if !is_file_parsable(path)? {
         return Err(anyhow!("File exceeds max file size limit for parsing"));
     }
-    let Some(language) = languages::language_by_filename(path) else {
+    let standardized_path = StandardizedPath::try_from_local(path)?;
+    let Some(language) = languages::language_by_filename(&standardized_path) else {
         return Err(anyhow!("Language unsupported for file {:?}", path));
     };
     let content = fs::read_to_string(path)?;

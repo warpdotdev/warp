@@ -11,7 +11,6 @@ use super::{
 };
 use crate::auth::AuthStateProvider;
 use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
-use crate::util::truncation::truncate_from_end;
 use crate::{
     appearance::Appearance,
     modal::{Modal, ModalEvent, ModalViewState},
@@ -22,11 +21,13 @@ use chrono::{DateTime, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
+use warpui::text_layout::ClipConfig;
 use warpui::{
     elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty,
-        Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisSize, MouseStateHandle,
-        Padding, ParentElement, Shrinkable, Text,
+        resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
+        CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
+        HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
+        ResizableStateHandle, Shrinkable, Text,
     },
     fonts::{Properties, Weight},
     ui_components::{
@@ -39,6 +40,54 @@ use warpui::{
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
 const API_KEY_DOCS_URL: &str = "https://docs.warp.dev/reference/cli/api-keys";
+const API_KEY_NAME_COLUMN_DEFAULT_WIDTH: f32 = 220.;
+const API_KEY_NAME_COLUMN_MIN_WIDTH: f32 = 120.;
+const API_KEY_KEY_COLUMN_WIDTH: f32 = 120.;
+const API_KEY_METADATA_COLUMN_MIN_WIDTH: f32 = 80.;
+const API_KEY_ACTION_COLUMN_MIN_WIDTH: f32 = 48.;
+const API_KEY_TABLE_MIN_NON_RESIZABLE_COLUMNS_WIDTH: f32 = API_KEY_KEY_COLUMN_WIDTH
+    + (API_KEY_METADATA_COLUMN_MIN_WIDTH * 3.)
+    + API_KEY_ACTION_COLUMN_MIN_WIDTH;
+const API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH: f32 = API_KEY_METADATA_COLUMN_MIN_WIDTH;
+const API_KEY_TABLE_LAYOUT_SAFETY_PADDING: f32 = 16.;
+const SETTINGS_SIDEBAR_WIDTH_DEFAULT: f32 = 200.;
+const SETTINGS_SIDEBAR_WIDTH_WITH_FOOTER: f32 = 248.;
+const SETTINGS_SECTION_BORDER_WIDTH: f32 = 1.;
+const SETTINGS_PAGE_HORIZONTAL_PADDING: f32 = 56.;
+const SETTINGS_PAGE_MAX_CONTENT_WIDTH: f32 = 800.;
+fn settings_sidebar_width_for_platform_page() -> f32 {
+    if FeatureFlag::SettingsFile.is_enabled() {
+        SETTINGS_SIDEBAR_WIDTH_WITH_FOOTER
+    } else {
+        SETTINGS_SIDEBAR_WIDTH_DEFAULT
+    }
+}
+
+fn api_key_table_width_chrome() -> f32 {
+    settings_sidebar_width_for_platform_page()
+        + SETTINGS_SECTION_BORDER_WIDTH
+        + SETTINGS_PAGE_HORIZONTAL_PADDING
+        + API_KEY_TABLE_LAYOUT_SAFETY_PADDING
+}
+
+fn api_key_table_min_non_resizable_columns_width(show_scope_column: bool) -> f32 {
+    if show_scope_column {
+        API_KEY_TABLE_MIN_NON_RESIZABLE_COLUMNS_WIDTH + API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH
+    } else {
+        API_KEY_TABLE_MIN_NON_RESIZABLE_COLUMNS_WIDTH
+    }
+}
+
+fn compute_api_key_name_column_max_width(
+    window_width: f32,
+    min_width: f32,
+    min_non_resizable_columns_width: f32,
+    table_width_chrome: f32,
+) -> f32 {
+    let available_table_width =
+        (window_width - table_width_chrome).clamp(0., SETTINGS_PAGE_MAX_CONTENT_WIDTH);
+    (available_table_width - min_non_resizable_columns_width).max(min_width)
+}
 
 #[derive(Clone, Copy)]
 pub enum PlatformPageViewEvent {
@@ -56,6 +105,7 @@ pub struct PlatformPageView {
     page: PageType<Self>,
     create_api_key_modal_state: CreateApiKeyModalViewState,
     api_keys: Vec<APIKeyProperties>,
+    api_key_table_column_widths: ApiKeyTableColumnWidths,
     expire_buttons: HashMap<ApiKeyUid, ViewHandle<ExpireApiKeyButton>>,
     is_loading: bool,
     documentation_link_highlight: HighlightedHyperlink,
@@ -164,6 +214,7 @@ impl PlatformPageView {
                 create_api_key_modal_view,
             )),
             api_keys: vec![],
+            api_key_table_column_widths: ApiKeyTableColumnWidths::default(),
             expire_buttons: HashMap::new(),
             is_loading: true,
             documentation_link_highlight: HighlightedHyperlink::default(),
@@ -344,6 +395,30 @@ impl APIKeyProperties {
     }
 }
 
+struct ApiKeyTableColumnWidths {
+    name: ResizableStateHandle,
+}
+
+impl Default for ApiKeyTableColumnWidths {
+    fn default() -> Self {
+        Self {
+            name: resizable_state_handle(API_KEY_NAME_COLUMN_DEFAULT_WIDTH),
+        }
+    }
+}
+
+impl ApiKeyTableColumnWidths {
+    fn width(state_handle: &ResizableStateHandle) -> f32 {
+        state_handle
+            .lock()
+            .expect("API key table column width handle should lock")
+            .size()
+    }
+
+    fn name_width(&self) -> f32 {
+        Self::width(&self.name)
+    }
+}
 #[derive(Default)]
 struct PlatformPageWidget {
     create_api_key_button_mouse_state: MouseStateHandle,
@@ -414,6 +489,7 @@ impl PlatformPageWidget {
                     Text::new_inline("Oz Cloud API Keys", appearance.ui_font_family(), 16.)
                         .with_style(Properties::default().weight(Weight::Bold))
                         .with_color(appearance.theme().active_ui_text_color().into())
+                        .with_clip(ClipConfig::end())
                         .finish(),
                 )
                 .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish())
@@ -446,22 +522,39 @@ impl PlatformPageWidget {
                 col.add_child(self.render_zero_state(appearance));
             }
         } else {
-            col.add_child(self.render_api_keys_header(appearance));
+            col.add_child(self.render_api_keys_header(appearance, view));
             col.add_child(self.render_api_keys_rows(appearance, view, api_keys));
         }
 
         col.finish()
     }
-
-    fn render_api_keys_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_api_keys_header(
+        &self,
+        appearance: &Appearance,
+        view: &PlatformPageView,
+    ) -> Box<dyn Element> {
+        let table_width_chrome = api_key_table_width_chrome();
+        let show_scope_column =
+            FeatureFlag::TeamApiKeys.is_enabled() || FeatureFlag::NamedAgents.is_enabled();
+        let min_non_resizable_columns_width =
+            api_key_table_min_non_resizable_columns_width(show_scope_column);
         let mut header_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max);
-        header_row
-            .add_child(Expanded::new(1., self.render_header_cell(appearance, "Name")).finish());
-        header_row
-            .add_child(Expanded::new(1., self.render_header_cell(appearance, "Key")).finish());
-        if FeatureFlag::TeamApiKeys.is_enabled() || FeatureFlag::NamedAgents.is_enabled() {
+        header_row.add_child(self.render_resizable_header_cell(
+            appearance,
+            "Name",
+            view.api_key_table_column_widths.name.clone(),
+            API_KEY_NAME_COLUMN_MIN_WIDTH,
+            min_non_resizable_columns_width,
+            table_width_chrome,
+        ));
+        header_row.add_child(
+            ConstrainedBox::new(self.render_header_cell(appearance, "Key"))
+                .with_width(API_KEY_KEY_COLUMN_WIDTH)
+                .finish(),
+        );
+        if show_scope_column {
             header_row.add_child(
                 Expanded::new(1., self.render_header_cell(appearance, "Scope")).finish(),
             );
@@ -480,6 +573,54 @@ impl PlatformPageWidget {
             .with_margin_top(16.)
             .with_padding_bottom(8.)
             .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
+            .finish()
+    }
+
+    fn render_resizable_header_cell(
+        &self,
+        appearance: &Appearance,
+        label: &str,
+        width_handle: ResizableStateHandle,
+        min_width: f32,
+        min_non_resizable_columns_width: f32,
+        table_width_chrome: f32,
+    ) -> Box<dyn Element> {
+        let width = width_handle
+            .lock()
+            .expect("API key header width handle should lock")
+            .size();
+        let header_cell = ConstrainedBox::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(Expanded::new(1., self.render_header_cell(appearance, label)).finish())
+                .with_child(
+                    Container::new(
+                        Text::new_inline("⋮", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                            .with_color(appearance.theme().nonactive_ui_detail().into())
+                            .finish(),
+                    )
+                    .with_padding_right(3.)
+                    .finish(),
+                )
+                .finish(),
+        )
+        .with_width(width)
+        .finish();
+        Resizable::new(width_handle, header_cell)
+            .with_dragbar_side(DragBarSide::Right)
+            .with_bounds_callback(Box::new(move |window_size| {
+                let max_width = compute_api_key_name_column_max_width(
+                    window_size.x(),
+                    min_width,
+                    min_non_resizable_columns_width,
+                    table_width_chrome,
+                );
+                (min_width, max_width)
+            }))
+            .on_resize(|ctx, _| {
+                ctx.notify();
+            })
             .finish()
     }
 
@@ -505,6 +646,7 @@ impl PlatformPageWidget {
             )
             .with_style(Properties::default().weight(Weight::Semibold))
             .with_color(appearance.theme().nonactive_ui_text_color().into())
+            .with_clip(ClipConfig::end())
             .finish(),
         )
         .with_padding(Padding::uniform(8.))
@@ -525,29 +667,28 @@ impl PlatformPageWidget {
             .expires_at
             .map(|dt| format!("{}", dt.format("%b %-d, %Y")))
             .unwrap_or_else(|| "Never".to_owned());
-
-        // Truncate long names to keep columns aligned
-        let name_display = truncate_from_end(&key.name, 21);
+        let name_column_width = view.api_key_table_column_widths.name_width();
+        let key_column_width = API_KEY_KEY_COLUMN_WIDTH;
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max);
         // TODO: use appearance.ui_font_size() instead of hardcoded 12
         row.add_child(
-            Expanded::new(
-                1.,
+            ConstrainedBox::new(
                 Container::new(
-                    Text::new_inline(name_display, appearance.ui_font_family(), 13.)
+                    Text::new_inline(key.name.clone(), appearance.ui_font_family(), 13.)
                         .with_color(appearance.theme().active_ui_text_color().into())
+                        .with_clip(ClipConfig::end())
                         .finish(),
                 )
                 .with_padding(Padding::uniform(8.))
                 .finish(),
             )
+            .with_width(name_column_width)
             .finish(),
         );
         row.add_child(
-            Expanded::new(
-                1.,
+            ConstrainedBox::new(
                 Container::new(
                     Text::new_inline(
                         format!("wk-**{}", key.key_suffix),
@@ -555,11 +696,13 @@ impl PlatformPageWidget {
                         12.,
                     )
                     .with_color(appearance.theme().active_ui_text_color().into())
+                    .with_clip(ClipConfig::end())
                     .finish(),
                 )
                 .with_padding(Padding::uniform(8.))
                 .finish(),
             )
+            .with_width(key_column_width)
             .finish(),
         );
         if FeatureFlag::TeamApiKeys.is_enabled() || FeatureFlag::NamedAgents.is_enabled() {
@@ -723,3 +866,7 @@ impl From<ViewHandle<PlatformPageView>> for SettingsPageViewHandle {
         SettingsPageViewHandle::OzCloudAPIKeys(view_handle)
     }
 }
+
+#[cfg(test)]
+#[path = "platform_page_tests.rs"]
+mod tests;

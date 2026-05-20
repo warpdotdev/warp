@@ -196,7 +196,7 @@ pub async fn scp_upload(
     remote_path: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    async {
+    let output = async {
         Command::new("scp")
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
@@ -213,16 +213,16 @@ pub async fn scp_upload(
     .with_timeout(timeout)
     .await
     .map_err(|_| anyhow!("scp timed out after {timeout:?}"))?
-    .map_err(|e| anyhow!("scp failed to execute: {e}"))
-    .and_then(|output| {
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(anyhow!(
-                "scp failed (exit {:?}): {stderr}",
-                output.status.code()
-            ))
-        }
-    })
+    .map_err(|e| anyhow!("scp failed to execute: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(anyhow!(
+            "scp failed (exit {:?}): {}",
+            output.status.code(),
+            stderr
+        ))
+    }
 }

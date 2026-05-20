@@ -53,7 +53,7 @@ use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 
 use crate::{
     code::{
-        buffer_location::BufferLocation,
+        buffer_location::LocalOrRemotePath as BufferFileLocation,
         editor::model::HoverableLink,
         footer::{CodeFooterView, CodeFooterViewEvent},
         global_buffer_model::{BufferState, GlobalBufferModel},
@@ -73,6 +73,8 @@ use pathfinder_color::ColorU;
 use repo_metadata::repositories::DetectedRepositories;
 use vim::vim::{MotionType, VimMode};
 use warp_core::ui::icons::Icon;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
 use crate::workspace::WorkspaceAction;
@@ -169,9 +171,9 @@ pub enum LocalCodeEditorEvent {
 
 /// Metadata about a file that is opened in the code view.
 #[derive(Debug, Clone)]
-enum LoadedFileMetadata {
-    /// Normal file with both FileId and path (for files that are actually opened)
-    LocalFile { id: FileId, path: PathBuf },
+struct LoadedFileMetadata {
+    id: FileId,
+    location: BufferFileLocation,
 }
 
 pub use super::diff_viewer::DisplayMode;
@@ -280,6 +282,9 @@ pub struct LocalCodeEditorView {
     was_edited: bool,
     /// Content version of the base file state.
     base_content_version: Option<ContentVersion>,
+    /// Set to `true` when a `RemoteBufferConflict` event fires for this
+    /// editor's buffer. Cleared when the user discards or overwrites.
+    has_remote_conflict: bool,
     conflict_banner_mouse_states: ConflictResolutionBannerMouseStates,
     /// Default directory to use for save dialogs when creating new files
     default_directory: Option<PathBuf>,
@@ -484,6 +489,7 @@ impl LocalCodeEditorView {
             selection_as_context_tooltip: None,
             was_edited: false,
             base_content_version: None,
+            has_remote_conflict: false,
             conflict_banner_mouse_states: Default::default(),
             default_directory: None,
             lsp_server: None,
@@ -1168,9 +1174,13 @@ impl LocalCodeEditorView {
         GlobalBufferModel::as_ref(ctx).buffer_loaded(file_id)
     }
 
-    /// Construct a new local editor view with a shared buffer.
+    /// Construct a new editor view with a shared buffer backed by the given location.
+    ///
+    /// For local files, sets the language from the file path and wires up LSP.
+    /// For remote files, sets the language from the extension and skips
+    /// local-only wiring (LSP, footer).
     pub fn new_with_global_buffer<T>(
-        path: &Path,
+        location: BufferFileLocation,
         editor_constructor: T,
         enable_diff_nav_by_default: bool,
         display_mode: Option<DisplayMode>,
@@ -1179,26 +1189,36 @@ impl LocalCodeEditorView {
     where
         T: FnOnce(BufferState, &mut ViewContext<Self>) -> ViewHandle<CodeEditorView>,
     {
-        let buffer_state = GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
-            model.open(BufferLocation::Local(path.to_path_buf()), ctx)
-        });
+        let buffer_state = GlobalBufferModel::handle(ctx)
+            .update(ctx, |model, ctx| model.open(location.clone(), ctx));
         let file_id = buffer_state.file_id;
         let editor = editor_constructor(buffer_state, ctx);
 
-        editor.update(ctx, |editor, ctx| {
-            editor.set_language_with_path(path, ctx);
-            // Rebuild layout and bootstrap syntax highlighting for the editor with existing buffer content.
-            editor.model.update(ctx, |model, ctx| {
-                model.rebuild_layout_with_syntax_highlighting(ctx)
-            });
-        });
+        match &location {
+            BufferFileLocation::Local(path) => {
+                editor.update(ctx, |editor, ctx| {
+                    editor.set_language_with_local_path(path, ctx);
+                    editor.model.update(ctx, |model, ctx| {
+                        model.rebuild_layout_with_syntax_highlighting(ctx)
+                    });
+                });
+            }
+            BufferFileLocation::Remote(remote_path) => {
+                editor.update(ctx, |editor, ctx| {
+                    editor.set_language_with_path(&remote_path.path, ctx);
+                    editor.model.update(ctx, |model, ctx| {
+                        model.rebuild_layout_with_syntax_highlighting(ctx)
+                    });
+                });
+            }
+        }
 
         let mut local_editor =
             Self::new(editor, None, enable_diff_nav_by_default, display_mode, ctx);
 
-        local_editor.metadata = Some(LoadedFileMetadata::LocalFile {
+        local_editor.metadata = Some(LoadedFileMetadata {
             id: file_id,
-            path: path.to_path_buf(),
+            location,
         });
 
         Self::subscribe_to_global_buffer_events(file_id, ctx);
@@ -1385,7 +1405,10 @@ impl LocalCodeEditorView {
         {
             Some(workspace_root.to_path_buf())
         } else {
-            match DetectedRepositories::as_ref(ctx).get_root_for_path(path) {
+            match DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok())
+            {
                 Some(root) => Some(root),
                 None => path.parent().map(|s| s.to_path_buf()), // If we can't find root, treat the parent as the root.
             }
@@ -1423,7 +1446,10 @@ impl LocalCodeEditorView {
         {
             Some(workspace_root.to_path_buf())
         } else {
-            match DetectedRepositories::as_ref(ctx).get_root_for_path(&path) {
+            match DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok())
+            {
                 Some(root) => Some(root),
                 None => path.parent().map(|s| s.to_path_buf()),
             }
@@ -1498,7 +1524,13 @@ impl LocalCodeEditorView {
                 GlobalBufferModelEvent::BufferLoaded {
                     content_version, ..
                 } => {
+                    // For a reopen (discard), base_content_version is already
+                    // set from the initial load. Accept the new version and
+                    // clear any conflict flag.
+                    me.has_remote_conflict = false;
                     if me.base_content_version.is_some() {
+                        me.base_content_version = Some(*content_version);
+                        ctx.notify();
                         return;
                     }
                     me.base_content_version = Some(*content_version);
@@ -1526,6 +1558,7 @@ impl LocalCodeEditorView {
                     }
                 }
                 GlobalBufferModelEvent::FileSaved { .. } => {
+                    me.has_remote_conflict = false;
                     ctx.emit(LocalCodeEditorEvent::FileSaved);
                 }
                 GlobalBufferModelEvent::FailedToSave { error, .. } => {
@@ -1534,8 +1567,11 @@ impl LocalCodeEditorView {
                         error: error.clone(),
                     });
                 }
-                GlobalBufferModelEvent::RemoteBufferConflict { .. }
-                | GlobalBufferModelEvent::ServerLocalBufferUpdated { .. } => {
+                GlobalBufferModelEvent::RemoteBufferConflict { .. } => {
+                    me.has_remote_conflict = true;
+                    ctx.notify();
+                }
+                GlobalBufferModelEvent::ServerLocalBufferUpdated { .. } => {
                     // Not relevant for local code editors.
                 }
             }
@@ -1543,13 +1579,18 @@ impl LocalCodeEditorView {
     }
 
     pub fn has_version_conflicts(&self, app: &AppContext) -> bool {
+        // Remote buffers use SyncClock for conflict detection.
+        // The flag is set by the RemoteBufferConflict event handler.
+        if matches!(self.file_location(), Some(BufferFileLocation::Remote(_))) {
+            return self.has_remote_conflict;
+        }
         let Some(file_id) = self.file_id() else {
             return false;
         };
         self.has_unsaved_changes(app)
             && self.base_content_version != GlobalBufferModel::as_ref(app).base_version(file_id)
     }
-    /// Save the file to the local file system.
+    /// Save the file to the local file system (or remotely via the remote server).
     /// This will only return an error immediately if there is a failure in the sync part of the call.
     /// Other errors could be returned asynchronously via the FileModelEvent::FailedToSave event.
     pub fn save_local(&mut self, ctx: &mut ViewContext<Self>) -> Result<(), ImmediateSaveError> {
@@ -1599,15 +1640,15 @@ impl LocalCodeEditorView {
             .update(ctx, |model, ctx| model.register(path.clone(), buffer, ctx));
 
         let file_id = buffer_state.file_id;
-        me.metadata = Some(LoadedFileMetadata::LocalFile {
+        me.metadata = Some(LoadedFileMetadata {
             id: file_id,
-            path: path.clone(),
+            location: BufferFileLocation::Local(path.clone()),
         });
 
         me.set_new_file(false);
 
         me.editor.update(ctx, |editor, ctx| {
-            editor.set_language_with_path(&path, ctx);
+            editor.set_language_with_local_path(&path, ctx);
         });
 
         let content = me.editor.as_ref(ctx).text(ctx).into_string();
@@ -1666,15 +1707,18 @@ impl LocalCodeEditorView {
     }
 
     pub fn file_id(&self) -> Option<FileId> {
-        self.metadata.as_ref().map(|metadata| match metadata {
-            LoadedFileMetadata::LocalFile { id, .. } => *id,
-        })
+        self.metadata.as_ref().map(|m| m.id)
     }
 
+    /// Returns the unified file location (local or remote).
+    pub fn file_location(&self) -> Option<&BufferFileLocation> {
+        self.metadata.as_ref().map(|m| &m.location)
+    }
+
+    /// Returns the local path if this editor is backed by a local file.
+    /// Returns `None` for remote files. Used by LSP and other local-only code paths.
     pub fn file_path(&self) -> Option<&Path> {
-        self.metadata.as_ref().map(|metadata| match metadata {
-            LoadedFileMetadata::LocalFile { path, .. } => path.as_path(),
-        })
+        self.file_location().and_then(|loc| loc.to_local_path())
     }
 
     /// Update this editor's file identity after a `GlobalBufferModel::rename`.
@@ -1688,13 +1732,13 @@ impl LocalCodeEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         let file_id = buffer_state.file_id;
-        self.metadata = Some(LoadedFileMetadata::LocalFile {
+        self.metadata = Some(LoadedFileMetadata {
             id: file_id,
-            path: new_path.to_path_buf(),
+            location: BufferFileLocation::Local(new_path.to_path_buf()),
         });
 
         self.editor.update(ctx, |editor, ctx| {
-            editor.set_language_with_path(new_path, ctx);
+            editor.set_language_with_local_path(new_path, ctx);
         });
 
         // Re-subscribe to GlobalBufferModel events for the new file_id.
@@ -2230,6 +2274,17 @@ impl TypedActionView for LocalCodeEditorView {
                 if let Some(path) = self.file_path().map(Path::to_path_buf) {
                     self.base_content_version = Some(self.editor().as_ref(ctx).version(ctx));
                     ctx.emit(LocalCodeEditorEvent::DiscardUnsavedChanges { path });
+                } else if self.has_remote_conflict {
+                    // Remote file: re-open the buffer from the server to get
+                    // the latest on-disk content. The BufferLoaded event will
+                    // clear has_remote_conflict and update base_content_version.
+                    // If the re-open fails, has_remote_conflict stays true and
+                    // the banner remains visible so the user can retry.
+                    if let Some(file_id) = self.file_id() {
+                        GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.reopen_remote_buffer(file_id, ctx);
+                        });
+                    }
                 }
             }
             LocalCodeEditorAction::NavigateToTarget(location) => {

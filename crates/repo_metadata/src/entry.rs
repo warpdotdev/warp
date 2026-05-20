@@ -426,6 +426,48 @@ pub(crate) fn is_shared_git_ref(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+/// Returns `true` for loose remote-tracking refs under the shared `.git`
+/// directory, e.g. `.git/refs/remotes/origin/main`.
+pub(crate) fn is_remote_tracking_ref(path: &Path) -> bool {
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let components: Vec<_> = path.components().collect();
+    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+        return false;
+    };
+    let after_git = &components[git_index + 1..];
+    after_git.len() >= 4
+        && after_git[0].as_os_str() == "refs"
+        && after_git[1].as_os_str() == "remotes"
+}
+
+/// Returns true for Git files that can change the current branch's tracked
+/// upstream ref.
+pub(crate) fn is_tracking_state_git_file(path: &Path) -> bool {
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    suffix.len() == 1
+        && matches!(
+            suffix[0].as_os_str().to_str(),
+            Some("HEAD" | "config" | "config.worktree")
+        )
+}
+
+/// Returns true for `.git/config` in the shared Git directory.
+pub(crate) fn is_common_git_config(path: &Path) -> bool {
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let components: Vec<_> = path.components().collect();
+    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+        return false;
+    };
+    let after_git = &components[git_index + 1..];
+    after_git.len() == 1 && after_git[0].as_os_str() == "config"
+}
+
 /// Returns true for `.git/HEAD` and `.git/refs/heads/*`
 /// (and their worktree equivalents `.git/worktrees/*/HEAD`, etc.).
 pub(crate) fn is_commit_related_git_file(path: &Path) -> bool {
@@ -452,15 +494,18 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
 
 /// Determines if a git-related path should be ignored by the filesystem watcher.
 ///
-/// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*)
-/// and the index lock file are allowed through. Everything else inside `.git/`
-/// is ignored.
+/// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*),
+/// loose remote-tracking refs, tracked-upstream state files, and the index lock
+/// file are allowed through. Everything else inside `.git/` is ignored.
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
     }
     // Ignore everything inside .git/ except the allowlisted patterns.
-    !is_commit_related_git_file(path) && !is_index_lock_file(path)
+    !is_commit_related_git_file(path)
+        && !is_index_lock_file(path)
+        && !is_remote_tracking_ref(path)
+        && !is_tracking_state_git_file(path)
 }
 
 pub fn path_passes_filters(path: &Path, gitignores: &[Gitignore]) -> bool {

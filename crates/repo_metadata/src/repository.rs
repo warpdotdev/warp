@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "local_fs")]
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use futures::future::ready;
 #[cfg(feature = "local_fs")]
@@ -74,8 +74,44 @@ pub struct Repository {
     /// Cached gitignore patterns for this repository.
     #[cfg(feature = "local_fs")]
     gitignores: Vec<Gitignore>,
+    /// Cached loose remote-tracking ref tracked by the active branch.
+    #[cfg(feature = "local_fs")]
+    tracked_remote_ref: Option<TrackedRemoteRef>,
 
     task_queue: ModelHandle<TaskQueue>,
+}
+
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrackedRemoteRef {
+    full_ref_name: String,
+}
+
+#[cfg(feature = "local_fs")]
+impl TrackedRemoteRef {
+    pub(crate) fn from_full_ref_name(full_ref_name: impl Into<String>) -> Option<Self> {
+        let full_ref_name = full_ref_name.into();
+        if !full_ref_name.starts_with("refs/remotes/") {
+            return None;
+        }
+        let ref_path = Path::new(&full_ref_name);
+        if ref_path.has_root() {
+            return None;
+        }
+        let mut component_count = 0;
+        for component in ref_path.components() {
+            match component {
+                Component::Normal(_) => component_count += 1,
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+            }
+        }
+        (component_count >= 4).then_some(Self { full_ref_name })
+    }
+
+    fn full_ref_name(&self) -> &str {
+        &self.full_ref_name
+    }
 }
 
 impl Repository {
@@ -107,6 +143,8 @@ impl Repository {
             next_subscriber_id: 0,
             #[cfg(feature = "local_fs")]
             gitignores,
+            #[cfg(feature = "local_fs")]
+            tracked_remote_ref: None,
             task_queue,
         }
     }
@@ -159,6 +197,109 @@ impl Repository {
             .unwrap_or_else(|| self.git_dir())
     }
 
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn tracked_remote_ref_path(&self) -> Option<PathBuf> {
+        self.tracked_remote_ref
+            .as_ref()
+            .map(|tracked_ref| self.common_git_dir().join(tracked_ref.full_ref_name()))
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn tracks_remote_ref_path(&self, remote_ref_path: &Path) -> bool {
+        self.tracked_remote_ref_path().is_some_and(|tracked_path| {
+            Self::path_for_comparison(&tracked_path) == Self::path_for_comparison(remote_ref_path)
+        })
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn update_tracked_remote_ref(
+        &mut self,
+        tracked_remote_ref: Option<TrackedRemoteRef>,
+    ) -> bool {
+        if self.tracked_remote_ref == tracked_remote_ref {
+            return false;
+        }
+        self.tracked_remote_ref = tracked_remote_ref;
+        true
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn path_for_comparison(path: &Path) -> PathBuf {
+        dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) async fn resolve_tracked_remote_ref(root_dir: PathBuf) -> Option<TrackedRemoteRef> {
+        let output = warp_util::git::run_git_command(
+            &root_dir,
+            &["rev-parse", "--symbolic-full-name", "@{u}"],
+        )
+        .await
+        .ok()?;
+        let full_ref_name = output.lines().next()?.trim();
+        TrackedRemoteRef::from_full_ref_name(full_ref_name)
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn refresh_tracked_remote_ref(
+        &mut self,
+        notify: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let root_dir = self.root_dir().to_local_path_lossy();
+        ctx.spawn(
+            Repository::resolve_tracked_remote_ref(root_dir),
+            move |repository, tracked_remote_ref, ctx| {
+                let tracked_remote_ref_changed =
+                    repository.update_tracked_remote_ref(tracked_remote_ref);
+                if notify && tracked_remote_ref_changed {
+                    repository.enqueue_remote_ref_update(ctx);
+                }
+            },
+        );
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn enqueue_remote_ref_update(&mut self, ctx: &mut ModelContext<Self>) {
+        let repository_handle = ctx.handle();
+        let subscriber_ids = self.get_subscriber_ids();
+        let update = RepositoryUpdate {
+            remote_ref_updated: true,
+            ..Default::default()
+        };
+        self.task_queue.update(ctx, |queue, ctx| {
+            for subscriber_id in subscriber_ids {
+                queue.enqueue_incremental_update(
+                    repository_handle.clone(),
+                    subscriber_id,
+                    update.clone(),
+                    ctx,
+                );
+            }
+        });
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn watch_paths(&self) -> Vec<StandardizedPath> {
+        let mut paths = vec![self.root_dir.clone()];
+        if let Some(external_git_dir) = &self.external_git_directory {
+            paths.push(external_git_dir.clone());
+        }
+        if let Some(common_git_dir) = &self.common_git_directory {
+            if let Some(common_local) = common_git_dir.to_local_path() {
+                let refs_dir = common_local.join("refs");
+                if let Ok(refs_std) = StandardizedPath::from_local_canonicalized(&refs_dir) {
+                    paths.push(refs_std);
+                }
+                let config_file = common_local.join("config");
+                if let Ok(config_std) = StandardizedPath::from_local_canonicalized(&config_file) {
+                    paths.push(config_std);
+                }
+            }
+        }
+        paths
+    }
+
     /// Returns the current watcher count.
     pub fn watcher_count(&self) -> usize {
         self.subscribers.len()
@@ -186,27 +327,7 @@ impl Repository {
         #[cfg(feature = "local_fs")]
         let registration_future: BoxFuture<'static, Result<(), RepoMetadataError>> =
             if should_start_watching {
-                // Prepare list of directories to watch
-                let mut directories_to_watch = vec![self.root_dir.clone()];
-
-                // Watch the per-worktree gitdir for worktree-specific events
-                // (HEAD, index.lock under .git/worktrees/<name>/).
-                if let Some(external_git_dir) = &self.external_git_directory {
-                    directories_to_watch.push(external_git_dir.clone());
-                }
-
-                // For linked worktrees, also watch .git/refs so shared ref
-                // changes (refs/heads/*) are visible even when the main
-                // worktree isn't registered.
-                if let Some(common_git_dir) = &self.common_git_directory {
-                    if let Some(common_local) = common_git_dir.to_local_path() {
-                        let refs_dir = common_local.join("refs").join("heads");
-                        if let Ok(refs_std) = StandardizedPath::from_local_canonicalized(&refs_dir)
-                        {
-                            directories_to_watch.push(refs_std);
-                        }
-                    }
-                }
+                let directories_to_watch = self.watch_paths();
 
                 Box::pin(DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
                     watcher.start_watching_directories(directories_to_watch, ctx)
@@ -223,6 +344,8 @@ impl Repository {
         self.task_queue.update(ctx, |queue, ctx| {
             queue.enqueue_scan(self_handle, subscriber_id, ctx);
         });
+        #[cfg(feature = "local_fs")]
+        self.refresh_tracked_remote_ref(false, ctx);
 
         StartWatching {
             subscriber_id,
@@ -252,21 +375,8 @@ impl Repository {
             #[cfg(feature = "local_fs")]
             {
                 DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
-                    // Stop watching the working tree directory
-                    std::mem::drop(watcher.stop_watching_directory(&self.root_dir, ctx));
-                    // Mirror start_watching: stop per-worktree gitdir + shared refs.
-                    if let Some(external_git_dir) = &self.external_git_directory {
-                        std::mem::drop(watcher.stop_watching_directory(external_git_dir, ctx));
-                    }
-                    if let Some(common_git_dir) = &self.common_git_directory {
-                        if let Some(common_local) = common_git_dir.to_local_path() {
-                            let refs_dir = common_local.join("refs").join("heads");
-                            if let Ok(refs_std) =
-                                StandardizedPath::from_local_canonicalized(&refs_dir)
-                            {
-                                std::mem::drop(watcher.stop_watching_directory(&refs_std, ctx));
-                            }
-                        }
+                    for path in self.watch_paths() {
+                        std::mem::drop(watcher.stop_watching_directory(&path, ctx));
                     }
                 });
             }
@@ -393,6 +503,7 @@ fn merge_repository_updates(acc: &mut RepositoryUpdate, incoming: &RepositoryUpd
 
     acc.commit_updated |= incoming.commit_updated;
     acc.index_lock_detected |= incoming.index_lock_detected;
+    acc.remote_ref_updated |= incoming.remote_ref_updated;
 }
 
 /// A generic debouncing layer for any RepositorySubscriber.
@@ -507,3 +618,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "repository_tests.rs"]
+mod tests;

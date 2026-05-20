@@ -15,11 +15,15 @@ use warpui::{
     ViewHandle,
 };
 
+use settings::Setting as _;
+
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
+use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::host_selector::NakedHeaderButtonTheme;
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
@@ -34,7 +38,7 @@ const MENU_HORIZONTAL_PADDING: f32 = 16.;
 
 const ITEM_VERTICAL_PADDING: f32 = 8.;
 
-const MENU_WIDTH: f32 = 208.;
+const MENU_WIDTH: f32 = 232.;
 
 const SIDECAR_WIDTH: f32 = 220.;
 
@@ -48,7 +52,7 @@ const MENU_HEADER_LABEL: &str = "API key";
 
 const SIDECAR_HEADER_LABEL: &str = "Choose a type";
 
-const NO_SECRET_LABEL: &str = "No API key";
+const NO_SECRET_LABEL: &str = "Inherit key from environment";
 
 const NEW_ITEM_LABEL: &str = "New";
 
@@ -115,12 +119,8 @@ impl AuthSecretSelector {
             MenuEvent::ItemSelected => {}
         });
 
-        let new_type_sidecar = ctx.add_typed_action_view(|_ctx| {
-            Menu::new()
-                .with_width(SIDECAR_WIDTH)
-                .with_drop_shadow()
-                .prevent_interaction_with_other_elements()
-        });
+        let new_type_sidecar = ctx
+            .add_typed_action_view(|_ctx| Menu::new().with_width(SIDECAR_WIDTH).with_drop_shadow());
 
         ctx.subscribe_to_view(&new_type_sidecar, |me, _, event, ctx| match event {
             MenuEvent::Close { .. } => {
@@ -131,6 +131,8 @@ impl AuthSecretSelector {
 
         ctx.subscribe_to_model(&ambient_agent_model, |me, _, event, ctx| match event {
             AmbientAgentViewModelEvent::HarnessSelected => {
+                // When the harness changes, try to restore the saved auth secret.
+                me.maybe_restore_auth_secret_from_settings(ctx);
                 me.refresh_button(ctx);
                 me.refresh_menu(ctx);
                 me.refresh_sidecar(ctx);
@@ -146,7 +148,8 @@ impl AuthSecretSelector {
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
                 HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretCreated { .. } => {
+                | HarnessAvailabilityEvent::AuthSecretCreated { .. }
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
                     me.refresh_menu(ctx);
                     me.refresh_button(ctx);
                 }
@@ -169,10 +172,36 @@ impl AuthSecretSelector {
             menu_positioning_provider,
             ambient_agent_model,
         };
+        me.maybe_restore_auth_secret_from_settings(ctx);
         me.refresh_button(ctx);
         me.refresh_menu(ctx);
         me.refresh_sidecar(ctx);
         me
+    }
+
+    /// Restores the saved auth secret from settings for the active harness if none is selected.
+    fn maybe_restore_auth_secret_from_settings(&mut self, ctx: &mut ViewContext<Self>) {
+        if self
+            .ambient_agent_model
+            .as_ref(ctx)
+            .selected_harness_auth_secret_name()
+            .is_some()
+        {
+            return;
+        }
+        let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+        let saved_name = CloudAgentSettings::as_ref(ctx)
+            .last_selected_auth_secret
+            .value()
+            .get(harness.config_name())
+            .cloned();
+        if let Some(saved_name) = saved_name {
+            // Apply optimistically — secrets may not be fetched yet, but the UI
+            // will update once auth secrets are loaded.
+            self.ambient_agent_model.update(ctx, |model, ctx| {
+                model.set_harness_auth_secret_name(Some(saved_name), ctx);
+            });
+        }
     }
 
     pub fn is_menu_open(&self) -> bool {
@@ -375,7 +404,7 @@ fn build_main_menu_items(
     let mut items = vec![header];
 
     items.push(MenuItem::Item(
-        MenuItemFields::new("No secret")
+        MenuItemFields::new(NO_SECRET_LABEL)
             .with_font_size_override(ITEM_FONT_SIZE)
             .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
             .with_override_hover_background_color(hover_background)
@@ -476,19 +505,27 @@ impl TypedActionView for AuthSecretSelector {
                 let name = name.clone();
                 let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
                 self.ambient_agent_model.update(ctx, |model, ctx| {
-                    model.set_harness_auth_secret_name(Some(name), ctx);
+                    model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
-                crate::ai::cloud_agent_settings::CloudAgentSettings::handle(ctx).update(
-                    ctx,
-                    |settings, ctx| {
-                        settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    },
-                );
+                // Persist the selection per-harness and mark FTUX completed.
+                CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings.mark_harness_auth_ftux_completed(harness, ctx);
+                    let mut map = settings.last_selected_auth_secret.value().clone();
+                    map.insert(harness.config_name().to_string(), name);
+                    report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
+                });
                 self.set_menu_visibility(false, ctx);
             }
             AuthSecretSelectorAction::ClearSecret => {
+                let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
                 self.ambient_agent_model.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(None, ctx);
+                });
+                // Clear the persisted selection for this harness.
+                CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut map = settings.last_selected_auth_secret.value().clone();
+                    map.remove(harness.config_name());
+                    report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
                 });
                 self.set_menu_visibility(false, ctx);
             }

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use super::comment::{
     AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin,
 };
 use super::pending_imported::{PendingImportedReviewComment, PendingImportedReviewCommentTarget};
+use crate::code::buffer_location::LocalOrRemotePath;
 
 /// Converts pending imported provider comments into attached review comments by:
 /// * flattening threaded replies
@@ -12,7 +12,7 @@ use super::pending_imported::{PendingImportedReviewComment, PendingImportedRevie
 /// * converting repo-relative file paths to absolute file paths
 pub(crate) fn attach_pending_imported_comments(
     pending_comments: Vec<PendingImportedReviewComment>,
-    repo_path: &Path,
+    repo_path: &LocalOrRemotePath,
 ) -> Vec<AttachedReviewComment> {
     if pending_comments.is_empty() {
         return Vec::new();
@@ -63,7 +63,7 @@ pub(crate) fn attach_pending_imported_comments(
 fn flatten_pending_imported_thread(
     root: &PendingImportedReviewComment,
     children_map: &HashMap<&str, Vec<&PendingImportedReviewComment>>,
-    repo_path: &Path,
+    repo_path: &LocalOrRemotePath,
 ) -> AttachedReviewComment {
     const THREAD_REPLY_DIVIDER: &str = "\n---\n";
 
@@ -82,13 +82,13 @@ fn flatten_pending_imported_thread(
             line,
             diff_content,
         } => AttachedReviewCommentTarget::Line {
-            absolute_file_path: repo_path.join(relative_file_path),
+            absolute_file_path: repo_path.join(&relative_file_path.to_string_lossy()),
             line: line.clone(),
             content: diff_content.clone(),
         },
         PendingImportedReviewCommentTarget::File { relative_file_path } => {
             AttachedReviewCommentTarget::File {
-                absolute_file_path: repo_path.join(relative_file_path),
+                absolute_file_path: repo_path.join(&relative_file_path.to_string_lossy()),
             }
         }
         PendingImportedReviewCommentTarget::General => AttachedReviewCommentTarget::General,

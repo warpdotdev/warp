@@ -299,17 +299,18 @@ impl UpdateModalBody {
     }
 
     fn render_action_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, self.cancel_mouse_state.clone())
             .with_text_label("Cancel".into())
             .with_style(UiComponentStyles {
                 font_weight: Some(Weight::Bold),
-                font_color: Some(appearance.theme().active_ui_text_color().into()),
+                font_color: Some(theme.active_ui_text_color().into()),
                 ..Default::default()
             })
             .with_hovered_styles(UiComponentStyles {
-                font_color: Some(appearance.theme().disabled_ui_text_color().into()),
+                font_color: Some(theme.disabled_ui_text_color().into()),
                 ..Default::default()
             })
             .build()
@@ -317,21 +318,22 @@ impl UpdateModalBody {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(UpdateModalBodyAction::Cancel))
             .finish();
 
+        // Disable the update button if no updates are selected
+        let has_selection = self.selected_updates.iter().any(|&x| x);
+        let label_color = if has_selection {
+            theme.font_color(theme.accent())
+        } else {
+            theme.disabled_text_color(theme.surface_3())
+        };
+
         let corner_down_left_icon = Container::new(
-            ConstrainedBox::new(
-                Icon::CornerDownLeft
-                    .to_warpui_icon(appearance.theme().active_ui_text_color())
-                    .finish(),
-            )
-            .with_width(appearance.monospace_font_size())
-            .with_height(appearance.monospace_font_size())
-            .finish(),
+            ConstrainedBox::new(Icon::CornerDownLeft.to_warpui_icon(label_color).finish())
+                .with_width(appearance.monospace_font_size())
+                .with_height(appearance.monospace_font_size())
+                .finish(),
         )
         .with_uniform_padding(2.)
-        .with_border(Border::all(1.).with_border_fill(coloru_with_opacity(
-            appearance.theme().active_ui_text_color().into(),
-            60,
-        )))
+        .with_border(Border::all(1.).with_border_fill(coloru_with_opacity(label_color.into(), 60)))
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .finish();
 
@@ -343,7 +345,7 @@ impl UpdateModalBody {
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
-                .with_color(appearance.theme().active_ui_text_color().into())
+                .with_color(label_color.into())
                 .with_style(Properties::default().weight(Weight::Bold))
                 .finish(),
             )
@@ -362,9 +364,6 @@ impl UpdateModalBody {
                 padding: Some(Coords::uniform(5.).left(10.).right(10.)),
                 ..Default::default()
             });
-
-        // Disable the update button if no updates are selected
-        let has_selection = self.selected_updates.iter().any(|&x| x);
 
         if !has_selection {
             update_button_builder = update_button_builder.disabled();

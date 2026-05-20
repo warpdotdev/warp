@@ -716,7 +716,7 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
                         |prefs| prefs.get_default_base_model().id.clone(),
                         &me.upgrade_footer_mouse_state,
@@ -730,7 +730,7 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.full_terminal_use_model_dropdown,
                         current_permissions.cli_agent_model.clone(),
-                        |prefs| prefs.get_cli_agent_llm_choices().collect_vec(),
+                        |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
                         |prefs| prefs.get_default_cli_agent_model().id.clone(),
                         &me.upgrade_footer_mouse_state,
@@ -739,7 +739,7 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.computer_use_model_dropdown,
                         current_permissions.computer_use_model.clone(),
-                        |prefs| prefs.get_computer_use_llm_choices().collect_vec(),
+                        |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
                         |prefs| prefs.get_default_computer_use_model().id.clone(),
                         &me.upgrade_footer_mouse_state,
@@ -751,7 +751,7 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
                         |prefs| prefs.get_default_base_model().id.clone(),
                         &me.upgrade_footer_mouse_state,
@@ -779,7 +779,7 @@ impl ExecutionProfileEditorView {
                 Self::refresh_filterable_model_dropdown(
                     &me.base_model_dropdown,
                     current_permissions.base_model.clone(),
-                    |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                    |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
                     |prefs| prefs.get_default_base_model().id.clone(),
                     &me.upgrade_footer_mouse_state,
@@ -894,7 +894,7 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.base_model_dropdown,
             current_permissions.base_model.clone(),
-            |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+            |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
             |prefs| prefs.get_default_base_model().id.clone(),
             &self.upgrade_footer_mouse_state,
@@ -908,7 +908,7 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.full_terminal_use_model_dropdown,
             current_permissions.cli_agent_model.clone(),
-            |prefs| prefs.get_cli_agent_llm_choices().collect_vec(),
+            |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
             |prefs| prefs.get_default_cli_agent_model().id.clone(),
             &self.upgrade_footer_mouse_state,
@@ -917,7 +917,7 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.computer_use_model_dropdown,
             current_permissions.computer_use_model.clone(),
-            |prefs| prefs.get_computer_use_llm_choices().collect_vec(),
+            |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
             |prefs| prefs.get_default_computer_use_model().id.clone(),
             &self.upgrade_footer_mouse_state,
@@ -1095,7 +1095,7 @@ impl ExecutionProfileEditorView {
         upgrade_mouse_state: &MouseStateHandle,
         ctx: &mut ViewContext<Self>,
     ) where
-        G: FnOnce(&LLMPreferences) -> Vec<&LLMInfo>,
+        G: for<'a> FnOnce(&'a LLMPreferences, &AppContext) -> Vec<&'a LLMInfo>,
         A: Fn(LLMId) -> ExecutionProfileEditorViewAction,
         D: FnOnce(&LLMPreferences) -> LLMId,
     {
@@ -1110,7 +1110,7 @@ impl ExecutionProfileEditorView {
 
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let choices = get_choices(llm_prefs);
+            let choices = get_choices(llm_prefs, ctx);
 
             let has_upgrade_gated_models = choices
                 .iter()
@@ -1161,7 +1161,7 @@ impl ExecutionProfileEditorView {
             }
 
             let choices = LLMPreferences::as_ref(ctx)
-                .get_coding_llm_choices()
+                .get_coding_llm_choices(ctx)
                 .collect_vec();
 
             let items = available_model_menu_items(

@@ -818,6 +818,7 @@ impl From<GqlUserOutput> for UserProperties {
 
         let is_on_work_domain = user_properties.is_on_work_domain;
         let is_onboarded = user_properties.is_onboarded;
+        let global_skills = user_properties.global_skills;
         let api_key_owner_type = user_output.api_key_owner_type;
 
         let linked_at = user_properties
@@ -854,6 +855,7 @@ impl From<GqlUserOutput> for UserProperties {
             linked_at,
             personal_object_limits: personal_object_limits.and_then(|t| t.try_into().ok()),
             principal_type,
+            global_skills,
         };
 
         UserProperties {

@@ -24,8 +24,9 @@ const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
 // Sub-component size ratios, expressed as fractions of `total_size`. The brand circle is
 // ~76% wide and the status badge is ~57% wide, with the badge's bottom-right anchored at
 // the box's bottom-right corner. With these ratios the badge center sits *inside* the
-// brand circle (not on its edge).
-const CIRCLE_RATIO: f32 = 0.76;
+// brand circle (not on its edge). `CIRCLE_RATIO` is `pub(crate)` so callers that
+// pre-render their own avatar can size it consistently with the other variants.
+pub(crate) const CIRCLE_RATIO: f32 = 0.76;
 const ICON_RATIO: f32 = 0.43;
 const BADGE_RATIO: f32 = 0.57;
 const BADGE_ICON_RATIO: f32 = 0.34;
@@ -37,7 +38,8 @@ const STATUS_IN_CLOUD_RATIO: f32 = 0.285;
 // a 24px container held a 16px glyph (16/24 ≈ 0.667).
 const NEUTRAL_GLYPH_RATIO: f32 = 16.0 / 24.0;
 
-fn circle_size(total: f32) -> f32 {
+/// Returns the brand-circle diameter for a given `total_size`.
+pub(crate) fn circle_size(total: f32) -> f32 {
     total * CIRCLE_RATIO
 }
 
@@ -110,6 +112,14 @@ pub(crate) enum IconWithStatusVariant {
     /// A CLI agent icon on the agent's brand color background.
     CLIAgent {
         agent: CLIAgent,
+        status: Option<ConversationStatus>,
+        is_ambient: bool,
+    },
+    /// A pre-rendered avatar with an optional status overlay (cloud lobe when
+    /// ambient). Caller must size `avatar` to `circle_size(total_size)` so the
+    /// overlay's overhang matches the other variants.
+    CustomAvatar {
+        avatar: Box<dyn Element>,
         status: Option<ConversationStatus>,
         is_ambient: bool,
     },
@@ -209,6 +219,19 @@ pub(crate) fn render_icon_with_status(
                 status_container_background,
             )
         }
+        IconWithStatusVariant::CustomAvatar {
+            avatar,
+            status,
+            is_ambient,
+        } => attach_status_overlay(
+            avatar,
+            status.as_ref(),
+            is_ambient,
+            total_size,
+            overlay_extra_overhang_ratio,
+            theme,
+            status_container_background,
+        ),
     }
 }
 

@@ -216,7 +216,8 @@ fn test_set_root_task_replaces_old() {
 
     assert_eq!(store.task_count(), 1);
     assert_eq!(store.exchange_count(), 3);
-    assert!(store.get(&task1_id).is_none());
+    // task1_id is now aliased to the new root task via optimistic_root_task_id
+    assert!(store.get(&task1_id).is_some());
     assert!(store.get(&task2_id).is_some());
     assert_eq!(store.root_task_id(), &task2_id);
 

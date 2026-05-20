@@ -19,8 +19,8 @@ use super::{
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_conversations_model::entry::{
-    AgentConversationBackingData, AgentConversationCapabilities, AgentConversationCreator,
-    AgentConversationDisplayData, AgentConversationIdentity,
+    AgentConversationBackingData, AgentConversationCapabilities, AgentConversationDisplayData,
+    AgentConversationIdentity, AgentConversationPrincipal,
 };
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationProvenance,
@@ -60,7 +60,8 @@ impl AgentIconFields {
                 is_ambient: *is_ambient,
             }),
             IconWithStatusVariant::Neutral { .. }
-            | IconWithStatusVariant::NeutralElement { .. } => None,
+            | IconWithStatusVariant::NeutralElement { .. }
+            | IconWithStatusVariant::CustomAvatar { .. } => None,
         }
     }
 }
@@ -400,7 +401,8 @@ fn non_ambient_entry_uses_display_harness() {
             created_at: Utc::now(),
             last_updated: Utc::now(),
             status: AgentRunDisplayStatus::ConversationSucceeded,
-            creator: AgentConversationCreator::default(),
+            creator: AgentConversationPrincipal::default(),
+            executor: None,
             request_usage: None,
             run_time: None,
             session_status: None,

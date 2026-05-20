@@ -1,4 +1,8 @@
-use super::{format_git_branch_command, truncate_from_beginning, GitBranch, GitLineChanges};
+use super::{
+    format_create_git_branch_command, format_git_branch_command, truncate_from_beginning,
+    CreateGitBranch, GitBranch, GitLineChanges,
+};
+use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::{
     git_branch_on_click::GitBranchOnClickValue, github_pr_display_text_from_url, ContextChipKind,
 };
@@ -100,6 +104,42 @@ fn test_git_branch_menu_icon_uses_worktree_icon_for_linked_worktree() {
     .encode();
 
     assert_eq!(GitBranch(value).icon_for_menu(), Icon::Dataflow02);
+}
+
+#[test]
+fn test_format_create_git_branch_command_quotes_branch_and_appends_double_dash() {
+    assert_eq!(
+        format_create_git_branch_command("feature/xyz"),
+        "git checkout -b 'feature/xyz' --"
+    );
+}
+
+#[test]
+fn test_format_create_git_branch_command_escapes_single_quotes() {
+    assert_eq!(
+        format_create_git_branch_command("alice's-branch"),
+        "git checkout -b 'alice'\\''s-branch' --"
+    );
+}
+
+#[test]
+fn test_create_git_branch_menu_name_quotes_query() {
+    let item = CreateGitBranch::new("feature/xyz".to_string());
+    assert_eq!(item.name(), "Create new branch \"feature/xyz\"");
+}
+
+#[test]
+fn test_create_git_branch_action_data_returns_branch_name() {
+    let item = CreateGitBranch::new("feature/xyz".to_string());
+    assert_eq!(item.action_data(), "feature/xyz");
+    assert_eq!(item.branch_name(), "feature/xyz");
+}
+
+#[test]
+fn test_create_git_branch_trims_whitespace_in_constructor() {
+    let item = CreateGitBranch::new("  feature/xyz  ".to_string());
+    assert_eq!(item.branch_name(), "feature/xyz");
+    assert_eq!(item.name(), "Create new branch \"feature/xyz\"");
 }
 
 #[test]

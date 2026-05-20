@@ -50,7 +50,7 @@ fn create_default_serialized_block() -> SerializedBlock {
 
 #[test]
 fn cloud_mode_deferred_terminal_model_starts_view_pending() {
-    let model = TerminalModel::new_for_cloud_mode_shared_session_viewer(
+    let mut model = TerminalModel::new_for_cloud_mode_shared_session_viewer(
         block_size(),
         color::List::from(&color::Colors::default()),
         ChannelEventListener::new_for_test(),
@@ -67,6 +67,31 @@ fn cloud_mode_deferred_terminal_model_starts_view_pending() {
     ));
     assert!(model.shared_session_status().is_viewer());
     assert!(model.is_dummy_cloud_mode_session());
+    assert!(!model
+        .block_list()
+        .is_executing_oz_environment_startup_commands());
+
+    let restored_block = SerializedBlock {
+        id: BlockId::new(),
+        stylized_command: str_to_byte_vec("setup-looking-command"),
+        stylized_output: str_to_byte_vec("output"),
+        did_execute: true,
+        start_ts: Some(Local::now()),
+        completed_ts: Some(Local::now()),
+        ..Default::default()
+    };
+    model
+        .block_list_mut()
+        .insert_restored_block(&restored_block);
+
+    let restored_command_block = model
+        .block_list()
+        .blocks()
+        .iter()
+        .find(|block| block.command_to_string() == "setup-looking-command")
+        .expect("restored command block should exist");
+    assert!(!restored_command_block.is_hidden());
+    assert!(!restored_command_block.is_oz_environment_startup_command());
 }
 
 #[test]
@@ -103,6 +128,7 @@ fn ssh_bootstraps_if_blocklist_empty() {
         shell: String::from("bash"),
         home_dir: None,
         path: None,
+        cdpath: None,
         editor: None,
         env_var_names: None,
         aliases: None,

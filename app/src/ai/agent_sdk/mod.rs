@@ -26,6 +26,7 @@ use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
 use warp_cli::{
     agent::{AgentCommand, AgentProfileCommand, OutputFormat},
+    api_key::ApiKeyCommand,
     artifact::ArtifactCommand,
     environment::{EnvironmentCommand, ImageCommand},
     federate::FederateCommand,
@@ -76,6 +77,7 @@ use warp_cli::OZ_HARNESS_ENV;
 mod admin;
 mod agent_config;
 mod ambient;
+mod api_key;
 mod artifact;
 pub(crate) mod artifact_upload;
 mod common;
@@ -195,6 +197,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'artifact'"));
             }
             artifact::run(ctx, global_options, artifact_cmd)
+        }
+        CliCommand::ApiKey(api_key_cmd) => {
+            if !FeatureFlag::APIKeyManagement.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'api-key'"));
+            }
+            api_key::run(ctx, global_options, api_key_cmd)
         }
     }
 }
@@ -350,6 +358,7 @@ fn build_merged_config_and_task(
     let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
         harness_type: args.harness,
         model_id: harness_model_id,
+        reasoning_level: None,
     });
 
     let oz_model = if args.harness == Harness::Oz {
@@ -450,6 +459,7 @@ fn build_server_side_task(
     let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
         harness_type: args.harness,
         model_id: harness_model_id,
+        reasoning_level: None,
     });
 
     let skill_name = resolved_skill.as_ref().map(|s| s.name.clone());
@@ -609,6 +619,7 @@ impl AgentDriverRunner {
             // Pull relevant variables out of args before moving it into the closure.
             let share_requests = args.share.share.clone();
             let bedrock_inference_role = args.bedrock_inference_role.clone();
+            let bedrock_role_region = args.bedrock_role_region.clone();
             let has_task_id = args.task_id.is_some();
             let args_harness = args.harness;
             // `--conversation` path (user-invoked local resume): validate before any task side
@@ -650,6 +661,16 @@ impl AgentDriverRunner {
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
+                // clap's `requires` constraint enforces this at parse time, so a missing
+                // region here means a caller is constructing `RunAgentArgs` directly
+                // without the flag. Fail loudly so callers don't silently fall back to a
+                // hard-coded STS region.
+                let role_region = bedrock_role_region.ok_or_else(|| {
+                    AgentDriverError::AwsBedrockCredentialsFailed(
+                        "--bedrock-role-region is required when --bedrock-inference-role is set"
+                            .to_string(),
+                    )
+                })?;
                 // Set the OIDC strategy on the UI thread and kick off the refresh; the
                 // returned future resolves when credentials are committed to the model.
                 let refresh_future = foreground
@@ -660,6 +681,7 @@ impl AgentDriverRunner {
                                 AwsCredentialsRefreshStrategy::OidcManaged {
                                     task_id: bedrock_task_id,
                                     role_arn,
+                                    region: role_region,
                                 },
                             );
                             refresh_aws_credentials(manager, ctx)
@@ -825,10 +847,10 @@ impl AgentDriverRunner {
                 let should_share = (args.share.is_shared() || args.task_id.is_some())
                     && FeatureFlag::AgentSharedSessions.is_enabled();
 
-                let third_party_harness_model_id = merged_config
+                let third_party_harness_model_config = merged_config
                     .harness
                     .as_ref()
-                    .and_then(|h| h.model_id.clone());
+                    .and_then(|h| h.model_config());
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
@@ -840,7 +862,7 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     selected_harness: args.harness,
-                    third_party_harness_model_id,
+                    third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1125,7 +1147,7 @@ impl AgentDriverRunner {
                 }
             }
         };
-        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_id) =
+        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_config) =
             match task_metadata_result {
                 Ok(Some(task_metadata)) => {
                     // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1136,13 +1158,13 @@ impl AgentDriverRunner {
                     let task_harness = task_harness_config
                         .map(|h| h.harness_type)
                         .unwrap_or(Harness::Oz);
-                    let task_harness_model_id =
-                        task_harness_config.and_then(|h| h.model_id.clone());
+                    let task_harness_model_config =
+                        task_harness_config.and_then(|h| h.model_config());
                     (
                         task_metadata.parent_run_id,
                         task_metadata.conversation_id,
                         Some(task_harness),
-                        task_harness_model_id,
+                        task_harness_model_config,
                     )
                 }
                 Ok(None) => (None, None, None, None),
@@ -1178,8 +1200,8 @@ impl AgentDriverRunner {
         driver_options.parent_run_id = parent_run_id;
         driver_options.secrets = secrets;
         // CLI flags continue to take precedence so users can still override per-invocation.
-        if driver_options.third_party_harness_model_id.is_none() {
-            driver_options.third_party_harness_model_id = task_harness_model_id;
+        if driver_options.third_party_harness_model_config.is_none() {
+            driver_options.third_party_harness_model_config = task_harness_model_config;
         }
 
         // Update the task prompt to include the downloaded attachments dir
@@ -1385,6 +1407,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Federate(_) => true,
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
+        CliCommand::ApiKey(_) => true,
     }
 }
 
@@ -1608,6 +1631,11 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             ArtifactCommand::Upload(_) => CliTelemetryEvent::ArtifactUpload,
             ArtifactCommand::Get(_) => CliTelemetryEvent::ArtifactGet,
             ArtifactCommand::Download(_) => CliTelemetryEvent::ArtifactDownload,
+        },
+        CliCommand::ApiKey(api_key_cmd) => match api_key_cmd {
+            ApiKeyCommand::List(_) => CliTelemetryEvent::ApiKeyList,
+            ApiKeyCommand::Create(_) => CliTelemetryEvent::ApiKeyCreate,
+            ApiKeyCommand::Expire(_) => CliTelemetryEvent::ApiKeyExpire,
         },
     }
 }

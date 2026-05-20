@@ -390,6 +390,14 @@ pub struct GridHandler {
     track_content_length: bool,
 
     full_grid_clear_behavior: FullGridClearBehavior,
+
+    /// Accumulates dirty row ranges for find operations.
+    ///
+    /// Unlike `dirty_cells_range` in `ansi_handler_state` which is reset after each byte
+    /// processing pass, this field accumulates dirty rows until find explicitly consumes them.
+    /// This allows find to be updated less frequently than byte processing while still
+    /// knowing exactly which rows have changed.
+    find_dirty_rows_range: Option<RangeInclusive<usize>>,
 }
 
 impl GridHandler {
@@ -439,6 +447,7 @@ impl GridHandler {
             bottommost_visible_content_row: None,
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         }
     }
 
@@ -570,6 +579,7 @@ impl GridHandler {
             bottommost_visible_content_row: None,
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         };
 
         // Scan the full grid for secrets.  This is less performant than
@@ -1614,6 +1624,40 @@ impl GridHandler {
         let range_start = min(dirty_cells_range.start, cursor_point);
         let range_end = max(dirty_cells_range.end, cursor_point);
         *dirty_cells_range = range_start..range_end;
+
+        // Also update the find dirty rows range.
+        self.update_find_dirty_rows_range(cursor_point.row);
+    }
+
+    /// Updates the find dirty rows range to include the given row.
+    ///
+    /// This accumulates dirty rows across multiple byte processing passes
+    /// until find explicitly consumes them.
+    fn update_find_dirty_rows_range(&mut self, row: usize) {
+        self.find_dirty_rows_range = Some(match &self.find_dirty_rows_range {
+            Some(existing) => {
+                let start = min(*existing.start(), row);
+                let end = max(*existing.end(), row);
+                start..=end
+            }
+            None => row..=row,
+        });
+    }
+
+    /// Returns the accumulated dirty row range for find operations, if any.
+    ///
+    /// Unlike `dirty_cells_range()`, this range accumulates across multiple byte
+    /// processing passes until explicitly consumed with `take_find_dirty_rows_range()`.
+    pub fn find_dirty_rows_range(&self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.clone()
+    }
+
+    /// Returns and clears the accumulated dirty row range for find operations.
+    ///
+    /// This should be called when find has processed the dirty range and no longer
+    /// needs to track those rows as dirty.
+    pub fn take_find_dirty_rows_range(&mut self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.take()
     }
 
     fn reset_dirty_cells_range_to_cursor_point(&mut self) {
@@ -2029,7 +2073,15 @@ impl GridHandler {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 
-    fn find_in_range<'a>(&'a self, dfas: &'a RegexDFAs, start: Point, end: Point) -> RegexIter<'a> {
+    /// Find matches in a specific range of the grid.
+    ///
+    /// This is used by async find to scan chunks of a grid without scanning the entire grid.
+    pub(in crate::terminal) fn find_in_range<'a>(
+        &'a self,
+        dfas: &'a RegexDFAs,
+        start: Point,
+        end: Point,
+    ) -> RegexIter<'a> {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 

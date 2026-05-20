@@ -6,7 +6,7 @@ This FAQ covers the questions we hear most often about contributing to the Warp 
 
 ### How do I contribute?
 
-Start with a GitHub issue. Bug reports are implicitly ready to fix once triaged; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+Start with a GitHub issue. Bug reports can go straight to a code PR once they are triaged as actionable; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### How do I file a good bug report or feature request?
 
@@ -17,7 +17,7 @@ If you're already running Warp, the `/feedback` command files an issue with logs
 ### What do the readiness labels mean?
 
 - **`ready-to-spec`** — the problem is understood, the design is open. Next step is a spec PR.
-- **`ready-to-implement`** — the design is settled, or it's a triaged bug. Next step is a code PR.
+- **`ready-to-implement`** — the issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable.
 - **`needs-mocks`** — design mocks are required before implementation can start.
 
 Anyone can pick up a labeled issue. Mention **@oss-maintainers** on an issue if it needs triage or readiness re-evaluation.

@@ -6,6 +6,8 @@ use enum_iterator::Sequence;
 use lsp::supported_servers::LSPServerType;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
+#[cfg(not(target_family = "wasm"))]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, ModelContext, SingletonEntity as _};
 
 use crate::{
@@ -187,7 +189,7 @@ impl InitProjectModel {
             && !*CodeSettings::as_ref(ctx).auto_indexing_enabled;
 
         let has_pending_project_scoped_rules = ProjectContextModel::as_ref(ctx)
-            .find_applicable_rules(path)
+            .find_applicable_project_rules(path)
             .is_none();
 
         has_pending_codebase_context || has_pending_project_scoped_rules
@@ -408,7 +410,8 @@ impl InitProjectModel {
         let pwd_path = pwd_path.to_path_buf();
         #[cfg(not(target_family = "wasm"))]
         let repo_root = DetectedRepositories::as_ref(ctx)
-            .get_root_for_path(&pwd_path)
+            .get_root_for_path(&LocalOrRemotePath::Local(pwd_path.clone()))
+            .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
             .unwrap_or_else(|| pwd_path.clone());
         #[cfg(target_family = "wasm")]
         let repo_root = pwd_path.clone();

@@ -47,20 +47,19 @@ impl BackgroundFileWatcher {
         debounce_duration: Duration,
         handler: WatcherEventHandler,
         rx: mpsc::Receiver<BackgroundFileWatcherCommand>,
-    ) -> Self {
+    ) -> Result<Self> {
         let debounced_watcher = new_debouncer_opt(
             debounce_duration,
             None,
             handler,
             NoCache,
             notify::Config::default(),
-        )
-        .expect("Should be able to create watcher");
+        )?;
 
-        Self {
+        Ok(Self {
             notifier: debounced_watcher,
             rx,
-        }
+        })
     }
 
     /// Listen to streamed in commands to modify the internal notifier state.
@@ -150,12 +149,24 @@ impl BulkFilesystemWatcher {
         if let Err(e) = thread::Builder::new()
             .name("Bulk Filesystem Watcher".into())
             .spawn(move || {
-                let watcher = BackgroundFileWatcher::new(
+                match BackgroundFileWatcher::new(
                     debounce_duration,
                     WatcherEventHandler { tx },
                     bg_rx,
-                );
-                watcher.run();
+                ) {
+                    Ok(watcher) => watcher.run(),
+                    Err(e) => {
+                        // The thread exits, which drops `bg_rx` and the
+                        // event-channel sender. Subsequent `register_path` /
+                        // `unregister_path` calls will get `SendError` and
+                        // log a warning — the app continues without file
+                        // watching.
+                        log::error!(
+                            "Failed to create filesystem watcher, \
+                             file watching will be disabled: {e:?}"
+                        );
+                    }
+                }
             })
         {
             log::error!("Failed to spawn thread for background file watcher {e:?}");

@@ -1,6 +1,7 @@
 use warp_core::features::FeatureFlag;
 use warpui::{SingletonEntity, ViewContext};
 
+use super::rich_content::RichContentMetadata;
 use crate::{
     ai::{
         agent::{conversation::AIConversationId, CancellationReason},
@@ -9,8 +10,6 @@ use crate::{
     auth::AuthStateProvider,
     terminal::{view::PendingUserQueryKind, TerminalView},
 };
-
-use super::rich_content::RichContentMetadata;
 
 impl TerminalView {
     pub(super) fn pending_user_query_conversation_id(&self) -> Option<AIConversationId> {
@@ -53,22 +52,30 @@ impl TerminalView {
                 ctx,
             )
         });
-        if show_close_button || show_send_now_button {
-            ctx.subscribe_to_view(&handle, move |me, _, event, ctx| match event {
-                PendingUserQueryBlockEvent::Dismissed => {
+        ctx.subscribe_to_view(&handle, move |me, block, event, ctx| match event {
+            PendingUserQueryBlockEvent::Dismissed => {
+                if show_close_button {
                     me.remove_pending_user_query_block(ctx);
                 }
-                PendingUserQueryBlockEvent::SendNow => {
+            }
+            PendingUserQueryBlockEvent::SendNow => {
+                if show_send_now_button {
                     me.send_queued_prompt_now(prompt_for_send_now.clone(), ctx);
                 }
-            });
-        }
+            }
+            PendingUserQueryBlockEvent::TextSelected => {
+                // Ensure only one active text selection across the entire terminal view.
+                me.clear_selected_text_except(Some(block.id()), ctx);
+            }
+        });
         let view_id = handle.id();
 
         self.insert_rich_content(
             None,
-            handle,
-            Some(RichContentMetadata::PendingUserQuery),
+            handle.clone(),
+            Some(RichContentMetadata::PendingUserQuery {
+                pending_user_query_block_handle: handle,
+            }),
             super::rich_content::RichContentInsertionPosition::PinToBottom,
             ctx,
         );

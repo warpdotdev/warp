@@ -87,6 +87,8 @@ pub fn filter_tool_call_result(result: &message::ToolCallResult) -> message::Too
                             command_id: "command_id".to_string(),
                             output: "[OUTPUT OMITTED]".to_string(),
                             exit_code: cmd_result.exit_code,
+                            start_ts: None,
+                            finish_ts: None,
                         },
                     ),
                 ),

@@ -28,7 +28,7 @@ use crate::{
         sync_queue::SyncQueue,
     },
     settings::cloud_preferences::{CloudPreferenceModel, CloudPreferencesSettings, Platform},
-    Assets,
+    ASSETS,
 };
 
 use warp_core::{
@@ -281,7 +281,7 @@ fn expect_bulk_create_generic_string_objects(
 
 #[test]
 fn test_sync_local_pref_to_cloud_after_initial_sync_creates_prefs_setting() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -327,7 +327,7 @@ fn test_sync_local_pref_to_cloud_after_initial_sync_creates_prefs_setting() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_after_initial_sync() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -456,7 +456,7 @@ fn test_sync_local_pref_to_cloud_after_initial_sync() {
 }
 
 fn run_initial_sync_test(is_onboarded: bool) {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -598,7 +598,7 @@ fn test_sync_local_pref_to_cloud_on_initial_sync_for_returning_user() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_updates_existing_pref() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -685,7 +685,7 @@ fn test_sync_local_pref_to_cloud_updates_existing_pref() {
 
 #[test]
 fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -800,7 +800,7 @@ fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
 
 #[test]
 fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -925,7 +925,7 @@ fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1029,7 +1029,7 @@ fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
 
 #[test]
 fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         // Start with cloud prefs disabled
         initialize_settings(&mut app);
 
@@ -1090,7 +1090,7 @@ fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
 
 #[test]
 fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1152,7 +1152,7 @@ fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
 
 #[test]
 fn test_ensure_no_duplicate_cloud_prefs() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1311,7 +1311,7 @@ fn write_stored_hash(app: &App, value: &str) {
 
 #[test]
 fn test_force_local_wins_on_startup_uploads_local_to_cloud() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Step 1: create a real temp settings.toml. The file's hash is
@@ -1402,7 +1402,7 @@ fn test_force_local_wins_on_startup_uploads_local_to_cloud() {
 
 #[test]
 fn test_no_force_local_when_hashes_match() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Create a file and seed the stored hash with its exact value
@@ -1460,7 +1460,7 @@ fn test_no_force_local_when_hashes_match() {
 
 #[test]
 fn test_force_local_suppressed_when_file_is_broken() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Create a file whose contents happen to hash to something,
@@ -1531,7 +1531,7 @@ fn test_force_local_suppressed_when_file_is_broken() {
 
 #[test]
 fn test_file_missing_with_stored_hash_lets_cloud_win() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Use a path that doesn't exist: the user has deleted their
@@ -1584,7 +1584,7 @@ fn test_file_missing_with_stored_hash_lets_cloud_win() {
 
 #[test]
 fn test_first_launch_with_no_stored_hash_lets_cloud_win() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Fresh install: a settings.toml exists but there is no
@@ -1640,7 +1640,7 @@ fn test_first_launch_with_no_stored_hash_lets_cloud_win() {
 
 #[test]
 fn test_offline_ui_change_does_not_update_hash_until_sync_succeeds() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Phase 1: normal startup. File and stored hash match, cloud

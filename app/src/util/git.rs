@@ -3,78 +3,13 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use warp_core::safe_warn;
+use warp_util::git::run_git_command;
+#[cfg(feature = "local_fs")]
+use warp_util::git::run_git_command_with_env;
 
 #[cfg(test)]
 #[path = "git_tests.rs"]
 mod tests;
-
-/// Runs a git command and returns the output as a string.
-/// Thin wrapper over [`run_git_command_with_env`] with no `PATH` override.
-#[cfg(feature = "local_fs")]
-pub async fn run_git_command(repo_path: &Path, args: &[&str]) -> Result<String> {
-    run_git_command_with_env(repo_path, args, None).await
-}
-
-/// Like [`run_git_command`] but sets `PATH` on the child when `path_env` is
-/// `Some`. Used by callers whose hooks need user-installed binaries (e.g.
-/// the LFS `pre-push` hook → `git-lfs`). See `specs/APP-4188/TECH.md`.
-#[cfg(feature = "local_fs")]
-pub async fn run_git_command_with_env(
-    repo_path: &Path,
-    args: &[&str],
-    path_env: Option<&str>,
-) -> Result<String> {
-    use command::r#async::Command;
-    use command::Stdio;
-
-    log::debug!(
-        "[GIT OPERATION] git.rs run_git_command git {}",
-        args.join(" ")
-    );
-    let mut cmd = Command::new("git");
-    cmd.arg("-c")
-        .arg("diff.autoRefreshIndex=false")
-        .args(args)
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .kill_on_drop(true);
-    if let Some(path_env) = path_env {
-        cmd.env("PATH", path_env);
-    }
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| anyhow!("Failed to execute git command: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Handle git diff specific behavior:
-    // - Exit code 0: no differences
-    // - Exit code 1: differences found (this is normal for diff commands)
-    // - Exit code > 1: actual error
-    if output.status.success() || (output.status.code() == Some(1) && !stdout.is_empty()) {
-        Ok(stdout)
-    } else {
-        Err(anyhow!("Git command failed: {}, {}", stderr, stdout))
-    }
-}
-
-#[cfg(not(feature = "local_fs"))]
-pub async fn run_git_command(_repo_path: &Path, _args: &[&str]) -> Result<String> {
-    Err(anyhow!("Not supported on wasm"))
-}
-
-#[cfg(not(feature = "local_fs"))]
-pub async fn run_git_command_with_env(
-    _repo_path: &Path,
-    _args: &[&str],
-    _path_env: Option<&str>,
-) -> Result<String> {
-    Err(anyhow!("Not supported on wasm"))
-}
 
 /// Returns the set of local branch names for the repo at `repo_path`.
 /// Uses a synchronous subprocess call — suitable for call sites in
@@ -937,14 +872,20 @@ pub async fn create_pr(
     Err(anyhow!("Not supported on wasm"))
 }
 
+/// A single branch entry returned by [`get_all_branches`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct BranchEntry {
+    pub name: String,
+    pub is_main: bool,
+}
+
 /// Gets git branches, sorted by commit date (most recent first).
-/// Returns a list of `(branch_name, is_main_branch)` tuples.
 /// Defaults to the most recent 100 branches for performance.
 pub async fn get_all_branches(
     repo_path: &Path,
     max_branch_count: Option<usize>,
     include_remotes: bool,
-) -> Result<Vec<(String, bool)>> {
+) -> Result<Vec<BranchEntry>> {
     let main_branch = match detect_main_branch(repo_path).await {
         Ok(branch) => branch,
         Err(err) => {
@@ -965,7 +906,7 @@ pub async fn get_all_branches_with_known_main(
     main_branch: &str,
     max_branch_count: Option<usize>,
     include_remotes: bool,
-) -> Result<Vec<(String, bool)>> {
+) -> Result<Vec<BranchEntry>> {
     fetch_branch_list_with_main(repo_path, main_branch, max_branch_count, include_remotes).await
 }
 
@@ -977,7 +918,7 @@ async fn fetch_branch_list_with_main(
     main_branch: &str,
     max_branch_count: Option<usize>,
     include_remotes: bool,
-) -> Result<Vec<(String, bool)>> {
+) -> Result<Vec<BranchEntry>> {
     let count_arg = format!("--count={}", max_branch_count.unwrap_or(100));
 
     let mut args = vec![
@@ -1011,12 +952,15 @@ async fn fetch_branch_list_with_main(
         }
 
         let is_main = branch == main_branch || branch == main_branch.trim_start_matches("origin/");
-        branches.push((branch.to_string(), is_main));
+        branches.push(BranchEntry {
+            name: branch.to_string(),
+            is_main,
+        });
     }
 
     // Remove duplicates while preserving order (most recent first)
     let mut seen = std::collections::HashSet::new();
-    branches.retain(|(name, _)| seen.insert(name.clone()));
+    branches.retain(|entry| seen.insert(entry.name.clone()));
 
     if branches.is_empty() {
         safe_warn!(
@@ -1028,15 +972,13 @@ async fn fetch_branch_list_with_main(
     Ok(branches)
 }
 
-/// Returns an iterator over `branches` with main branches (`is_main == true`) first,
+/// Returns an iterator over `branches` with main branches first,
 /// then the rest in their existing order.
-pub fn sort_branches_main_first(
-    branches: &[(String, bool)],
-) -> impl Iterator<Item = &(String, bool)> {
+pub fn sort_branches_main_first(branches: &[BranchEntry]) -> impl Iterator<Item = &BranchEntry> {
     branches
         .iter()
-        .filter(|(_, is_main)| *is_main)
-        .chain(branches.iter().filter(|(_, is_main)| !is_main))
+        .filter(|entry| entry.is_main)
+        .chain(branches.iter().filter(|entry| !entry.is_main))
 }
 
 /// Represents a parsed unified diff header.

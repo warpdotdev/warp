@@ -23,8 +23,13 @@ onnx_ort = [
     "dep:ndarray",
     "dep:parking_lot",
 ]
-fasttext = ["dep:fasttext", "dep:rust-embed", "dep:tempfile"]
 onnx = ["dep:rust-embed", "dep:tokenizers"]
+# Selects which BERT-tiny ONNX model bytes are embedded via rust-embed; enable exactly one.
+nld_classifier_v1 = ["onnx_candle"]
+nld_classifier_v2 = ["onnx_candle"]
+# Selects which shell-command heuristic behavior is used. If both are enabled, v2 wins.
+nld_heuristic_v1 = []
+nld_heuristic_v2 = []
 
 [dependencies]
 anyhow.workspace = true
@@ -36,7 +41,6 @@ candle-nn = { version = "0.9.2", optional = true }
 candle-onnx = { version = "0.9.2", optional = true }
 cfg-if.workspace = true
 itertools.workspace = true
-fasttext = { version = "0.7.8", optional = true }
 futures-lite.workspace = true
 instant.workspace = true
 lazy_static.workspace = true
@@ -49,8 +53,8 @@ prost = { version = "0.14.3", optional = true }
 rust-embed = { workspace = true, optional = true }
 serde.workspace = true
 smol_str.workspace = true
-tempfile = { workspace = true, optional = true }
 tokenizers = { version = "0.21.4", optional = true }
 warp_completer.workspace = true
 
 [dev-dependencies]
+warp_features.workspace = true

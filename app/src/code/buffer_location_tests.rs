@@ -729,6 +729,93 @@ fn apply_client_edit_multiple_edits_in_batch() {
 }
 
 #[test]
+fn apply_client_edit_sequential_insertions() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        // Simulate a file with content "def fib(n):\n    pass"
+        let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+            let state = gbm.open_server_local("/tmp/test_seq_insert.txt".into(), ctx);
+            gbm.populate_buffer_with_read_content(
+                state.file_id,
+                "def fib(n):\n    pass",
+                ContentVersion::new(),
+                ContentVersion::new(),
+                true,
+                ctx,
+            );
+            state
+        });
+        let file_id = _buffer_state.file_id;
+
+        let sv = server_version(&app, file_id);
+
+        // Simulate rapid typing of "hello" at position 13 (after '\n', start of line 2).
+        // Each edit's offset is in sequential coordinates (post-previous-edit).
+        let accepted = gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.apply_client_edit(
+                file_id,
+                &[
+                    text_edit(13, 13, "h"),
+                    text_edit(14, 14, "e"),
+                    text_edit(15, 15, "l"),
+                    text_edit(16, 16, "l"),
+                    text_edit(17, 17, "o"),
+                ],
+                sv,
+                ContentVersion::new(),
+                ctx,
+            )
+        });
+
+        assert!(accepted);
+        assert_eq!(content(&app, file_id), "def fib(n):\nhello    pass");
+    })
+}
+
+#[test]
+fn apply_client_edit_insertion_then_edit_at_shifted_offset() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+            let state = gbm.open_server_local("/tmp/test_mixed_batch.txt".into(), ctx);
+            gbm.populate_buffer_with_read_content(
+                state.file_id,
+                "aaa bbb",
+                ContentVersion::new(),
+                ContentVersion::new(),
+                true,
+                ctx,
+            );
+            state
+        });
+        let file_id = _buffer_state.file_id;
+
+        let sv = server_version(&app, file_id);
+
+        // Edit 0: insert "xx" at position 4 → "aaaxx bbb"  (net +2 chars)
+        // Edit 1: replace positions 6..9 in post-edit-0 state (" bb") with "ZZ"
+        //         In original coords this would be 4..7, but the client sends
+        //         sequential coords: 6..9.
+        let accepted = gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.apply_client_edit(
+                file_id,
+                &[text_edit(4, 4, "xx"), text_edit(6, 9, "ZZ")],
+                sv,
+                ContentVersion::new(),
+                ctx,
+            )
+        });
+
+        assert!(accepted);
+        assert_eq!(content(&app, file_id), "aaaxxZZb");
+    })
+}
+
+#[test]
 fn handle_buffer_updated_push_multiple_edits_in_batch() {
     App::test((), |mut app| async move {
         init_app(&mut app);

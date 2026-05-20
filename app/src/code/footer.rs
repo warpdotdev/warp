@@ -45,6 +45,8 @@ use crate::view_components::action_button::{
 };
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 const FOOTER_HEIGHT: f32 = 24.;
 /// Margin around the LSP icon container
@@ -699,7 +701,8 @@ impl CodeFooterView {
 
         let repo_root = DetectedRepositories::handle(ctx)
             .as_ref(ctx)
-            .get_root_for_path(file_path)
+            .get_root_for_path(&LocalOrRemotePath::Local(file_path.to_path_buf()))
+            .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
             .or_else(|| file_path.parent().map(|p| p.to_path_buf()));
 
         let Some(repo_root) = repo_root else {

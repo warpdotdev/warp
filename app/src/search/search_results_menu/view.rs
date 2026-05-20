@@ -267,7 +267,7 @@ impl<T: Action + Clone> SearchResultsMenuView<T> {
         ctx: &mut ViewContext<Self>,
     ) {
         self.search_bar.update(ctx, |view, ctx| {
-            view.set_visible_query_filter(
+            view.set_query_filter(
                 filter.map(|filter| (filter, filter.filter_atom().primary_text)),
                 ctx,
             )
@@ -282,7 +282,7 @@ impl<T: Action + Clone> SearchResultsMenuView<T> {
         let selected_index = state.selected_index();
         let query_result_renderers = state.query_result_renderers();
 
-        let active_filter = state.active_visible_query_filter();
+        let active_filter = state.active_query_filter();
         let appearance = Appearance::as_ref(app);
 
         let mut column = Flex::column();

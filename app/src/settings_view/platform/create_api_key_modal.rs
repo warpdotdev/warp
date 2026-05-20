@@ -6,14 +6,16 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     appearance::Appearance,
     editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},
+    view_components::{dropdown::DROPDOWN_PADDING, dropdown::TOP_MENU_BAR_HEIGHT},
     view_components::{Dropdown as DropdownView, DropdownItem},
 };
 use chrono::Utc;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, Empty, Fill, Flex,
-    MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Empty, Fill, Flex,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
 };
 use warpui::elements::{CrossAxisAlignment, Expanded, MainAxisAlignment, MainAxisSize, Padding};
 use warpui::ui_components::button::ButtonVariant;
@@ -29,6 +31,7 @@ const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
 
 const LABEL_FONT_SIZE: f32 = 14.;
 const INPUT_WIDTH: f32 = 428.; // 460px - (2 * 16px) padding
+const AGENT_DROPDOWN_POSITION_ID: &str = "create_api_key_modal_agent_dropdown";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ApiKeyType {
@@ -166,7 +169,7 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
-            dropdown.set_menu_width(INPUT_WIDTH, ctx);
+            dropdown.set_match_menu_width_to_top_bar(true, ctx);
         });
 
         let api_key_type_control = ctx.add_typed_action_view(move |ctx| {
@@ -667,6 +670,7 @@ impl View for CreateApiKeyModal {
                 .finish();
 
                 let mut col = Flex::column();
+                let mut render_agent_dropdown = false;
 
                 if self.has_team || self.has_named_agents {
                     let type_label =
@@ -738,13 +742,19 @@ impl View for CreateApiKeyModal {
                             .finish(),
                         );
                     } else {
+                        render_agent_dropdown = true;
                         col.add_child(
-                            ConstrainedBox::new(
-                                Container::new(ChildView::new(&self.agent_dropdown).finish())
-                                    .with_margin_bottom(16.)
-                                    .finish(),
+                            Container::new(
+                                SavePosition::new(
+                                    ConstrainedBox::new(Empty::new().finish())
+                                        .with_width(INPUT_WIDTH)
+                                        .with_height(TOP_MENU_BAR_HEIGHT + (2. * DROPDOWN_PADDING))
+                                        .finish(),
+                                    AGENT_DROPDOWN_POSITION_ID,
+                                )
+                                .finish(),
                             )
-                            .with_width(INPUT_WIDTH)
+                            .with_margin_bottom(16.)
                             .finish(),
                         );
                     }
@@ -786,7 +796,24 @@ impl View for CreateApiKeyModal {
                 );
 
                 col.add_child(buttons_row);
-                col.finish()
+                let mut stack = Stack::new()
+                    .with_constrain_absolute_children()
+                    .with_child(col.finish());
+                if render_agent_dropdown {
+                    stack.add_positioned_overlay_child(
+                        ConstrainedBox::new(ChildView::new(&self.agent_dropdown).finish())
+                            .with_width(INPUT_WIDTH)
+                            .finish(),
+                        OffsetPositioning::offset_from_save_position_element(
+                            AGENT_DROPDOWN_POSITION_ID,
+                            vec2f(0., 0.),
+                            PositionedElementOffsetBounds::WindowByPosition,
+                            PositionedElementAnchor::TopLeft,
+                            ChildAnchor::TopLeft,
+                        ),
+                    );
+                }
+                stack.finish()
             }
         }
     }

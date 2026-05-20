@@ -1,12 +1,12 @@
 use warpui::{AppContext, ModelHandle, ViewContext, ViewHandle};
 
 use crate::{
+    ai::ambient_agents::github_auth_url::GithubAuthRedirectTarget,
     app_state::{EnvironmentManagementPaneSnapshot, LeafContents},
     pane_group::focus_state::PaneFocusHandle,
     settings_view::{
         environments_page::{EnvironmentsPage, EnvironmentsPageView},
         settings_page::{PaneEventWrapper, SettingsPageEvent},
-        update_environment_form::GithubAuthRedirectTarget,
     },
 };
 

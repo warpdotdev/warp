@@ -1,6 +1,6 @@
 use crate::schema;
 
-use super::billing::{BillingMetadata, BonusGrantsInfo};
+use super::billing::{BillingCycleUsageHistory, BillingMetadata, BonusGrantsInfo};
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Workspace {
@@ -11,6 +11,7 @@ pub struct Workspace {
     pub teams: Vec<Team>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_info: BonusGrantsInfo,
+    pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
     pub invite_code: Option<String>,
@@ -285,6 +286,7 @@ pub enum MembershipRole {
 #[derive(cynic::Enum, Clone, Debug)]
 pub enum LlmModelHost {
     AwsBedrock,
+    CustomEndpoint,
     DirectApi,
     #[cynic(fallback)]
     Other(String),

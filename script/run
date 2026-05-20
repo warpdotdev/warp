@@ -21,8 +21,10 @@ OS_TYPE="$(uname -s)"
 FEATURES="gui"
 INSTALL_COMMON_SKILLS=1
 FORCE_COMMON_SKILLS=0
+COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
 
 ./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
+
 
 # If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
 if command -v warp-channel-config &>/dev/null; then
@@ -93,11 +95,30 @@ while (( "$#" )); do
   esac
 done
 
+common_skills_match_lock() {
+  ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "$@" --verify-only --quiet >/dev/null 2>&1
+}
 if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
-  if [[ "$FORCE_COMMON_SKILLS" -eq 1 ]]; then
-    ./script/install_common_skills --force --non-interactive || echo "Skipping common-skills update."
+  COMMON_SKILLS_ARGS=()
+  if [[ "${COMMON_SKILLS_TARGET}" = "project" || "${COMMON_SKILLS_TARGET}" = "global" ]]; then
+    COMMON_SKILLS_ARGS=("--${COMMON_SKILLS_TARGET}")
+  fi
+  if [[ "${WARP_SKIP_COMMON_SKILLS_INSTALL:-}" = "1" ]]; then
+    :
+  elif [[ "$FORCE_COMMON_SKILLS" -eq 1 ]]; then
+    if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
+      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "${COMMON_SKILLS_ARGS[@]}" --force
+    else
+      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --force --prompt-for-target
+    fi
+  elif common_skills_match_lock "${COMMON_SKILLS_ARGS[@]}"; then
+    :
   else
-    ./script/install_common_skills --if-needed --non-interactive --quiet || echo "Skipping common-skills update."
+    if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
+      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "${COMMON_SKILLS_ARGS[@]}" --if-needed --quiet
+    else
+      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --if-needed --prompt-for-target --quiet
+    fi
   fi
 fi
 

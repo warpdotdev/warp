@@ -1133,17 +1133,22 @@ esac
         rcfiles_end_time="$(LC_ALL="C"; echo $EPOCHREALTIME)"
     fi
 
-    # Unset HISTFILESIZE if the user rcfiles didn't change it away from our
-    # very large sentinel value.  We need to set the initial value of HISTSIZE
-    # to ensure that the user's history file doesn't get truncated when we spawn
-    # the shell, but once bootstrap has completes, we want the value to be what
-    # it would have been if we hadn't set an initial value.
+    # Unset HISTFILESIZE and HISTSIZE if the user rcfiles didn't change them
+    # away from our very large sentinel values.  We need to set the initial
+    # values to ensure that the user's history file and in-memory history list
+    # don't get truncated when we spawn the shell, but once bootstrap has
+    # completed, we want the values to be what they would have been if we hadn't
+    # set initial values.
     #
     # For more context, see: https://github.com/warpdotdev/Warp/issues/1262
     if [[ $HISTFILESIZE == $WARP_INITIAL_HISTFILESIZE ]]; then
         unset HISTFILESIZE
     fi
     unset WARP_INITIAL_HISTFILESIZE
+    if [[ $HISTSIZE == $WARP_INITIAL_HISTSIZE ]]; then
+        unset HISTSIZE
+    fi
+    unset WARP_INITIAL_HISTSIZE
 
     # Save the value of HISTCONTROL as it existed just after reading the user's
     # rcfiles.
@@ -1318,6 +1323,7 @@ esac
           warp_send_hook_kv_pair "user" "$_user"
           warp_send_hook_kv_pair "hostname" "$_hostname"
           warp_send_hook_kv_pair "path" "$PATH"
+          warp_send_hook_kv_pair "cdpath" "$CDPATH"
           warp_send_hook_kv_pair_escaped "env_var_names" "$env_var_names"
           warp_send_hook_kv_pair "abbreviations" ""
           warp_send_hook_kv_pair_escaped "aliases" "$aliases"
@@ -1338,7 +1344,8 @@ esac
         else
           local escaped_editor="$(warp_escape_json "$EDITOR")"
           local escaped_shell_path="$(warp_escape_json "$BASH")"
-          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
+          local escaped_cdpath="$(warp_escape_json "$CDPATH")"
+          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
           warp_send_json_message "$escaped_json"
         fi
     }
