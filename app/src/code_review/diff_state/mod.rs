@@ -537,7 +537,7 @@ impl DiffStateModel {
             Self::Remote(remote) => {
                 if force {
                     remote.update(ctx, |remote, ctx| {
-                        remote.replay_latest_diffs(ctx);
+                        remote.fetch_fresh_snapshot(ctx);
                     });
                 }
             }
