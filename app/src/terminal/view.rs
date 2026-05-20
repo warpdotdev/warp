@@ -3870,7 +3870,7 @@ impl TerminalView {
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text("Seems like your completions are not working ("),
                 FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
-                FormattedTextFragment::plain_text("). Enabling tmux warpification in "),
+                FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
                 FormattedTextFragment::hyperlink_action(
                     "settings",
                     TerminalAction::ShowWarpifySettings,
@@ -8679,13 +8679,6 @@ impl TerminalView {
         // probably won't happen often, but it's something that we might want to clean
         // up eventually.
         if self.control_master_error_banner_state.associated_session_id != active_session_id {
-            self.control_master_error_banner_state = ControlMasterErrorBannerState {
-                is_open: true,
-                associated_session_id: active_session_id,
-            };
-
-            ctx.notify();
-
             let has_remote_server = active_session_id.is_some_and(|session_id| {
                 self.sessions
                     .as_ref(ctx)
@@ -8700,6 +8693,16 @@ impl TerminalView {
                         )
                     })
             });
+
+            // Don't show the banner when the session already has a remote server
+            // active — the CTA to enable the SSH extension is irrelevant.
+            self.control_master_error_banner_state = ControlMasterErrorBannerState {
+                is_open: !has_remote_server,
+                associated_session_id: active_session_id,
+            };
+
+            ctx.notify();
+
             send_telemetry_from_ctx!(
                 TelemetryEvent::SSHControlMasterError { has_remote_server },
                 ctx
@@ -11766,6 +11769,31 @@ impl TerminalView {
                                                 );
                                             },
                                         );
+
+                                        // Force the workspace to re-evaluate
+                                        // ActiveSession::working_directory. The
+                                        // AppStateChanged at line 11671 already ran
+                                        // update_active_session once, but for remote
+                                        // sessions pwd_as_local_or_remote() may have
+                                        // returned None at that point because host_id
+                                        // wasn't set yet. Now that remote repo
+                                        // detection succeeded we know host_id is
+                                        // available, so a second pass populates
+                                        // working_directory correctly.
+                                        // Local sessions don't need this because
+                                        // pwd_as_local_or_remote always succeeds for
+                                        // local paths (no host_id dependency).
+                                        ctx.emit(Event::AppStateChanged);
+
+                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                            me.input.update(ctx, |input, ctx| {
+                                                input
+                                                    .check_and_update_ai_context_menu_disabled_state(
+                                                        ctx,
+                                                    );
+                                            });
+                                        }
+
                                         ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                             remote_path: remote_path.clone(),
                                         }));
@@ -20322,6 +20350,14 @@ impl TerminalView {
         active_block.index() == block_index && active_block.is_active_and_long_running()
     }
 
+    pub fn has_active_long_running_command(&self) -> bool {
+        let model = self.model.lock();
+        model
+            .block_list()
+            .active_block()
+            .is_active_and_long_running()
+    }
+
     /// If password notification settings enabled, send a notification.
     /// Otherwise, set the banner trigger so that we show the banner the next
     /// time a block completes.
@@ -26519,7 +26555,7 @@ impl View for TerminalView {
 
                     let stack = Stack::new()
                         .with_constrain_absolute_children()
-                        .with_child(column.finish());
+                        .with_child(Clipped::new(column.finish()).finish());
                     if matches!(input_mode, InputMode::Waterfall) && !is_alt_screen_active {
                         self.render_waterfall_mode_background(&model, stack, app)
                     } else {

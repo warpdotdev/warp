@@ -18,7 +18,10 @@ use crate::util::openable_file_type::{
     is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
 };
 use crate::workspace::util::PaneViewLocator;
-use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
+use crate::workspace::{
+    auto_handoff::trigger_auto_handoff_to_cloud, AutoCloudHandoffTrigger, Workspace,
+    WorkspaceAction, WorkspaceRegistry,
+};
 use crate::{cloud_object::ObjectType, workspace::ToastStack};
 use crate::{drive::OpenWarpDriveObjectArgs, view_components::DismissibleToast};
 use crate::{features::FeatureFlag, workspace::active_terminal_in_window};
@@ -802,6 +805,19 @@ fn parse_tab_path(url: &Url) -> Option<PathBuf> {
     Some(PathBuf::from(shellexpand::tilde(&raw).into_owned()))
 }
 
+fn parse_auto_handoff_trigger(url: &Url) -> AutoCloudHandoffTrigger {
+    match url
+        .query_pairs()
+        .find(|(k, _)| k == "trigger")
+        .map(|(_, v)| v)
+    {
+        Some(trigger) if matches!(trigger.as_ref(), "sleep" | "macos_sleep" | "macos-sleep") => {
+            AutoCloudHandoffTrigger::MacOsSleep
+        }
+        Some(_) | None => AutoCloudHandoffTrigger::Uri,
+    }
+}
+
 #[derive(Debug)]
 enum Action {
     NewTab,
@@ -813,6 +829,7 @@ enum Action {
     NewAgentConversation,
     CreateEnvironment { repos: Vec<String> },
     FocusCloudMode,
+    AutoHandoffToCloud { trigger: AutoCloudHandoffTrigger },
 }
 
 impl Action {
@@ -834,6 +851,9 @@ impl Action {
                 Ok(Self::CreateEnvironment { repos })
             }
             "/focus_cloud_mode" => Ok(Self::FocusCloudMode),
+            "/auto_handoff_to_cloud" | "/auto-handoff-to-cloud" => Ok(Self::AutoHandoffToCloud {
+                trigger: parse_auto_handoff_trigger(url),
+            }),
             _ => Err(anyhow!(
                 "Received \"action\" intent with unexpected action: {}",
                 url.path()
@@ -1046,6 +1066,9 @@ impl Action {
                     ctx,
                 );
             }
+            Action::AutoHandoffToCloud { trigger } => {
+                trigger_auto_handoff_to_cloud(*trigger, ctx);
+            }
         }
     }
 
@@ -1060,7 +1083,8 @@ impl Action {
             | Self::CloudAgentSetup
             | Self::NewCloudAgentConversation
             | Self::NewAgentConversation
-            | Self::FocusCloudMode => W::default(),
+            | Self::FocusCloudMode
+            | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
                 description: "Go to Warp to see your new tab.".to_owned(),

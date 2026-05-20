@@ -28,10 +28,10 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
-    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    CodebaseContextEnabled, FeedbackBundledSkillEnabled, FileBasedMcpEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled,
+    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
@@ -53,7 +53,10 @@ use strum::IntoEnumIterator;
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Dismiss,
     Empty, Expanded, Fill, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize,
@@ -2668,6 +2671,7 @@ pub enum AISettingsPageAction {
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
+    ToggleFeedbackBundledSkill,
 
     // Custom inference
     OpenAddCustomEndpointModal,
@@ -2677,6 +2681,7 @@ pub enum AISettingsPageAction {
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
     ToggleCloudHandoff,
     ToggleAmpersandHandoff,
+    ToggleAutoHandoffOnSleep,
     ToggleShowConversationHistory,
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
@@ -3417,6 +3422,14 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ToggleFeedbackBundledSkill => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .feedback_bundled_skill_enabled
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             AISettingsPageAction::OpenAddCustomEndpointModal => {
                 self.show_add_custom_endpoint_modal(ctx);
             }
@@ -3435,6 +3448,14 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .should_force_disable_ampersand_handoff
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleAutoHandoffOnSleep => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .auto_handoff_on_sleep_enabled
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -6056,6 +6077,7 @@ struct OtherAIWidget {
     show_oz_updates_in_zero_state_toggle: SwitchStateHandle,
     use_agent_footer_toggle: SwitchStateHandle,
     show_conversation_history_toggle: SwitchStateHandle,
+    feedback_bundled_skill_toggle: SwitchStateHandle,
 }
 
 impl OtherAIWidget {
@@ -6086,7 +6108,7 @@ impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history"
+        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history feedback skill bundled github issue"
     }
 
     fn render(
@@ -6154,6 +6176,20 @@ impl SettingsWidget for OtherAIWidget {
             is_toggleable,
             self.show_conversation_history_toggle.clone(),
             &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<FeedbackBundledSkillEnabled>(
+            "Enable built-in feedback skill",
+            AISettingsPageAction::ToggleFeedbackBundledSkill,
+            *ai_settings.feedback_bundled_skill_enabled,
+            is_toggleable,
+            self.feedback_bundled_skill_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_description(
+            "Let Oz use Warp's built-in skill for turning Warp product feedback into GitHub issues.",
+            is_toggleable,
             app,
         ));
 
@@ -6712,6 +6748,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 #[derive(Default)]
 struct CloudHandoffWidget {
     handoff_toggle: SwitchStateHandle,
+    auto_handoff_on_sleep_toggle: SwitchStateHandle,
     ampersand_toggle: SwitchStateHandle,
 }
 
@@ -6719,7 +6756,7 @@ impl SettingsWidget for CloudHandoffWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "cloud handoff ampersand & move to cloud local"
+        "cloud handoff auto sleep ampersand & move to cloud local"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
@@ -6806,6 +6843,38 @@ impl SettingsWidget for CloudHandoffWidget {
             ));
 
         if ai_settings.is_cloud_handoff_enabled(app) {
+            if ai_settings
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            {
+                let auto_handoff_on_sleep_toggle = ui_builder
+                    .switch(self.auto_handoff_on_sleep_toggle.clone())
+                    .check(*ai_settings.auto_handoff_on_sleep_enabled)
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AISettingsPageAction::ToggleAutoHandoffOnSleep);
+                    })
+                    .finish();
+                let auto_handoff_on_sleep_row = build_toggle_element(
+                    render_body_item_label::<AISettingsPageAction>(
+                        "Auto-handoff before sleep".to_string(),
+                        Some(styles::header_font_color(true, app)),
+                        None,
+                        LocalOnlyIconState::Hidden,
+                        ToggleState::Enabled,
+                        appearance,
+                    ),
+                    auto_handoff_on_sleep_toggle,
+                    appearance,
+                    None,
+                );
+                column.add_child(auto_handoff_on_sleep_row);
+                column.add_child(render_ai_setting_description(
+                    "When macOS is about to sleep, automatically moves the most recently focused running local Warp Agent conversation to Cloud Mode so it can keep working.",
+                    true,
+                    app,
+                ));
+            }
             let ampersand_toggle = ui_builder
                 .switch(self.ampersand_toggle.clone())
                 .check(!*ai_settings.should_force_disable_ampersand_handoff)
@@ -7091,6 +7160,7 @@ impl ApiKeysWidget {
                 ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
             ),
         ])]);
+        let tooltip_background = appearance.theme().tooltip_background();
 
         let info_button =
             Hoverable::new(self.custom_inference_info_tooltip.clone(), move |state| {
@@ -7106,7 +7176,16 @@ impl ApiKeysWidget {
                                 appearance.theme().background().into_solid(),
                                 self.custom_inference_terms_index.clone(),
                             )
-                            .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+                            .with_hyperlink_font_color(
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .on_background(
+                                        ThemeFill::Solid(tooltip_background),
+                                        MinimumAllowedContrast::Text,
+                                    )
+                                    .into(),
+                            )
                             .register_default_click_handlers(|url, ctx, _| {
                                 ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(
                                     url,
@@ -7114,7 +7193,7 @@ impl ApiKeysWidget {
                             })
                             .finish(),
                         )
-                        .with_background_color(appearance.theme().tooltip_background())
+                        .with_background_color(tooltip_background)
                         .with_vertical_padding(4.)
                         .with_horizontal_padding(8.)
                         .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))

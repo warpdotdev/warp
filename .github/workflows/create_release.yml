@@ -1619,7 +1619,7 @@ jobs:
 
   generate_changelogs:
     name: Generate Changelogs
-    if: ${{ needs.prepare_release.outputs.should_publish == 'true' && inputs.channel == 'stable' }}
+    if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -1646,7 +1646,12 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Generate changelog via Oz
+      # Stable releases use the Oz changelog-draft agent for higher-quality,
+      # human-reviewable output. Non-stable channels (dev/preview/beta) use the
+      # legacy generate-changelog action to avoid spending Oz agent tokens on
+      # daily dev cuts and preview RCs.
+      - name: Generate changelog via Oz (stable only)
+        if: inputs.channel == 'stable'
         uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
         with:
           prompt: |
@@ -1663,31 +1668,60 @@ jobs:
           warp_api_key: ${{ secrets.WARP_API_KEY }}
           share: team
 
-      - name: Convert draft JSON to release format
+      - name: Convert draft JSON to release format (stable only)
+        if: inputs.channel == 'stable'
         shell: bash
         run: |
           python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
             --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
             --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
 
-      - name: Load release changelog into step output
+      - name: Obtain a GitHub App Installation Access Token (non-stable only)
+        if: inputs.channel != 'stable'
+        id: github_app_auth
+        run: |
+          TOKEN="$(npx obtain-github-app-installation-access-token ci ${{ secrets.GH_APP_CREDENTIALS_TOKEN }})"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog via legacy action (non-stable only)
+        if: inputs.channel != 'stable'
+        id: legacy_changelog
+        uses: warpdotdev/generate-changelog@70f534c1e030dafb45046ae57e4aa4d43a2f5c84 # main
+        with:
+          channel: ${{ inputs.channel }}
+          github_auth_token: ${{ steps.github_app_auth.outputs.token }}
+          version: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Load changelog into step output
         id: generate_changelog
         shell: bash
+        env:
+          LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
         run: |
-          # Read the release-pipeline-compatible JSON produced by the conversion
-          # script and expose it as a step output so downstream steps can consume
-          # it with the same interface as the old generate-changelog action.
-          CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
-            exit 1
+          # Bridge step: picks whichever generator ran for this channel and
+          # re-emits the changelog as outputs.changelog so downstream Slack/GCS
+          # steps work unchanged.
+          if [[ "${{ inputs.channel }}" == "stable" ]]; then
+            CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
+            if [ ! -f "$CHANGELOG_FILE" ]; then
+              echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
+              exit 1
+            fi
+            jq empty "$CHANGELOG_FILE"
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              cat "$CHANGELOG_FILE"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "$LEGACY_CHANGELOG" | jq empty
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              printf '%s\n' "$LEGACY_CHANGELOG"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
           fi
-          # Validate JSON
-          jq empty "$CHANGELOG_FILE"
-          # Set multiline output
-          echo "changelog<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
-          cat "$CHANGELOG_FILE" >> $GITHUB_OUTPUT
-          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
 
       - name: Build Slack changelog payload
         id: build_slack_payload

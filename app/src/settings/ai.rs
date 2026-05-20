@@ -1222,6 +1222,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
+    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
+    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
+        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
+    }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
     can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
@@ -1497,6 +1507,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
         description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
     }
+
+    auto_handoff_on_sleep_enabled: AutoHandoffOnSleepEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
+        description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
+    }
 ]);
 
 impl AISettings {
@@ -1738,6 +1758,14 @@ impl AISettings {
     ) -> bool {
         self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
             && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && self
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            && *self.auto_handoff_on_sleep_enabled
     }
 
     /// Determines whether a quota reset banner should be displayed to the user.

@@ -1,5 +1,3 @@
-#[allow(unused_imports)]
-use crate::{Assets, ASSETS};
 use anyhow::Result;
 
 pub fn init() -> Result<()> {

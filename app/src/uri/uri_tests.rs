@@ -319,6 +319,56 @@ fn test_action_cloud_agent_setup_parse() {
     let action = Action::parse(&url).unwrap();
     assert!(matches!(action, Action::CloudAgentSetup));
 }
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_default_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_alias_path() {
+    let url = Url::parse(&format!(
+        "{}://action/auto-handoff-to-cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_sleep_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud?trigger=sleep",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::MacOsSleep,
+        }
+    ));
+}
 
 #[test]
 fn test_action_new_cloud_agent_conversation_parse() {
