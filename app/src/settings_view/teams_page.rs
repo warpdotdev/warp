@@ -1110,6 +1110,22 @@ impl TeamsPageView {
         ctx.notify();
     }
 
+    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
+        self.show_delete_or_leave_team_confirmation_dialog
+            && matches!(
+                &self.pending_team_action_confirmation,
+                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
+            )
+    }
+
+    fn should_show_centered_team_action_confirmation_dialog(&self) -> bool {
+        self.show_delete_or_leave_team_confirmation_dialog
+            && matches!(
+                &self.pending_team_action_confirmation,
+                Some(TeamActionConfirmationTarget::RemoveUser { .. })
+            )
+    }
+
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
     /// invite editor.
     pub fn open_team_members(&mut self, email: Option<&String>, ctx: &mut ViewContext<Self>) {
@@ -2305,6 +2321,7 @@ impl TeamsWidget {
                 Container::new(self.render_leave_or_delete_team_button(
                     is_owner,
                     delete_disabled_reason.is_none(),
+                    view,
                     appearance,
                 ))
                 .with_padding_right(24.)
@@ -3299,8 +3316,10 @@ impl TeamsWidget {
         &self,
         is_team_owner: bool,
         can_team_be_deleted: bool,
+        view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        let mut stack = Stack::new();
         let (label, action) = if is_team_owner {
             (
                 DELETE_TEAM_BUTTON_LABEL,
@@ -3346,10 +3365,27 @@ impl TeamsWidget {
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         };
-        Container::new(hoverable.finish())
-            .with_padding_top(CONTENT_SEPARATION_PADDING)
-            .with_padding_bottom(CONTENT_SEPARATION_PADDING)
-            .finish()
+
+        stack.add_child(
+            Container::new(hoverable.finish())
+                .with_padding_top(CONTENT_SEPARATION_PADDING)
+                .with_padding_bottom(CONTENT_SEPARATION_PADDING)
+                .finish(),
+        );
+
+        if view.should_show_delete_or_leave_team_confirmation_dialog() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&view.delete_or_leave_team_confirmation_dialog).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::Unbounded,
+                    ParentAnchor::Center,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+
+        stack.finish()
     }
 
     fn render_delete_disabled_help_text(
@@ -4382,7 +4418,7 @@ impl SettingsWidget for TeamsWidget {
                 ),
             );
         }
-        if view.show_delete_or_leave_team_confirmation_dialog {
+        if view.should_show_centered_team_action_confirmation_dialog() {
             stack.add_positioned_overlay_child(
                 ChildView::new(&view.delete_or_leave_team_confirmation_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
