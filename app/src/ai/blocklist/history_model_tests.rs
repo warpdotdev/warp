@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Local, Utc};
@@ -38,7 +39,8 @@ use crate::{
 
 use super::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,
-    AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput, PersistedAIInputType,
+    AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PersistedAIInput,
+    PersistedAIInputType,
 };
 use uuid::Uuid;
 
@@ -2249,6 +2251,130 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
     });
 }
 
+#[test]
+fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_events() {
+    use crate::ai::agent::conversation::AIConversation;
+    use crate::persistence::model::AgentConversationData;
+    use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let terminal_view_id = EntityId::new();
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+
+        app.update(|ctx| {
+            let captured_events = captured_events.clone();
+            ctx.subscribe_to_model(&history_model, move |_, event, _| {
+                captured_events.lock().unwrap().push(event.clone());
+            });
+        });
+
+        let source_id = AIConversationId::new();
+        let root_task = create_api_task(
+            "root-task",
+            vec![create_message("root-task-message", "root-task")],
+        );
+        let source = AIConversation::new_restored(
+            source_id,
+            vec![root_task],
+            Some(AgentConversationData {
+                server_conversation_token: Some("src-token".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            }),
+        )
+        .expect("restored source conversation should build");
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![source], ctx);
+        });
+
+        let forked_conversation = history_model.update(&mut app, |model, ctx| {
+            let source = model
+                .conversation(&source_id)
+                .expect("source conversation must be in memory after restore")
+                .clone();
+            model
+                .fork_conversation(&source, "[Fork] ", false, None, ctx)
+                .expect("fork must succeed when sqlite sender is wired up")
+        });
+        let forked_id = forked_conversation.id();
+        let fork_terminal_view_id = EntityId::new();
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(
+                fork_terminal_view_id,
+                vec![forked_conversation.clone()],
+                ctx,
+            );
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.set_server_conversation_token_for_conversation_and_persist(
+                forked_id,
+                "cloud-T".to_string(),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |model, _| {
+            let metadata = model
+                .get_conversation_metadata(&forked_id)
+                .expect("forked conversation should keep a cached metadata entry");
+            assert_eq!(
+                metadata
+                    .server_conversation_token
+                    .as_ref()
+                    .map(ServerConversationToken::as_str),
+                Some("cloud-T"),
+            );
+            assert!(
+                metadata.has_cloud_data,
+                "a token-bound fork should be treated as cloud-backed in cached metadata",
+            );
+        });
+
+        let events = captured_events.lock().unwrap().clone();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                    terminal_view_id: Some(id),
+                    conversation_id,
+                } if *id == fork_terminal_view_id && *conversation_id == forked_id
+            )),
+            "token binding should emit UpdatedConversationMetadata so metadata-driven UI refreshes",
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                    terminal_view_id: id,
+                    conversation_id,
+                } if *id == fork_terminal_view_id && *conversation_id == forked_id
+            )),
+            "token binding should emit ConversationServerTokenAssigned so conversation-management UI refreshes",
+        );
+    });
+}
 /// REMOTE-1519 local-to-cloud handoff requires `preserve_task_ids: true` so the local fork's
 /// task store matches the cloud-side fork (a byte-for-byte GCS copy of the source). Verifies
 /// that root and subtask ids are preserved across the fork, the subtask's `parent_task_id`
