@@ -9,7 +9,7 @@ use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
 use crate::{send_telemetry_from_ctx, LaunchMode, TelemetryEvent};
@@ -627,8 +627,27 @@ impl AIExecutionProfilesModel {
         );
 
         if changed {
+            let Some(profile) = self.get_profile_by_id(profile_id, ctx) else {
+                return;
+            };
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            let model_info = profile
+                .data()
+                .base_model
+                .as_ref()
+                .and_then(|id| llm_preferences.get_llm_info(id))
+                .unwrap_or_else(|| llm_preferences.get_default_base_model());
+            let context_window = &model_info.context_window;
             send_telemetry_from_ctx!(
-                TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens: limit },
+                TelemetryEvent::AIExecutionProfileContextWindowSelected {
+                    tokens: limit,
+                    model_value: model_info.id.to_string(),
+                    context_window_is_configurable: context_window.is_configurable,
+                    context_window_min_tokens: context_window.min,
+                    context_window_max_tokens: context_window.max,
+                    context_window_default_tokens: context_window.default_max,
+                    context_window_selected_tokens: limit.unwrap_or(context_window.default_max),
+                },
                 ctx
             );
         }
