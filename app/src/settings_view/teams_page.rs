@@ -470,8 +470,8 @@ pub struct TeamsPageView {
     invite_view: TeamsInviteOption,
     team_members_mouse_state_handles: Vec<MouseStateHandle>,
     team_approved_domains_mouse_state_handles: Vec<MouseStateHandle>,
-    delete_or_leave_team_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
-    show_delete_or_leave_team_confirmation_dialog: bool,
+    team_action_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
+    show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -788,10 +788,10 @@ impl TeamsPageView {
             ctx.notify()
         });
 
-        let delete_or_leave_team_confirmation_dialog =
+        let team_action_confirmation_dialog =
             ctx.add_typed_action_view(|_| CloudActionConfirmationDialog::new());
         ctx.subscribe_to_view(
-            &delete_or_leave_team_confirmation_dialog,
+            &team_action_confirmation_dialog,
             |me, _, event, ctx| {
                 me.handle_cloud_action_confirmation_dialog_event(event, ctx);
             },
@@ -859,8 +859,8 @@ impl TeamsPageView {
             team_members_mouse_state_handles,
             team_approved_domains_mouse_state_handles,
             clipped_scroll_state: Default::default(),
-            delete_or_leave_team_confirmation_dialog,
-            show_delete_or_leave_team_confirmation_dialog: false,
+            team_action_confirmation_dialog,
+            show_team_action_confirmation_dialog: false,
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
@@ -1077,19 +1077,19 @@ impl TeamsPageView {
     ) {
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
-        self.delete_or_leave_team_confirmation_dialog
+        self.team_action_confirmation_dialog
             .update(ctx, |dialog, ctx| {
                 dialog.set_variant(variant);
                 dialog.set_confirmation_button_enabled(true);
                 ctx.notify();
             });
-        self.show_delete_or_leave_team_confirmation_dialog = true;
+        self.show_team_action_confirmation_dialog = true;
         ctx.notify();
     }
 
     fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
         self.pending_team_action_confirmation = None;
-        self.show_delete_or_leave_team_confirmation_dialog = false;
+        self.show_team_action_confirmation_dialog = false;
         ctx.notify();
     }
 
@@ -1098,7 +1098,7 @@ impl TeamsPageView {
             self.hide_team_action_confirmation(ctx);
             return;
         };
-        self.show_delete_or_leave_team_confirmation_dialog = false;
+        self.show_team_action_confirmation_dialog = false;
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1111,15 +1111,15 @@ impl TeamsPageView {
     }
 
     fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
-        self.show_delete_or_leave_team_confirmation_dialog
+        self.show_team_action_confirmation_dialog
             && matches!(
                 &self.pending_team_action_confirmation,
                 Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
             )
     }
 
-    fn should_show_centered_team_action_confirmation_dialog(&self) -> bool {
-        self.show_delete_or_leave_team_confirmation_dialog
+    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
+        self.show_team_action_confirmation_dialog
             && matches!(
                 &self.pending_team_action_confirmation,
                 Some(TeamActionConfirmationTarget::RemoveUser { .. })
@@ -1836,9 +1836,6 @@ impl SettingsPageMeta for TeamsPageView {
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
         );
-        self.ai_request_usage_model.update(ctx, |usage_model, ctx| {
-            usage_model.refresh_request_usage_async(ctx);
-        });
         self.update_team_members_state(ctx);
         self.update_approved_domains_state(ctx);
         if NetworkStatus::as_ref(ctx).is_online() {
@@ -3320,6 +3317,7 @@ impl TeamsWidget {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut stack = Stack::new();
+
         let (label, action) = if is_team_owner {
             (
                 DELETE_TEAM_BUTTON_LABEL,
@@ -3375,7 +3373,7 @@ impl TeamsWidget {
 
         if view.should_show_delete_or_leave_team_confirmation_dialog() {
             stack.add_positioned_overlay_child(
-                ChildView::new(&view.delete_or_leave_team_confirmation_dialog).finish(),
+                ChildView::new(&view.team_action_confirmation_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., 0.),
                     ParentOffsetBounds::Unbounded,
@@ -4418,9 +4416,9 @@ impl SettingsWidget for TeamsWidget {
                 ),
             );
         }
-        if view.should_show_centered_team_action_confirmation_dialog() {
+        if view.should_show_remove_user_from_team_confirmation_dialog() {
             stack.add_positioned_overlay_child(
-                ChildView::new(&view.delete_or_leave_team_confirmation_dialog).finish(),
+                ChildView::new(&view.team_action_confirmation_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., 0.),
                     ParentOffsetBounds::WindowByPosition,
