@@ -49,6 +49,12 @@ app/src/persistence/schema.rs.orig
 # Don't include personal Claude Code settings
 .claude/settings.local.json
 
+# External context files (Confluence exports, API specs, etc.)
+.artifacts/
+
+# Kiro agent configuration and knowledge base
+.kiro/
+
 # Don't include Claude Code worktrees
 .claude/worktrees/
 
