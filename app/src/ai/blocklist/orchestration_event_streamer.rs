@@ -690,6 +690,13 @@ impl OrchestrationEventStreamer {
             .get(&parent_task_id)
             .map(|entry| entry.known_children.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
+        if !run_ids.is_empty() {
+            log::info!(
+                "[orch-viewer-streamer] replaying known children for parent_task_id={parent_task_id}: \
+                 count={}",
+                run_ids.len()
+            );
+        }
         self.emit_viewer_mode_child_spawns(parent_task_id, run_ids, ctx);
     }
 
@@ -700,6 +707,10 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         for run_id in run_ids {
+            log::debug!(
+                "[orch-viewer-streamer] emit ChildSpawned parent_task_id={parent_task_id} \
+                 run_id={run_id:?}"
+            );
             ctx.emit(OrchestrationEventStreamerEvent::ChildSpawned {
                 parent_task_id,
                 run_id,
@@ -734,6 +745,10 @@ impl OrchestrationEventStreamer {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
+        log::info!(
+            "[orch-viewer-streamer] spawning ancestor seed fetch for parent_task_id={parent_task_id} \
+             (limit={VIEWER_MODE_SEED_FETCH_LIMIT})"
+        );
         let ai_client = self.ai_client.clone();
         let filter = TaskListFilter {
             ancestor_run_id: Some(parent_task_id.to_string()),
@@ -763,10 +778,15 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         if !self.viewer_mode_orchestrators.contains_key(&parent_task_id) {
+            log::warn!(
+                "[orch-viewer-streamer] ancestor seed fetch completed but viewer-mode entry \
+                 for parent_task_id={parent_task_id} is gone; dropping"
+            );
             return;
         };
         match result {
             Ok(tasks) => {
+                let tasks_received = tasks.len();
                 let mut seeded_run_ids = Vec::new();
                 {
                     let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id)
@@ -791,9 +811,11 @@ impl OrchestrationEventStreamer {
                     entry.event_cursor = seed;
                     entry.seeded = true;
                     log::info!(
-                        "Ancestor SSE seed applied for parent_task_id={parent_task_id}: \
-                         known_children={}, seed_cursor={seed}",
-                        entry.known_children.len()
+                        "[orch-viewer-streamer] ancestor seed applied for parent_task_id={parent_task_id}: \
+                         tasks_received={tasks_received} children_seeded={} known_children_total={} \
+                         seed_cursor={seed} local_cursor_before={local_cursor}",
+                        seeded_run_ids.len(),
+                        entry.known_children.len(),
                     );
                 }
                 self.emit_viewer_mode_child_spawns(parent_task_id, seeded_run_ids, ctx);
@@ -801,7 +823,8 @@ impl OrchestrationEventStreamer {
             }
             Err(err) => {
                 log::warn!(
-                    "Ancestor SSE seed fetch failed for parent_task_id={parent_task_id}: {err:#}"
+                    "[orch-viewer-streamer] ancestor seed fetch failed for \
+                     parent_task_id={parent_task_id}: {err:#}"
                 );
                 // No retry timer here: the next viewer-mode registration
                 // (or an explicit reconnect) re-issues the fetch. Closed
@@ -820,9 +843,20 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(entry) = self.viewer_mode_orchestrators.get(&parent_task_id) else {
+            log::debug!(
+                "[orch-viewer-streamer] start_ancestor_sse_if_seeded: no entry for \
+                 parent_task_id={parent_task_id}"
+            );
             return;
         };
         if !entry.seeded || entry.consumers.is_empty() || entry.sse_connection.is_some() {
+            log::debug!(
+                "[orch-viewer-streamer] start_ancestor_sse_if_seeded: skipping \
+                 parent_task_id={parent_task_id} (seeded={}, consumers={}, sse_open={})",
+                entry.seeded,
+                entry.consumers.len(),
+                entry.sse_connection.is_some(),
+            );
             return;
         }
         let cursor = entry.event_cursor;
@@ -950,6 +984,11 @@ impl OrchestrationEventStreamer {
         if events.is_empty() {
             return;
         }
+        log::debug!(
+            "[orch-viewer-streamer] draining {} ancestor events for parent_task_id={parent_task_id} \
+             (cursor_before={cursor})",
+            events.len(),
+        );
 
         for event in events {
             // Drop `new_message` events: viewer-mode consumers only surface

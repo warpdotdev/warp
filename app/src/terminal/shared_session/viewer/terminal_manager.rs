@@ -1621,9 +1621,13 @@ impl TerminalManager {
         let Some(handle) = orchestration_viewer_model.lock().take() else {
             return;
         };
+        let parent_task_id = handle.as_ref(ctx).parent_task_id();
+        let consumer_id = handle.id();
+        log::info!(
+            "[orch-viewer] stopping orchestration viewer model parent_task_id={parent_task_id} \
+             consumer_id={consumer_id:?}"
+        );
         if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            let parent_task_id = handle.as_ref(ctx).parent_task_id();
-            let consumer_id = handle.id();
             crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::handle(
                 ctx,
             )
