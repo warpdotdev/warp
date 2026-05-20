@@ -2456,9 +2456,8 @@ impl ServerModel {
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!(
-            "Handling UploadHandoffSnapshot ({} paths, cwd={:?}, request_id={request_id})",
+            "Handling UploadHandoffSnapshot ({} paths, request_id={request_id})",
             msg.paths.len(),
-            msg.working_directory,
         );
 
         let server_api = ServerApiProvider::handle(ctx);
@@ -2466,7 +2465,6 @@ impl ServerModel {
         let http = server_api.as_ref(ctx).get_http_client();
 
         let paths = msg.paths;
-        let working_directory = msg.working_directory;
         let request_id_for_response = request_id.clone();
 
         let handle = self.spawn_request_handler(
@@ -2474,7 +2472,6 @@ impl ServerModel {
             async move {
                 super::handoff_snapshot::gather_and_upload_handoff_snapshot(
                     paths,
-                    working_directory,
                     ai_client,
                     &http,
                 )

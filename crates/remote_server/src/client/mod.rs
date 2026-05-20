@@ -1137,16 +1137,12 @@ impl RemoteServerClient {
     pub async fn upload_handoff_snapshot(
         &self,
         paths: Vec<String>,
-        working_directory: Option<String>,
     ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::UploadHandoffSnapshot(
-                UploadHandoffSnapshot {
-                    paths,
-                    working_directory,
-                },
+                UploadHandoffSnapshot { paths },
             )),
         };
 

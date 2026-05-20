@@ -13528,7 +13528,6 @@ impl Workspace {
         pane_view: ViewHandle<TerminalView>,
         model_handle: ModelHandle<AmbientAgentViewModel>,
         remote_session_id: Option<SessionId>,
-        remote_working_directory: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(session_id) = remote_session_id {
@@ -13555,9 +13554,7 @@ impl Workspace {
                 .collect();
             ctx.spawn(
                 async move {
-                    client
-                        .upload_handoff_snapshot(path_strings, remote_working_directory)
-                        .await
+                    client.upload_handoff_snapshot(paths).await
                 },
                 move |_workspace, result, ctx| {
                     model_handle.update(ctx, |model, model_ctx| {
@@ -13778,26 +13775,24 @@ impl Workspace {
         });
 
         let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
-        let (paths, remote_session_id, remote_wd) = if is_remote {
+        let (paths, remote_session_id) = if is_remote {
             let remote_pwd = source_view.as_ref(ctx).pwd();
             let session_id = source_view.as_ref(ctx).active_block_session_id();
-            let paths: Vec<PathBuf> = remote_pwd
-                .as_deref()
-                .map(PathBuf::from)
-                .into_iter()
-                .collect();
-            (paths, session_id, remote_pwd)
+            let paths: Vec<String> = remote_pwd.into_iter().collect();
+            (paths, session_id)
         } else {
             let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-            let paths: Vec<PathBuf> = source_pwd.into_iter().collect();
-            (paths, None, None)
+            let paths: Vec<String> = source_pwd
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            (paths, None)
         };
         Self::spawn_handoff_snapshot_upload(
             paths,
             new_pane_view,
             model_handle,
             remote_session_id,
-            remote_wd,
             ctx,
         );
     }
@@ -14211,7 +14206,7 @@ impl Workspace {
         });
 
         let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
-        let (paths, remote_session_id, remote_wd) = if is_remote {
+        let (paths, remote_session_id) = if is_remote {
             let remote_pwd = source_view.as_ref(ctx).pwd();
             let session_id = source_view.as_ref(ctx).active_block_session_id();
             // For remote sessions, conversation paths are remote; combine with pwd.
@@ -14219,7 +14214,7 @@ impl Workspace {
             if let Some(ref pwd) = remote_pwd {
                 p.push(PathBuf::from(pwd));
             }
-            (p, session_id, remote_pwd)
+            (p, session_id)
         } else {
             let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
             // Derive touched repos and upload the initial snapshot off the UI thread.
@@ -14229,14 +14224,13 @@ impl Workspace {
             if let Some(pwd) = source_pwd {
                 p.push(pwd);
             }
-            (p, None, None)
+            (p, None)
         };
         Self::spawn_handoff_snapshot_upload(
             paths,
             new_pane_view,
             model_handle,
             remote_session_id,
-            remote_wd,
             ctx,
         );
     }

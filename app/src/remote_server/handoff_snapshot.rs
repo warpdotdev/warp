@@ -16,10 +16,9 @@ use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
 use crate::ai::blocklist::handoff::touched_repos::derive_touched_workspace;
 use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 
-/// Gather the workspace snapshot from the given paths and upload it.
+/// Gather the workspace snapshot from the given absolute paths and upload it.
 ///
-/// 1. Resolves each path to an absolute location (relative paths are resolved
-///    against `working_directory` when provided).
+/// 1. Filters to valid absolute paths (non-absolute paths are logged and skipped).
 /// 2. Runs [`derive_touched_workspace`] to discover git roots and orphan files.
 /// 3. Calls [`upload_snapshot_for_handoff`] to build patches, allocate a token,
 ///    and upload everything to GCS.
@@ -29,12 +28,9 @@ use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 /// for hard failures (auth, network).
 pub(crate) async fn gather_and_upload_handoff_snapshot(
     paths: Vec<String>,
-    working_directory: Option<String>,
     ai_client: Arc<dyn AIClient>,
     http: &http_client::Client,
 ) -> Result<Option<InitialSnapshotToken>> {
-    // Resolve raw path strings to absolute PathBufs.
-    let cwd = working_directory.as_deref().map(PathBuf::from);
     let resolved_paths: Vec<PathBuf> = paths
         .into_iter()
         .filter_map(|raw| {
@@ -45,10 +41,8 @@ pub(crate) async fn gather_and_upload_handoff_snapshot(
             let candidate = PathBuf::from(&raw);
             if candidate.is_absolute() {
                 Some(candidate)
-            } else if let Some(cwd) = &cwd {
-                Some(cwd.join(candidate))
             } else {
-                log::warn!("Skipping relative path with no working_directory: {raw}");
+                log::warn!("Skipping non-absolute path in handoff snapshot: {raw}");
                 None
             }
         })
