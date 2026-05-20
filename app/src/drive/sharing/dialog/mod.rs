@@ -22,6 +22,7 @@ use crate::terminal::shared_session::permissions_manager::{
 };
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::TerminalView;
+use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::word_block_editor::{
@@ -38,6 +39,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclData};
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill as ThemeFill;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Align, ChildAnchor, ChildView, Fill, Highlight, MainAxisSize, MouseStateHandle,
@@ -406,6 +408,15 @@ impl SharingDialog {
         self.target
             .as_ref()
             .is_some_and(|target| matches!(target, ShareableObject::Session { .. }))
+    }
+
+    pub fn show_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(self.target, Some(ShareableObject::Session { .. })) {
+            self.set_open_menu(OpenMenuState::None, ctx);
+            self.mode = SharingDialogMode::QrCode;
+            ctx.focus_self();
+            ctx.notify();
+        }
     }
 
     /// Returns `true` if the target is an AI conversation that cannot be shared.
@@ -2536,30 +2547,34 @@ impl SharingDialog {
     ) -> Box<dyn Element> {
         let button_background = appearance.theme().surface_2();
         let button_foreground = appearance.theme().main_text_color(button_background);
-        appearance
-            .ui_builder()
-            .button(ButtonVariant::Basic, mouse_state)
-            .with_icon_label(icon.to_warpui_icon(button_foreground))
-            .with_style(UiComponentStyles {
-                width: Some(style::ACL_ITEM_HEIGHT),
-                height: Some(style::ACL_ITEM_HEIGHT),
-                font_color: Some(button_foreground.into()),
-                background: Some(button_background.into()),
-                border_color: Some(style::form_border_color(appearance).into()),
-                border_radius: Some(CornerRadius::with_all(Radius::Pixels(0.))),
-                ..Default::default()
-            })
-            .with_clicked_styles(UiComponentStyles {
-                background: Some(appearance.theme().surface_2().into()),
-                ..Default::default()
-            })
-            .with_hovered_styles(UiComponentStyles {
-                background: Some(appearance.theme().surface_3().into()),
-                ..Default::default()
-            })
-            .build()
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .finish()
+        icon_button_with_color(
+            appearance,
+            icon,
+            false,
+            mouse_state,
+            ThemeFill::Solid(button_foreground.into()),
+        )
+        .with_style(UiComponentStyles {
+            width: Some(style::ACL_ITEM_HEIGHT),
+            height: Some(style::ACL_ITEM_HEIGHT),
+            padding: Some(Coords::uniform(4.)),
+            font_color: Some(button_foreground.into()),
+            background: Some(button_background.into()),
+            border_color: Some(style::form_border_color(appearance).into()),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(0.))),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(appearance.theme().surface_2().into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(appearance.theme().surface_3().into()),
+            ..Default::default()
+        })
+        .build()
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+        .finish()
     }
 
     fn render_qr_matrix(&self, matrix: &QrMatrix) -> Box<dyn Element> {
@@ -2615,20 +2630,18 @@ impl SharingDialog {
             background: Some(appearance.theme().surface_2().into()),
             ..Default::default()
         };
-        let back_button = appearance
-            .ui_builder()
-            .button(
-                ButtonVariant::Basic,
-                self.ui_state_handles.qr_back_button.clone(),
-            )
-            .with_icon_label(Icon::ArrowLeft.to_warpui_icon(foreground.into()))
-            .with_style(icon_button_styles)
-            .with_hovered_styles(icon_hover_styles)
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(SharingDialogAction::BackToAccessDialog)
-            })
-            .finish();
+        let back_button = icon_button_with_color(
+            appearance,
+            Icon::ArrowLeft,
+            false,
+            self.ui_state_handles.qr_back_button.clone(),
+            ThemeFill::Solid(foreground.into()),
+        )
+        .with_style(icon_button_styles)
+        .with_hovered_styles(icon_hover_styles)
+        .build()
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::BackToAccessDialog))
+        .finish();
         let title = appearance
             .ui_builder()
             .span("Share session QR code")
@@ -2652,18 +2665,18 @@ impl SharingDialog {
             })
             .build()
             .finish();
-        let close_button = appearance
-            .ui_builder()
-            .button(
-                ButtonVariant::Basic,
-                self.ui_state_handles.qr_close_button.clone(),
-            )
-            .with_icon_label(Icon::X.to_warpui_icon(foreground.into()))
-            .with_style(icon_button_styles)
-            .with_hovered_styles(icon_hover_styles)
-            .build()
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::Close))
-            .finish();
+        let close_button = icon_button_with_color(
+            appearance,
+            Icon::X,
+            false,
+            self.ui_state_handles.qr_close_button.clone(),
+            ThemeFill::Solid(foreground.into()),
+        )
+        .with_style(icon_button_styles)
+        .with_hovered_styles(icon_hover_styles)
+        .build()
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::Close))
+        .finish();
 
         Container::new(
             Flex::row()
@@ -2738,7 +2751,7 @@ impl SharingDialog {
             });
 
         Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_size(MainAxisSize::Min)
             .with_children([
                 self.render_qr_header(appearance),
                 Container::new(Align::new(qr_contents).finish())
@@ -2999,14 +3012,7 @@ impl TypedActionView for SharingDialog {
                 ctx.notify();
             }
             SharingDialogAction::CopyLink => self.copy_link(ctx),
-            SharingDialogAction::ShowQrCode => {
-                if matches!(self.target, Some(ShareableObject::Session { .. })) {
-                    self.set_open_menu(OpenMenuState::None, ctx);
-                    self.mode = SharingDialogMode::QrCode;
-                    ctx.focus_self();
-                    ctx.notify();
-                }
-            }
+            SharingDialogAction::ShowQrCode => self.show_qr_code(ctx),
             SharingDialogAction::BackToAccessDialog => {
                 self.mode = SharingDialogMode::Access;
                 ctx.notify();

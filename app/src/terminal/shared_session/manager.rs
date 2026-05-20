@@ -82,6 +82,25 @@ impl Manager {
         view_handle
     }
 
+    pub fn shared_view_by_session_id(
+        &self,
+        session_id: &SessionId,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let weak_handle = self
+            .shared
+            .values()
+            .find(|state| state.session_id == *session_id)
+            .map(|state| state.view_handle.clone())?;
+
+        let view_handle = weak_handle.upgrade(ctx);
+        if view_handle.is_none() {
+            log::warn!("Failed to upgrade a terminal view in the shared session manager");
+        }
+
+        view_handle
+    }
+
     /// Returns the view handle to the joined terminal view, identified by `terminal_view_id`, if it's being viewed.
     pub fn joined_view_by_id(
         &self,

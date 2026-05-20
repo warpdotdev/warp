@@ -4288,8 +4288,31 @@ impl Workspace {
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string());
+            let toast = DismissibleToast::default("Remote control link copied.".to_string())
+                .with_link(
+                    ToastLink::new("View QR code".to_string()).with_onclick_action(
+                        WorkspaceAction::OpenSharedSessionQrCode {
+                            session_id: *session_id,
+                        },
+                    ),
+                );
             toast_stack.add_ephemeral_toast(toast, ctx);
+        });
+    }
+
+    fn open_shared_session_qr_code(
+        &mut self,
+        session_id: &SharedSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_view) = terminal::shared_session::manager::Manager::as_ref(ctx)
+            .shared_view_by_session_id(session_id, ctx)
+        else {
+            return;
+        };
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.open_shared_session_qr_code(ctx);
         });
     }
 
@@ -22272,6 +22295,9 @@ impl TypedActionView for Workspace {
             }
             CopySharedSessionLinkFromTab { tab_index } => {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
+            }
+            OpenSharedSessionQrCode { session_id } => {
+                self.open_shared_session_qr_code(session_id, ctx)
             }
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());

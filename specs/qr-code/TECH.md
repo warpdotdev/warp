@@ -8,6 +8,8 @@ The relevant current code paths are:
 - `app/src/terminal/shared_session/mod.rs:285` implements `join_link`, including staging/native-intent and preview-channel behavior.
 - `app/src/terminal/view/shared_session/view_impl.rs:591` sets the pane header shareable object to `ShareableObject::Session` when a share starts and opens the sharing dialog unless the flow explicitly skips it.
 - `app/src/terminal/view/shared_session/view_impl.rs:408` refreshes the same shareable object from active shared-session state when roles or session state change.
+- `app/src/workspace/view.rs:4281` listens for `ManagerEvent::StartedShare`, copies the remote-control link, and shows the `Remote control link copied.` toast.
+- `app/src/terminal/shared_session/manager.rs:135` emits `ManagerEvent::StartedShare` with the new shared-session id and window id.
 - `app/src/drive/sharing/dialog/mod.rs:69` defines the generic `SharingDialog` state and `UiStateHandles`.
 - `app/src/drive/sharing/dialog/mod.rs:149` defines `SharingDialogAction`; it currently has `CopyLink` and permission actions but no QR actions.
 - `app/src/drive/sharing/dialog/mod.rs:332` resets the dialog target through `set_target`.
@@ -19,9 +21,16 @@ The relevant current code paths are:
 - `app/src/drive/sharing/style.rs:15` contains sharing-dialog layout constants and color helpers.
 - `crates/warpui_core/src/platform/file_picker.rs:127` defines `SaveFilePickerConfiguration`, and `crates/warpui_core/src/core/view/context.rs:311` exposes `open_save_file_picker` for save-file flows.
 - `crates/warpui_core/src/clipboard.rs:29` defines `ClipboardContent` with image data support through `ImageData`.
-The codebase already has `Icon::Download` and `Icon::Copy` mapped in `crates/warp_core/src/ui/icons.rs (436-439)`, but the Figma QR icon (`qr-code-02`) is not currently exposed in the app icon enum.
+The app icon inventory now exposes the QR flow controls used by this surface, including `Icon::Download`, `Icon::Copy`, and `Icon::QrCode`, with the QR asset mapped alongside the other share/link icons.
 ## Proposed changes
-### 1. Add QR mode to `SharingDialog`
+### 1. Add the toast entry point shown in the mocks
+Extend the existing shared-session start toast in `app/src/workspace/view.rs` so it renders:
+- message: `Remote control link copied.`
+- inline action: `View QR code`
+The action should carry the new `SessionId` from `ManagerEvent::StartedShare` and route back to the matching shared terminal view. Add a workspace action dedicated to opening the QR flow for that session id instead of relying on whichever pane is currently focused.
+Add a lookup helper on the shared-session manager that resolves a shared session id back to its terminal view. From there, dispatch into the terminal/pane-header sharing flow so the right pane opens its existing sharing overlay in QR mode.
+If the standard live-session sharing dialog is already open, switch that existing overlay into QR mode. If it is closed, open it directly in QR mode. Back should always return to the access-management panel for the same session target.
+### 2. Add QR mode to `SharingDialog`
 Add a dialog mode enum in `app/src/drive/sharing/dialog/mod.rs`, for example:
 - `SharingDialogMode::Access`
 - `SharingDialogMode::QrCode`
@@ -37,7 +46,7 @@ Extend `SharingDialogAction` with:
 - `CopyQrCode`
 - `DownloadQrCode`
 Keep `SharingDialogAction::Close` behavior unchanged: it should still close the overlay and reset editable state.
-### 2. Render the QR entry point only for session targets
+### 3. Render the QR entry point only for session targets
 Extract a small helper such as `target_link(&self, app: &AppContext) -> Option<String>` so `render_object_link`, copy, and QR actions all use the same URL lookup.
 Modify `render_object_link` so that when `self.target` is `Some(ShareableObject::Session { .. })`, the footer row includes an icon-only QR button between the link field and the existing `Copy link` button. For non-session targets, keep the current link + copy button layout.
 The QR button should:
@@ -49,7 +58,7 @@ Add a bundled QR icon if needed:
 - Add the SVG asset under the existing bundled SVG asset location.
 - Add a variant such as `Icon::QrCode`.
 - Map it to the bundled path near the other share/link icons.
-### 3. Render the QR-code view inside `SharingDialog`
+### 4. Render the QR-code view inside `SharingDialog`
 In `View for SharingDialog`, branch on `self.mode`:
 - `Access` renders the existing dialog contents.
 - `QrCode` renders a compact QR view for session targets.
@@ -58,12 +67,13 @@ Keep the same outer `Dismiss` behavior and border/background styling so the QR v
 - header height around 48px;
 - body centered around a 192px QR card;
 - two 32px icon buttons beneath the QR card.
+The QR branch must preserve the sharing dialog's compact intrinsic overlay layout. Render it with minimum-height column sizing rather than max-height stretching so opening QR mode replaces the dialog contents instead of producing a workspace-height panel.
 The QR view should render:
 - a header row with back button, `Share session QR code`, `ESC`, and close button;
 - a QR code card;
 - copy-image and download-image icon buttons.
 If `self.target` is no longer a session target or `target_link` is missing, render a compact error body with the same header and a message equivalent to `Unable to create QR code for this session link.`
-### 4. Generate QR data with a small pure helper
+### 5. Generate QR data with a small pure helper
 Add a small QR helper module, for example `app/src/drive/sharing/qr_code.rs`, with pure functions:
 - `qr_matrix_for_url(url: &str) -> Result<QrMatrix, QrCodeError>`
 - `qr_png_for_url(url: &str, pixel_size: u32) -> Result<Vec<u8>, QrCodeError>`
@@ -71,7 +81,7 @@ Add a workspace dependency on a QR encoder crate such as `qrcode` in the root `C
 Use the same QR helper for on-screen rendering and PNG generation so scanning behavior cannot drift between the two paths.
 For on-screen rendering, prefer drawing the QR matrix directly with Warp UI rectangles rather than feeding a generated PNG back through the image cache. This keeps the view deterministic, avoids temporary files, and makes sizing straightforward. The helper should expose module count and module values; the view computes cell size and quiet-zone padding inside the 160px visual target.
 For PNG export, generate a black-on-white PNG with a quiet zone. Use a larger export size than the on-screen display, such as 512px or 1024px, so downloaded images remain scannable when printed or projected.
-### 5. Copy QR image to clipboard
+### 6. Copy QR image to clipboard
 Implement `SharingDialogAction::CopyQrCode` by:
 - resolving `target_link`;
 - generating PNG bytes with `qr_png_for_url`;
@@ -79,7 +89,7 @@ Implement `SharingDialogAction::CopyQrCode` by:
 - showing a success toast such as `QR code copied`.
 Do not fall back to copying the session URL if image clipboard write fails. The product distinction between `Copy link` and QR image copy should remain clear.
 If the current platform cannot write image clipboard content despite `ClipboardContent` supporting images, show a failure toast and leave the dialog open.
-### 6. Download QR image
+### 7. Download QR image
 Implement `SharingDialogAction::DownloadQrCode` by:
 - generating the same PNG bytes;
 - opening `ctx.open_save_file_picker` with `SaveFilePickerConfiguration::new().with_default_filename(default_qr_filename(...))`;
@@ -89,7 +99,7 @@ Implement `SharingDialogAction::DownloadQrCode` by:
 - doing nothing when the picker returns `None`.
 Default filename suggestion: `warp-session-qr-code-<session-id>.png` for session targets. If the session id is unavailable in a future target shape, fall back to `warp-session-qr-code.png`.
 The download action can be compiled only for local filesystem builds if needed. If save-file picker or filesystem writes are unavailable for a target platform, disable or hide the download button there rather than showing a broken control.
-### 7. Preserve existing sharing behavior
+### 8. Preserve existing sharing behavior
 Do not change:
 - `ShareableObject::Session.link`;
 - `join_link`;
@@ -98,7 +108,7 @@ Do not change:
 - session invite flow;
 - pane-header sharing dialog toggling.
 The QR flow should be additive. Existing tests for session permissions and link-copy behavior should keep passing without expected-output changes except where snapshots explicitly include the new QR button.
-### 8. Telemetry
+### 9. Telemetry
 Keep existing link-copy telemetry unchanged. Add telemetry only if the product/event taxonomy already has an appropriate place for it:
 - `OpenedSharedSessionQrCode`
 - `CopiedSharedSessionQrCode`
@@ -106,16 +116,17 @@ Keep existing link-copy telemetry unchanged. Add telemetry only if the product/e
 If new telemetry is added, include the same action source where available or derive it from the sharing dialog context. Avoid error-level logs for QR generation or export failures; use user-visible toasts and at most warn-level diagnostic logging.
 ## Testing and validation
 Map validation to `PRODUCT.md` behavior:
-- Behavior 1-3: unit or view tests verify that `render_object_link` includes the QR button only for `ShareableObject::Session`, and non-session targets still render the existing footer.
-- Behavior 4-7: view/action tests verify `ShowQrCode`, `BackToAccessDialog`, `Close`, and Escape transition between access mode, QR mode, and closed overlay as expected.
-- Behavior 8, 10, 13, 24: pure QR helper tests verify that the generated matrix/PNG encodes the exact URL passed in and does not add extra query parameters or payload data.
-- Behavior 9: screenshot or integration verification compares the QR view against the Figma layout in dark theme, including header, centered QR card, and copy/download buttons.
-- Behavior 11-12: tests update the target/session link while QR mode is active and verify the rendered/exported QR payload follows the current `ShareableObject::link` result; missing links render the error state.
-- Behavior 14-16: clipboard tests verify `CopyQrCode` writes `image/png` image data and does not write plain text as a fallback for the QR action.
-- Behavior 17-19: save-file tests cover default filename, cancel behavior, successful write, and write failure.
-- Behavior 20: existing `CopyLink` tests or new targeted tests verify plain link copying and toast behavior remain unchanged.
-- Behavior 21-22: manual accessibility pass verifies tab order and labels for the QR button, QR image, back button, close button, copy-image button, and download button.
-- Behavior 23: unit tests construct two session targets with different ids and verify each QR helper call uses that target's own link.
+- Behavior 1-5: workspace/session tests verify the shared-session toast includes `View QR code`, that it targets the newly-started session id, that clicking it opens QR mode on the correct pane even when the access dialog was not already open, and that the QR state remains the same compact sharing overlay rather than a full-height panel.
+- Behavior 5-7: unit or view tests verify that `render_object_link` includes the QR button only for `ShareableObject::Session`, and non-session targets still render the existing footer.
+- Behavior 9-12: view/action tests verify `ShowQrCode`, `BackToAccessDialog`, `Close`, and Escape transition between access mode, QR mode, and closed overlay as expected.
+- Behavior 13, 15, 18, 29: pure QR helper tests verify that the generated matrix/PNG encodes the exact URL passed in and does not add extra query parameters or payload data.
+- Behavior 14: screenshot or integration verification compares the QR view against the Figma layout in dark theme, including header, centered QR card, and copy/download buttons.
+- Behavior 16-17: tests update the target/session link while QR mode is active and verify the rendered/exported QR payload follows the current `ShareableObject::link` result; missing links render the error state.
+- Behavior 19-21: clipboard tests verify `CopyQrCode` writes `image/png` image data and does not write plain text as a fallback for the QR action.
+- Behavior 22-24: save-file tests cover default filename, cancel behavior, successful write, and write failure.
+- Behavior 25: existing `CopyLink` tests or new targeted tests verify plain link copying and toast behavior remain unchanged.
+- Behavior 26-27: manual accessibility pass verifies tab order and labels for the toast link, QR button, QR image, back button, close button, copy-image button, and download button.
+- Behavior 28: unit tests construct two session targets with different ids and verify each QR helper call uses that target's own link.
 Suggested targeted commands after implementation:
 - `cargo nextest run --no-fail-fast --workspace drive::sharing::dialog`
 - `cargo nextest run --no-fail-fast --workspace drive::sharing::qr_code`
