@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use futures::future::BoxFuture;
 use futures::FutureExt;
 #[cfg(not(target_family = "wasm"))]
@@ -166,36 +168,179 @@ impl Entity for CallMCPToolExecutor {
     type Event = ();
 }
 
-/// Coerces whole-number floats in `args` to integers for fields declared as
-/// [`"type": "integer"`](https://json-schema.org/understanding-json-schema/reference/type)
-/// in the tool's JSON Schema `input_schema`.
+/// Coerces whole-number floats in `args` to integers wherever the tool's JSON
+/// Schema `input_schema` declares an [integer type], at any depth.
 ///
 /// MCP tool args round-trip through `google.protobuf.Struct` on the wire, whose
 /// `NumberValue` stores everything as `f64`. Without this fix, serde_json emits
-/// whole-number floats as `"5.0"`, which strict MCP servers reject for integer fields.
+/// whole-number floats as `"5.0"`, which strict MCP servers reject for integer
+/// fields.
+///
+/// Walks the schema recursively, covering nested objects, array items, the
+/// composition keywords `allOf` / `oneOf` / `anyOf`, internal `$ref` pointers,
+/// and nullable type-arrays like `["integer", "null"]`. Unsupported or unknown
+/// schema shapes (external `$ref`, `not`, `if`/`then`/`else`, `patternProperties`)
+/// are skipped — coercion is conservative and a skip preserves the existing wire
+/// behavior.
+///
+/// [integer type]: https://json-schema.org/understanding-json-schema/reference/type
 pub(crate) fn coerce_integer_args(
     args: &mut serde_json::Map<String, serde_json::Value>,
     input_schema: &serde_json::Map<String, serde_json::Value>,
 ) {
-    let Some(properties) = input_schema.get("properties").and_then(|p| p.as_object()) else {
+    // Clone the schema once so the walker can hold it as a `Value` (needed for
+    // `$ref` resolution against the same root). Schemas are small in practice.
+    let root = serde_json::Value::Object(input_schema.clone());
+    let mut value = serde_json::Value::Object(std::mem::take(args));
+    coerce_recursive(&mut value, &root, &root);
+    if let serde_json::Value::Object(map) = value {
+        *args = map;
+    }
+}
+
+/// Walks `value` and `schema` in parallel, coercing whole-number floats to
+/// integers wherever the schema declares an integer type.
+fn coerce_recursive(
+    value: &mut serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) {
+    let schema = resolve_refs(schema, root);
+
+    // `allOf` — apply every branch; can stack with sibling keywords.
+    if let Some(branches) = schema.get("allOf").and_then(|v| v.as_array()) {
+        for b in branches {
+            coerce_recursive(value, b, root);
+        }
+    }
+
+    // `oneOf` / `anyOf` — apply every branch. Coercion is conservative
+    // (whole-number f64 → i64 only) and applying a branch whose schema doesn't
+    // match the value is a no-op, so trying all branches sidesteps the
+    // ambiguity of picking the "right" branch when multiple top-level types
+    // would match.
+    for key in ["oneOf", "anyOf"] {
+        if let Some(branches) = schema.get(key).and_then(|v| v.as_array()) {
+            for b in branches {
+                coerce_recursive(value, b, root);
+            }
+        }
+    }
+
+    // Integer leaf — handles `"type": "integer"` and `"type": ["integer", ...]`.
+    if declares_integer(schema) && value.is_number() {
+        coerce_integer_in_place(value);
+        return;
+    }
+
+    // Object — recurse into `properties`, then `additionalProperties` (when it
+    // is itself a schema object) for keys outside `properties`.
+    if let serde_json::Value::Object(map) = value {
+        if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
+            for (k, child_schema) in props {
+                if let Some(child_value) = map.get_mut(k) {
+                    coerce_recursive(child_value, child_schema, root);
+                }
+            }
+        }
+        if let Some(additional) = schema.get("additionalProperties") {
+            if additional.is_object() {
+                let known: HashSet<&str> = schema
+                    .get("properties")
+                    .and_then(|v| v.as_object())
+                    .map(|p| p.keys().map(String::as_str).collect())
+                    .unwrap_or_default();
+                for (k, v) in map.iter_mut() {
+                    if !known.contains(k.as_str()) {
+                        coerce_recursive(v, additional, root);
+                    }
+                }
+            }
+        }
+    }
+
+    // Array — `items` is either one schema (applies to every element) or an
+    // array of schemas (tuple validation, positional).
+    if let serde_json::Value::Array(arr) = value {
+        match schema.get("items") {
+            Some(item_schema @ serde_json::Value::Object(_)) => {
+                for v in arr.iter_mut() {
+                    coerce_recursive(v, item_schema, root);
+                }
+            }
+            Some(serde_json::Value::Array(item_schemas)) => {
+                for (v, s) in arr.iter_mut().zip(item_schemas.iter()) {
+                    coerce_recursive(v, s, root);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn declares_integer(schema: &serde_json::Value) -> bool {
+    match schema.get("type") {
+        Some(serde_json::Value::String(s)) => s == "integer",
+        Some(serde_json::Value::Array(arr)) => arr.iter().any(|t| t.as_str() == Some("integer")),
+        _ => false,
+    }
+}
+
+/// Iteratively follows `$ref` pointers against `root`. Returns the first schema
+/// in the chain that has no `$ref` — or the last schema reached if the chain
+/// cycles or hits an unresolvable / external reference.
+fn resolve_refs<'a>(
+    schema: &'a serde_json::Value,
+    root: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    let mut visited = HashSet::<String>::new();
+    let mut current = schema;
+    while let Some(ref_str) = current.get("$ref").and_then(|v| v.as_str()) {
+        if !ref_str.starts_with('#') || !visited.insert(ref_str.to_string()) {
+            return current;
+        }
+        match resolve_internal_ref(root, ref_str) {
+            Some(resolved) => current = resolved,
+            None => return current,
+        }
+    }
+    current
+}
+
+/// Resolves a JSON-Pointer-style fragment like `#/$defs/Foo` against `root`.
+/// Returns the referenced subschema, or `None` if any segment is missing.
+fn resolve_internal_ref<'a>(
+    root: &'a serde_json::Value,
+    ref_str: &str,
+) -> Option<&'a serde_json::Value> {
+    let path = ref_str.strip_prefix('#').unwrap_or(ref_str);
+    if path.is_empty() {
+        return Some(root);
+    }
+    let mut current = root;
+    for raw_segment in path.trim_start_matches('/').split('/') {
+        // RFC 6901: decode `~1` -> `/` before `~0` -> `~`, otherwise `~01`
+        // (which means literal `~1`) would be incorrectly decoded as `/`.
+        let segment = raw_segment.replace("~1", "/").replace("~0", "~");
+        current = match current {
+            serde_json::Value::Object(map) => map.get(&segment)?,
+            serde_json::Value::Array(arr) => arr.get(segment.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+fn coerce_integer_in_place(value: &mut serde_json::Value) {
+    let serde_json::Value::Number(n) = value else {
         return;
     };
-
-    for (key, prop_def) in properties {
-        let is_integer = prop_def.get("type").and_then(|t| t.as_str()) == Some("integer");
-        if !is_integer {
-            continue;
-        }
-        let Some(serde_json::Value::Number(n)) = args.get_mut(key) else {
-            continue;
-        };
-        let Some(f) = n.as_f64() else { continue };
-        if f.fract() != 0.0 {
-            continue;
-        }
-        if let Ok(i) = i64::try_from(f as i128) {
-            *n = serde_json::Number::from(i);
-        }
+    let Some(f) = n.as_f64() else { return };
+    if f.fract() != 0.0 {
+        return;
+    }
+    if let Ok(i) = i64::try_from(f as i128) {
+        *value = serde_json::Value::Number(serde_json::Number::from(i));
     }
 }
 
