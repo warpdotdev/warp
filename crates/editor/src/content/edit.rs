@@ -515,10 +515,14 @@ impl EditDelta {
 
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
+        let new_lines = if layout_options.group_plain_text_lines {
+            group_adjacent_plain_text_blocks(self.new_lines)
+        } else {
+            self.new_lines
+        };
 
         // First, build a Vec of layout tasks with information about whether they're hidden
-        let layout_tasks: Vec<_> = self
-            .new_lines
+        let layout_tasks: Vec<_> = new_lines
             .into_iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
@@ -610,6 +614,31 @@ impl EditDelta {
     }
 }
 
+fn group_adjacent_plain_text_blocks(blocks: Vec<StyledBufferBlock>) -> Vec<StyledBufferBlock> {
+    let mut grouped_blocks = Vec::with_capacity(blocks.len());
+
+    for block in blocks {
+        match block {
+            StyledBufferBlock::Text(text_block)
+                if text_block.style == BufferBlockStyle::PlainText =>
+            {
+                if let Some(StyledBufferBlock::Text(previous_text_block)) =
+                    grouped_blocks.last_mut()
+                    && previous_text_block.style == BufferBlockStyle::PlainText
+                {
+                    previous_text_block.content_length += text_block.content_length;
+                    previous_text_block.block.extend(text_block.block);
+                    continue;
+                }
+
+                grouped_blocks.push(StyledBufferBlock::Text(text_block));
+            }
+            block => grouped_blocks.push(block),
+        }
+    }
+
+    grouped_blocks
+}
 /// Lay out a list of temporary blocks in parallel.
 pub fn layout_temporary_blocks(
     blocks: Vec<TemporaryBlock>,
@@ -662,7 +691,10 @@ enum LayoutTask {
     /// [`AppContext`].
     Embed(Box<dyn LaidOutEmbeddedItem>),
     /// A text block, which will be laid out in parallel.
-    Text(StyledTextBlock),
+    Text {
+        text_block: StyledTextBlock,
+        group_plain_text_lines: bool,
+    },
     MermaidDiagram {
         text_block: StyledTextBlock,
         asset_source: AssetSource,
@@ -842,7 +874,10 @@ impl LayoutTask {
                         }
                     }
                 } else {
-                    Self::Text(text_block)
+                    Self::Text {
+                        text_block,
+                        group_plain_text_lines: layout_options.group_plain_text_lines,
+                    }
                 }
             }
         }
@@ -888,13 +923,22 @@ impl LayoutTask {
                     true, // Images are always followed by a trailing newline in the buffer
                 ))
             }
-            Self::Text(text_block) => layout_text_block(text_block, layout, location, is_hidden),
+            Self::Text {
+                text_block,
+                group_plain_text_lines,
+            } => layout_text_block(
+                text_block,
+                layout,
+                location,
+                is_hidden,
+                group_plain_text_lines,
+            ),
             Self::MermaidCodeFallback {
                 text_block,
                 pending_mermaid_asset,
             } => {
                 let (block_item, has_trailing_newline) =
-                    layout_text_block(text_block, layout, location, is_hidden)?;
+                    layout_text_block(text_block, layout, location, is_hidden, false)?;
                 let block_item = match block_item {
                     BlockItem::RunnableCodeBlock {
                         paragraph_block,
@@ -941,6 +985,8 @@ fn estimate_paragraph_count(text_block: &StyledTextBlock) -> usize {
         // highlighting). Use the number of individual runs as an overestimate for the number
         // of lines.
         text_block.block.len()
+    } else if text_block.style == BufferBlockStyle::PlainText {
+        text_block.block.len()
     } else {
         // Non-code blocks may only contain a single paragraph.
         1
@@ -970,6 +1016,7 @@ fn layout_text_block(
     layout: &TextLayout,
     location: BlockLocation,
     is_hidden: bool,
+    group_plain_text_lines: bool,
 ) -> Result<(BlockItem, bool)> {
     if is_hidden {
         // If all text is hidden, return a BlockItem::Hidden without doing any layout
@@ -1139,11 +1186,21 @@ fn layout_text_block(
                 .ok_or_else(|| anyhow!("Header item should have one paragraph"))
         }
         BufferBlockStyle::PlainText => {
-            debug_assert_eq!(
-                paragraphs.len(),
-                1,
-                "Plain text paragraphs should only have one line."
-            );
+            if group_plain_text_lines && paragraphs.len() > 1 {
+                return Vec1::try_from_vec(paragraphs)
+                    .ok()
+                    .map(|paragraphs| BlockItem::TextBlock {
+                        paragraph_block: ParagraphBlock::new(paragraphs),
+                    })
+                    .ok_or_else(|| anyhow!("Plain text block should have at least one paragraph"))
+                    .map(|item| (item, has_trailing_newline));
+            } else {
+                debug_assert_eq!(
+                    paragraphs.len(),
+                    1,
+                    "Plain text paragraphs should only have one line."
+                );
+            }
 
             paragraphs
                 .pop()

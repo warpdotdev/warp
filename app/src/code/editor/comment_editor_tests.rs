@@ -9,6 +9,10 @@ use super::{create_editable_comment_markdown_editor, create_readonly_comment_mar
 use crate::notebooks::editor::view::RichTextEditorView;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::RepoMetadataModel;
+use warp_editor::{
+    model::{CoreEditorModel, RichTextEditorModel},
+    render::model::BlockItem,
+};
 
 use crate::{
     appearance::Appearance,
@@ -135,6 +139,41 @@ fn test_editable_comment_editor_keeps_final_trailing_newline_for_non_empty_code_
             render_model.read(&app, |render_state, _| render_state.blocks()),
             2
         );
+    });
+}
+
+#[test]
+fn test_comment_editor_groups_adjacent_plain_text_lines() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view, _test_view) =
+            initialize_editor(&mut app, CommentEditorMode::Editable);
+        let render_model = editor_view.read(&app, |editor, ctx| {
+            editor.model().as_ref(ctx).render_state().clone()
+        });
+
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model().update(ctx, |model, ctx| {
+                model.user_insert("first plaintext line", ctx);
+                model.enter(ctx);
+                model.user_insert("second plaintext line", ctx);
+            });
+        });
+
+        let pending_layout =
+            render_model.read(&app, |render_state, _| render_state.layout_complete());
+        pending_layout.await;
+
+        render_model.read(&app, |render_state, _| {
+            let content = render_state.content();
+            let items = content.block_items().collect::<Vec<_>>();
+            assert_eq!(items.len(), 1);
+            match items[0] {
+                BlockItem::TextBlock { paragraph_block } => {
+                    assert_eq!(paragraph_block.paragraphs().len(), 2);
+                }
+                other => panic!("expected grouped text block, got {other:?}"),
+            }
+        });
     });
 }
 

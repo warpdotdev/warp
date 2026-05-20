@@ -84,6 +84,49 @@ fn test_highlight_urls() {
 }
 
 #[test]
+fn test_layout_text_block_groups_plain_text_lines_when_enabled() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let block = StyledTextBlock {
+                block: vec![
+                    StyledBufferRun {
+                        run: "first\n".to_string(),
+                        text_styles: TextStylesWithMetadata::default(),
+                        block_style: BufferBlockStyle::PlainText,
+                    },
+                    StyledBufferRun {
+                        run: "second".to_string(),
+                        text_styles: TextStylesWithMetadata::default(),
+                        block_style: BufferBlockStyle::PlainText,
+                    },
+                ],
+                style: BufferBlockStyle::PlainText,
+                content_length: CharOffset::from("first\nsecond".chars().count()),
+            };
+
+            let (item, has_trailing_newline) =
+                layout_text_block(block, &text_layout, BlockLocation::Middle, false, true)
+                    .expect("plain text layout should succeed");
+
+            match item {
+                BlockItem::TextBlock { paragraph_block } => {
+                    assert_eq!(paragraph_block.paragraphs().len(), 2);
+                }
+                other => panic!("expected grouped text block, got {other:?}"),
+            }
+            assert!(!has_trailing_newline);
+        });
+    })
+}
+
+#[test]
 fn test_highlight_urls_unicode() {
     let test_runs = vec![StyledBufferRun {
         run: "This (not https://example.com) is a 🔥 link about a 🇨🇦 🏡:\u{a0}https://warp.dev"
@@ -693,7 +736,7 @@ fn test_layout_text_block_uses_rich_table_when_flag_enabled() {
             };
 
             let (item, has_trailing_newline) =
-                layout_text_block(block, &text_layout, BlockLocation::Middle, false)
+                layout_text_block(block, &text_layout, BlockLocation::Middle, false, false)
                     .expect("table layout should succeed");
 
             assert!(matches!(item, BlockItem::Table(_)));
@@ -726,7 +769,7 @@ fn test_layout_text_block_uses_plain_text_when_flag_disabled() {
             };
 
             let (item, _has_trailing_newline) =
-                layout_text_block(block, &text_layout, BlockLocation::Middle, false)
+                layout_text_block(block, &text_layout, BlockLocation::Middle, false, false)
                     .expect("table layout should succeed");
 
             assert!(matches!(item, BlockItem::Paragraph(_)));

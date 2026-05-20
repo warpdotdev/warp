@@ -204,6 +204,7 @@ pub enum HitTestBlockType {
 pub struct RenderLayoutOptions {
     pub render_mermaid_diagrams: bool,
     pub mermaid_render_offsets: HashSet<CharOffset>,
+    pub group_plain_text_lines: bool,
 }
 
 #[derive(Debug)]
@@ -1882,6 +1883,14 @@ impl RenderState {
         true
     }
 
+    pub fn set_group_plain_text_lines(&mut self, group_plain_text_lines: bool) -> bool {
+        if self.layout_options.group_plain_text_lines == group_plain_text_lines {
+            return false;
+        }
+        self.layout_options.group_plain_text_lines = group_plain_text_lines;
+        true
+    }
+
     pub fn set_show_final_trailing_newline_when_non_empty(&mut self, show: bool) {
         if self.show_final_trailing_newline_when_non_empty == show {
             return;
@@ -2612,6 +2621,48 @@ impl RenderState {
         *self.content.borrow_mut() = new_tree;
     }
 
+    fn group_adjacent_plain_text_items(tree: SumTree<BlockItem>) -> SumTree<BlockItem> {
+        fn flush_plain_text(paragraphs: &mut Vec<Paragraph>, tree: &mut SumTree<BlockItem>) {
+            if paragraphs.is_empty() {
+                return;
+            }
+
+            if paragraphs.len() == 1 {
+                let paragraph = paragraphs
+                    .pop()
+                    .expect("paragraphs length was verified to be one");
+                tree.push(BlockItem::Paragraph(paragraph));
+            } else {
+                let paragraphs = Vec1::try_from_vec(mem::take(paragraphs))
+                    .expect("paragraphs length was verified to be greater than one");
+                tree.push(BlockItem::TextBlock {
+                    paragraph_block: ParagraphBlock::new(paragraphs),
+                });
+            }
+        }
+
+        let mut grouped_tree = SumTree::new();
+        let mut pending_plain_text = Vec::new();
+
+        for item in tree.cursor::<(), ()>() {
+            match item {
+                BlockItem::Paragraph(paragraph) => {
+                    pending_plain_text.push(paragraph.clone());
+                }
+                BlockItem::TextBlock { paragraph_block } => {
+                    pending_plain_text.extend(paragraph_block.paragraphs.iter().cloned());
+                }
+                item => {
+                    flush_plain_text(&mut pending_plain_text, &mut grouped_tree);
+                    grouped_tree.push(item.clone());
+                }
+            }
+        }
+
+        flush_plain_text(&mut pending_plain_text, &mut grouped_tree);
+        grouped_tree
+    }
+
     /// Update the render state with laid out new edits.
     fn layout_pending_edit(
         &self,
@@ -2748,6 +2799,9 @@ impl RenderState {
         // This step ensures these are merged into one.
         if let Some(hidden_ranges) = hidden_ranges {
             new_tree = Self::dedupe_hidden_ranges(new_tree, hidden_ranges);
+        }
+        if self.layout_options.group_plain_text_lines {
+            new_tree = Self::group_adjacent_plain_text_items(new_tree);
         }
         log::trace!("Resulting blocks:\n{}", new_tree.describe());
         self.has_final_trailing_newline

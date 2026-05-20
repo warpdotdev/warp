@@ -543,6 +543,7 @@ where
                 can_execute_shell_commands: Some(false),
                 disable_block_insertion_menu: true,
                 disable_scrolling,
+                group_plain_text_lines: true,
             },
             ctx,
         )

@@ -1105,6 +1105,10 @@ pub struct RichTextEditorConfig {
     /// Enable or disable the block insertion menu (slash menu).
     /// When disabled, typing "/" will not open the menu.
     pub disable_block_insertion_menu: bool,
+
+    /// When true, adjacent plain-text lines are laid out as one text block instead of separate
+    /// paragraph blocks. This avoids inter-paragraph spacing for compact editors such as comments.
+    pub group_plain_text_lines: bool,
 }
 
 impl RichTextEditorView {
@@ -1159,6 +1163,15 @@ impl RichTextEditorView {
 
         let insertion_menu_state =
             BlockInsertionMenuState::new(ctx, config.embedded_objects_enabled.unwrap_or(true));
+        if config.group_plain_text_lines {
+            model
+                .as_ref(ctx)
+                .render_state()
+                .clone()
+                .update(ctx, |render_state, _| {
+                    render_state.set_group_plain_text_lines(true);
+                });
+        }
 
         Self {
             omnibar,
