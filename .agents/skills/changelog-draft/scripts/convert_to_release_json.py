@@ -44,8 +44,6 @@ def format_entry(entry: dict) -> str:
     link = ""
     if url and pr_number:
         link = f" ([#{pr_number}]({url}))"
-    elif url:
-        link = f" ([PR]({url}))"
 
     attribution = ""
     if entry.get("is_external") and entry.get("author"):
