@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -258,7 +258,7 @@ jobs:
             ${{ steps.bundle_app.outputs.frameworks_dir }}
 
       - name: Archive ${{ matrix.arch }} build artifacts for universal build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -402,7 +402,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -490,7 +490,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -664,7 +664,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -837,7 +837,7 @@ jobs:
 
       - name: Upload CLI packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -935,7 +935,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_app.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1010,7 +1010,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_cli.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1272,7 +1272,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-arm64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1388,7 +1388,7 @@ jobs:
 
       - name: Upload web bundle as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1551,7 +1551,7 @@ jobs:
 
       - name: Upload installer as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
