@@ -63,10 +63,19 @@ fn own_only_visibility_yields_overall_card_only() {
 }
 
 #[test]
-fn per_user_totals_visibility_returns_three_cards_with_partitioned_sums() {
+fn per_user_totals_visibility_yields_overall_card_only() {
     let summaries = build_team_total_card_summaries(
         &entries_two_per_source(),
         &visibility(UsageVisibilityGranularity::PerUserTotals),
+    );
+    assert_eq!(titles(&summaries), vec!["Overall usage"]);
+}
+
+#[test]
+fn full_breakdown_visibility_returns_three_cards_with_partitioned_sums() {
+    let summaries = build_team_total_card_summaries(
+        &entries_two_per_source(),
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
     );
 
     assert_eq!(
@@ -83,16 +92,4 @@ fn per_user_totals_visibility_returns_three_cards_with_partitioned_sums() {
     assert_eq!(summaries[1].total_cost_cents, 10);
     assert_eq!(summaries[2].total_credits, 70);
     assert_eq!(summaries[2].total_cost_cents, 25);
-}
-
-#[test]
-fn full_breakdown_visibility_returns_three_cards() {
-    let summaries = build_team_total_card_summaries(
-        &entries_two_per_source(),
-        &visibility(UsageVisibilityGranularity::FullBreakdown),
-    );
-    assert_eq!(
-        titles(&summaries),
-        vec!["Overall usage", "Local agent usage", "Cloud agent usage"]
-    );
 }

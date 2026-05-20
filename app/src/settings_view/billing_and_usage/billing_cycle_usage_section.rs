@@ -257,7 +257,7 @@ impl View for BillingCycleUsageSectionView {
                 .unwrap_or_default(),
         );
 
-        // Only show the "Team" block + "Member" subheader when the viewer
+        // Only show the "Team" block + "Members" subheader when the viewer
         // actually gets data about other people. `members.len() > 1` covers
         // the common multi-member case; `has_non_viewer_data` catches the
         // edge case where the roster shrank to one after a teammate left
@@ -571,7 +571,7 @@ impl BillingCycleUsageSectionView {
         };
 
         // The Aggregate bucket replaces per-cost-type detail with a single
-        // "All sources" row, which isn't self-explanatory; surface a small
+        // "Combined" row, which isn't self-explanatory; surface a small
         // hover tooltip clarifying what it includes.
         if !matches!(cost_type, AiCreditsUsageAndCostType::Aggregate) {
             return entry;
@@ -707,7 +707,7 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
         AiCreditsUsageAndCostType::BonusGrant => (BONUS_CREDITS_DOT_COLOR, "Add-ons"),
         AiCreditsUsageAndCostType::Payg => (PAYG_CREDITS_DOT_COLOR, "Pay-as-you-go"),
         AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Cloud-only"),
-        AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "All sources"),
+        AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "Combined"),
         AiCreditsUsageAndCostType::Other(_) => (BASE_CREDITS_DOT_COLOR, ""),
     }
 }

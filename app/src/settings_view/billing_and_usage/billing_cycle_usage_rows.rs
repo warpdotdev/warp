@@ -591,18 +591,6 @@ fn build_viewer_own_usage_row(
     )
 }
 
-/// Top-level row dispatcher. Caller is expected to have already filtered
-/// legacy buckets via `filter_legacy_buckets` and rendered the team-totals
-/// block (if any) above. `shows_team_section` mirrors the caller's decision
-/// to render the "Team" block — when false, we skip the "Member" subheader
-/// and elide the synthetic "Other members" row so single-member teams (or
-/// `OwnOnly` viewers) just see their own bar with no orphan scaffolding.
-///
-/// Thin orchestrator over three siblings:
-///   - [`build_rows`] derives the row data (including `bar_max_credits`),
-///   - [`render_member_header`] optionally emits the "Member" subheader
-///     (and source-filter toggle for `FullBreakdown`),
-///   - [`render_member_row_list`] blindly renders the row vec.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
     workspace: &Workspace,
@@ -642,14 +630,6 @@ pub fn render_rows(
     column.finish()
 }
 
-/// Per-visibility row construction with `bar_max_credits` already populated.
-///
-/// `OwnOnly` / `TeamAggregate` give each row its own 100% denominator so the
-/// rows read as parallel summaries. `PerUserTotals` / `FullBreakdown` share
-/// a single top-member denominator so heaviest user fills the bar and the
-/// rest scale proportionally. When `shows_team_section` is false (single-
-/// member team or `OwnOnly`), the `TeamAggregate` branch skips the synthetic
-/// "Other members" row so the viewer just sees their own bar.
 fn build_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
@@ -705,12 +685,6 @@ fn build_rows(
     rows
 }
 
-/// "Member" subheader + optional source-filter toggle.
-///
-/// `None` when the caller isn't rendering a team-totals block above (single
-/// row tells its own story, no need for a subheader). The toggle is only
-/// surfaced for `FullBreakdown` and only when there's any cloud usage to
-/// filter to.
 fn render_member_header(
     visibility: &UsageVisibility,
     shows_team_section: bool,
@@ -727,7 +701,7 @@ fn render_member_header(
     let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
         && has_cloud_usage(entries);
 
-    let subheader = render_section_subheader("Member", appearance);
+    let subheader = render_section_subheader("Members", appearance);
     let header = if show_toggle {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

@@ -101,7 +101,7 @@ fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
         AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
         AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
         AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
-        AiCreditsUsageAndCostType::Aggregate => "All sources",
+        AiCreditsUsageAndCostType::Aggregate => "Combined",
         AiCreditsUsageAndCostType::Other(_) => "Other",
     }
 }
@@ -201,14 +201,7 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
-/// True when any entry is attributable to someone other than the current
-/// viewer — either a Team-aggregate row (the shape `TeamAggregate`
-/// visibility uses for everyone else's usage) or a non-viewer subject row
-/// (the shape `PerUserTotals` / `FullBreakdown` use). Used to decide whether
-/// to render the "Team" / "Member" subheaders: a workspace whose only data
-/// belongs to the viewer (e.g. a solo team) should skip them, but a
-/// workspace whose roster shrank to one after a teammate left — with their
-/// usage still attributed against the current cycle — should keep them.
+/// "Is there any data in `entries` that's not my own?"
 pub fn has_non_viewer_data(entries: &[BillingCycleUsageEntry], viewer_uid: Option<&str>) -> bool {
     entries.iter().any(|e| match &e.subject_type {
         AiCreditsUsageAndCostSubjectType::Team => true,

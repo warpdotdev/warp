@@ -28,8 +28,6 @@ const CARD_BAR_HEIGHT: f32 = 8.;
 const CARD_BAR_RADIUS: f32 = CARD_BAR_HEIGHT / 2.;
 
 /// Summary backing a single team-totals card (Overall / Local / Cloud).
-/// Mirrors the admin panel's `AgentSpendingLimitItem` shape so we can swap in
-/// per-source spend limits later without restructuring the renderer.
 #[derive(Debug)]
 pub struct TeamTotalCardSummary {
     pub title: &'static str,
@@ -37,20 +35,9 @@ pub struct TeamTotalCardSummary {
     pub segments: Vec<BarSegment>,
     pub total_credits: i64,
     pub total_cost_cents: i64,
-    /// Monthly spend limit driving the bar fill and threshold border colors.
-    /// `None` for the rendering scaffold — bars fill 100% and the border stays
-    /// at the default outline. Plumbed through once the per-source limits land
-    /// on the client `Workspace`.
     pub limit_cents: Option<i64>,
 }
 
-/// Builds the team-totals card summaries: always Overall, plus Local + Cloud
-/// when the viewer's visibility actually exposes per-source breakdowns. Under
-/// `TeamAggregate` the server collapses teammates' usage into an aggregate-
-/// source row, so the Local/Cloud split can't be honestly attributed and we
-/// suppress those cards. Cards always reflect every renderable entry for
-/// their slice and ignore the source filter toggle, which only scopes the
-/// per-member rows below.
 pub fn build_team_total_card_summaries(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
@@ -67,7 +54,7 @@ pub fn build_team_total_card_summaries(
 
     let shows_per_source = matches!(
         visibility.granularity,
-        UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown
+        UsageVisibilityGranularity::FullBreakdown
     );
     if shows_per_source {
         let (local_segments, local_credits, local_cost) = aggregate_segments(
@@ -101,10 +88,6 @@ pub fn build_team_total_card_summaries(
     summaries
 }
 
-/// Pill-shaped stacked progress bar for team-totals cards. Mirrors the admin
-/// panel's `StackedProgressBar`: fills to `total_cost_cents / limit_cents`
-/// when a limit is set (capped at 100%), otherwise fills 100% when there is
-/// any usage. Empty slots render as a muted track.
 fn render_card_pill_bar(
     segments: &[BarSegment],
     total_credits: i64,
@@ -273,8 +256,6 @@ fn build_team_total_card(
         .finish()
 }
 
-/// Card wrapped in a Hoverable that opens the breakdown tooltip when the card
-/// has any segments.
 fn render_team_total_card(
     summary: &TeamTotalCardSummary,
     tooltip_mouse_state: MouseStateHandle,
@@ -335,9 +316,7 @@ fn render_team_totals_section(
     row.finish()
 }
 
-/// Team-totals block ("Team" subheader + cards). Callers must gate on
-/// whether the viewer actually gets team-level data (visibility + team
-/// size); this function unconditionally emits the subheader.
+/// "Team" subheader + cards
 pub fn render_team_totals_block(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
