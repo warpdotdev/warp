@@ -5326,7 +5326,7 @@ impl PaneGroup {
         use crate::pane_group::CodePane;
 
         // Use the provided source if available, or construct from the path.
-        let source = source.unwrap_or_else(|| CodeSource::FileTree { location: path });
+        let source = source.unwrap_or(CodeSource::FileTree { location: path });
 
         let code_pane = CodePane::new(source, None, ctx);
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);

@@ -667,8 +667,8 @@ impl WorkingDirectoriesModel {
         let mut new_repo_roots_wrapped: Vec<LocalOrRemotePath> = new_local_repo_roots
             .into_iter()
             .map(LocalOrRemotePath::Local)
-            .chain(new_remote_repo_roots.into_iter())
-            .chain(new_remote_display_roots.into_iter())
+            .chain(new_remote_repo_roots)
+            .chain(new_remote_display_roots)
             .collect();
         // Deduplicate (IndexSet handles this, but avoid duplicates in the input).
         let seen: HashSet<_> = new_repo_roots_wrapped.iter().cloned().collect();
