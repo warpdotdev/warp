@@ -63,7 +63,6 @@ pub enum BillingCycleUsageAction {
     TogglePeriodMenu,
     ChangeSourceFilter(SourceFilter),
     OpenUpgrade,
-    ContactSales,
     OpenAdminPanel,
 }
 
@@ -182,9 +181,6 @@ impl TypedActionView for BillingCycleUsageSectionView {
                 if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
                     ctx.open_url(&UserWorkspaces::upgrade_link_for_team(team_uid));
                 }
-            }
-            BillingCycleUsageAction::ContactSales => {
-                AdminActions::contact_sales(ctx);
             }
             BillingCycleUsageAction::OpenAdminPanel => {
                 if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
@@ -689,9 +685,9 @@ fn visibility_cta_for(
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::PerUserTotals => Some((
-            "Contact sales",
+            "Upgrade to Enterprise",
             "to see fine-grained credit attribution and set per-user spend limits.",
-            BillingCycleUsageAction::ContactSales,
+            BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         // FullBreakdown viewers already have full visibility; nudge them to
