@@ -42,7 +42,7 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -156,6 +156,23 @@ fn mock_pane_group(app: &mut App, options: MockOptions) -> ViewHandle<PaneGroup>
             )
         });
     pane_group
+}
+
+#[test]
+fn template_startup_directory_preserves_nonexistent_path() {
+    let temp_dir = tempfile::tempdir().expect("Should create temp dir");
+    let missing_dir = temp_dir.path().join("worktree-not-created-yet");
+    assert!(!missing_dir.exists());
+
+    assert_eq!(
+        startup_directory_from_template_cwd(missing_dir.clone()),
+        Some(missing_dir)
+    );
+}
+
+#[test]
+fn template_startup_directory_ignores_empty_path() {
+    assert_eq!(startup_directory_from_template_cwd(PathBuf::new()), None);
 }
 
 fn get_newly_created_pane_id(panes: &PaneGroup, existing_ids: &[PaneId]) -> PaneId {

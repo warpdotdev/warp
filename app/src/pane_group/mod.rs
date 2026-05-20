@@ -1159,9 +1159,7 @@ impl PaneGroup {
                 let (view, terminal_manager) = match pane_mode {
                     PaneMode::Cloud | PaneMode::Terminal | PaneMode::Agent => {
                         PaneGroup::create_session(
-                            // Use cwd from the template iff such path exists, otherwise None
-                            // TODO(CORE-3187): On Windows, support WSL directory restoration.
-                            Some(cwd).filter(|p| p.exists()),
+                            startup_directory_from_template_cwd(cwd),
                             HashMap::new(),
                             resources,
                             None,
@@ -5383,6 +5381,14 @@ impl PaneGroup {
                 }
             }
         }
+    }
+}
+
+fn startup_directory_from_template_cwd(cwd: PathBuf) -> Option<PathBuf> {
+    if cwd.as_os_str().is_empty() {
+        None
+    } else {
+        Some(cwd)
     }
 }
 
