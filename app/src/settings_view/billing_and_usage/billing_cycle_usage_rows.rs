@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use itertools::Itertools as _;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
@@ -99,17 +100,15 @@ pub fn build_own_usage_row(
     viewer_base_limit: Option<i64>,
     source_filter: SourceFilter,
 ) -> MemberUsageRow {
-    let viewer_entries: Vec<&BillingCycleUsageEntry> = entries
+    let viewer_entries = entries
         .iter()
-        .filter(|e| e.subject_type != AiCreditsUsageAndCostSubjectType::Team)
         .filter(|e| source_filter.matches(&e.usage_source))
-        // Defensive: filter to viewer-only even though OwnOnly should already be redacted.
+        // Defensive: positive-attribute to the viewer only.
         .filter(|e| match (viewer_uid, e.subject_uid.as_deref()) {
             (Some(uid), Some(entry_uid)) => uid == entry_uid,
-            (_, None) => true,
-            (None, _) => true,
+            _ => false,
         })
-        .collect();
+        .collect_vec();
 
     let (segments, total_credits, total_cost_cents) =
         aggregate_segments(viewer_entries.iter().copied());
