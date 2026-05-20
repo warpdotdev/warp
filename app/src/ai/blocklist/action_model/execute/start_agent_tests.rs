@@ -547,6 +547,7 @@ fn execute_rejects_disabled_local_claude_before_other_local_harness_validation()
 fn parallel_dispatch_keeps_two_pendings_distinguishable_by_request_id() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);

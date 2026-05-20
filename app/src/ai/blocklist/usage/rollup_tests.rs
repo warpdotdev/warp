@@ -1,6 +1,7 @@
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 use warpui::{App, EntityId};
 
 fn set_credits(
@@ -38,6 +39,7 @@ fn spawn_child(
 #[test]
 fn returns_none_when_orchestrator_has_no_descendants() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -58,6 +60,7 @@ fn returns_none_when_orchestrator_has_no_descendants() {
 #[test]
 fn sums_orchestrator_and_loaded_descendants() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -96,6 +99,7 @@ fn sums_orchestrator_and_loaded_descendants() {
 #[test]
 fn excludes_zero_credit_descendants_from_breakdown() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -146,6 +150,7 @@ fn excludes_zero_credit_descendants_from_breakdown() {
 #[test]
 fn rolls_up_grandchildren_transitively() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -182,6 +187,7 @@ fn rolls_up_grandchildren_transitively() {
 #[test]
 fn returns_six_contributors_for_show_n_more_caller() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -213,6 +219,7 @@ fn returns_six_contributors_for_show_n_more_caller() {
 #[test]
 fn returns_none_when_only_orchestrator_has_zero_credits_with_loaded_children() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -238,6 +245,7 @@ fn returns_none_when_only_orchestrator_has_zero_credits_with_loaded_children() {
 #[test]
 fn ties_break_by_spawn_order_earlier_first() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -276,6 +284,7 @@ fn ties_break_by_spawn_order_earlier_first() {
 #[test]
 fn unloaded_descendant_id_is_silently_skipped() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
