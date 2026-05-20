@@ -55,6 +55,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warpui::{
     elements::{DispatchEventResult, EventHandler, MouseInBehavior},
@@ -1115,12 +1116,12 @@ pub enum PaneEvent {
     ClearHoveredTabIndex,
     #[cfg(feature = "local_fs")]
     ReplaceWithCodePane {
-        path: warp_util::local_or_remote_path::LocalOrRemotePath,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
     #[cfg(feature = "local_fs")]
     ReplaceWithFilePane {
-        path: warp_util::local_or_remote_path::LocalOrRemotePath,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
 }

@@ -383,6 +383,10 @@ impl FileNotebookView {
     /// Open a file from a local or remote path.
     ///
     /// For local paths, uses `FileModel` to load and watch for changes.
+    /// The `session` is used to resolve display names and link context for
+    /// local paths. If `None` for a local path, the view falls back to the
+    /// active local session when one becomes available. For remote paths the
+    /// session is ignored because the `RemotePath` already carries host info.
     /// For remote paths, fetches content via the remote server.
     pub fn open(
         &mut self,
@@ -392,6 +396,12 @@ impl FileNotebookView {
     ) {
         match path {
             LocalOrRemotePath::Local(local_path) => {
+                // For local paths, try to resolve a local session if none was provided.
+                let session = session.or_else(|| {
+                    ActiveSession::as_ref(ctx)
+                        .session(ctx.window_id())
+                        .filter(|s| s.is_local())
+                });
                 self.open_local(local_path, session, ctx);
             }
             LocalOrRemotePath::Remote(remote_path) => {

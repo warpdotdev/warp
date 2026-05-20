@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
+use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
@@ -10,7 +10,6 @@ use crate::{
     notebooks::file::{FileNotebookEvent, FileNotebookView},
     terminal::model::session::Session,
     workflows::WorkflowSelectionSource,
-    workspace::ActiveSession,
 };
 
 use super::{
@@ -54,19 +53,7 @@ impl FilePane {
             view.set_code_source(code_source);
 
             if let Some(path) = path {
-                match &path {
-                    LocalOrRemotePath::Local(_) => {
-                        let session = target_session.or_else(|| {
-                            ActiveSession::as_ref(ctx)
-                                .session(ctx.window_id())
-                                .filter(|session| session.is_local())
-                        });
-                        view.open(path, session, ctx);
-                    }
-                    LocalOrRemotePath::Remote(_) => {
-                        view.open(path, None, ctx);
-                    }
-                }
+                view.open(path, target_session, ctx);
             }
 
             view

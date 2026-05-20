@@ -281,15 +281,11 @@ impl CodeView {
 
     #[cfg(feature = "local_fs")]
     fn update_markdown_mode_segmented_control(&mut self, ctx: &mut ViewContext<Self>) {
-        let path = self
-            .local_path(ctx)
-            .or_else(|| {
-                self.tab_at(self.active_tab_index)
-                    .and_then(|t| t.local_path())
-            })
-            .or_else(|| self.source.path());
-
-        let is_markdown = path.as_ref().map(is_markdown_file).unwrap_or(false);
+        let is_markdown = self
+            .tab_at(self.active_tab_index)
+            .and_then(|t| t.location.as_ref())
+            .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+            .unwrap_or(false);
 
         if !is_markdown {
             self.markdown_mode_segmented_control = None;
@@ -2212,12 +2208,11 @@ impl TypedActionView for CodeView {
             }
             #[cfg(feature = "local_fs")]
             CodeViewAction::RenderMarkdown => {
-                let path = self.local_path(ctx).or_else(|| {
-                    self.tab_at(self.active_tab_index)
-                        .and_then(|t| t.local_path())
-                });
+                let lor_path = self
+                    .tab_at(self.active_tab_index)
+                    .and_then(|t| t.location.clone());
 
-                if let Some(path) = path {
+                if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
                     if self.active_tab_has_unsaved_changes(ctx) {
                         self.save_local(
@@ -2225,7 +2220,7 @@ impl TypedActionView for CodeView {
                             Some(Box::new(move |outcome, _me, ctx| {
                                 if outcome != SaveOutcome::Canceled {
                                     ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                                        path: LocalOrRemotePath::Local(path.clone()),
+                                        path: lor_path.clone(),
                                         source: Some(source.clone()),
                                     }));
                                 }
@@ -2234,7 +2229,7 @@ impl TypedActionView for CodeView {
                         );
                     } else {
                         ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                            path: LocalOrRemotePath::Local(path),
+                            path: lor_path,
                             source: Some(source),
                         }));
                     }

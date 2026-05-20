@@ -542,7 +542,7 @@ pub enum Event {
     /// tell the workspace to open a file within Warp.
     OpenFileInWarp {
         /// The file path to open.
-        path: PathBuf,
+        path: LocalOrRemotePath,
         /// The session that the path was opened from.
         session: Arc<Session>,
     },
