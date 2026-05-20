@@ -165,6 +165,7 @@ pub fn build_tab_config(
             } else {
                 Some(commands)
             },
+            agent: None,
             shell: None,
         }],
         params,
@@ -265,6 +266,7 @@ fn snapshot_to_flat_panes(
                     is_focused: None,
                     directory: None,
                     commands: None,
+                    agent: None,
                     shell: None,
                 },
             );
@@ -302,6 +304,7 @@ fn snapshot_to_flat_panes(
                 is_focused: if *is_focused { Some(true) } else { None },
                 directory,
                 commands: None,
+                agent: None,
                 shell: None,
             });
 

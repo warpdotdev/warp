@@ -46,6 +46,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Codex
             | CLIAgent::Gemini
             | CLIAgent::Auggie
+            | CLIAgent::Hermes
             | CLIAgent::Pi
     )
 }
@@ -53,19 +54,17 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
 /// Creates the appropriate handler for the given CLI agent.
 fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
     match agent {
-        // Auggie and Pi are supported via community-maintained plugins
-        // (https://github.com/augmentmoogi/auggie-warp,
-        // https://github.com/badlogic/pi-mono), which emit the same
-        // structured OSC 777 events as the first-party Claude/OpenCode/Gemini
-        // plugins. We don't ship install flows for them — we just listen.
+        // Hermes, Auggie, and Pi are supported when they emit the same structured
+        // OSC 777 events as the first-party Claude/OpenCode/Gemini plugins. We
+        // don't ship install flows for them — we just listen.
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
+        | CLIAgent::Hermes
         | CLIAgent::Pi => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
-        CLIAgent::Hermes
-        | CLIAgent::Amp
+        CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::CursorCli
@@ -291,6 +290,16 @@ mod tests {
             payload: CLIAgentEventPayload::default(),
         };
         assert!(handler.handle_event(event).is_some());
+    }
+
+    #[test]
+    fn hermes_is_supported() {
+        assert!(is_agent_supported(&CLIAgent::Hermes));
+    }
+
+    #[test]
+    fn hermes_uses_default_handler_with_rich_status() {
+        assert!(agent_supports_rich_status(&CLIAgent::Hermes));
     }
 
     #[test]

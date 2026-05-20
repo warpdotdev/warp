@@ -51,6 +51,7 @@ fn build_test_tab_config_toml(name: &str, commands: Vec<String>) -> String {
             is_focused: None,
             directory: Some("/Users/me/repo".to_string()),
             commands: Some(commands),
+            agent: None,
             shell: None,
         }],
         params: HashMap::new(),

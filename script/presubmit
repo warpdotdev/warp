@@ -18,6 +18,10 @@ fi
 
 echo "Cargo fmt succeeded..."
 
+echo "Ensuring Cargo.lock is up-to-date..."
+cargo metadata --locked --format-version=1 >/dev/null || (echo "Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
+echo "Cargo.lock is up-to-date..."
+
 echo "Running clippy..."
 # Exclude warp_completer because we run clippy on it with default features (rather than all features) below.
 #

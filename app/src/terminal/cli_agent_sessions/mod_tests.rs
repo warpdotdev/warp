@@ -1,4 +1,5 @@
 use super::event::{parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
+use super::listener::agent_supports_rich_status;
 use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -234,6 +235,18 @@ fn parse_pi_stop_notification() {
     assert_eq!(notif.event, CLIAgentEventType::Stop);
     assert_eq!(notif.payload.query.as_deref(), Some("write a haiku"));
     assert_eq!(notif.payload.response.as_deref(), Some("Memory is safe"));
+}
+
+#[test]
+fn parse_hermes_stop_notification_has_supported_handler() {
+    let body = r#"{"v":1,"agent":"hermes","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.agent, CLIAgent::Hermes);
+    assert_eq!(notif.event, CLIAgentEventType::Stop);
+    assert_eq!(notif.payload.query.as_deref(), Some("write a haiku"));
+    assert_eq!(notif.payload.response.as_deref(), Some("Memory is safe"));
+    assert!(agent_supports_rich_status(&notif.agent));
 }
 
 #[test]

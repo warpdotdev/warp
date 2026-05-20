@@ -781,6 +781,24 @@ fn terminal_search_fragments_include_rendered_terminal_badges() {
 }
 
 #[test]
+fn cli_agent_hermes_vertical_tabs_badge_metadata_round_trip() {
+    let fragments = terminal_search_text_fragments(
+        "Investigate Hermes support".to_string(),
+        "~/warp".to_string(),
+        None,
+        terminal_kind_badge_label(false, Some(CLIAgent::Hermes)),
+        None,
+        None,
+    );
+
+    assert_eq!(
+        terminal_kind_badge_label(false, Some(CLIAgent::Hermes)),
+        "Hermes"
+    );
+    assert!(search_fragments_contain_query(&fragments, "hermes"));
+}
+
+#[test]
 fn pane_search_fragments_prepend_custom_title_and_keep_generated_metadata() {
     let fragments = pane_search_text_fragments(
         Some("Production API"),

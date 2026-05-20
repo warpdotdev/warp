@@ -193,6 +193,75 @@ fn insert_pending_ai_block(
     );
 }
 
+fn insert_cli_agent_session(
+    view: &mut TerminalView,
+    agent: CLIAgent,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let view_id = view.id();
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.set_session(
+            view_id,
+            CLIAgentSession {
+                agent,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext::default(),
+                input_state: CLIAgentInputState::Closed,
+                listener: None,
+                plugin_version: None,
+                remote_host: None,
+                draft_text: None,
+                custom_command_prefix: None,
+                should_auto_toggle_input: false,
+            },
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn cli_agent_hermes_rich_input_submit_strategy_uses_delayed_enter() {
+    assert_eq!(
+        rich_input_submit_strategy(CLIAgent::Hermes),
+        RichInputSubmitStrategy::DelayedEnter,
+    );
+}
+
+#[test]
+fn cli_agent_pi_rich_input_submit_strategy_regression_stays_inline() {
+    assert_eq!(
+        rich_input_submit_strategy(CLIAgent::Pi),
+        RichInputSubmitStrategy::Inline,
+    );
+}
+
+#[test]
+fn cli_agent_hermes_toolbar_events_preserve_agent_identity() {
+    match UseAgentToolbarEvent::ToggleCodeReviewPane(CLIAgent::Hermes) {
+        UseAgentToolbarEvent::ToggleCodeReviewPane(agent) => assert_eq!(agent, CLIAgent::Hermes),
+        _ => unreachable!("constructed code-review event must stay code-review"),
+    }
+    match UseAgentToolbarEvent::ToggleFileExplorer(CLIAgent::Hermes) {
+        UseAgentToolbarEvent::ToggleFileExplorer(agent) => assert_eq!(agent, CLIAgent::Hermes),
+        _ => unreachable!("constructed file-explorer event must stay file-explorer"),
+    }
+}
+
+#[test]
+fn cli_agent_hermes_footer_tracks_cli_agent_for_remote_control() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            insert_cli_agent_session(view, CLIAgent::Hermes, ctx);
+            assert_eq!(
+                view.use_agent_footer.as_ref(ctx).cli_agent(ctx),
+                Some(CLIAgent::Hermes),
+            );
+        });
+    })
+}
+
 #[test]
 fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::terminal::cli_agent::CLIAgent;
@@ -35,6 +36,10 @@ fn cli_agent_command_prefix_delegates() {
     assert_eq!(
         SessionType::CliAgent(CLIAgent::Gemini).command_prefix(),
         Some("gemini")
+    );
+    assert_eq!(
+        SessionType::CliAgent(CLIAgent::Hermes).command_prefix(),
+        Some("hermes")
     );
 }
 
@@ -262,6 +267,31 @@ fn render_cli_agent_produces_correct_commands() {
     {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].exec, "claude");
+    } else {
+        panic!("Expected PaneTemplate variant");
+    }
+}
+
+#[test]
+fn cli_agent_hermes_tab_config_agent_field_renders_command() {
+    let toml = r#"
+name = "Hermes tab"
+
+[[panes]]
+id = "main"
+type = "terminal"
+directory = "/home/user/project"
+agent = "hermes"
+"#;
+    let config: super::super::TabConfig = toml::from_str(toml).expect("agent field should parse");
+    let (_, pane_template) = super::super::render_tab_config(&config, &HashMap::new(), None);
+
+    if let crate::launch_configs::launch_config::PaneTemplateType::PaneTemplate {
+        commands, ..
+    } = pane_template
+    {
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].exec, "hermes");
     } else {
         panic!("Expected PaneTemplate variant");
     }

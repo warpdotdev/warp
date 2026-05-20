@@ -20,6 +20,7 @@ use crate::code_review::comments::{
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::telemetry::CLIAgentType;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -220,6 +221,21 @@ fn test_build_review_prompt_exports_internal_markdown_without_punctuation_escape
     assert!(!prompt.contains("Fix this\\."));
 }
 
+#[test]
+fn test_cli_agent_hermes_review_prompt_and_context_providers() {
+    let comment = make_comment(
+        "fix Hermes regression",
+        AttachedReviewCommentTarget::General,
+        false,
+    );
+    let prompt = build_review_prompt(&batch(vec![comment]));
+    assert!(prompt.contains("General: fix Hermes regression"));
+    assert_eq!(
+        CLIAgent::Hermes.supported_skill_providers(),
+        CLIAgent::Pi.supported_skill_providers(),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // build_diff_hunk_prompt tests
 // ---------------------------------------------------------------------------
@@ -263,6 +279,7 @@ fn test_detect_known_agents() {
                 ("copilot", CLIAgent::Copilot),
                 ("agent", CLIAgent::CursorCli),
                 ("goose", CLIAgent::Goose),
+                ("hermes", CLIAgent::Hermes),
                 ("vibe", CLIAgent::Vibe),
             ] {
                 assert_eq!(
@@ -286,6 +303,19 @@ fn test_detect_with_arguments() {
             assert_eq!(
                 CLIAgent::detect("gemini chat", None, None, ctx),
                 Some(CLIAgent::Gemini),
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cli_agent_hermes_command_prefix_and_detection() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(CLIAgent::Hermes.command_prefix(), "hermes");
+            assert_eq!(
+                CLIAgent::detect("hermes --model nous", None, None, ctx),
+                Some(CLIAgent::Hermes),
             );
         });
     });
@@ -533,6 +563,20 @@ fn test_from_serialized_name_falls_back_to_unknown() {
     assert_eq!(
         CLIAgent::from_serialized_name("nonexistent"),
         CLIAgent::Unknown
+    );
+}
+
+#[test]
+fn test_cli_agent_hermes_telemetry_matches_existing_wire_case() {
+    let cli_agent: CLIAgentType = CLIAgent::Hermes.into();
+    assert!(matches!(cli_agent, CLIAgentType::Hermes));
+    assert_eq!(
+        serde_json::to_value(cli_agent).unwrap(),
+        serde_json::json!("Hermes"),
+    );
+    assert_eq!(
+        serde_json::to_value(CLIAgentType::Claude).unwrap(),
+        serde_json::json!("Claude"),
     );
 }
 
