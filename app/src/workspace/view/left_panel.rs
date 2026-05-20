@@ -272,27 +272,43 @@ impl LeftPanelView {
                 }
                 let has_terminal_session = directories.iter().any(|dir| dir.terminal_id.is_some());
 
-                // Update GlobalSearchView root directories based on all working directories
-                let roots: Vec<PathBuf> = directories.iter().map(|d| d.path.clone()).collect();
+                // Split directories into local and remote.
+                let local_paths: Vec<PathBuf> = directories
+                    .iter()
+                    .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+                    .collect();
+                let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = directories
+                    .iter()
+                    .filter_map(|d| match &d.path {
+                        LocalOrRemotePath::Remote(remote_path) => {
+                            Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                                remote_path.host_id.clone(),
+                                remote_path.path.clone(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
+                // Update GlobalSearchView root directories (local only).
                 let global_search_view =
                     me.get_or_create_global_search_view_for_pane_group(active_pane_group.id(), ctx);
                 global_search_view.update(ctx, |view, view_ctx| {
-                    view.set_root_directories(roots, view_ctx);
+                    view.set_root_directories(local_paths.clone(), view_ctx);
                 });
 
-                let directories: Vec<PathBuf> =
-                    directories.iter().map(|dir| dir.path.clone()).collect();
-
                 // Directories are already in display order (most recent first) from the model
-                let directories = deduplicate_by_directory_name(directories);
+                let local_directories = deduplicate_by_directory_name(local_paths);
                 let file_tree_view =
                     me.get_or_create_file_tree_view_for_pane_group(active_pane_group.id(), ctx);
 
                 let is_visible =
                     active_pane_group.as_ref(ctx).left_panel_open && me.is_file_tree_active();
                 file_tree_view.update(ctx, |view, ctx| {
-                    view.set_root_directories(directories, ctx);
+                    view.set_root_directories(local_directories, ctx);
+                    if !remote_repos.is_empty() {
+                        view.set_remote_root_directories(&remote_repos, ctx);
+                    }
                     view.set_has_terminal_session(has_terminal_session, ctx);
                     view.set_is_active(is_visible, ctx);
 
@@ -593,26 +609,42 @@ impl LeftPanelView {
             .iter()
             .any(|dir| dir.terminal_id.is_some());
 
-        // Update GlobalSearchView root directories based on all working directories
-        let roots: Vec<PathBuf> = active_directories.iter().map(|d| d.path.clone()).collect();
+        // Split directories into local and remote.
+        let local_paths: Vec<PathBuf> = active_directories
+            .iter()
+            .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+            .collect();
+        let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = active_directories
+            .iter()
+            .filter_map(|d| match &d.path {
+                LocalOrRemotePath::Remote(remote_path) => {
+                    Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                        remote_path.host_id.clone(),
+                        remote_path.path.clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Update GlobalSearchView root directories (local only).
         let global_search_view =
             self.get_or_create_global_search_view_for_pane_group(pane_group_id, ctx);
         global_search_view.update(ctx, |view, view_ctx| {
-            view.set_root_directories(roots, view_ctx);
+            view.set_root_directories(local_paths.clone(), view_ctx);
         });
 
-        let directories: Vec<PathBuf> = active_directories
-            .iter()
-            .map(|dir| dir.path.clone())
-            .collect();
-        let directories = deduplicate_by_directory_name(directories);
+        let local_directories = deduplicate_by_directory_name(local_paths);
         let active_file_model = pane_group.as_ref(ctx).active_file_model().clone();
 
         let file_tree_view = self.get_or_create_file_tree_view_for_pane_group(pane_group_id, ctx);
         let left_panel_open = pane_group.as_ref(ctx).left_panel_open;
         let is_visible = left_panel_open && self.is_file_tree_active();
         file_tree_view.update(ctx, |view, ctx| {
-            view.set_root_directories(directories, ctx);
+            view.set_root_directories(local_directories, ctx);
+            if !remote_repos.is_empty() {
+                view.set_remote_root_directories(&remote_repos, ctx);
+            }
             view.set_has_terminal_session(has_terminal_session, ctx);
             view.set_active_file_model(active_file_model, ctx);
             view.set_is_active(is_visible, ctx);

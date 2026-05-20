@@ -221,8 +221,6 @@ use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workflows::manager::WorkflowManager;
 use crate::workflows::workflow::Workflow;
-#[cfg(feature = "local_fs")]
-use repo_metadata::RemoteRepositoryIdentifier;
 #[cfg(target_family = "wasm")]
 use url::Url;
 
@@ -14674,30 +14672,12 @@ impl Workspace {
                     }
                 }
             }
-            #[cfg(feature = "local_fs")]
-            pane_group::Event::RemoteRepoNavigated { remote_path } => {
-                let remote_id = RemoteRepositoryIdentifier::new(
-                    remote_path.host_id.clone(),
-                    remote_path.path.clone(),
-                );
-                let pane_group_id = pane_group.id();
-                if let Some(file_tree_view) = self
-                    .working_directories_model
-                    .as_ref(ctx)
-                    .get_file_tree_view(pane_group_id)
-                {
-                    file_tree_view.update(ctx, |view, ctx| {
-                        view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);
-                    });
-                }
-
-                // Remote repos now enter repository_roots through
-                // refresh_working_directories_for_pane_group (via
-                // pwd_as_local_or_remote). No need to register here —
-                // doing so would race with refresh and prevent stale
-                // DiffStateModels from being dropped.
-            }
-            #[cfg(not(feature = "local_fs"))]
+            // Remote repo navigation is handled entirely through
+            // refresh_working_directories_for_pane_group, which inserts
+            // remote paths into the unified `pane_groups` set. The
+            // resulting `DirectoriesChanged` event carries both local
+            // and remote dirs, so the left panel subscriber forwards
+            // them to `set_remote_root_directories` on the file tree.
             pane_group::Event::RemoteRepoNavigated { .. } => {}
             pane_group::Event::OpenChildAgentInNewTab { conversation_id } => {
                 // Move the existing child pane into a new tab so the live
