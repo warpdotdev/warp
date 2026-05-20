@@ -2,6 +2,13 @@ use std::cell::OnceCell;
 use std::sync::Arc;
 use std::{fmt, vec};
 
+use crate::safe_triangle::SafeTriangle;
+use crate::themes::theme::Fill;
+use crate::util::time_format::format_approx_duration_from_now_sentence_case;
+use crate::{
+    appearance::Appearance,
+    ui_components::{buttons::icon_button_with_color, icons},
+};
 use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -1062,24 +1069,20 @@ impl<A: Action + Clone> MenuItemFields<A> {
             .icon_size_override
             .unwrap_or_else(|| appearance.ui_font_size());
         let icon_color = override_color.unwrap_or(color);
-        let icon_element = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
-            .with_width(icon_size)
-            .with_height(icon_size)
-            .finish();
-        let container = Container::new(icon_element)
-            .with_margin_left(icon_size / 2.)
-            .finish();
-
-        // If a separate right-side icon action is set, wrap the icon in
-        // its own `Hoverable` so it can dispatch independently of the row.
-        // The child `Hoverable` consumes the click event, preventing the
-        // row's `on_select_action` from firing alongside it.
-        let element: Box<dyn Element> = if let Some(action) = &self.right_side_icon_action {
-            let mut hoverable =
-                Hoverable::new(self.right_side_icon_mouse_state.clone(), |_| container);
+        if let Some(action) = &self.right_side_icon_action {
+            let mut button = icon_button_with_color(
+                appearance,
+                icon.clone(),
+                false,
+                self.right_side_icon_mouse_state.clone(),
+                icon_color,
+            );
+            if self.right_side_icon_disabled {
+                button = button.disabled();
+            }
+            let mut hoverable = button.build();
             if !self.right_side_icon_disabled {
                 let action = action.clone();
-                hoverable = hoverable.with_cursor(Cursor::PointingHand);
                 hoverable = hoverable.on_click(move |ctx, _, _| {
                     if dispatch_item_actions {
                         ctx.dispatch_typed_action(action.clone());
@@ -1089,12 +1092,19 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 // doesn't latch onto the press that targets the icon.
                 hoverable = hoverable.on_mouse_down(|_, _, _| {});
             }
-            hoverable.finish()
-        } else {
-            container
-        };
-
-        Some(Shrinkable::new(1., element).finish())
+            let element = Container::new(hoverable.finish())
+                .with_margin_left(icon_size / 2.)
+                .finish();
+            return Some(Shrinkable::new(1., Align::new(element).right().finish()).finish());
+        }
+        let icon_element = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+            .with_width(icon_size)
+            .with_height(icon_size)
+            .finish();
+        let container = Container::new(icon_element)
+            .with_margin_left(icon_size / 2.)
+            .finish();
+        Some(Shrinkable::new(1., container).finish())
     }
 
     fn render_right_aligned_chevron(

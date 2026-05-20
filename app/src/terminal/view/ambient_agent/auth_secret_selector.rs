@@ -169,12 +169,7 @@ impl AuthSecretSelector {
                     name,
                     error,
                 } => {
-                    me.handle_secret_deletion_failed(
-                        *harness,
-                        name.clone(),
-                        error.clone(),
-                        ctx,
-                    );
+                    me.handle_secret_deletion_failed(*harness, name.clone(), error.clone(), ctx);
                 }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
