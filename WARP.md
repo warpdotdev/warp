@@ -36,6 +36,21 @@ Environment variables:
 - `./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Format C/C++/Obj-C code
 - `find . -name "*.wgsl" -exec wgslfmt --check {} +` - Check WGSL shader formatting
 
+### Spec Validation
+
+Before opening a spec PR, validate that your spec directory is well-formed:
+
+```bash
+./script/validate_specs.sh   # macOS/Linux
+bash script/validate_specs.sh  # alternative
+```
+
+Each spec under `specs/` must contain:
+- `product.md` (or `PRODUCT.md`) — product spec
+- `tech.md` (or `TECH.md`) — tech spec
+
+The script skips contributor-named directories (e.g. `zachlloyd/`) that group related specs.
+
 ### Platform Setup
 - `./script/bootstrap` - Platform-specific setup plus common agent skill installation from `skills-lock.json`; prompts for project/global when an install or update is needed unless a target flag or environment override is provided.
 - `./script/bootstrap --skip-common-skills` - Platform setup without installing or updating common agent skills.
