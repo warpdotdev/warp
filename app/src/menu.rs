@@ -1072,7 +1072,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
         if let Some(action) = &self.right_side_icon_action {
             let mut button = icon_button_with_color(
                 appearance,
-                icon.clone(),
+                *icon,
                 false,
                 self.right_side_icon_mouse_state.clone(),
                 icon_color,
