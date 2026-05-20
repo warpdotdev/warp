@@ -20,7 +20,7 @@ The relevant current code paths are:
 - `app/src/drive/sharing/dialog/mod.rs:2505` composes the full dialog in `render`.
 - `app/src/drive/sharing/style.rs:15` contains sharing-dialog layout constants and color helpers.
 - `crates/warpui_core/src/platform/file_picker.rs:127` defines `SaveFilePickerConfiguration`, and `crates/warpui_core/src/core/view/context.rs:311` exposes `open_save_file_picker` for save-file flows.
-- `crates/warpui_core/src/clipboard.rs:29` defines `ClipboardContent` with image data support through `ImageData`.
+- `crates/warpui_core/src/clipboard.rs:29` defines `ClipboardContent`, which the existing link-copy action already uses for plain-text URLs.
 The app icon inventory now exposes the QR flow controls used by this surface, including `Icon::Download`, `Icon::Copy`, and `Icon::QrCode`, with the QR asset mapped alongside the other share/link icons.
 ## Proposed changes
 ### 1. Add the toast entry point shown in the mocks
@@ -38,12 +38,11 @@ Store it on `SharingDialog`, defaulting to `Access`. Reset it to `Access` in `se
 Extend `UiStateHandles` with mouse states for:
 - the footer QR button;
 - the QR dialog back button;
-- the QR dialog copy-image button;
+- the QR dialog copy-link button;
 - the QR dialog download button.
 Extend `SharingDialogAction` with:
 - `ShowQrCode`
 - `BackToAccessDialog`
-- `CopyQrCode`
 - `DownloadQrCode`
 Keep `SharingDialogAction::Close` behavior unchanged: it should still close the overlay and reset editable state.
 ### 3. Render the QR entry point only for session targets
@@ -53,7 +52,7 @@ The QR button should:
 - use the same button/style system as the existing footer controls;
 - dispatch `SharingDialogAction::ShowQrCode`;
 - be disabled or omitted when `target_link` returns `None`;
-- use an accessible name/tooltip equivalent to `Show QR code`.
+- show a tooltip equivalent to `Show QR code`.
 Add a bundled QR icon if needed:
 - Add the SVG asset under the existing bundled SVG asset location.
 - Add a variant such as `Icon::QrCode`.
@@ -71,7 +70,7 @@ The QR branch must preserve the sharing dialog's compact intrinsic overlay layou
 The QR view should render:
 - a header row with back button, `Share session QR code`, `ESC`, and close button;
 - a QR code card;
-- copy-image and download-image icon buttons.
+- copy-link and download-image icon buttons.
 If `self.target` is no longer a session target or `target_link` is missing, render a compact error body with the same header and a message equivalent to `Unable to create QR code for this session link.`
 ### 5. Generate QR data with a small pure helper
 Add a small QR helper module, for example `app/src/drive/sharing/qr_code.rs`, with pure functions:
@@ -81,14 +80,12 @@ Add a workspace dependency on a QR encoder crate such as `qrcode` in the root `C
 Use the same QR helper for on-screen rendering and PNG generation so scanning behavior cannot drift between the two paths.
 For on-screen rendering, prefer drawing the QR matrix directly with Warp UI rectangles rather than feeding a generated PNG back through the image cache. This keeps the view deterministic, avoids temporary files, and makes sizing straightforward. The helper should expose module count and module values; the view computes cell size and quiet-zone padding inside the 160px visual target.
 For PNG export, generate a black-on-white PNG with a quiet zone. Use a larger export size than the on-screen display, such as 512px or 1024px, so downloaded images remain scannable when printed or projected.
-### 6. Copy QR image to clipboard
-Implement `SharingDialogAction::CopyQrCode` by:
-- resolving `target_link`;
-- generating PNG bytes with `qr_png_for_url`;
-- writing `ClipboardContent` with `images: Some(vec![ImageData { data, mime_type: "image/png".to_string(), filename: Some(default_qr_filename(...)) }])`;
-- showing a success toast such as `QR code copied`.
-Do not fall back to copying the session URL if image clipboard write fails. The product distinction between `Copy link` and QR image copy should remain clear.
-If the current platform cannot write image clipboard content despite `ClipboardContent` supporting images, show a failure toast and leave the dialog open.
+### 6. Copy the session link from QR mode
+Wire the QR dialog's copy button to the existing `SharingDialogAction::CopyLink` behavior so it:
+- resolves `target_link`;
+- writes the same plain session URL that the access dialog footer copies;
+- preserves the existing shared-session link-copy telemetry and toast feedback;
+- behaves consistently across platforms without depending on image clipboard support.
 ### 7. Download QR image
 Implement `SharingDialogAction::DownloadQrCode` by:
 - generating the same PNG bytes;
@@ -111,7 +108,6 @@ The QR flow should be additive. Existing tests for session permissions and link-
 ### 9. Telemetry
 Keep existing link-copy telemetry unchanged. Add telemetry only if the product/event taxonomy already has an appropriate place for it:
 - `OpenedSharedSessionQrCode`
-- `CopiedSharedSessionQrCode`
 - `DownloadedSharedSessionQrCode`
 If new telemetry is added, include the same action source where available or derive it from the sharing dialog context. Avoid error-level logs for QR generation or export failures; use user-visible toasts and at most warn-level diagnostic logging.
 ## Testing and validation
@@ -122,10 +118,10 @@ Map validation to `PRODUCT.md` behavior:
 - Behavior 13, 15, 18, 29: pure QR helper tests verify that the generated matrix/PNG encodes the exact URL passed in and does not add extra query parameters or payload data.
 - Behavior 14: screenshot or integration verification compares the QR view against the Figma layout in dark theme, including header, centered QR card, and copy/download buttons.
 - Behavior 16-17: tests update the target/session link while QR mode is active and verify the rendered/exported QR payload follows the current `ShareableObject::link` result; missing links render the error state.
-- Behavior 19-21: clipboard tests verify `CopyQrCode` writes `image/png` image data and does not write plain text as a fallback for the QR action.
+- Behavior 19-21: clipboard tests verify the QR dialog copy button routes through the plain-link copy path and does not attempt image clipboard writes.
 - Behavior 22-24: save-file tests cover default filename, cancel behavior, successful write, and write failure.
 - Behavior 25: existing `CopyLink` tests or new targeted tests verify plain link copying and toast behavior remain unchanged.
-- Behavior 26-27: manual accessibility pass verifies tab order and labels for the toast link, QR button, QR image, back button, close button, copy-image button, and download button.
+- Behavior 26: manual verification confirms the QR view copy/download icon buttons show the expected tooltips.
 - Behavior 28: unit tests construct two session targets with different ids and verify each QR helper call uses that target's own link.
 Suggested targeted commands after implementation:
 - `cargo nextest run --no-fail-fast --workspace drive::sharing::dialog`
@@ -136,6 +132,6 @@ If the implementation changes Rust files, follow the repository convention of ad
 Do not split this implementation across parallel agents. The work is concentrated in the sharing dialog, icon plumbing, QR generation helper, and adjacent tests; parallel edits would likely collide in the same files and add coordination overhead.
 ## Risks and mitigations
 - QR scan reliability: mitigate by keeping black-on-white rendering, including a quiet zone, and validating with an actual phone camera during manual QA.
-- Platform clipboard differences: mitigate by testing clipboard behavior on at least macOS and Linux and showing a failure toast instead of silently copying a different payload.
+- Platform clipboard differences: mitigate by reusing the existing plain-link clipboard path shared by supported platforms.
 - Platform save-file differences: mitigate by using the existing `open_save_file_picker` abstraction and hiding/disabling download where local filesystem support is unavailable.
 - Link drift: mitigate by deriving all QR payloads from `ShareableObject::link` at action/render time rather than storing a separate URL string.

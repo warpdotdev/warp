@@ -54,7 +54,7 @@ use warpui::ui_components::components::Coords;
 use warpui::FocusContext;
 use warpui::WeakViewHandle;
 use warpui::{
-    clipboard::{ClipboardContent, ImageData},
+    clipboard::ClipboardContent,
     elements::{
         Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex,
         MainAxisAlignment, ParentElement, Radius,
@@ -208,7 +208,6 @@ pub enum SharingDialogAction {
     CopyLink,
     ShowQrCode,
     BackToAccessDialog,
-    CopyQrCode,
     DownloadQrCode,
     #[allow(dead_code)]
     SetLinkPermissions(Option<SharingAccessLevel>),
@@ -2453,40 +2452,6 @@ impl SharingDialog {
         });
     }
 
-    fn copy_qr_code(&self, ctx: &mut ViewContext<Self>) {
-        let Some(url) = self.target_link(ctx) else {
-            self.show_ephemeral_toast(
-                DismissibleToast::error("Unable to copy QR code.".to_string()),
-                ctx,
-            );
-            return;
-        };
-
-        match qr_png_for_url(&url, QR_EXPORT_SIZE) {
-            Ok(data) => {
-                let filename = self.qr_filename();
-                ctx.clipboard().write(ClipboardContent {
-                    plain_text: String::new(),
-                    paths: None,
-                    html: None,
-                    images: Some(vec![ImageData {
-                        data,
-                        mime_type: "image/png".to_string(),
-                        filename: Some(filename),
-                    }]),
-                });
-                self.show_ephemeral_toast(
-                    DismissibleToast::success("QR code copied.".to_string()),
-                    ctx,
-                );
-            }
-            Err(_) => self.show_ephemeral_toast(
-                DismissibleToast::error("Unable to copy QR code.".to_string()),
-                ctx,
-            ),
-        }
-    }
-
     fn download_qr_code(&self, ctx: &mut ViewContext<Self>) {
         let Some(url) = self.target_link(ctx) else {
             self.show_ephemeral_toast(
@@ -2542,11 +2507,13 @@ impl SharingDialog {
         &self,
         icon: Icon,
         action: SharingDialogAction,
+        tooltip: &'static str,
         mouse_state: MouseStateHandle,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let button_background = appearance.theme().surface_2();
         let button_foreground = appearance.theme().main_text_color(button_background);
+        let ui_builder = appearance.ui_builder().clone();
         icon_button_with_color(
             appearance,
             icon,
@@ -2554,6 +2521,7 @@ impl SharingDialog {
             mouse_state,
             ThemeFill::Solid(button_foreground.into()),
         )
+        .with_tooltip(move || ui_builder.tool_tip(tooltip.to_string()).build().finish())
         .with_style(UiComponentStyles {
             width: Some(style::ACL_ITEM_HEIGHT),
             height: Some(style::ACL_ITEM_HEIGHT),
@@ -2712,13 +2680,15 @@ impl SharingDialog {
                     .with_children([
                         self.render_footer_icon_button(
                             Icon::Copy,
-                            SharingDialogAction::CopyQrCode,
+                            SharingDialogAction::CopyLink,
+                            "Copy link",
                             self.ui_state_handles.qr_copy_button.clone(),
                             appearance,
                         ),
                         Container::new(self.render_footer_icon_button(
                             Icon::Download,
                             SharingDialogAction::DownloadQrCode,
+                            "Download QR code",
                             self.ui_state_handles.qr_download_button.clone(),
                             appearance,
                         ))
@@ -2826,6 +2796,7 @@ impl SharingDialog {
             self.render_footer_icon_button(
                 Icon::QrCode,
                 SharingDialogAction::ShowQrCode,
+                "Show QR code",
                 self.ui_state_handles.qr_code_button.clone(),
                 appearance,
             )
@@ -3013,7 +2984,6 @@ impl TypedActionView for SharingDialog {
                 self.mode = SharingDialogMode::Access;
                 ctx.notify();
             }
-            SharingDialogAction::CopyQrCode => self.copy_qr_code(ctx),
             SharingDialogAction::DownloadQrCode => self.download_qr_code(ctx),
             SharingDialogAction::ToggleLinkSharingMenu => {
                 self.toggle_menu(OpenMenuState::LinkSharing, ctx);

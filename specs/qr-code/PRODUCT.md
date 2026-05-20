@@ -8,7 +8,7 @@ The live-session sharing dialog already exposes invite controls, access controls
 - Add a QR-code entry point to the existing live-session sharing dialog.
 - Add a `View QR code` call to action to the `Remote control link copied.` toast shown immediately after a shared session starts.
 - Ensure the QR code represents exactly the same URL shown in the dialog footer.
-- Let users copy the QR code image or download it as a PNG.
+- Let users copy the session link from the QR-code view or download the QR code as a PNG.
 - Preserve the existing `Copy link` behavior and sharing access controls.
 ## Non-goals
 - Changing shared-session permission semantics or default access levels.
@@ -26,7 +26,7 @@ The live-session sharing dialog already exposes invite controls, access controls
    - An icon-only QR-code button.
    - The existing `Copy link` button.
 7. The QR-code button is visually distinct and immediately adjacent to the link field and `Copy link` button, matching the Figma layout. It must read as its own bordered button rather than visually merging into the URL field or disappearing into the footer row, and it does not replace or change `Copy link`.
-8. The QR-code button has an accessible name and tooltip equivalent to `Show QR code`.
+8. The QR-code button shows a tooltip equivalent to `Show QR code`.
 9. Activating the QR-code button opens a QR-code view in the same sharing overlay. The underlying shared session continues uninterrupted.
 10. The QR-code view header contains:
    - A back arrow on the left.
@@ -45,14 +45,13 @@ The live-session sharing dialog already exposes invite controls, access controls
 16. If the session URL changes while the QR-code view is open, the QR image updates to encode the latest canonical URL. This includes channel-specific URL changes and preview/staging URL behavior already handled by the session-link generator.
 17. If the session ends while the QR-code view is open, the QR view keeps encoding the same URL that the sharing dialog would copy for the session. If Warp can no longer provide a session URL, the QR view closes or shows a non-scannable error state instead of displaying stale or empty data.
 18. Scanning the QR code has the same result as opening the visible session URL directly. Authorization is still enforced by the existing shared-session access controls; QR generation does not grant access by itself.
-19. The copy icon in the QR-code view copies the QR code image to the clipboard as a PNG when the platform supports image clipboard writes.
-20. When QR image copy succeeds, Warp shows a concise success toast such as `QR code copied`.
-21. If QR image copy is unsupported or fails, Warp shows a concise failure toast and does not silently copy the plain session URL as a substitute.
+19. The copy icon in the QR-code view copies the same plain session URL as the sharing dialog's existing `Copy link` button, across all supported platforms.
+20. When the QR-code view copy action succeeds, Warp shows the existing link-copy success feedback.
+21. The QR-code view copy action does not attempt to write QR image data to the clipboard.
 22. The download icon in the QR-code view opens the platform save-file flow for a PNG file. The default filename is recognizable as a Warp session QR code and includes the session id when available.
 23. If the user cancels the save-file flow, Warp leaves the QR-code view open and does not show an error.
 24. If PNG generation or file writing fails, Warp leaves the QR-code view open and shows a concise failure toast.
 25. The existing `Copy link` button in the live-session sharing dialog continues to copy the plain session URL and show the existing link-copy success feedback.
-26. Keyboard navigation reaches the toast link, QR-code button, back button, close button, copy-QR button, and download-QR button in visual order.
-27. Screen readers announce the QR-code image with a useful label such as `QR code for shared session link`; they do not attempt to read the encoded URL as visual content.
-28. Multiple shared sessions can each open their own sharing dialog and QR-code view. Each QR code always encodes the URL for that dialog's session target.
-29. The QR code must not encode additional sensitive data beyond the canonical session URL that the user can already copy from the sharing dialog.
+26. The QR-code view's copy and download icon buttons show tooltips equivalent to `Copy link` and `Download QR code`.
+27. Multiple shared sessions can each open their own sharing dialog and QR-code view. Each QR code always encodes the URL for that dialog's session target.
+28. The QR code must not encode additional sensitive data beyond the canonical session URL that the user can already copy from the sharing dialog.
