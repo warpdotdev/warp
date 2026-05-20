@@ -7905,46 +7905,43 @@ impl PaneGroup {
         })
     }
 
-    /// Get all code CWDs for this pane group.
+    /// Get all code editor paths (local and remote) for this pane group.
     /// This is used by the Workspace to refresh the active directories model.
-    pub fn code_view_local_paths<'a>(
+    pub fn code_view_paths<'a>(
         &'a self,
         ctx: &'a AppContext,
-    ) -> impl Iterator<Item = (EntityId, Option<String>)> + 'a {
+    ) -> impl Iterator<Item = (EntityId, Option<LocalOrRemotePath>)> + 'a {
         self.code_views(ctx).into_iter().map(move |code_view| {
             let id = code_view.id();
-            let local_path = code_view
+            let location = code_view
                 .as_ref(ctx)
-                .local_path(ctx)
-                .map(|p| p.display().to_string());
-            (id, local_path)
+                .tab_at(code_view.as_ref(ctx).active_tab_index())
+                .and_then(|tab| tab.location().cloned());
+            (id, location)
         })
     }
 
-    pub fn code_diff_view_local_paths<'a>(
+    pub fn code_diff_view_paths<'a>(
         &'a self,
         ctx: &'a AppContext,
-    ) -> impl Iterator<Item = (EntityId, Option<String>)> + 'a {
+    ) -> impl Iterator<Item = (EntityId, Option<LocalOrRemotePath>)> + 'a {
         self.code_diff_views(ctx).into_iter().map(move |diff_view| {
             let id = diff_view.id();
-            let local_path = diff_view.as_ref(ctx).primary_file_path(ctx);
-            (id, local_path)
+            let location = diff_view.as_ref(ctx).primary_file_location(ctx);
+            (id, location)
         })
     }
 
-    pub fn file_notebook_local_paths<'a>(
+    pub fn file_notebook_paths<'a>(
         &'a self,
         ctx: &'a AppContext,
-    ) -> impl Iterator<Item = (EntityId, Option<String>)> + 'a {
+    ) -> impl Iterator<Item = (EntityId, Option<LocalOrRemotePath>)> + 'a {
         self.file_notebook_views(ctx)
             .into_iter()
             .map(move |file_view| {
                 let id = file_view.id();
-                let local_path = file_view
-                    .as_ref(ctx)
-                    .local_path()
-                    .map(|p| p.display().to_string());
-                (id, local_path)
+                let path = file_view.as_ref(ctx).path().cloned();
+                (id, path)
             })
     }
 

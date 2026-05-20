@@ -486,11 +486,11 @@ impl WorkingDirectoriesModel {
         &mut self,
         pane_group_id: EntityId,
         terminal_cwds: Vec<(EntityId, LocalOrRemotePath)>,
-        local_paths: Vec<(EntityId, String)>,
+        editor_paths: Vec<(EntityId, LocalOrRemotePath)>,
         focused_terminal_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if terminal_cwds.is_empty() && local_paths.is_empty() {
+        if terminal_cwds.is_empty() && editor_paths.is_empty() {
             self.handle_empty_pane_group(pane_group_id, ctx);
             return;
         }
@@ -547,7 +547,21 @@ impl WorkingDirectoriesModel {
             .filter_map(|(_, cwd)| root_for_raw_path(cwd))
             .collect();
 
-        let local_cwds: Vec<(EntityId, String)> = local_paths
+        // Split editor paths into local and remote buckets.
+        let mut local_editor_paths: Vec<(EntityId, String)> = Vec::new();
+        let mut remote_editor_paths: Vec<(EntityId, RemotePath)> = Vec::new();
+        for (view_id, path) in &editor_paths {
+            match path {
+                LocalOrRemotePath::Local(p) => {
+                    local_editor_paths.push((*view_id, p.to_string_lossy().into_owned()));
+                }
+                LocalOrRemotePath::Remote(remote_path) => {
+                    remote_editor_paths.push((*view_id, remote_path.clone()));
+                }
+            }
+        }
+
+        let local_cwds: Vec<(EntityId, String)> = local_editor_paths
             .into_iter()
             .filter_map(|(view_id, path)| {
                 let path_buf = PathBuf::from(&path);
@@ -612,6 +626,16 @@ impl WorkingDirectoriesModel {
                 // No repo detected — still track the CWD → terminal mapping
                 // so `find_review_terminal` can resolve it.
                 new_root_to_terminal.insert(remote_key, *terminal_id);
+            }
+        }
+
+        // Resolve remote editor paths to their repo roots.
+        for (_view_id, remote_path) in &remote_editor_paths {
+            let remote_key = LocalOrRemotePath::Remote(remote_path.clone());
+            if let Some(repo_root) =
+                DetectedRepositories::as_ref(ctx).get_root_for_path(&remote_key)
+            {
+                new_remote_repo_roots.push(repo_root);
             }
         }
 
@@ -856,7 +880,7 @@ impl WorkingDirectoriesModel {
         &mut self,
         _pane_group_id: EntityId,
         _terminal_cwds: Vec<(EntityId, LocalOrRemotePath)>,
-        _local_paths: Vec<(EntityId, String)>,
+        _editor_paths: Vec<(EntityId, LocalOrRemotePath)>,
         _focused_terminal_id: Option<EntityId>,
         _ctx: &mut ModelContext<Self>,
     ) {

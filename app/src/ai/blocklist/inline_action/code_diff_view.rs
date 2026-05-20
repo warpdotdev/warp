@@ -2608,6 +2608,32 @@ impl CodeDiffView {
             .file_path()
             .map(|p| p.to_string())
     }
+
+    /// Returns the primary file location as a `LocalOrRemotePath`,
+    /// using `diff_session_type` to correctly identify remote files.
+    pub fn primary_file_location(
+        &self,
+        app: &AppContext,
+    ) -> Option<crate::code::buffer_location::LocalOrRemotePath> {
+        let path_str = self.primary_file_path(app)?;
+        match &self.diff_session_type {
+            DiffSessionType::Local => Some(crate::code::buffer_location::LocalOrRemotePath::Local(
+                std::path::PathBuf::from(path_str),
+            )),
+            DiffSessionType::Remote(host_id) => {
+                warp_util::standardized_path::StandardizedPath::try_new(&path_str)
+                    .ok()
+                    .map(|path| {
+                        crate::code::buffer_location::LocalOrRemotePath::Remote(
+                            warp_util::remote_path::RemotePath {
+                                host_id: host_id.clone(),
+                                path,
+                            },
+                        )
+                    })
+            }
+        }
+    }
 }
 
 impl Entity for CodeDiffView {

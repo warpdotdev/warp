@@ -227,6 +227,11 @@ pub enum PendingSaveIntent {
 }
 
 impl TabData {
+    /// Returns the file location (local or remote), if any.
+    pub fn location(&self) -> Option<&LocalOrRemotePath> {
+        self.location.as_ref()
+    }
+
     /// Returns the local filesystem path, if this tab is backed by a local file.
     /// Returns `None` for remote files and untitled tabs.
     pub fn local_path(&self) -> Option<PathBuf> {

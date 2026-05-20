@@ -689,6 +689,11 @@ impl FileNotebookView {
         }
     }
 
+    /// The path to the currently-open file (local or remote), if any.
+    pub fn path(&self) -> Option<&LocalOrRemotePath> {
+        self.file_state.path()
+    }
+
     /// The path to the currently-open file, if it is local.
     pub fn local_path(&self) -> Option<PathBuf> {
         self.file_state.local_path().map(Path::to_path_buf)
