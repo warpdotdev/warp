@@ -101,6 +101,8 @@ use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::keymap::Context;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
+#[cfg(feature = "local_fs")]
+use warpui::platform::OperatingSystem;
 use warpui::platform::{
     Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
 };
@@ -2218,6 +2220,7 @@ impl Workspace {
                         &selection.directory,
                         selection.enable_worktree,
                         selection.autogenerate_worktree_branch_name,
+                        OperatingSystem::get().default_shell_family(),
                     );
                     !config.params.is_empty()
                 };
@@ -2288,6 +2291,7 @@ impl Workspace {
             &selection.directory,
             selection.enable_worktree,
             selection.autogenerate_worktree_branch_name,
+            OperatingSystem::get().default_shell_family(),
         );
 
         let old_pane_group_id = self.active_tab_pane_group().id();
@@ -10580,6 +10584,7 @@ impl Workspace {
             repo,
             base_branch,
             worktree_branch_name,
+            OperatingSystem::get().default_shell_family(),
         );
 
         let dir = tab_configs_dir();
@@ -10702,6 +10707,7 @@ impl Workspace {
             &config_name,
             &repo_path,
             pane_type,
+            OperatingSystem::get().default_shell_family(),
         ) {
             Ok(materialized) => materialized,
             Err(e) => {

@@ -245,6 +245,7 @@ pub(crate) fn materialize_default_worktree_config(
     config_name: &str,
     repo_path: &str,
     pane_type: &str,
+    shell_family: warp_util::path::ShellFamily,
 ) -> Result<(String, TabConfig), String> {
     // Shell-escape the repo-derived portion of the worktree path. The path
     // is split into a static prefix (under `~/.warp/worktrees/<repo>/`) and
@@ -265,7 +266,8 @@ pub(crate) fn materialize_default_worktree_config(
         Path::new(repo_path),
         BRANCH_PLACEHOLDER,
     );
-    let worktree_path = escape_worktree_path_prefix(&raw_worktree_path, BRANCH_PLACEHOLDER);
+    let worktree_path =
+        escape_worktree_path_prefix(&raw_worktree_path, BRANCH_PLACEHOLDER, shell_family);
     let mut toml_value = toml::from_str::<toml::Value>(template_toml)
         .map_err(|e| format!("failed to parse default worktree template: {e:?}"))?;
 
@@ -309,17 +311,20 @@ pub(crate) fn materialize_default_worktree_config(
 /// lets us escape exactly what the shell will parse, without disturbing
 /// the templating layer above.
 #[cfg(feature = "local_fs")]
-fn escape_worktree_path_prefix(worktree_path: &str, branch_placeholder: &str) -> String {
-    use warp_util::path::ShellFamily;
+fn escape_worktree_path_prefix(
+    worktree_path: &str,
+    branch_placeholder: &str,
+    shell_family: warp_util::path::ShellFamily,
+) -> String {
     match worktree_path.rsplit_once(branch_placeholder) {
         Some((prefix, suffix)) => {
-            let escaped_prefix = ShellFamily::Posix.shell_escape(prefix);
+            let escaped_prefix = shell_family.shell_escape(prefix);
             format!("{escaped_prefix}{branch_placeholder}{suffix}")
         }
         // No placeholder found — fall back to escaping the whole path. This
         // preserves the bug-fix guarantee for any future call site that
         // happens to pass a raw path with no embedded template.
-        None => ShellFamily::Posix.shell_escape(worktree_path).into_owned(),
+        None => shell_family.shell_escape(worktree_path).into_owned(),
     }
 }
 
