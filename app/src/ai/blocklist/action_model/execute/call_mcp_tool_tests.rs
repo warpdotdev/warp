@@ -351,6 +351,53 @@ fn additional_properties_does_not_overwrite_known_properties() {
     assert_serialized_as(&args, "extra", "2");
 }
 
+#[test]
+fn pattern_properties_keys_are_excluded_from_additional_properties() {
+    // Per JSON Schema, a key that matches a `patternProperties` regex is
+    // governed by that pattern's schema, not by `additionalProperties`. Our
+    // walker doesn't (yet) coerce through `patternProperties`, but it must
+    // still skip those keys when iterating `additionalProperties` — otherwise
+    // a value governed by a pattern schema can be coerced by the wrong
+    // schema.
+    let mut args = obj(json!({ "_internal": 5.0, "regular": 7.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "patternProperties": {
+            "^_": { "type": "number" }
+        },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // `_internal` matches the `^_` pattern → governed by patternProperties
+    // (type: number) → must NOT be coerced to integer.
+    assert_serialized_as(&args, "_internal", "5.0");
+    // `regular` matches no pattern → falls under additionalProperties
+    // (type: integer) → coerced.
+    assert_serialized_as(&args, "regular", "7");
+}
+
+#[test]
+fn invalid_pattern_property_regex_is_ignored() {
+    // If a `patternProperties` key fails to compile as a regex (e.g. an
+    // unclosed group), we treat it as absent rather than panicking — matching
+    // the "unsupported shapes are skipped" policy used elsewhere in the
+    // walker. The unrelated `additionalProperties` recursion still runs.
+    let mut args = obj(json!({ "x": 3.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "patternProperties": {
+            "(": { "type": "number" }
+        },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "x", "3");
+}
+
 // ---------- Conservative cases ----------
 
 #[test]

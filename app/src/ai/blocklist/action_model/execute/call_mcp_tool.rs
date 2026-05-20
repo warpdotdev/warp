@@ -250,10 +250,31 @@ fn coerce_recursive(
                     .and_then(|v| v.as_object())
                     .map(|p| p.keys().map(String::as_str).collect())
                     .unwrap_or_default();
+                // Keys covered by `patternProperties` are governed by their
+                // pattern's schema, not by `additionalProperties` — so they
+                // must be excluded here even though we don't (yet) coerce
+                // through `patternProperties` itself. Without this carve-out
+                // a pattern-governed value could be coerced by the wrong
+                // schema. Patterns that fail to compile are ignored, which
+                // matches the existing "unsupported shapes are skipped"
+                // policy elsewhere in this walker.
+                let pattern_regexes: Vec<regex::Regex> = schema
+                    .get("patternProperties")
+                    .and_then(|v| v.as_object())
+                    .map(|p| {
+                        p.keys()
+                            .filter_map(|pat| regex::Regex::new(pat).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 for (k, v) in map.iter_mut() {
-                    if !known.contains(k.as_str()) {
-                        coerce_recursive(v, additional, root);
+                    if known.contains(k.as_str()) {
+                        continue;
                     }
+                    if pattern_regexes.iter().any(|re| re.is_match(k)) {
+                        continue;
+                    }
+                    coerce_recursive(v, additional, root);
                 }
             }
         }
