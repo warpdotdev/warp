@@ -12,6 +12,7 @@ use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -375,8 +376,9 @@ impl AIRequestUsageModel {
     /// 2. user has overage enabled
     /// 3. user has bonus grants (either team grants or user grants)
     /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
-    /// 5. user's team has bonus grants auto-reload enabled
-    /// 6. user has BYOK enabled and has provided at least one API key
+    /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
+    /// 6. user's team can purchase add-on credits and Billing and Usage V2 is enabled
+    /// 7. user has BYOK enabled and has provided at least one API key
     /// Use this method as the starting point for AI availability checking.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
@@ -393,8 +395,13 @@ impl AIRequestUsageModel {
 
         let is_payg_enabled = current_workspace
             .is_some_and(|w| w.billing_metadata.is_enterprise_pay_as_you_go_enabled());
-        let is_auto_reload_enabled =
-            current_workspace.is_some_and(|w| w.billing_metadata.is_auto_reload_enabled());
+        let is_enterprise_auto_reload_enabled = current_workspace
+            .is_some_and(|w| w.billing_metadata.is_enterprise_auto_reload_enabled());
+        let is_add_on_credits_policy_enabled = FeatureFlag::BillingAndUsagePageV2.is_enabled()
+            && current_workspace.is_some_and(|w| {
+                w.billing_metadata
+                    .is_purchase_add_on_credits_policy_enabled()
+            });
 
         // If you have provided your own API key,
         // it doesn't matter if you are out of warp-provided requests.
@@ -405,7 +412,8 @@ impl AIRequestUsageModel {
             || (user_bonus_credits || workspace_bonus_credits)
             || workspace_has_overages
             || is_payg_enabled
-            || is_auto_reload_enabled
+            || is_enterprise_auto_reload_enabled
+            || is_add_on_credits_policy_enabled
             || has_byo_api_key
     }
 

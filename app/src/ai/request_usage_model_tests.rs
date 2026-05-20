@@ -402,7 +402,6 @@ fn test_has_any_ai_remaining_true_with_payg_enabled() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
-            // No standard requests remaining, no bonus credits.
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
             model.bonus_grants.clear();
 
@@ -415,9 +414,34 @@ fn test_has_any_ai_remaining_true_with_payg_enabled() {
 }
 
 #[test]
-fn test_has_any_ai_remaining_true_with_auto_reload() {
+fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
     App::test((), |mut app| async move {
-        // Create a workspace with auto-reload enabled.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.customer_type = CustomerType::Enterprise;
+        workspace
+            .billing_metadata
+            .tier
+            .enterprise_credits_auto_reload_policy =
+            Some(EnterpriseCreditsAutoReloadPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when enterprise auto-reload is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_enterprise_auto_reload_policy_on_non_enterprise() {
+    App::test((), |mut app| async move {
         let (_uid, mut workspace) = create_test_workspace();
         workspace
             .billing_metadata
@@ -429,13 +453,64 @@ fn test_has_any_ai_remaining_true_with_auto_reload() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
-            // No standard requests remaining, no bonus credits.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when enterprise auto-reload policy is enabled for a non-enterprise workspace",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_add_on_credits_policy_and_billing_v2() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(true);
+
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
             model.bonus_grants.clear();
 
             assert!(
                 model.has_any_ai_remaining(ctx),
-                "expected has_any_ai_remaining to be true when auto-reload is enabled",
+                "expected has_any_ai_remaining to be true when add-on credit purchase is enabled with Billing and Usage V2",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_add_on_credits_policy_and_billing_v2_disabled() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(false);
+
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when add-on credit purchase is enabled without Billing and Usage V2",
             );
         });
     });

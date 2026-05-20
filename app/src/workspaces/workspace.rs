@@ -721,14 +721,18 @@ impl BillingMetadata {
                 .is_some_and(|policy| policy.enabled)
     }
 
-    pub fn is_auto_reload_enabled(&self) -> bool {
-        self.tier
-            .enterprise_credits_auto_reload_policy
-            .is_some_and(|policy| policy.enabled)
-            || self
+    pub fn is_enterprise_auto_reload_enabled(&self) -> bool {
+        self.customer_type == CustomerType::Enterprise
+            && self
                 .tier
-                .purchase_add_on_credits_policy
+                .enterprise_credits_auto_reload_policy
                 .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| policy.enabled)
     }
 }
 
