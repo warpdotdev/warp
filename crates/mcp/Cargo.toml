@@ -6,13 +6,30 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+cfg-if.workspace = true
+cloud_object_models.workspace = true
 futures.workspace = true
 http = "1"
+log.workspace = true
+oauth2.workspace = true
 pin-project-lite = "0.2"
 reqwest = { workspace = true, features = ["json", "stream"] }
-rmcp = { workspace = true, features = ["client", "client-side-sse", "auth"] }
+rmcp = { workspace = true, features = ["client", "client-side-sse", "auth", "transport-streamable-http-client-reqwest", "transport-child-process"] }
+serde.workspace = true
 serde_json.workspace = true
+simple_logger.workspace = true
 sse-stream = "0.2"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util"] }
 tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+warp_core.workspace = true
+warpui.workspace = true
+warpui_extras = { workspace = true, features = ["default", "user_preferences-toml"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_Threading"] }
