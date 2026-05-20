@@ -36,6 +36,9 @@ use crate::ai::blocklist::telemetry::{
     OrchestrationExecutionModeKind, OrchestrationHarnessKind, PlanConfigApprovalToggledEvent,
 };
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
@@ -300,6 +303,17 @@ impl OrchestrationConfigBlockView {
             }
         });
 
+        ctx.subscribe_to_model(
+            &ConnectedSelfHostedWorkersModel::handle(ctx),
+            |me, _, event, ctx| match event {
+                ConnectedSelfHostedWorkersEvent::Changed => {
+                    if me.pickers_initialized {
+                        oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
+                    }
+                    ctx.notify();
+                }
+            },
+        );
         let mut view = Self {
             conversation_id,
             plan_id,
@@ -495,12 +509,18 @@ impl OrchestrationConfigBlockView {
             picker.set_use_overlay_layer(true, picker_ctx);
         });
         oc::populate_host_picker(&host_handle, initial_host, ctx);
-        ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| {
-            if let HostPickerEvent::HostChanged { slug } = event {
+        ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| match event {
+            HostPickerEvent::Opened => {
+                ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
+                });
+            }
+            HostPickerEvent::HostChanged { slug } => {
                 ctx.dispatch_typed_action(&OrchestrationConfigBlockAction::WorkerHostChanged {
                     worker_host: slug.clone(),
                 });
             }
+            HostPickerEvent::Closed => {}
         });
         self.pickers.host_picker = Some(host_handle);
 
