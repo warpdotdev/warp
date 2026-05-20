@@ -790,12 +790,9 @@ impl TeamsPageView {
 
         let team_action_confirmation_dialog =
             ctx.add_typed_action_view(|_| CloudActionConfirmationDialog::new());
-        ctx.subscribe_to_view(
-            &team_action_confirmation_dialog,
-            |me, _, event, ctx| {
-                me.handle_cloud_action_confirmation_dialog_event(event, ctx);
-            },
-        );
+        ctx.subscribe_to_view(&team_action_confirmation_dialog, |me, _, event, ctx| {
+            me.handle_cloud_action_confirmation_dialog_event(event, ctx);
+        });
 
         let transfer_ownership_modal_body =
             ctx.add_typed_action_view(|_| TransferOwnershipConfirmationModal::new());
