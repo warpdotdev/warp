@@ -92,6 +92,27 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
     terminal
 }
 
+#[test]
+fn submit_cli_agent_rich_input_hermes_defers_enter() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        let (_terminal, pty_writes) =
+            submit_rich_input_and_collect_pty_writes(&mut app, CLIAgent::Hermes, "hello");
+
+        assert_eq!(pty_writes.borrow().len(), 1);
+        assert_eq!(pty_writes.borrow()[0], b"hello");
+
+        assert_eventually!(
+            pty_writes.borrow().len() == 2,
+            "carriage return should be written after delay"
+        );
+        assert_eq!(pty_writes.borrow()[1], b"\r");
+    })
+}
+
 fn has_pending_user_query_block(view: &TerminalView) -> bool {
     let Some(view_id) = view.pending_user_query_view_id else {
         return false;
@@ -5047,6 +5068,7 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
             (CLIAgent::Claude, "Enter prompt for Claude Code..."),
             (CLIAgent::Gemini, "Enter prompt for Gemini..."),
             (CLIAgent::Codex, "Enter prompt for Codex..."),
+            (CLIAgent::Hermes, "Enter prompt for Hermes..."),
             (CLIAgent::Unknown, "Tell the agent what to build..."),
         ] {
             let terminal = open_cli_agent_rich_input_for_agent(&mut app, agent);

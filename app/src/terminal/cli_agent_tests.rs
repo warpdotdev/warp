@@ -263,6 +263,7 @@ fn test_detect_known_agents() {
                 ("copilot", CLIAgent::Copilot),
                 ("agent", CLIAgent::CursorCli),
                 ("goose", CLIAgent::Goose),
+                ("hermes", CLIAgent::Hermes),
                 ("vibe", CLIAgent::Vibe),
             ] {
                 assert_eq!(
@@ -286,6 +287,14 @@ fn test_detect_with_arguments() {
             assert_eq!(
                 CLIAgent::detect("gemini chat", None, None, ctx),
                 Some(CLIAgent::Gemini),
+            );
+            assert_eq!(
+                CLIAgent::detect("hermes chat", None, None, ctx),
+                Some(CLIAgent::Hermes),
+            );
+            assert_eq!(
+                CLIAgent::detect("hermes --tui", None, None, ctx),
+                Some(CLIAgent::Hermes),
             );
         });
     });
