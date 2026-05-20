@@ -11970,8 +11970,10 @@ impl Workspace {
         if let Some(server_id) = server_forked_conversation_id {
             let forked_id = forked_conversation.id();
             forked_conversation.set_server_conversation_token(server_id.clone());
-            history_model.update(ctx, |history_model, _| {
-                history_model.set_server_conversation_token_for_conversation(forked_id, server_id);
+            history_model.update(ctx, |history_model, ctx| {
+                history_model.set_server_conversation_token_for_conversation_and_persist(
+                    forked_id, server_id, ctx,
+                );
             });
         }
 
@@ -14086,10 +14088,11 @@ impl Workspace {
         });
 
         // Bind the local fork to the server fork token.
-        history_model.update(ctx, |history_model, _| {
-            history_model.set_server_conversation_token_for_conversation(
+        history_model.update(ctx, |history_model, ctx| {
+            history_model.set_server_conversation_token_for_conversation_and_persist(
                 local_fork_id,
                 forked_conversation_id.clone(),
+                ctx,
             );
             history_model.set_viewing_shared_session_for_conversation(local_fork_id, true);
         });

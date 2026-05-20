@@ -659,42 +659,44 @@ impl BillingAndUsagePageV2View {
                     );
                 }
 
-                let team_uid = team.uid;
-                let fg_color = appearance.theme().active_ui_text_color();
-                right_side.add_child(
-                    Container::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Link,
-                                self.plan_mouse_states.open_admin_panel_link.clone(),
-                            )
-                            .with_text_and_icon_label(
-                                TextAndIcon::new(
-                                    TextAndIconAlignment::IconFirst,
-                                    "Open admin panel",
-                                    Icon::Users.to_warpui_icon(fg_color),
-                                    MainAxisSize::Min,
-                                    MainAxisAlignment::Center,
-                                    vec2f(14., 14.),
+                if team.billing_metadata.is_enterprise_plan() {
+                    let team_uid = team.uid;
+                    let fg_color = appearance.theme().active_ui_text_color();
+                    right_side.add_child(
+                        Container::new(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Link,
+                                    self.plan_mouse_states.open_admin_panel_link.clone(),
                                 )
-                                .with_inner_padding(4.),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(fg_color.into()),
-                                ..Default::default()
-                            })
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                );
-                            })
-                            .finish(),
-                    )
-                    .with_margin_left(8.)
-                    .finish(),
-                );
+                                .with_text_and_icon_label(
+                                    TextAndIcon::new(
+                                        TextAndIconAlignment::IconFirst,
+                                        "Open admin panel",
+                                        Icon::Users.to_warpui_icon(fg_color),
+                                        MainAxisSize::Min,
+                                        MainAxisAlignment::Center,
+                                        vec2f(14., 14.),
+                                    )
+                                    .with_inner_padding(4.),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_color: Some(fg_color.into()),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenAdminPanel { team_uid },
+                                    );
+                                })
+                                .finish(),
+                        )
+                        .with_margin_left(8.)
+                        .finish(),
+                    );
+                }
             }
         } else {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();

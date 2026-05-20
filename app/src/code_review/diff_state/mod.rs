@@ -527,19 +527,21 @@ impl DiffStateModel {
         }
     }
 
-    pub(crate) fn load_diffs_for_current_repo(&self, force: bool, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn load_diffs_for_current_repo(
+        &self,
+        should_fetch_base: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match self {
             Self::Local(local) => {
                 local.update(ctx, |local, ctx| {
-                    local.load_diffs_for_current_repo(force, ctx);
+                    local.load_diffs_for_current_repo(should_fetch_base, ctx);
                 });
             }
             Self::Remote(remote) => {
-                if force {
-                    remote.update(ctx, |remote, ctx| {
-                        remote.replay_latest_diffs(ctx);
-                    });
-                }
+                remote.update(ctx, |remote, ctx| {
+                    remote.fetch_fresh_snapshot(ctx);
+                });
             }
         }
     }

@@ -39,6 +39,7 @@ use crate::ai::connected_self_hosted_workers::{ConnectedSelfHostedWorkersModel, 
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
+use crate::ai::llms::LLMInfo;
 use crate::ai::local_child_harnesses::{
     local_child_harness_disabled_message, local_child_harness_is_enabled,
 };
@@ -437,6 +438,16 @@ pub fn new_standard_picker_dropdown<A: OrchestrationControlAction, V: View>(
     })
 }
 
+/// Returns Warp base-model choices for orchestration.
+fn get_base_model_choices<'a>(
+    llm_prefs: &'a LLMPreferences,
+    app: &'a AppContext,
+    is_local: bool,
+) -> impl Iterator<Item = &'a LLMInfo> {
+    llm_prefs
+        .get_base_llm_choices_for_agent_mode(app)
+        .filter(move |llm| is_local || llm_prefs.custom_llm_info_for_id(&llm.id).is_none())
+}
 /// Populates the model picker based on the active harness.
 ///
 /// - **Oz / empty**: shows the Warp LLM catalog (existing behavior).
@@ -458,17 +469,27 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
         let harness = Harness::parse_orchestration_harness(&harness_type);
         match harness {
             Some(Harness::Oz) | None => {
-                // Oz / unset: current behavior — Warp LLM catalog.
+                // Oz / unset: Warp LLM catalog. Custom models excluded for
+                // cloud runs (not supported by remote workers).
+                // Order: auto models first, then custom models, then other models.
                 let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                let choices: Vec<_> = llm_prefs
-                    .get_base_llm_choices_for_agent_mode(ctx_dropdown)
+                let (auto_models, rest): (Vec<_>, Vec<_>) =
+                    get_base_model_choices(llm_prefs, ctx_dropdown, is_local)
+                        .partition(|llm| llm.id.as_str().starts_with("auto"));
+                let (custom_models, other_models): (Vec<_>, Vec<_>) = rest
+                    .into_iter()
+                    .partition(|llm| llm_prefs.custom_llm_info_for_id(&llm.id).is_some());
+                let ordered_choices: Vec<_> = auto_models
+                    .into_iter()
+                    .chain(custom_models)
+                    .chain(other_models)
                     .collect();
-                let selected_display_name = choices
+                let selected_display_name = ordered_choices
                     .iter()
                     .find(|llm| llm.id.to_string() == initial_model_id)
                     .map(|llm| llm.menu_display_name());
                 let items = available_model_menu_items(
-                    choices,
+                    ordered_choices,
                     move |llm| {
                         DropdownAction::SelectActionAndClose(A::model_changed(llm.id.to_string()))
                     },
@@ -550,8 +571,7 @@ pub fn is_model_in_filtered_choices<V: View>(
     match harness {
         Some(Harness::Oz) | None => {
             let llm_prefs = LLMPreferences::as_ref(ctx);
-            llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx)
+            get_base_model_choices(llm_prefs, ctx, is_local)
                 .any(|llm| llm.id.to_string() == model_id)
         }
         Some(Harness::Codex) if is_local => model_id.is_empty(),

@@ -21,7 +21,7 @@ use warpui::SingletonEntity;
 use warpui::{platform::WindowStyle, App, ViewHandle, WindowId};
 use watcher::HomeDirectoryWatcher;
 
-use super::settings::initialize_settings_for_tests;
+use super::settings::initialize_history_persistence_for_tests;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
@@ -77,7 +77,7 @@ use warp_core::features::FeatureFlag;
 
 /// Initializes all of the necessary models to use a terminal view.
 pub fn initialize_app_for_terminal_view(app: &mut App) {
-    initialize_settings_for_tests(app);
+    initialize_history_persistence_for_tests(app);
 
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|ctx| ChangelogModel::new(ServerApiProvider::as_ref(ctx).get()));
