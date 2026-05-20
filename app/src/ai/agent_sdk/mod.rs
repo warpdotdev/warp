@@ -112,7 +112,7 @@ fn run_agent(
             runner.update(ctx, move |_, ctx| {
                 let spawner = ctx.spawner();
                 ctx.spawn(
-                    AgentDriverRunner::setup_and_run_driver(spawner, args),
+                    AgentDriverRunner::setup_and_run_driver(spawner, *args),
                     |_, result, _ctx| {
                         if let Err(e) = result {
                             report_fatal_error(e.into(), _ctx);

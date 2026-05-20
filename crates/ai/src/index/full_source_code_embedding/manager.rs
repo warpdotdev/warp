@@ -685,7 +685,7 @@ impl CodebaseIndexManager {
                     .is_some_and(|p| has_snapshot(&p))
             {
                 if let Some(snapshot_dir) = snapshot_dir() {
-                    match read_snapshot(
+                    if let Ok(snapshot_index) = read_snapshot(
                         store_client.clone(),
                         snapshot_dir.as_path(),
                         repository.clone(),
@@ -693,10 +693,7 @@ impl CodebaseIndexManager {
                         embedding_generation_batch_size,
                         ctx,
                     ) {
-                        Ok(snapshot_index) => {
-                            return snapshot_index;
-                        }
-                        Err(_) => {}
+                        return snapshot_index;
                     }
                 }
             }
