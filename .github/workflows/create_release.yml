@@ -118,7 +118,7 @@ jobs:
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
@@ -202,7 +202,7 @@ jobs:
 
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -353,7 +353,7 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         with:
@@ -367,7 +367,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets.outcome == 'failure' }}
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -377,7 +377,7 @@ jobs:
         id: upload_github_assets_retry2
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -468,7 +468,7 @@ jobs:
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -641,7 +641,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -797,7 +797,7 @@ jobs:
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
@@ -820,7 +820,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
@@ -1213,14 +1213,14 @@ jobs:
 
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1229,7 +1229,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
@@ -1340,7 +1340,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -1526,7 +1526,7 @@ jobs:
       - name: Add installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.installer_path }}
