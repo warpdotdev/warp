@@ -5,9 +5,11 @@ description: Launch Oz cloud agents with computer use to reproduce UI-focused bu
 
 # Reproduce bug report
 
-Use this skill when the current context is a GitHub issue, support report, Linear ticket, or user prompt describing a specific bug that may be reproducible in the Warp app. This skill is primarily for bugs with a UI, rendering, windowing, onboarding, settings, editor, terminal-display, or other visual/interactive component where screenshots or recordings would make the result more actionable.
+Use this skill when the current context is a GitHub issue, support report, Linear ticket, or user prompt describing a specific bug that may be reproducible in the Warp app while logged out. This skill is primarily for bugs with a UI, rendering, windowing, onboarding, settings, editor, terminal-display, or other visual/interactive component where screenshots or recordings would make the result more actionable.
 
 The parent agent should not try to manually reproduce the UI bug locally unless the user explicitly asks. Launch one or more Oz cloud agents with computer use enabled so they can run the app, interact with it, and capture visual evidence.
+
+For now, use this skill only for non-logged-in reproduction attempts. If a report requires authentication, account state, cloud sync, logged-in onboarding, or AI behavior that cannot be exercised while logged out, do not launch a repro agent for it with this skill; report that it is out of scope for the current logged-out workflow.
 
 ## Parent workflow
 
@@ -18,26 +20,25 @@ The parent agent should not try to manually reproduce the UI bug locally unless 
    - OS, app version/channel, shell, feature flags, account state, or other environment constraints
    - attached screenshots, videos, logs, or comments that narrow the repro path
 2. Decide whether this skill applies:
-   - Use it for UI-visible bugs, interaction bugs, rendering/layout bugs, onboarding/account-state bugs, and bugs where screenshot evidence would be useful.
+   - Use it for UI-visible bugs, interaction bugs, rendering/layout bugs, login-free onboarding bugs, and bugs where screenshot evidence would be useful.
+   - Use it only when the relevant state can be reached while Warp remains logged out.
+   - Do not use it for authenticated-user flows, account-specific state, cloud-synced state, or AI behaviors that require login.
    - Do not use it for purely backend, CI, build, dependency, or text-only code issues unless the prompt specifically asks for visual reproduction.
 3. If the reproduction path is straightforward, launch one Oz cloud agent with computer use.
-4. If the bug requires an authenticated user, AI access, cloud-synced settings, account state, or a logged-in onboarding path, attach or explicitly reference `.agents/skills/warp-computer-use-login/SKILL.md` for the relevant child agents and mark the assigned repro path as logged-in.
-5. If there are multiple plausible repro paths, launch several Oz cloud agents in one `run_agents` batch. Give each child a distinct hypothesis or environment variant, such as:
+4. If there are multiple plausible repro paths, launch several Oz cloud agents in one `run_agents` batch. Give each child a distinct hypothesis or environment variant, such as:
    - different OS or desktop environment
-   - logged-in vs logged-out account state
+   - fresh first-run logged-out state vs completed logged-out onboarding
    - stable vs dev build
    - fresh settings vs existing settings
    - different shells, prompts, pane layouts, or settings toggles
-6. If steps are incomplete, use codebase knowledge to propose likely app states and assign children to investigate those states. Do not invent facts about the original reporter's environment.
-7. Wait for all children to report before summarizing. Distinguish confirmed reproduction, partial reproduction, non-reproduction, auth blockers, other blockers, and untested hypotheses.
+5. If steps are incomplete, use codebase knowledge to propose likely app states and assign children to investigate those states. Do not invent facts about the original reporter's environment.
+6. Wait for all children to report before summarizing. Distinguish confirmed reproduction, partial reproduction, non-reproduction, blockers, and untested hypotheses.
 
 Use a `run_agents` call shaped like this:
 
 ```text
 summary: Launching Oz cloud computer-use agents to reproduce the reported UI bug and collect screenshots.
 remote.computer_use_enabled: true
-skills:
-- spec: ".agents/skills/warp-computer-use-login/SKILL.md" # include when any child needs login
 agent_run_configs:
 - name: "repro-primary"
   prompt: the primary repro prompt
@@ -63,14 +64,14 @@ Goal:
 
 Inputs:
 - Bug report context: <paste or summarize the issue body, comments, screenshots/video descriptions, labels, and relevant metadata>
-- Assigned repro path or hypothesis: <specific steps, environment, account state, settings, feature flags, or code path to test>
-- Login requirement: <logged-out, logged-in using warp-computer-use-login, or no preference>
+- Assigned repro path or hypothesis: <specific steps, environment, logged-out app state, settings, feature flags, or code path to test>
 - Build/app target: <stable app, dev build, local checkout command, or explicit user-provided target>
 
 Safety and privacy:
 - Do not ask the public reporter for credentials, tokens, private repos, private workspace names, or private account identifiers.
 - Do not include secrets, auth tokens, private URLs, Authorization headers, or refresh tokens in screenshots, logs, manifests, or final reports.
-- If this repro requires login, follow `.agents/skills/warp-computer-use-login/SKILL.md` exactly and report auth blockers separately from product repro results.
+- Keep Warp logged out. Do not create an account, sign in, paste auth tokens, or use real user credentials.
+- If the assigned report cannot be exercised without authentication, stop and report that the current logged-out workflow is blocked for this issue.
 - Do not post comments to GitHub, Linear, Slack, or external services unless explicitly instructed.
 - Avoid destructive actions. If a repro requires deleting app state, delete only Warp-specific test state for the current test user and report exactly what was reset.
 
@@ -87,7 +88,7 @@ Artifact workflow:
 
 Reproduction workflow:
 1. Confirm the environment you are testing: OS, architecture, display/session type, shell if relevant, and app/build/version if visible.
-2. Start from the cleanest state that matches the report. Do not reset user state if the bug depends on existing settings or account state.
+2. Start from the cleanest state that matches the report. Do not reset user state if the bug depends on existing settings or persisted logged-out state.
 3. Follow the exact provided steps first, when available.
 4. If exact steps do not reproduce, test the assigned hypothesis and document where it diverges from the report.
 5. If the bug appears, stop changing variables and capture enough evidence to make the reproduction actionable.
@@ -121,7 +122,7 @@ Use this for a report with clear steps:
 ```text
 You own the primary reproduction attempt.
 
-Follow the bug report's steps exactly before trying variants. Prioritize matching the reporter's OS, account state, app channel, settings, shell, and layout. If those details are missing, choose the most common path and explicitly list assumptions.
+Follow the bug report's steps exactly before trying variants. Prioritize matching the reporter's OS, app channel, logged-out app state, settings, shell, and layout. If those details are missing, choose the most common path and explicitly list assumptions.
 ```
 
 ### Variant child
@@ -132,18 +133,6 @@ Use this when there is a specific alternate condition worth testing:
 You own this reproduction variant: <variant name>.
 
 Test only this variant's assigned environment or state. Do not duplicate the primary child's full search space. Report whether this variant changes the outcome and include screenshots for any difference.
-```
-
-### Logged-in repro child
-
-Use this when a report requires AI, account state, cloud sync, authenticated onboarding, or any feature unavailable while logged out:
-
-```text
-You own the logged-in reproduction attempt.
-
-Before testing the product bug, authenticate Warp by following `.agents/skills/warp-computer-use-login/SKILL.md` exactly. Use the default managed secret `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` unless the parent prompt provides a different managed secret environment variable name. Do not switch to a logged-out path if authentication fails; report an auth blocker with the non-sensitive step where it failed.
-
-After login succeeds, continue with the assigned reproduction steps and capture screenshots that show the authenticated feature state needed for the bug. Do not copy the authenticated user's email address into logs, shell output, or final text unless explicitly requested.
 ```
 
 ### Code-path hypothesis child

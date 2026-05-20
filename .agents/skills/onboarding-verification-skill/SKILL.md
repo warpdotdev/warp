@@ -13,16 +13,16 @@ The parent agent should not perform the walkthrough locally. Launch two parallel
 
 1. Launch exactly two remote Oz cloud agents in a single parallel `run_agents` batch with computer use enabled.
 2. Use no environment-specific assumptions unless the user provided an environment. If no environment was provided, omit the environment ID and let Warp choose the default remote environment.
-3. Give both child agents the shared child prompt below, plus the appropriate flow-specific prompt. Attach or explicitly reference `.agents/skills/warp-computer-use-login/SKILL.md` for the logged-in child.
+3. Give both child agents the shared child prompt below, plus the appropriate flow-specific prompt.
 4. Wait for both child agents' reports before summarizing results.
 5. Treat the authenticated child as blocked if `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` is missing or does not authenticate successfully.
 
-## Logged-in auth dependency
+## Managed FTUE auth secret
 
-The logged-in child uses `.agents/skills/warp-computer-use-login/SKILL.md` to authenticate with Warp through Oz cloud computer use.
-
-- Use the default managed secret `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN`.
-- Treat the logged-in child as blocked if the managed secret is missing, invalid, expired, revoked, or cannot be routed through Warp's Paste Auth Token flow.
+- `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` is an internal-team managed secret for cloud agents, not a repo file or prompt literal.
+- The secret should authenticate as a dedicated non-employee, non-`warp.dev` FTUE test user.
+- Rotate the secret with `oz-dev secret update --team --value-file <private-token-file> ONBOARDING_AGENT_FTUE_REFRESH_TOKEN`.
+- Treat the private token file as local scratch material only. Do not read it into chat, print it, stage it, commit it, upload it, or include it in artifacts. Delete it after the managed secret is updated.
 - Children should receive the secret only through the managed environment variable injected into the remote run.
 
 Use a `run_agents` call shaped like this:
@@ -30,8 +30,6 @@ Use a `run_agents` call shaped like this:
 ```text
 summary: Launching two cloud agents with computer use to compare logged-out and logged-in Warp onboarding screenshots.
 remote.computer_use_enabled: true
-skills:
-- spec: ".agents/skills/warp-computer-use-login/SKILL.md"
 agent_run_configs:
 - name: "warp-onboarding-logged-out"
   prompt: the logged-out flow prompt below
@@ -145,12 +143,54 @@ Flow-specific goal:
 - Continue through the authenticated onboarding path until Warp reaches a usable terminal session.
 
 Secret handling requirements:
-- Follow `.agents/skills/warp-computer-use-login/SKILL.md` exactly.
-- Use the default managed secret environment variable `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN`.
-- Choose login/sign-in rather than skip/login-later when presented with an auth choice.
+- Before doing auth work, verify that `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` exists and is non-empty without printing it.
+- Never echo, log, screenshot, upload, or report the secret value.
+- Avoid shell tracing (`set -x`) and avoid writing commands that place the raw token in shell history or process lists.
+- Treat every auth redirect URL containing the refresh token as secret-bearing material, even after URL-encoding.
+- Do not pass a token-bearing redirect URL to a shell command, desktop URI handler, browser address bar, process argument, log, artifact, or report. In particular, do not use commands such as `xdg-open`, `gio open`, `open`, or equivalent with the redirect URL.
+- If you need to construct an auth redirect URL, keep it only in a clipboard value or a private temporary file with user-only permissions, paste it through Warp's visible Paste Auth Token flow, then delete the temporary file immediately after use.
+
+Secure Paste Auth Token process:
+1. Verify `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` exists and is non-empty without printing it.
+2. Start Warp's normal login flow and derive the current-run `state` from Warp's generated login URL.
+3. Normalize the managed secret privately:
+   - Trim surrounding whitespace and one pair of surrounding single or double quotes if present.
+   - If the secret parses as a URL with a `refresh_token` query parameter, extract that `refresh_token` value and ignore any stale `state` in the secret.
+   - Otherwise, treat the trimmed secret as the raw refresh token.
+4. URL-encode the extracted refresh token and current-run `state` separately as query parameter values.
+5. Construct the redirect URL only in a clipboard value or private temporary file with user-only permissions.
+6. Return to Warp and use the visible Paste Auth Token path:
+   - Click the `Click here to paste your token from the browser` link, `Paste Auth Token` button, or equivalent pasted-token control shown by Warp.
+   - Focus the auth token text input that appears.
+   - Paste the prepared redirect URL into that input and submit it through Warp's UI so Warp parses and validates it.
+7. Delete any private temporary files immediately after use and clear the clipboard if the environment supports doing so safely.
+8. If the Paste Auth Token UI cannot be reached or automated safely, stop and report an auth blocker instead of parsing the redirect in place of Warp, using a desktop URI handler, browser address bar, or shell command with the token-bearing URL.
+
+Preferred authenticated path:
+- Launch Warp in a fresh first-run state and choose the login/sign-in path from onboarding.
+- Use Warp's built-in Paste Auth Token flow rather than visiting real OAuth providers, invoking a desktop URI handler, or asking the agent to parse/validate the redirect URI itself.
+- Derive `<state>` from the login URL generated by Warp if the UI exposes a copied login URL or opens the browser. If the UI does not expose the state after reasonable effort, report that as an auth blocker rather than bypassing state validation.
+- Do not preflight the token with Firebase Secure Token before handing it to Warp. Warp's desktop redirect handler only requires `refresh_token` and `state`; `user_uid` is optional, and `deleted_anonymous_user=true` handles the anonymous-user override case.
+- Treat `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` as either of these secret shapes:
+  - a raw Firebase refresh token, or
+  - a complete Warp desktop auth redirect URL containing a `refresh_token` query parameter.
+- Normalize the secret into a current-run redirect URL without printing it:
+  - Trim surrounding whitespace and one pair of surrounding single or double quotes if present.
+  - If the secret parses as a URL with a `refresh_token` query parameter, extract that `refresh_token` value and ignore any stale `state` in the secret.
+  - Otherwise, treat the trimmed secret as the raw refresh token.
+  - URL-encode the extracted refresh token and the current-run `state` separately as query parameter values.
+  - Build `warp://auth/desktop_redirect?refresh_token=<url-encoded-normalized-refresh-token>&deleted_anonymous_user=true&state=<url-encoded-current-state>`.
+  - Do not include `user_uid` unless it is already present in a provided desktop redirect URL; it is not required for this flow.
+- Construct the normalized redirect URL in a clipboard value or private temporary file only, then hand it to Warp through the Paste Auth Token UI. Do not parse, validate, or route the redirect outside of Warp.
+- If the Paste Auth Token flow cannot be reached or automated safely, stop and report an auth blocker instead of using a desktop URI handler or any shell command that contains the token-bearing URL.
+
+Fallback authenticated path:
+- If Warp rejects the normalized redirect, report the non-sensitive user-visible error and classify whether the secret appeared to be a raw token or a desktop redirect URL, without reporting any token contents.
+- If the Paste Auth Token flow is blocked by UI automation issues, report the blocker and include the exact non-sensitive step where automation failed.
 - Do not switch to a logged-out path for this child.
 
 Flow-specific onboarding behavior:
+- Choose login/sign-in rather than skip/login-later when presented with an auth choice.
 - After auth succeeds, continue through the remaining onboarding screens with default or conservative options.
 - After the terminal verification succeeds, click the upper-right avatar/account control, open Settings from that menu, and capture an additional screenshot that clearly shows the logged-in user's email address in Warp settings or account/profile settings.
 - Include the account/settings email screenshot in the manifest and final report. The email address itself may be visible in the screenshot, but do not copy the email into logs, shell output, or the final text report unless the user explicitly asks for it.
