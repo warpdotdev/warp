@@ -46,6 +46,16 @@ fn persist_plan_config(
     plan_id: &str,
     status: OrchestrationConfigStatus,
 ) {
+    persist_plan_config_with_harness(app, conversation_id, plan_id, "oz", status);
+}
+
+fn persist_plan_config_with_harness(
+    app: &mut App,
+    conversation_id: AIConversationId,
+    plan_id: &str,
+    harness_type: &str,
+    status: OrchestrationConfigStatus,
+) {
     BlocklistAIHistoryModel::handle(app).update(app, |history, _ctx| {
         history
             .conversation_mut(&conversation_id)
@@ -54,7 +64,7 @@ fn persist_plan_config(
                 plan_id.to_string(),
                 OrchestrationConfig {
                     model_id: "auto".to_string(),
-                    harness_type: "oz".to_string(),
+                    harness_type: harness_type.to_string(),
                     execution_mode: OrchestrationExecutionMode::Remote {
                         environment_id: "env-1".to_string(),
                         worker_host: "warp".to_string(),
@@ -165,6 +175,33 @@ fn should_autoexecute_when_plan_has_approved_orchestration_config() {
         });
 
         assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn should_not_autoexecute_approved_remote_non_warp_plan_without_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        persist_plan_config_with_harness(
+            &mut app,
+            state.conversation_id,
+            "plan-1",
+            "codex",
+            OrchestrationConfigStatus::Approved,
+        );
+        let action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(!should_autoexecute);
     });
 }
 

@@ -499,7 +499,7 @@ impl ExecutionProfileEditorView {
             );
             dropdown
         });
-        
+
         let mcp_allowlist_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_menu_header_to_static("Select MCP servers");

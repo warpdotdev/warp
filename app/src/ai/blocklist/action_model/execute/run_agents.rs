@@ -308,7 +308,7 @@ impl RunAgentsExecutor {
         if AppExecutionMode::as_ref(ctx).is_autonomous() {
             return true;
         }
-        has_approved_orchestration_config(request, input.conversation_id, ctx)
+        approved_orchestration_config_can_autoexecute(request, input.conversation_id, ctx)
             || BlocklistAIPermissions::as_ref(ctx)
                 .get_run_agents_setting(ctx, Some(self.terminal_view_id))
                 .is_always_allow()
@@ -332,24 +332,15 @@ enum ChildSlot {
     Pending(async_channel::Receiver<StartAgentOutcome>),
 }
 
-fn orchestration_config_status_for_request(
-    request: &RunAgentsRequest,
-    parent_conversation_id: AIConversationId,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) -> Option<ai::agent::orchestration_config::OrchestrationConfigStatus> {
-    BlocklistAIHistoryModel::as_ref(ctx)
-        .conversation(&parent_conversation_id)?
-        .orchestration_config_for_plan(&request.plan_id)
-        .map(|(_, status)| status)
-}
-
-fn has_approved_orchestration_config(
+fn approved_orchestration_config_can_autoexecute(
     request: &RunAgentsRequest,
     parent_conversation_id: AIConversationId,
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> bool {
-    orchestration_config_status_for_request(request, parent_conversation_id, ctx)
+    let mut resolved_request = request.clone();
+    resolve_request_from_approved_config(&mut resolved_request, parent_conversation_id, ctx)
         .is_some_and(|status| status.is_approved())
+        && can_execute_with_auth_secret(&resolved_request, ctx)
 }
 
 fn resolve_request_from_approved_config(
