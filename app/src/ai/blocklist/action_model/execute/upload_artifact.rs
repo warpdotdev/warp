@@ -23,6 +23,20 @@ use crate::{
 use warpui::SingletonEntity;
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+#[cfg(not(target_family = "wasm"))]
+fn format_upload_artifact_error(err: &anyhow::Error) -> String {
+    let root_cause = err
+        .chain()
+        .last()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| err.to_string());
+
+    if root_cause != err.to_string() {
+        format!("Artifact upload failed: {root_cause}")
+    } else {
+        root_cause
+    }
+}
 
 pub struct UploadArtifactExecutor {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -148,7 +162,7 @@ impl UploadArtifactExecutor {
                         })
                     }
                     Err(err) => AIAgentActionResultType::UploadArtifact(
-                        UploadArtifactResult::Error(err.to_string()),
+                        UploadArtifactResult::Error(format_upload_artifact_error(&err)),
                     ),
                 },
             )
