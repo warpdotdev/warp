@@ -291,6 +291,57 @@ Run unit tests with `cargo nextest run`.
 - Branch names should be prefixed with your handle (e.g. `alice/fix-parser`).
 - Commit messages should explain *what* and *why*, not just *what*.
 
+## Release Process
+
+Warp publishes releases on three channels: **dev** (nightly), **preview** (weekly), and **stable** (weekly).
+
+### Release schedule
+
+| Channel | Frequency | Trigger |
+|---------|-----------|---------|
+| dev | Nightly (every morning at 3am EST) | Automated cron |
+| preview | Weekly (Wednesday mornings at 3am EST) | Automated cron |
+| stable | Weekly (Wednesday mornings at 3am EST) | Automated cron |
+
+All three channels can also be triggered manually via the **Cut New Releases** workflow on GitHub Actions.
+
+### Cutting a release candidate
+
+Release candidates (RCs) are cut manually on a dedicated release branch. The branch name determines the target channel:
+
+```
+<channel>_release/<date-or-name>
+```
+
+For example: `stable_release/2024-01-15`, `preview_release/rc-42`.
+
+To cut an RC:
+
+1. Create and push a branch following the naming convention above.
+2. Go to the **Cut New Release Candidate** workflow in GitHub Actions and click **Run workflow** on your branch.
+3. The workflow creates the RC artifacts and updates the [channel-versions](https://github.com/warpdotdev/channel-versions) repository.
+
+### Testing a release candidate
+
+RCs are available to test as soon as they are published. To access an RC:
+
+- **Dev/Preview RCs**: Use the Warp beta download links surfaced by the workflow run, or install from the corresponding pre-release assets.
+- **Stable RCs**: Stable RCs are promoted to the stable channel after a soak period. Testing details (e.g., specific test racks, feedback channels) are posted in the `#release` Slack channel when the RC is cut.
+
+When testing an RC, focus on regressions in core workflows — the kind of issues that would block a stable release. File bugs against the RC milestone or post in `#oss-contributors` with a link to the regression.
+
+### Final releases
+
+Final releases are produced by the automated **Cut New Releases** workflow, which runs on schedule and can also be triggered manually. The workflow:
+
+1. Creates release artifacts for each targeted channel.
+2. Publishes them to the appropriate distribution endpoints.
+3. Updates the [channel-versions](https://github.com/warpdotdev/channel-versions) repository so Warp clients receive the new version.
+
+### Release-related questions
+
+For release scheduling, RC testing, or publication issues, reach out in **[#oss-contributors](https://warpcommunity.slack.com/archives/C0B0LM8N4DB)** on Slack or mention **@oss-maintainers** on a GitHub issue or PR.
+
 ## Code of Conduct
 
 This project adopts the [Contributor Covenant](https://www.contributor-covenant.org/) (v2.1) as its code of conduct. All contributors and maintainers are expected to follow it in every project space. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the full text, or report violations to warp-coc at warp.dev.
