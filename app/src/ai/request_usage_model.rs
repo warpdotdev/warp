@@ -393,8 +393,11 @@ impl AIRequestUsageModel {
 
         let is_payg_enabled = current_workspace
             .is_some_and(|w| w.billing_metadata.is_enterprise_pay_as_you_go_enabled());
-        let is_auto_reload_enabled =
-            current_workspace.is_some_and(|w| w.billing_metadata.is_auto_reload_enabled());
+        let addon_credits_options = PricingInfoModel::as_ref(ctx).addon_credits_options();
+        let is_auto_reload_enabled = current_workspace.is_some_and(|w| {
+            w.billing_metadata.is_auto_reload_enabled()
+                && !w.would_auto_reload_reach_limit(addon_credits_options)
+        });
 
         // If you have provided your own API key,
         // it doesn't matter if you are out of warp-provided requests.
@@ -571,18 +574,11 @@ impl AIRequestUsageModel {
             return BuyCreditsBannerDisplayState::OutOfCredits;
         }
 
-        let at_monthly_limit =
-            current_workspace.is_some_and(|w| w.is_at_addon_credits_monthly_limit());
+        let auto_reload_would_reach_limit = current_workspace.is_some_and(|w| {
+            w.would_auto_reload_reach_limit(PricingInfoModel::as_ref(ctx).addon_credits_options())
+        });
 
-        let auto_reload_would_exceed = current_workspace
-            .and_then(|workspace| {
-                let options = PricingInfoModel::as_ref(ctx).addon_credits_options()?;
-                let price = workspace.get_auto_reload_price_cents(options)?;
-                Some(workspace.would_addon_purchase_reach_limit(price))
-            })
-            .unwrap_or(false);
-
-        if at_monthly_limit || auto_reload_would_exceed {
+        if auto_reload_would_reach_limit {
             BuyCreditsBannerDisplayState::MonthlyLimitReached
         } else {
             BuyCreditsBannerDisplayState::Hidden
