@@ -73,6 +73,25 @@ fn has_non_viewer_data_returns_true_for_team_aggregate_row() {
 }
 
 #[test]
+fn has_non_viewer_data_returns_false_for_empty_team_aggregate_row() {
+    // The server can send a zero Team aggregate row for a solo workspace. That
+    // placeholder should not create the "Other members" row.
+    let entries = vec![
+        viewer_user_entry(),
+        entry(
+            AiCreditsUsageAndCostSubjectType::Team,
+            None,
+            AiCreditsUsageAndCostType::Aggregate,
+            AiCreditsUsageBucket::Aggregate,
+            AiCreditsUsageSource::Aggregate,
+            0,
+            0,
+        ),
+    ];
+    assert!(!has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
 fn has_non_viewer_data_returns_true_for_other_user_row() {
     // PerUserTotals / FullBreakdown emit per-user rows, so a departed teammate
     // shows up as a User entry with a non-viewer UID.

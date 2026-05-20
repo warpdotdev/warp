@@ -203,14 +203,17 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
 
 /// "Is there any data in `entries` that's not my own?"
 pub fn has_non_viewer_data(entries: &[BillingCycleUsageEntry], viewer_uid: Option<&str>) -> bool {
-    entries.iter().any(|e| match &e.subject_type {
-        AiCreditsUsageAndCostSubjectType::Team => true,
-        _ => match (e.subject_uid.as_deref(), viewer_uid) {
-            (Some(uid), Some(viewer)) => uid != viewer,
-            // Unknown subject — conservatively treat as non-viewer.
-            _ => true,
-        },
-    })
+    entries
+        .iter()
+        .filter(|e| e.credits_used != 0 || e.cost_cents != 0)
+        .any(|e| match &e.subject_type {
+            AiCreditsUsageAndCostSubjectType::Team => true,
+            _ => match (e.subject_uid.as_deref(), viewer_uid) {
+                (Some(uid), Some(viewer)) => uid != viewer,
+                // Unknown subject — conservatively treat as non-viewer.
+                _ => true,
+            },
+        })
 }
 
 pub fn format_credits(credits: i64) -> String {
