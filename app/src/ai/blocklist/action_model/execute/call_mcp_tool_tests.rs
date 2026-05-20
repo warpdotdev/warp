@@ -471,6 +471,91 @@ fn large_timestamp_is_coerced() {
     assert_eq!(args["ts"].as_i64(), Some(1730419200000));
 }
 
+// ---------- Recursive composition guard ----------
+
+#[test]
+fn all_of_self_reference_terminates() {
+    // An MCP server could advertise a schema where `allOf` recursively
+    // references its own definition. `resolve_refs` breaks pure `$ref`
+    // chains, but without a depth guard `coerce_recursive` → `allOf` →
+    // `coerce_recursive` → `allOf` → ... loops indefinitely while preparing
+    // a tool call. The depth limit must terminate this without panicking.
+    let mut args = obj(json!({ "x": 3.0 }));
+    let schema = obj(json!({
+        "$defs": {
+            "Loop": {
+                "allOf": [{ "$ref": "#/$defs/Loop" }],
+                "properties": { "x": { "type": "integer" } }
+            }
+        },
+        "$ref": "#/$defs/Loop"
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // The loop unwinds before reaching the property recursion at the
+    // bottom, so `x` does not get coerced. The important guarantee is
+    // termination, not correctness on a malicious schema.
+    assert!(
+        args["x"].is_number(),
+        "coercion call must terminate without panicking"
+    );
+}
+
+#[test]
+fn one_of_self_reference_terminates() {
+    // Same shape via `oneOf` instead of `allOf`.
+    let mut args = obj(json!({ "x": 3.0 }));
+    let schema = obj(json!({
+        "$defs": {
+            "Loop": {
+                "oneOf": [{ "$ref": "#/$defs/Loop" }],
+                "properties": { "x": { "type": "integer" } }
+            }
+        },
+        "$ref": "#/$defs/Loop"
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert!(args["x"].is_number());
+}
+
+#[test]
+fn deep_finite_nesting_under_limit_still_coerces() {
+    // A schema with 10 levels of nested `properties` is well under the
+    // depth limit and must still produce a coerced result.
+    fn nest(remaining: usize) -> serde_json::Value {
+        if remaining == 0 {
+            json!({ "type": "integer" })
+        } else {
+            json!({
+                "type": "object",
+                "properties": { "next": nest(remaining - 1) }
+            })
+        }
+    }
+    fn nest_value(remaining: usize) -> serde_json::Value {
+        if remaining == 0 {
+            json!(5.0)
+        } else {
+            json!({ "next": nest_value(remaining - 1) })
+        }
+    }
+
+    let mut args = obj(nest_value(10));
+    let schema = obj(nest(10));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // Walk down to the leaf and confirm it coerced.
+    let mut current = &serde_json::Value::Object(args);
+    for _ in 0..10 {
+        current = &current["next"];
+    }
+    assert_eq!(serde_json::to_string(current).unwrap(), "5");
+}
+
 // ---------- End-to-end: the issue's repro schema ----------
 
 #[test]
