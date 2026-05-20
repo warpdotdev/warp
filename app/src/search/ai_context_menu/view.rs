@@ -24,7 +24,7 @@ use warpui::{
 
 use super::styles;
 use crate::appearance::Appearance;
-use crate::debounce::debounce;
+use crate::debounce;
 use crate::drive::settings::WarpDriveSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;

@@ -69,6 +69,7 @@ use warp_completer::parsers::LiteCommand;
 use warp_completer::signatures::CommandRegistry;
 use warp_completer::util::parse_current_commands_and_tokens;
 use warp_core::context_flag::ContextFlag;
+use warp_core::r#async::debounce;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::user_preferences::GetUserPreferences as _;
@@ -210,7 +211,6 @@ use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
 use crate::context_chips::display_chip::DisplayChipConfig;
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
-use crate::debounce::debounce;
 use crate::editor::{
     default_cursor_colors, position_id_for_cached_point, position_id_for_cursor,
     position_id_for_first_cursor, AttachedImage as AttachedImageRawData, AutosuggestionLocation,

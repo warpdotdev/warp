@@ -27,7 +27,6 @@ mod context_chips;
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
 mod crash_reporting;
-mod debounce;
 mod debug_dump;
 mod default_terminal;
 mod download_method;
@@ -211,6 +210,8 @@ use terminal::session_settings::SessionSettings;
 use url::Url;
 pub use warp_core::errors::{report_error, report_if_error};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the debounce function to simplify imports.
+pub use warp_core::r#async::debounce;
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use async_channel::Sender;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::r#async::debounce;
 use warp_editor::render::model::{AutoScrollMode, Decoration};
 use warp_editor::search::{SearchEvent, Searcher};
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
@@ -24,7 +25,6 @@ use warpui::{
 use super::model::NotebooksEditorModel;
 use super::view::{EditorViewEvent, RichTextEditorView};
 use crate::appearance::Appearance;
-use crate::debounce::debounce;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::ui_components::icons::Icon;
 use crate::view_components::find::{

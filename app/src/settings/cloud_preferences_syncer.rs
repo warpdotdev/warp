@@ -6,6 +6,7 @@ use std::time::Duration;
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::r#async::debounce;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::r#async::Timer;
@@ -20,7 +21,6 @@ use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::json_model::JsonSerializer;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType};
-use crate::debounce::debounce;
 use crate::drive::CloudObjectTypeAndId;
 use crate::report_if_error;
 use crate::server::cloud_objects::update_manager::{

@@ -2,22 +2,22 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use enum_iterator::{all, Sequence};
+use enum_iterator::{Sequence, all};
 use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
-use warpui::{Action, AppContext, Element, Entity, ModelHandle};
+use warpui_core::{Action, AppContext, Element, Entity, ModelHandle};
 
 use super::item::SearchItem;
 use super::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
-use crate::appearance::Appearance;
-use crate::search::item::IconLocation;
-use crate::search::mixer::{DataSourceRunError, SyncDataSource};
-use crate::search::result_renderer::ItemHighlightState;
-use crate::ui_components::icons::Icon;
+use crate::item::IconLocation;
+use crate::mixer::{DataSourceRunError, SyncDataSource};
+use crate::result_renderer::ItemHighlightState;
 
 lazy_static! {
     static ref HISTORY_FILTER_ATOM: FilterAtom = FilterAtom {
@@ -460,7 +460,7 @@ impl<T: Action + Clone> QueryResult<T> {
         self.item.accessibility_help_message()
     }
 
-    pub fn detail_data(&self) -> Option<crate::search::item::SearchItemDetail> {
+    pub fn detail_data(&self) -> Option<crate::item::SearchItemDetail> {
         self.item.detail_data()
     }
 
@@ -532,6 +532,12 @@ where
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataSourceSearchError {
     pub(crate) message: String,
+}
+
+impl DataSourceSearchError {
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
 }
 
 impl DataSourceRunError for DataSourceSearchError {

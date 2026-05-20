@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -1571,10 +1570,6 @@ pub enum TelemetryEvent {
     },
     CommandSearchFilterChanged {
         new_filter: Option<QueryFilter>,
-    },
-    CommandSearchAsyncQueryCompleted {
-        filters: HashSet<QueryFilter>,
-        error_payload: Option<Value>,
     },
     GlobalSearchOpened,
     GlobalSearchQueryStarted,
@@ -3245,10 +3240,6 @@ impl TelemetryEvent {
             TelemetryEvent::CommandSearchFilterChanged { new_filter } => {
                 Some(json!({ "new_filter": new_filter }))
             }
-            TelemetryEvent::CommandSearchAsyncQueryCompleted {
-                filters,
-                error_payload,
-            } => Some(json!({ "filter": filters, "error": error_payload })),
             TelemetryEvent::AICommandSearchOpened { entrypoint } => {
                 Some(json!({ "entrypoint": entrypoint }))
             }
@@ -4969,7 +4960,6 @@ impl TelemetryEvent {
             | TelemetryEvent::CommandSearchExited { .. }
             | TelemetryEvent::CommandSearchResultAccepted { .. }
             | TelemetryEvent::CommandSearchFilterChanged { .. }
-            | TelemetryEvent::CommandSearchAsyncQueryCompleted { .. }
             | TelemetryEvent::AICommandSearchOpened { .. }
             | TelemetryEvent::OpenNotebook(_)
             | TelemetryEvent::EditNotebook { .. }
@@ -5535,7 +5525,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CommandSearchExited => EnablementState::Always,
             Self::CommandSearchResultAccepted => EnablementState::Always,
             Self::CommandSearchFilterChanged => EnablementState::Always,
-            Self::CommandSearchAsyncQueryCompleted => EnablementState::Always,
             Self::AICommandSearchOpened => EnablementState::Always,
             Self::OpenedAltScreenFind => EnablementState::Always,
             Self::UserInitiatedClose => EnablementState::Always,
@@ -6041,7 +6030,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CommandSearchExited => "Command Search Exited",
             Self::CommandSearchResultAccepted => "Command Search Result Accepted",
             Self::CommandSearchFilterChanged => "Command Search Filter Changed",
-            Self::CommandSearchAsyncQueryCompleted => "Command Search Async Query Completed",
             Self::AICommandSearchOpened => "AI Command Search opened",
             Self::OpenNotebook => "Notebook Opened",
             Self::EditNotebook => "Notebook Edited",
@@ -6684,9 +6672,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::CommandSearchResultAccepted => "Accepted command search result",
             Self::CommandSearchFilterChanged => "Changed command search filter",
-            Self::CommandSearchAsyncQueryCompleted => {
-                "Finished searching for a command in the background"
-            }
             Self::AICommandSearchOpened => {
                 "Opened the modal for AI Command Search, where you can use natural language to search for commands"
             }
