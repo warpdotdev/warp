@@ -6,6 +6,7 @@ use crate::elements::{
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack,
 };
 use crate::geometry::vector::Vector2F;
+use crate::localization;
 
 use crate::platform::Cursor;
 use crate::{
@@ -58,7 +59,7 @@ impl TextAndIcon {
             alignment,
             flex_size,
             flex_spacing,
-            text: text.into(),
+            text: localization::localize_cow(text.into()),
             icon,
             padding: 0.,
             icon_size,
@@ -198,12 +199,12 @@ impl Button {
     }
 
     pub fn with_text_label(mut self, label: String) -> Self {
-        self.label = ButtonLabel::Text(label);
+        self.label = ButtonLabel::Text(localization::localize_string(label));
         self
     }
 
     pub fn with_centered_text_label(mut self, label: String) -> Self {
-        self.label = ButtonLabel::CenteredText(label);
+        self.label = ButtonLabel::CenteredText(localization::localize_string(label));
         self
     }
 

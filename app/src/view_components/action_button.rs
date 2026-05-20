@@ -16,6 +16,7 @@ use warpui::{
     },
     fonts::{Properties, Weight},
     keymap::Keystroke,
+    localization,
     platform::Cursor,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, BlurContext, Element, Entity, EventContext, FocusContext, SingletonEntity as _,
@@ -221,7 +222,7 @@ impl ActionButton {
             disabled: false,
             icon: None,
             icon_ansi_color: None,
-            label: label.into(),
+            label: localization::localize_cow(label.into()),
             tooltip: None,
             tooltip_sublabel: None,
             tooltip_max_height: None,
@@ -427,7 +428,7 @@ impl ActionButton {
     }
 
     pub fn set_label(&mut self, label: impl Into<Cow<'static, str>>, ctx: &mut ViewContext<Self>) {
-        self.label = label.into();
+        self.label = localization::localize_cow(label.into());
         ctx.notify();
     }
 

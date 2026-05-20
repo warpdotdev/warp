@@ -7,6 +7,7 @@ use crate::elements::{
 use crate::event::ModifiersState;
 use crate::fonts::Weight;
 use crate::geometry::rect::RectF;
+use crate::localization;
 use crate::platform::Cursor;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{
@@ -172,6 +173,49 @@ pub struct FormattedTextElement {
     constructor_location: Option<&'static std::panic::Location<'static>>,
 }
 
+fn localize_formatted_text_arc(formatted_text: Arc<FormattedText>) -> Arc<FormattedText> {
+    let mut formatted_text = (*formatted_text).clone();
+    localize_formatted_text_in_place(&mut formatted_text);
+    Arc::new(formatted_text)
+}
+
+fn localize_formatted_text(mut formatted_text: FormattedText) -> FormattedText {
+    localize_formatted_text_in_place(&mut formatted_text);
+    formatted_text
+}
+
+fn localize_formatted_text_in_place(formatted_text: &mut FormattedText) {
+    for line in &mut formatted_text.lines {
+        localize_formatted_text_line(line);
+    }
+}
+
+fn localize_formatted_text_line(line: &mut FormattedTextLine) {
+    match line {
+        FormattedTextLine::Heading(header) => localize_formatted_text_inline(&mut header.text),
+        FormattedTextLine::Line(inline) => localize_formatted_text_inline(inline),
+        FormattedTextLine::OrderedList(list) => {
+            localize_formatted_text_inline(&mut list.indented_text.text)
+        }
+        FormattedTextLine::UnorderedList(list) => localize_formatted_text_inline(&mut list.text),
+        FormattedTextLine::TaskList(list) => localize_formatted_text_inline(&mut list.text),
+        FormattedTextLine::CodeBlock(_)
+        | FormattedTextLine::LineBreak
+        | FormattedTextLine::HorizontalRule
+        | FormattedTextLine::Embedded(_)
+        | FormattedTextLine::Image(_)
+        | FormattedTextLine::Table(_) => {}
+    }
+}
+
+fn localize_formatted_text_inline(inline: &mut [FormattedTextFragment]) {
+    for fragment in inline {
+        if !fragment.styles.inline_code {
+            fragment.text = localization::localize_string(std::mem::take(&mut fragment.text));
+        }
+    }
+}
+
 impl FormattedTextElement {
     #[cfg_attr(debug_assertions, track_caller)]
     fn internal_constructor(
@@ -223,7 +267,7 @@ impl FormattedTextElement {
         highlight_index: HighlightedHyperlink,
     ) -> Self {
         Self::new_arc(
-            Arc::new(formatted_text),
+            Arc::new(localize_formatted_text(formatted_text)),
             font_size,
             family_id,
             code_block_family_id,
@@ -244,7 +288,7 @@ impl FormattedTextElement {
         highlight_index: HighlightedHyperlink,
     ) -> Self {
         Self::internal_constructor(
-            formatted_text,
+            localize_formatted_text_arc(formatted_text),
             font_size,
             family_id,
             code_block_family_id,
@@ -270,7 +314,7 @@ impl FormattedTextElement {
     ) -> Self {
         Self::internal_constructor(
             Arc::new(FormattedText::new([FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text(text.into()),
+                FormattedTextFragment::plain_text(localization::localize_cow(text.into())),
             ])])),
             font_size,
             family_id,

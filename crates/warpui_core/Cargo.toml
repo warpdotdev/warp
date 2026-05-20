@@ -78,6 +78,9 @@ trait-set = "0.3.0"
 vec1.workspace = true
 warp_util.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [dev-dependencies]
 command = { workspace = true, features = ["test-util"] }
 concat-idents.workspace = true

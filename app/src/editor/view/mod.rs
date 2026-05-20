@@ -43,7 +43,7 @@ use warp_util::{path::ShellFamily, user_input::UserInput};
 use warpui::platform::keyboard::KeyCode;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{elements, ViewHandle};
+use warpui::{elements, localization, ViewHandle};
 
 use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::{BlocklistAIContextModel, PendingAttachment, PendingFile};
@@ -3518,7 +3518,8 @@ impl EditorView {
         text: impl Into<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        Arc::make_mut(&mut self.placeholder_texts).insert(prefix.into(), text.into());
+        Arc::make_mut(&mut self.placeholder_texts)
+            .insert(prefix.into(), localization::localize_string(text));
         ctx.notify();
     }
 

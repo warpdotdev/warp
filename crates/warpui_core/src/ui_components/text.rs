@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::elements::{Highlight, HighlightedRange, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::localization;
 use crate::{
     elements::{Container, Element, Text},
     fonts::Properties,
@@ -109,7 +110,7 @@ pub struct Span {
 impl Span {
     pub fn new(text: impl Into<Cow<'static, str>>, styles: UiComponentStyles) -> Self {
         Span {
-            text: WrappableText::new(text.into(), false, styles),
+            text: WrappableText::new(localization::localize_cow(text.into()), false, styles),
         }
     }
 
@@ -159,7 +160,7 @@ pub struct Paragraph {
 impl Paragraph {
     pub fn new(text: impl Into<Cow<'static, str>>, styles: UiComponentStyles) -> Self {
         Paragraph {
-            text: WrappableText::new(text.into(), true, styles),
+            text: WrappableText::new(localization::localize_cow(text.into()), true, styles),
         }
     }
 

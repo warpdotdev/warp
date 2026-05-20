@@ -15216,6 +15216,7 @@ dependencies = [
  "warp_util",
  "warpui_core",
  "wasm-bindgen-futures",
+ "windows 0.62.2",
  "woothee",
 ]
 

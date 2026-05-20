@@ -1,5 +1,6 @@
 use crate::{
     elements::{Border, Container, Element, Flex, ParentElement, Text},
+    localization,
     ui_components::components::{UiComponent, UiComponentStyles},
 };
 use pathfinder_color::ColorU;
@@ -67,7 +68,10 @@ impl UiComponent for Tooltip {
 
 impl Tooltip {
     pub fn new(label: String, styles: UiComponentStyles) -> Self {
-        Tooltip { label, styles }
+        Tooltip {
+            label: localization::localize_string(label),
+            styles,
+        }
     }
 }
 
@@ -162,8 +166,8 @@ impl UiComponent for TooltipWithSublabel {
 impl TooltipWithSublabel {
     pub fn new(label: String, sublabel: String, styles: UiComponentStyles) -> Self {
         TooltipWithSublabel {
-            label,
-            sublabel,
+            label: localization::localize_string(label),
+            sublabel: localization::localize_string(sublabel),
             styles,
         }
     }

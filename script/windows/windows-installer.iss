@@ -88,6 +88,7 @@ SignedUninstaller=yes
 #endif
 
 [Languages]
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
@@ -114,24 +115,24 @@ Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; ValueType: string; ValueNa
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}"; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}"; Flags: deletekey
 ; Add "Open Warp in new tab" to directory context menu
-Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new tab"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "在新标签页中打开 {#MyAppName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_tab?path=%1"""
 ; Add "Open Warp in new tab" to directory background context menu
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new tab"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "在新标签页中打开 {#MyAppName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_tab?path=%V"""
 ; Add "Open Warp in new window" to directory context menu
-Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new window"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "在新窗口中打开 {#MyAppName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_window?path=%1"""
 ; Add "Open Warp in new window" to directory background context menu
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new window"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "在新窗口中打开 {#MyAppName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_window?path=%V"""
 
 [Tasks]
-Name: addToPath; Description: "Add Warp to PATH"
+Name: addToPath; Description: "将 Warp 添加到 PATH"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userappdata}\warp\{#MyAppName}"

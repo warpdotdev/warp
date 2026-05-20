@@ -6,6 +6,7 @@ use super::{
 };
 
 use crate::event::ModifiersState;
+use crate::localization;
 use crate::platform::{Cursor, LineStyle};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType, TextBuffer};
@@ -271,8 +272,10 @@ impl Text {
     /// use [`soft_warp(false)`](`Text::soft_wrap`) after creating the text element.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn new(text: impl Into<Cow<'static, str>>, family_id: FamilyId, font_size: f32) -> Self {
+        let text = localization::localize_cow(text.into());
+
         Self {
-            text: text.into(),
+            text,
             soft_wrap: true,
             family_id,
             font_properties: Properties::default(),

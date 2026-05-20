@@ -16,6 +16,7 @@ pub mod fonts;
 pub mod image_cache;
 pub mod integration;
 pub mod keymap;
+pub mod localization;
 pub mod modals;
 pub mod notification;
 pub mod platform;
