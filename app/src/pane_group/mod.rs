@@ -3225,15 +3225,24 @@ impl PaneGroup {
             return true;
         }
 
-        let parent_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_conversation_id)
-            .and_then(|conversation| conversation.parent_conversation_id())
-            .or_else(|| {
-                RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                    store
-                        .get_conversation(&child_conversation_id)
-                        .and_then(|conversation| conversation.parent_conversation_id())
-                })
+        let parent_conversation_id =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                history_model
+                    .conversation(&child_conversation_id)
+                    .and_then(|conversation| {
+                        history_model.resolved_parent_conversation_id_for_conversation(conversation)
+                    })
+                    .or_else(|| {
+                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                            store.get_conversation(&child_conversation_id).and_then(
+                                |conversation| {
+                                    history_model.resolved_parent_conversation_id_for_conversation(
+                                        conversation,
+                                    )
+                                },
+                            )
+                        })
+                    })
             });
 
         let Some(parent_conversation_id) = parent_conversation_id else {

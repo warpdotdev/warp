@@ -5,7 +5,10 @@ use settings::Setting as _;
 use warp::{
     integration_testing::{
         self,
-        command_search::{assert_command_search_is_open, assert_history_filter_is_active},
+        command_search::{
+            assert_command_search_has_results, assert_command_search_is_open,
+            assert_history_filter_is_active,
+        },
         input::assert_workflow_info_box_is_open,
         step::new_step_with_default_assertions,
         terminal::{assert_input_editor_contents, wait_until_bootstrapped_single_pane_for_tab},
@@ -239,6 +242,12 @@ pub fn test_command_search_loads_history() -> Builder {
                 ),
         )
         .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
+        )
+        .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
                 .with_keystrokes(&["up", "up", "enter"])
                 .add_named_assertion(
@@ -287,6 +296,12 @@ pub fn test_command_search_loads_history_from_nondefault_histfile_path() -> Buil
                     "History filter is active",
                     assert_history_filter_is_active(),
                 ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
         )
         .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
@@ -348,6 +363,12 @@ pub fn test_histfile_left_joined_with_persisted_history() -> Builder {
                 ),
         )
         .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
+        )
+        .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
                 .with_keystrokes(&["up", "enter"])
                 .add_named_assertion(
@@ -402,6 +423,12 @@ pub fn test_history_command_is_linked_to_local_workflow() -> Builder {
                     "History filter is active",
                     assert_history_filter_is_active(),
                 ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
         )
         .with_step(
             new_step_with_default_assertions("Loads history from sqlite")

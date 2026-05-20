@@ -28,10 +28,10 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
-    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    CodebaseContextEnabled, FeedbackBundledSkillEnabled, FileBasedMcpEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled,
+    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
@@ -2671,6 +2671,7 @@ pub enum AISettingsPageAction {
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
+    ToggleFeedbackBundledSkill,
 
     // Custom inference
     OpenAddCustomEndpointModal,
@@ -3417,6 +3418,14 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .show_conversation_history
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleFeedbackBundledSkill => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .feedback_bundled_skill_enabled
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -6068,6 +6077,7 @@ struct OtherAIWidget {
     show_oz_updates_in_zero_state_toggle: SwitchStateHandle,
     use_agent_footer_toggle: SwitchStateHandle,
     show_conversation_history_toggle: SwitchStateHandle,
+    feedback_bundled_skill_toggle: SwitchStateHandle,
 }
 
 impl OtherAIWidget {
@@ -6098,7 +6108,7 @@ impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history"
+        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history feedback skill bundled github issue"
     }
 
     fn render(
@@ -6166,6 +6176,20 @@ impl SettingsWidget for OtherAIWidget {
             is_toggleable,
             self.show_conversation_history_toggle.clone(),
             &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<FeedbackBundledSkillEnabled>(
+            "Enable built-in feedback skill",
+            AISettingsPageAction::ToggleFeedbackBundledSkill,
+            *ai_settings.feedback_bundled_skill_enabled,
+            is_toggleable,
+            self.feedback_bundled_skill_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_description(
+            "Let Oz use Warp's built-in skill for turning Warp product feedback into GitHub issues.",
+            is_toggleable,
             app,
         ));
 

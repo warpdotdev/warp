@@ -67,20 +67,11 @@ const DRAG_RESIZE_MARGIN: f32 = 4.0;
 #[cfg(windows)]
 const IDI_ICON: u16 = 0x101;
 
-cfg_if::cfg_if! {
-    if #[cfg(any(test, feature = "integration_tests"))] {
-        /// The window cannot be resized smaller than this.
-        /// TODO(CORE-1891) Instead of being hard-coded, this should be configurable by the user via
-        /// [`crate::platform::WindowOptions`].
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(124., 34.);
-    } else {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(480., 192.);
-    }
-}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(
+    crate::windowing::MIN_WINDOW_WIDTH as f64,
+    crate::windowing::MIN_WINDOW_HEIGHT as f64,
+);
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);

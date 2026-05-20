@@ -118,7 +118,7 @@ fn resolve_runtime_skills(
     let mut unresolved_references = Vec::new();
 
     for reference in skill_references {
-        let Some(skill) = skill_manager.skill_by_reference(reference) else {
+        let Some(skill) = skill_manager.active_skill_by_reference(reference, ctx) else {
             unresolved_references.push(reference.to_string());
             continue;
         };
@@ -2072,9 +2072,7 @@ fn launch_remote_child(
         );
         // Mark as remote so the parent's TaskStatusSyncModel skips status
         // reporting — the remote worker handles it.
-        if let Some(c) = history_model.conversation_mut(&id) {
-            c.mark_as_remote_child();
-        }
+        history_model.mark_conversation_as_remote_child(id, ctx);
         id
     });
 

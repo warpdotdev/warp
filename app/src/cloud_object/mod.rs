@@ -554,9 +554,6 @@ pub trait CloudModelType: Debug + Clone + Send + Sync {
     /// revision, which doesn't go through this code path.
     fn should_update_after_server_conflict(&self) -> bool;
 
-    /// Returns a new instance from a server update, or None if the update should be ignored.
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self>;
-
     /// Whether this model type can be exported.
     fn can_export(&self) -> bool {
         false

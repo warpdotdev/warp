@@ -2466,16 +2466,6 @@ impl AIBlock {
             }
         }
 
-        // Now that streaming is complete and all RunAgents requests are
-        // fully populated, re-evaluate auto-launch for any card that
-        // was created during streaming with an empty agent_run_configs.
-        let conversation_id_for_auto_launch = self.client_ids.conversation_id;
-        for view in self.run_agents_card_views.values() {
-            view.update(ctx, |card, ctx| {
-                card.try_auto_launch_on_stream_complete(conversation_id_for_auto_launch, ctx);
-            });
-        }
-
         // Collect UI state handles for code snippets, tables, and image
         // tooltips in a single pass. Each handle type is collected in the
         // order its section type appears, matching the indices used during

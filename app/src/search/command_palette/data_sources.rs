@@ -125,8 +125,7 @@ impl DataSourceStore {
 
             if FeatureFlag::CommandPaletteFileSearch.is_enabled() && !is_shared_session_viewer {
                 let file_search_model = FileSearchModel::as_ref(ctx);
-                let repo_root = file_search_model.repo_root(ctx);
-                let is_in_git_repo = repo_root.is_some();
+                let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
 
                 let files_data_source = if is_in_git_repo {
                     ctx.add_model(|_| files::data_source::FileDataSource::new())

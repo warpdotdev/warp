@@ -4,7 +4,8 @@
 //! pickers; in custom mode it swaps the top bar for an inline editor that
 //! accepts a self-hosted worker slug. The layout mirrors the Oz webapp's
 //! host selector: workspace default first (badged "Default"), then warp,
-//! then the user's most recent custom slug, then a "Custom host…" entry.
+//! then connected worker hosts, then the user's most recent custom slug,
+//! then a "Custom host…" entry.
 
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -38,6 +39,9 @@ use crate::view_components::dropdown::{
 
 #[derive(Debug, Clone)]
 pub enum HostPickerEvent {
+    /// Emitted when the dropdown opens so the parent can refresh dynamic
+    /// host sources before/while the menu is visible.
+    Opened,
     /// Emitted with a non-empty, trimmed slug whenever the user picks a
     /// known host or commits a custom entry.
     HostChanged { slug: String },
@@ -72,6 +76,8 @@ pub struct HostPicker {
     default_host: Option<String>,
     /// User's most-recent custom host, deduped against warp / default.
     recent_host: Option<String>,
+    /// Currently connected self-hosted worker slugs.
+    connected_hosts: Vec<String>,
     dropdown: ViewHandle<Dropdown<InternalAction>>,
     editor: ViewHandle<EditorView>,
     clear_mouse_state: MouseStateHandle,
@@ -101,16 +107,21 @@ impl HostPicker {
             dropdown
         });
         ctx.subscribe_to_view(&dropdown, |me, _, event, ctx| {
-            if let DropdownEvent::Close = event {
-                // Don't propagate Closed while transitioning into custom
-                // mode — the parent would refocus itself, blur the editor
-                // we just focused, and the resulting commit-on-blur would
-                // immediately revert us back out of custom mode.
-                if me.is_custom_mode {
-                    return;
+            match event {
+                DropdownEvent::ToggleExpanded => {
+                    ctx.emit(HostPickerEvent::Opened);
                 }
-                ctx.emit(HostPickerEvent::Closed);
-                ctx.notify();
+                DropdownEvent::Close => {
+                    // Don't propagate Closed while transitioning into custom
+                    // mode — the parent would refocus itself, blur the editor
+                    // we just focused, and the resulting commit-on-blur would
+                    // immediately revert us back out of custom mode.
+                    if me.is_custom_mode {
+                        return;
+                    }
+                    ctx.emit(HostPickerEvent::Closed);
+                    ctx.notify();
+                }
             }
         });
 
@@ -137,6 +148,7 @@ impl HostPicker {
             current_slug: ORCHESTRATION_WARP_WORKER_HOST.to_string(),
             default_host: None,
             recent_host: None,
+            connected_hosts: Vec::new(),
             dropdown,
             editor,
             clear_mouse_state: MouseStateHandle::default(),
@@ -150,15 +162,23 @@ impl HostPicker {
 
     // ── Public API ──────────────────────────────────────────────────
 
-    /// Replaces the default and recent menu rows. Pass `None` to omit one.
+    /// Replaces the default, connected, and recent menu rows. Pass `None` to omit
+    /// default/recent rows.
     pub fn set_options(
         &mut self,
         default_host: Option<String>,
         recent_host: Option<String>,
+        connected_hosts: Vec<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.default_host = default_host.filter(|s| !s.trim().is_empty());
         self.recent_host = recent_host.filter(|s| !s.trim().is_empty());
+        self.connected_hosts = connected_hosts
+            .into_iter()
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        self.connected_hosts.sort();
+        self.connected_hosts.dedup();
         self.repopulate_menu(ctx);
         self.sync_dropdown_selection(ctx);
         ctx.notify();
@@ -211,11 +231,18 @@ impl HostPicker {
         if self.recent_host.as_deref() == Some(slug) {
             return true;
         }
+        if self.connected_hosts.iter().any(|host| host == slug) {
+            return true;
+        }
         false
     }
 
     fn repopulate_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let items = build_menu_items(self.default_host.as_deref(), self.recent_host.as_deref());
+        let items = build_menu_items(
+            self.default_host.as_deref(),
+            self.recent_host.as_deref(),
+            &self.connected_hosts,
+        );
         self.dropdown.update(ctx, |dropdown, ctx_dropdown| {
             dropdown.set_rich_items(items, ctx_dropdown);
         });
@@ -390,13 +417,15 @@ fn normalize_slug(slug: &str) -> String {
 }
 
 /// Builds the menu items shown in list mode, in the order: workspace default
-/// (badged "Default" if set), warp, recent custom slug (if any and not a
-/// duplicate), then a "Custom host…" entry.
+/// (badged "Default" if set), warp, connected worker hosts, recent custom
+/// slug (if any and not a duplicate), then a "Custom host…" entry.
 pub(crate) fn build_menu_items(
     default_host: Option<&str>,
     recent_host: Option<&str>,
+    connected_hosts: &[String],
 ) -> Vec<MenuItem<DropdownAction<InternalAction>>> {
     let mut items: Vec<MenuItem<DropdownAction<InternalAction>>> = Vec::new();
+    let mut known_slugs: Vec<String> = Vec::new();
 
     if let Some(slug) = default_host {
         items.push(menu_item_for_known(
@@ -404,14 +433,34 @@ pub(crate) fn build_menu_items(
             Some(DEFAULT_BADGE),
             InternalAction::SelectKnown(slug.to_string()),
         ));
+        known_slugs.push(slug.to_string());
     }
     items.push(menu_item_for_known(
         ORCHESTRATION_WARP_WORKER_HOST,
         None,
         InternalAction::SelectKnown(ORCHESTRATION_WARP_WORKER_HOST.to_string()),
     ));
+    known_slugs.push(ORCHESTRATION_WARP_WORKER_HOST.to_string());
+
+    for slug in connected_hosts {
+        if slug.trim().is_empty()
+            || known_slugs
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(slug))
+        {
+            continue;
+        }
+        items.push(menu_item_for_known(
+            slug,
+            None,
+            InternalAction::SelectKnown(slug.to_string()),
+        ));
+        known_slugs.push(slug.to_string());
+    }
     if let Some(slug) = recent_host {
-        if default_host != Some(slug) && !slug.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST)
+        if !known_slugs
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(slug))
         {
             // Recent hosts render as plain slugs; only the workspace
             // default carries a badge.

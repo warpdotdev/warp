@@ -1112,6 +1112,13 @@ impl CommandSearchView {
     pub fn search_bar(&self) -> &ViewHandle<SearchBar<CommandSearchItemAction>> {
         &self.search_bar
     }
+
+    pub fn has_search_results(&self, app: &AppContext) -> bool {
+        self.search_bar_state
+            .as_ref(app)
+            .query_result_renderers()
+            .is_some_and(|results| !results.is_empty())
+    }
 }
 
 pub mod styles {

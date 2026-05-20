@@ -14517,6 +14517,7 @@ dependencies = [
  "walkdir",
  "warp-command-signatures",
  "warp-workflows",
+ "warp_assets",
  "warp_cli",
  "warp_completer",
  "warp_core",
@@ -14600,6 +14601,15 @@ version = "0.1.0"
 source = "git+https://github.com/warpdotdev/workflows?rev=793a98ddda6ef19682aed66364faebd2829f0e01#793a98ddda6ef19682aed66364faebd2829f0e01"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "warp_assets"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rust-embed 8.7.2",
+ "warpui_core",
 ]
 
 [[package]]
