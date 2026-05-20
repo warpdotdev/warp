@@ -7,9 +7,7 @@ use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, path::PathBuf};
-use warp_graphql::billing::{
-    AddonCreditAutoReloadStatus, AddonCreditsOption, ServiceAgreement, ServiceAgreementType,
-};
+use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
 
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
@@ -179,7 +177,7 @@ impl Workspace {
     /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
-        addon_credits_options: &[AddonCreditsOption],
+        addon_credits_options: &[warp_graphql::billing::AddonCreditsOption],
     ) -> Option<i32> {
         let selected_credits = self
             .settings
@@ -190,16 +188,6 @@ impl Workspace {
             .iter()
             .find(|option| option.credits == selected_credits)
             .map(|option| option.price_usd_cents)
-    }
-
-    pub fn would_auto_reload_reach_limit(
-        &self,
-        addon_credits_options: Option<&[AddonCreditsOption]>,
-    ) -> bool {
-        self.is_at_addon_credits_monthly_limit()
-            || addon_credits_options
-                .and_then(|options| self.get_auto_reload_price_cents(options))
-                .is_some_and(|price| self.would_addon_purchase_reach_limit(price))
     }
 }
 
