@@ -1104,7 +1104,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
         let container = Container::new(icon_element)
             .with_margin_left(icon_size / 2.)
             .finish();
-        Some(Shrinkable::new(1., container).finish())
+        Some(Shrinkable::new(1., Align::new(container).right().finish()).finish())
     }
 
     fn render_right_aligned_chevron(
