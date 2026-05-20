@@ -141,6 +141,129 @@ cargo run            # build and run Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 
+## Bootstrap Troubleshooting
+
+The bootstrap script (`./script/bootstrap`) sets up your machine for Warp development. If it fails, the sections below may help you resolve the issue.
+
+### macOS
+
+**Missing Xcode or Command Line Tools**
+If bootstrap reports that Xcode is not found, download Xcode from the Mac App Store. After installing, accept the license agreement and run:
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+xcodebuild -runFirstLaunch
+```
+
+**Homebrew issues**
+If `brew` commands fail, check your PATH includes Homebrew's bin directory (typically `/opt/homebrew/bin` on Apple Silicon or `/usr/local/bin` on Intel). You can verify with:
+```bash
+echo $PATH
+```
+If it's missing, add it to your shell profile (~/.zshrc or ~/.bashrc):
+```bash
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+To fix a broken Homebrew installation:
+```bash
+cd "$(brew --repo)"
+git fetch origin
+git reset --hard origin/master
+```
+
+**Rust toolchain errors**
+If `cargo` is not found after installation, start a new terminal session. If the problem persists:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+### Linux
+
+**Missing dependencies**
+If the build fails due to missing libraries, update apt and re-run the dependency installation:
+```bash
+sudo apt update -y
+./script/linux/install_test_deps
+```
+
+**Rust version mismatch**
+Warp requires a recent Rust version. Check your version:
+```bash
+rustc --version
+cargo --version
+```
+If outdated, update with:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+**gcloud authentication**
+If prompted about missing gcloud authentication:
+```bash
+gcloud auth login
+```
+
+### Windows (WSL2)
+
+Warp development on Windows is supported via WSL2. Ensure you are running Ubuntu inside WSL2 and not using Docker or a VM.
+
+Install WSL2 and set up your environment:
+```powershell
+wsl --install -d Ubuntu
+```
+
+After entering the WSL2 terminal, run bootstrap as normal:
+```bash
+./script/bootstrap
+```
+
+**Visual Studio Build Tools**
+If native compilation is needed and `cl` is not found, install Visual Studio Build Tools:
+1. Download Visual Studio Build Tools from https://visualstudio.microsoft.com/downloads/
+2. Select "Desktop development with C++" workload
+3. Restart your terminal and ensure the VS Developer Command Prompt is not active (it can conflict with WSL2)
+
+### Network and Timeout Issues
+
+**Slow or failing downloads**
+If bootstrap fails while downloading packages, check your internet connection and try again. For slow network conditions, you can set a longer timeout for curl:
+```bash
+export CURL_TIMEOUT=120
+./script/bootstrap
+```
+
+**Git LFS errors**
+If `git lfs pull` times out or fails:
+```bash
+git lfs install
+git lfs fetch
+git lfs checkout
+```
+
+### When Bootstrap Fails Completely
+
+If bootstrap consistently fails:
+
+1. **Check required tools** — Ensure Git, curl, and a package manager are installed and up-to-date:
+   ```bash
+   git --version
+   curl --version
+   ```
+
+2. **Run steps manually** — Bootstrap is a thin dispatcher; you can run the platform-specific script directly to isolate the failure:
+   - macOS: `./script/macos/bootstrap`
+   - Linux: `./script/linux/bootstrap`
+
+3. **Check system requirements** — Ensure your OS version and architecture are supported. Check [README.md](README.md) for the current requirements.
+
+4. **Ask for help** — If you've tried the above and still can't bootstrap, open a GitHub issue with:
+   - Your OS version and architecture (`uname -a`)
+   - The exact error output
+   - Steps you've already tried
+
 ## Testing
 
 Tests are required for most code changes:
