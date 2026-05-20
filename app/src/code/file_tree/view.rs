@@ -52,7 +52,9 @@ use crate::terminal::view::{TerminalDropTargetData, TerminalView};
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::openable_file_type::{is_file_content_binary, EditorLayout, FileTarget};
+use crate::util::openable_file_type::{
+    is_file_content_binary, is_markdown_file, EditorLayout, FileTarget,
+};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
     resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice,
@@ -2263,9 +2265,27 @@ impl FileTreeView {
                             host_id.clone(),
                             (*metadata.path).clone(),
                         );
+                        let path_str = metadata.path.as_str();
+                        let target = if is_markdown_file(Path::new(path_str)) {
+                            #[cfg(feature = "local_fs")]
+                            {
+                                let prefer_md = *EditorSettings::as_ref(ctx).prefer_markdown_viewer;
+                                if prefer_md {
+                                    FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                                } else {
+                                    FileTarget::CodeEditor(EditorLayout::SplitPane)
+                                }
+                            }
+                            #[cfg(not(feature = "local_fs"))]
+                            {
+                                FileTarget::CodeEditor(EditorLayout::SplitPane)
+                            }
+                        } else {
+                            FileTarget::CodeEditor(EditorLayout::SplitPane)
+                        };
                         ctx.emit(FileTreeEvent::OpenFile {
                             path: LocalOrRemotePath::Remote(remote_path),
-                            target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                            target,
                             line_col: None,
                         });
                     }

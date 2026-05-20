@@ -5,6 +5,7 @@ use std::{
 };
 
 use pathfinder_geometry::vector::vec2f;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::user_friendly_path;
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
@@ -70,6 +71,7 @@ use warp_editor::model::CoreEditorModel;
 use warp_files::{FileModel, FileModelEvent};
 #[cfg(feature = "local_fs")]
 use warp_util::file::FileId;
+use warp_util::remote_path::RemotePath;
 
 pub use crate::util::openable_file_type::is_markdown_file;
 
@@ -153,33 +155,36 @@ impl From<ContextMenuAction> for FileNotebookAction {
 }
 
 /// Information about the notebook's backing file.
-// TODO: This should probably build on the `warp_files` abstractions.
 #[derive(Debug, Clone)]
 enum SourceFile {
-    Local {
-        /// The full path to the open file - for now, _only_ local files are supported.
-        ///
-        /// See [this comment](https://docs.google.com/document/d/18h7VzSAl6r5a94CovShlpPSahYqECX9WZliLjUqUsko/edit?disco=AAAA5Y1THuk);
-        /// we cannot use [`PathBuf`] to represent non-local paths.
-        local_path: PathBuf,
+    /// A file identified by a local or remote path.
+    FileBased {
+        path: LocalOrRemotePath,
+        /// The session context for this file. Only meaningful for local paths;
+        /// remote paths carry their own host information.
         session: Option<Arc<Session>>,
     },
-    Static {
-        title: String,
-    },
+    /// Static content provided inline (not backed by a file on disk).
+    Static { title: String },
 }
 
 impl SourceFile {
-    fn local_path(&self) -> Option<&Path> {
+    /// Returns the path for this source, if it is file-based.
+    fn path(&self) -> Option<&LocalOrRemotePath> {
         match self {
-            SourceFile::Local { local_path, .. } => Some(local_path.as_path()),
+            SourceFile::FileBased { path, .. } => Some(path),
             SourceFile::Static { .. } => None,
         }
     }
 
+    /// Returns the local path, if this is a local file-based source.
+    fn local_path(&self) -> Option<&Path> {
+        self.path().and_then(|p| p.to_local_path())
+    }
+
     fn display_name(&self) -> String {
         match self {
-            SourceFile::Local { local_path, .. } => local_path.display().to_string(),
+            SourceFile::FileBased { path, .. } => path.display_path(),
             SourceFile::Static { title } => title.clone(),
         }
     }
@@ -194,6 +199,11 @@ enum FileState {
 }
 
 impl FileState {
+    /// Returns the path for the open file, if it is file-based.
+    fn path(&self) -> Option<&LocalOrRemotePath> {
+        self.source().and_then(|src| src.path())
+    }
+
     /// The path to the open file, if it exists and is local.
     fn local_path(&self) -> Option<&Path> {
         self.source().and_then(|src| src.local_path())
@@ -370,6 +380,26 @@ impl FileNotebookView {
         ctx.notify();
     }
 
+    /// Open a file from a local or remote path.
+    ///
+    /// For local paths, uses `FileModel` to load and watch for changes.
+    /// For remote paths, fetches content via the remote server.
+    pub fn open(
+        &mut self,
+        path: LocalOrRemotePath,
+        session: Option<Arc<Session>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match path {
+            LocalOrRemotePath::Local(local_path) => {
+                self.open_local(local_path, session, ctx);
+            }
+            LocalOrRemotePath::Remote(remote_path) => {
+                self.open_remote(remote_path, ctx);
+            }
+        }
+    }
+
     /// Asynchronously open a local file, watching for local file changes.
     pub fn open_local(
         &mut self,
@@ -390,8 +420,8 @@ impl FileNotebookView {
             });
         }
 
-        self.file_state = FileState::Loading(SourceFile::Local {
-            local_path: local_path.clone(),
+        self.file_state = FileState::Loading(SourceFile::FileBased {
+            path: LocalOrRemotePath::Local(local_path.clone()),
             session: session.clone(),
         });
 
@@ -427,8 +457,8 @@ impl FileNotebookView {
                             // Record the canonical path instead of the input path when available.
                             if let Some(canonical_path) = file_model.as_ref(ctx).file_path(file_id)
                             {
-                                me.file_state = FileState::Loaded(SourceFile::Local {
-                                    local_path: canonical_path,
+                                me.file_state = FileState::Loaded(SourceFile::FileBased {
+                                    path: LocalOrRemotePath::Local(canonical_path),
                                     session: session.clone(),
                                 });
                             }
@@ -475,8 +505,8 @@ impl FileNotebookView {
                 safe: ("Local filesystem access is not available in this build"),
                 full: ("Local filesystem access is not available in this build (feature \"local_fs\" disabled)")
             );
-            self.file_state = FileState::Error(SourceFile::Local {
-                local_path,
+            self.file_state = FileState::Error(SourceFile::FileBased {
+                path: LocalOrRemotePath::Local(local_path),
                 session,
             });
             ctx.notify();
@@ -526,27 +556,124 @@ impl FileNotebookView {
     fn reload_file(&mut self, ctx: &mut ViewContext<Self>) {
         // We can take the file state here because either it's (a) already NoFile or (b) about to
         // be replaced with a loading state.
-        let (local_path, session) = match mem::replace(&mut self.file_state, FileState::NoFile) {
+        let (path, session) = match mem::replace(&mut self.file_state, FileState::NoFile) {
             FileState::NoFile => return,
             FileState::Loading(source) | FileState::Error(source) | FileState::Loaded(source) => {
                 match source {
-                    SourceFile::Local {
-                        local_path,
-                        session,
-                    } => (local_path, session),
+                    SourceFile::FileBased { path, session } => (path, session),
                     SourceFile::Static { .. } => return,
                 }
             }
         };
-        self.open_local(local_path, session, ctx);
+        self.open(path, session, ctx);
+    }
+
+    /// Open a remote file by fetching its content from the remote server.
+    fn open_remote(&mut self, remote_path: RemotePath, ctx: &mut ViewContext<Self>) {
+        let path_str = remote_path.path.as_str().to_string();
+        let display_name = remote_path
+            .path
+            .file_name()
+            .unwrap_or(path_str.as_str())
+            .to_string();
+
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.set_title(display_name, ctx);
+        });
+
+        let lor_path = LocalOrRemotePath::Remote(remote_path.clone());
+        self.file_state = FileState::Loading(SourceFile::FileBased {
+            path: lor_path,
+            session: None,
+        });
+
+        let host_id = remote_path.host_id.clone();
+        let manager = remote_server::manager::RemoteServerManager::handle(ctx);
+        let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
+
+        let Some(client) = client else {
+            safe_warn!(
+                safe: ("No remote server client for host when opening markdown file"),
+                full: ("No remote server client for host {host_id:?} when opening markdown file")
+            );
+            self.file_state = match mem::replace(&mut self.file_state, FileState::NoFile) {
+                FileState::Loading(source) => FileState::Error(source),
+                other => other,
+            };
+            ctx.notify();
+            return;
+        };
+
+        let request = remote_server::proto::ReadFileContextRequest {
+            files: vec![remote_server::proto::ReadFileContextFile {
+                path: path_str,
+                line_ranges: vec![],
+            }],
+            max_file_bytes: None,
+            max_batch_bytes: None,
+        };
+
+        ctx.spawn(
+            async move { client.read_file_context(request).await },
+            move |me, result, ctx| match result {
+                Ok(response) => {
+                    if let Some(file_ctx) = response.file_contexts.first() {
+                        let text = match &file_ctx.content {
+                            Some(
+                                remote_server::proto::file_context_proto::Content::TextContent(
+                                    text,
+                                ),
+                            ) => text.as_str(),
+                            _ => "",
+                        };
+                        me.set_content(text, ctx);
+                        me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                            FileState::Loading(source) => FileState::Loaded(source),
+                            other => other,
+                        };
+                        me.pane_configuration.update(ctx, |pane_config, ctx| {
+                            pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                        });
+                        ctx.notify();
+                        ctx.emit(FileNotebookEvent::FileLoaded);
+                    } else if let Some(failed) = response.failed_files.first() {
+                        let error_msg = failed
+                            .error
+                            .as_ref()
+                            .map(|e| e.message.as_str())
+                            .unwrap_or("unknown error");
+                        safe_warn!(
+                            safe: ("Failed to read remote markdown file"),
+                            full: ("Failed to read remote markdown file: {error_msg}")
+                        );
+                        me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                            FileState::Loading(source) => FileState::Error(source),
+                            other => other,
+                        };
+                        ctx.notify();
+                    }
+                }
+                Err(err) => {
+                    safe_warn!(
+                        safe: ("Remote server error reading markdown file"),
+                        full: ("Remote server error reading markdown file: {err}")
+                    );
+                    me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                        FileState::Loading(source) => FileState::Error(source),
+                        other => other,
+                    };
+                    ctx.notify();
+                }
+            },
+        );
     }
 
     #[cfg(feature = "local_fs")]
     fn open_as_code(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(path) = self.local_path() {
+        if let Some(path) = self.file_state.path().cloned() {
             // Emit an event to the pane group to handle the replacement
             ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
-                path: path.clone(),
+                path,
                 source: self.code_source.clone(),
             }));
         }
@@ -566,17 +693,11 @@ impl FileNotebookView {
         self.links.clone()
     }
 
-    #[cfg(feature = "local_fs")]
     fn is_markdown_file(&self) -> bool {
         self.file_state
-            .local_path()
-            .map(is_markdown_file)
+            .path()
+            .map(|p| is_markdown_file(Path::new(&p.display_path())))
             .unwrap_or(false)
-    }
-
-    #[cfg(not(feature = "local_fs"))]
-    fn is_markdown_file(&self) -> bool {
-        false
     }
 
     fn update_editor_display_mode(&mut self, ctx: &mut ViewContext<Self>) {
@@ -909,7 +1030,7 @@ impl TypedActionView for FileNotebookView {
                     MarkdownDisplayMode::Raw => {
                         #[cfg(feature = "local_fs")]
                         {
-                            if let Some(path) = self.local_path() {
+                            if let Some(path) = self.file_state.path().cloned() {
                                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
                                     path,
                                     source: self.code_source.clone(),
@@ -941,11 +1062,7 @@ impl BackingView for FileNotebookView {
         _ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
         let mut actions = vec![];
-        if let Some(SourceFile::Local {
-            local_path: _local_path,
-            ..
-        }) = self.file_state.source()
-        {
+        if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
             actions.push(
                 MenuItemFields::new("Refresh file")
                     .with_on_select_action(FileNotebookAction::ReloadFile)

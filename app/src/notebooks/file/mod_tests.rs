@@ -30,7 +30,7 @@ use crate::{
     GlobalResourceHandles, GlobalResourceHandlesProvider,
 };
 
-use super::{FileNotebookView, FileState, MarkdownDisplayMode};
+use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
 use crate::notebooks::context_menu::MenuSource;
 use warp_editor::render::model::BlockItem;
 
@@ -125,10 +125,10 @@ fn test_load_before_session() {
             .update(&mut app, |file_notebook, ctx| {
                 file_notebook.open_local("../README.md", None, ctx);
                 match &file_notebook.file_state {
-                    FileState::Loading(source) => {
-                        assert_eq!(source.local_path(), Some(Path::new("../README.md")))
+                    FileState::Loading(SourceFile::FileBased { path, .. }) => {
+                        assert_eq!(path.to_local_path(), Some(Path::new("../README.md")))
                     }
-                    other => panic!("Expected FileState::Loading, got {other:?}"),
+                    other => panic!("Expected FileState::Loading(FileBased), got {other:?}"),
                 }
 
                 let file_id = file_notebook
@@ -150,10 +150,10 @@ fn test_load_before_session() {
             assert!(view.location.is_none());
 
             match &view.file_state {
-                FileState::Loaded(source) => {
-                    assert_eq!(source.local_path(), Some(expected_path.as_path()));
+                FileState::Loaded(SourceFile::FileBased { path, .. }) => {
+                    assert_eq!(path.to_local_path(), Some(expected_path.as_path()));
                 }
-                other => panic!("Expected FileState::Loaded, got {other:?}"),
+                other => panic!("Expected FileState::Loaded(FileBased), got {other:?}"),
             };
         });
 

@@ -2225,7 +2225,7 @@ impl TypedActionView for CodeView {
                             Some(Box::new(move |outcome, _me, ctx| {
                                 if outcome != SaveOutcome::Canceled {
                                     ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                                        path: path.clone(),
+                                        path: LocalOrRemotePath::Local(path.clone()),
                                         source: Some(source.clone()),
                                     }));
                                 }
@@ -2234,7 +2234,7 @@ impl TypedActionView for CodeView {
                         );
                     } else {
                         ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                            path,
+                            path: LocalOrRemotePath::Local(path),
                             source: Some(source),
                         }));
                     }

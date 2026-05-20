@@ -1115,12 +1115,12 @@ pub enum PaneEvent {
     ClearHoveredTabIndex,
     #[cfg(feature = "local_fs")]
     ReplaceWithCodePane {
-        path: std::path::PathBuf,
+        path: warp_util::local_or_remote_path::LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
     #[cfg(feature = "local_fs")]
     ReplaceWithFilePane {
-        path: std::path::PathBuf,
+        path: warp_util::local_or_remote_path::LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
 }

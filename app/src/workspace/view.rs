@@ -5893,7 +5893,12 @@ impl Workspace {
             FileTarget::MarkdownViewer(layout) => {
                 let session = self.get_active_session(ctx);
 
-                self.open_file_notebook(path.clone(), session, layout, ctx);
+                self.open_file_notebook(
+                    LocalOrRemotePath::Local(path.clone()),
+                    session,
+                    layout,
+                    ctx,
+                );
             }
             FileTarget::EnvEditor => {
                 let editor_value: Option<String> = self
@@ -5995,16 +6000,24 @@ impl Workspace {
                             ctx,
                         );
                     }
-                    LocalOrRemotePath::Remote(_) => {
+                    LocalOrRemotePath::Remote(_) =>
+                    {
                         #[cfg(feature = "local_fs")]
-                        self.open_code(
-                            code_source,
-                            crate::util::openable_file_type::EditorLayout::SplitPane,
-                            None,
-                            false,
-                            &[],
-                            ctx,
-                        );
+                        match target {
+                            FileTarget::MarkdownViewer(layout) => {
+                                self.open_file_notebook(location.clone(), None, *layout, ctx);
+                            }
+                            _ => {
+                                self.open_code(
+                                    code_source,
+                                    crate::util::openable_file_type::EditorLayout::SplitPane,
+                                    None,
+                                    false,
+                                    &[],
+                                    ctx,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -7374,7 +7387,7 @@ impl Workspace {
     #[cfg(feature = "local_fs")]
     fn open_file_notebook(
         &mut self,
-        path: PathBuf,
+        path: LocalOrRemotePath,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
@@ -14338,7 +14351,12 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, ctx);
+                    self.open_file_notebook(
+                        LocalOrRemotePath::Local(path.clone()),
+                        Some(session.clone()),
+                        layout,
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::MoveToSpace {

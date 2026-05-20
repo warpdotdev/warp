@@ -1717,7 +1717,7 @@ impl PaneGroup {
                         settings,
                     } => Box::new(NotebookPane::restore(notebook_id, &settings, ctx)?),
                     NotebookPaneSnapshot::LocalFileNotebook { path } => Box::new(FilePane::new(
-                        path,
+                        path.map(LocalOrRemotePath::Local),
                         None,
                         #[cfg(feature = "local_fs")]
                         None,
@@ -5318,19 +5318,15 @@ impl PaneGroup {
     fn replace_file_pane_with_code_pane(
         &mut self,
         file_pane_id: PaneId,
-        path: std::path::PathBuf,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::code::editor_management::CodeSource;
         use crate::pane_group::CodePane;
 
-        // Use the provided source if available.
-        let source = source.unwrap_or(CodeSource::Link {
-            path,
-            range_start: None,
-            range_end: None,
-        });
+        // Use the provided source if available, or construct from the path.
+        let source = source.unwrap_or_else(|| CodeSource::FileTree { location: path });
 
         let code_pane = CodePane::new(source, None, ctx);
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
@@ -5344,7 +5340,7 @@ impl PaneGroup {
     fn replace_code_pane_with_file_pane(
         &mut self,
         code_pane_id: PaneId,
-        path: std::path::PathBuf,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
         ctx: &mut ViewContext<Self>,
     ) {
