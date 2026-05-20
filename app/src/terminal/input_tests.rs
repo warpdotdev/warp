@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -89,6 +90,8 @@ use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
 use warpui::platform::WindowStyle;
+use warpui::r#async::Timer;
+use warpui::telemetry::EventPayload;
 use warpui::{App, ReadModel, UpdateView, WindowId};
 
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
@@ -6206,6 +6209,59 @@ fn test_source_less_locked_config_clears_decision_source() {
         });
     });
 }
+
+#[test]
+fn test_input_buffer_submitted_telemetry_uses_raw_nld_decision_source() {
+    fn input_buffer_submitted_events() -> Vec<serde_json::Value> {
+        warpui::telemetry::flush_events()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::NamedEvent { name, value, .. }
+                    if name == "AgentMode.NaturalLanguageDetection.InputBufferSubmitted" =>
+                {
+                    value
+                }
+                _ => None,
+            })
+            .collect_vec()
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        crate::server::telemetry::clear_event_queue();
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model().update(ctx, |input_model, ctx| {
+                input_model.set_input_config(
+                    InputConfig {
+                        input_type: InputType::Shell,
+                        is_locked: true,
+                    },
+                    true,
+                    None,
+                    ctx,
+                );
+            });
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("pwd", ctx);
+            input.input_enter(ctx);
+        });
+
+        Timer::after(Duration::from_millis(10)).await;
+
+        let telemetry_events = input_buffer_submitted_events();
+        assert_eq!(telemetry_events.len(), 1);
+        assert_eq!(telemetry_events[0]["input_type"], "Shell");
+        assert_eq!(telemetry_events[0]["is_locked"], true);
+        assert_eq!(
+            telemetry_events[0]["nld_decision_source"],
+            serde_json::Value::Null
+        );
+    });
+}
 #[test]
 fn test_image_attachment_preserves_lock_state() {
     App::test((), |mut app| async move {
@@ -6802,6 +6858,12 @@ fn test_terminal_only_escape_locks_shell_mode() {
         });
         assert_eq!(config.input_type, InputType::Shell);
         assert!(config.is_locked);
+        let source = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.nld_decision_source()
+            })
+        });
+        assert_eq!(source, Some(NldDecisionSource::ManualToggle));
     });
 }
 

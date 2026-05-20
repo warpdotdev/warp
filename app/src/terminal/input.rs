@@ -476,32 +476,6 @@ fn get_agent_mode_new_conversation_hint_text() -> &'static str {
     let index = HINT_INDEX.fetch_add(1, Ordering::Relaxed) % AGENT_MODE_HINT_OPTIONS.len();
     AGENT_MODE_HINT_OPTIONS[index]
 }
-fn submitted_nld_decision_source(input_model: &BlocklistAIInputModel) -> Option<NldDecisionSource> {
-    let decision_source = input_model.nld_decision_source();
-    if !input_model.is_input_type_locked() {
-        return decision_source;
-    }
-
-    match decision_source {
-        Some(
-            source @ (NldDecisionSource::ManualToggle
-            | NldDecisionSource::ShellPrefix
-            | NldDecisionSource::AttachmentForcedAi
-            | NldDecisionSource::SettingDisabled),
-        ) => Some(source),
-        Some(
-            NldDecisionSource::Denylist
-            | NldDecisionSource::HistoryMatch
-            | NldDecisionSource::OneOffWhitelist
-            | NldDecisionSource::AgentFollowUp
-            | NldDecisionSource::ShellHeuristic
-            | NldDecisionSource::NldClassifier
-            | NldDecisionSource::NldClassifierFallbackHeuristic
-            | NldDecisionSource::NldClassifierFallbackCurrentInput,
-        )
-        | None => Some(NldDecisionSource::ManualToggle),
-    }
-}
 
 fn get_stable_agent_mode_hint_text(cached_hint: &mut Option<&'static str>) -> &'static str {
     if let Some(hint) = cached_hint {
@@ -5007,7 +4981,7 @@ impl Input {
                                 is_locked: true,
                             },
                             false,
-                            None,
+                            Some(NldDecisionSource::ManualToggle),
                             ctx,
                         );
                     } else {
@@ -12718,7 +12692,7 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let nld_decision_source = submitted_nld_decision_source(input_model);
+            let nld_decision_source = input_model.nld_decision_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
@@ -12839,7 +12813,7 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let nld_decision_source = submitted_nld_decision_source(input_model);
+            let nld_decision_source = input_model.nld_decision_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(

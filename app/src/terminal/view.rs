@@ -227,10 +227,11 @@ use crate::ai::{
         BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
         BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
         InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
-        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
-        PendingQueryState, RequestFileEditsFormatKind, ShellCommandExecutor,
-        ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-        ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, NldDecisionSource,
+        PassiveSuggestionsModels, PendingQueryState, RequestFileEditsFormatKind,
+        ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+        StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+        PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
     get_relevant_files::controller::GetRelevantFilesController,
@@ -3454,7 +3455,12 @@ impl TerminalView {
             if !model.is_autodetection_enabled_for_current_context(ctx) {
                 if let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
-                    model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
+                    model.set_input_config(
+                        input_config,
+                        is_input_buffer_empty,
+                        Some(NldDecisionSource::SettingDisabled),
+                        ctx,
+                    );
                 }
             }
             model
@@ -18739,7 +18745,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
-                None,
+                Some(NldDecisionSource::ManualToggle),
                 ctx,
             );
         });
@@ -21943,7 +21949,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
-                    None,
+                    Some(NldDecisionSource::ManualToggle),
                     ctx,
                 );
             });
