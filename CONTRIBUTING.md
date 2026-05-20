@@ -114,7 +114,7 @@ After you push changes that address Oz's feedback, comment `/oz-review` on the P
 
 **You must include proof of [manual testing](#manual-testing)**. For small, isolated, and visual changes, you should include **before and after screenshots**. For larger, broad, or interactive changes, you should also include a **narrated screen recording**.
 
-If a maintainer requests changes to your PR, you will need to request `/oz-review` again and pass it before a re-review can be requested. Oz will do this for you automatically once you pass its reviews.
+If a maintainer requests changes to your PR, you will need to request `/oz-review` again and pass it before a re-review can be requested. Oz will request the re-review for you automatically once you pass its reviews.
 
 ## Using a Coding Agent
 
