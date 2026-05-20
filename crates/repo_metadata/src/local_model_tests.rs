@@ -1202,7 +1202,6 @@ Thumbs.db
             let subdir = huge_dir.join("subdir");
 
             let failed_path = StandardizedPath::try_from_local(&huge_dir).unwrap();
-            let child_path = StandardizedPath::try_from_local(&subdir).unwrap();
 
             // Seed the cache with huge_dir as a known-failed path.
             let mut failed_walk_paths = std::collections::HashSet::new();
