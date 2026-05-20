@@ -1127,7 +1127,7 @@ impl AgentConversationsModel {
         let mut emitted_conversation_ids = HashSet::new();
 
         for task in self.tasks.values() {
-            let entry = entry::entry_for_task(task, history_model, app);
+            let entry = entry::entry_for_task(task, &self.tasks, history_model, app);
             if let Some(conversation_id) = entry.identity.local_conversation_id {
                 attached_conversation_ids.insert(conversation_id);
             }
@@ -1177,7 +1177,7 @@ impl AgentConversationsModel {
             AgentConversationEntryId::AmbientRun(task_id) => self
                 .tasks
                 .get(task_id)
-                .map(|task| entry::entry_for_task(task, history_model, app)),
+                .map(|task| entry::entry_for_task(task, &self.tasks, history_model, app)),
             AgentConversationEntryId::Conversation(conversation_id) => self
                 .conversations
                 .get(conversation_id)
@@ -1366,14 +1366,14 @@ impl AgentConversationsModel {
             task.conversation_id()
                 .is_some_and(|conversation_id| conversation_id == server_token.as_str())
         }) {
-            return Some(entry::entry_for_task(task, history_model, app));
+            return Some(entry::entry_for_task(task, &self.tasks, history_model, app));
         }
 
         let conversation_id = history_model.find_conversation_id_by_server_token(server_token)?;
         if let Some(task) = self.tasks.values().find(|task| {
             entry::conversation_id_shadowed_by_task(task, history_model) == Some(conversation_id)
         }) {
-            return Some(entry::entry_for_task(task, history_model, app));
+            return Some(entry::entry_for_task(task, &self.tasks, history_model, app));
         }
 
         self.get_entry_by_id(
