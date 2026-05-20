@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use itertools::Itertools;
 use similar::DiffableStr;
@@ -22,11 +23,22 @@ pub(crate) fn find_secrets_in_text(text: &str) -> Vec<SecretRange> {
 
 /// Returns the ranges of detected secrets in the given text along with their SecretLevel.
 pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, SecretLevel)> {
-    let _guard = SECRETS_REGEX.read();
+    let secrets_regex: Arc<SecretsRegex> = {
+        SECRETS_REGEX.lock().clone()
+    };
+
+    find_secrets_in_text_with_levels_using_regex(text, &secrets_regex)
+}
+
+pub(crate) fn find_secrets_in_text_with_levels_using_regex(
+    text: &str,
+    secrets_regex: &SecretsRegex,
+) -> Vec<(SecretRange, SecretLevel)> {
     let SecretsRegex {
         regex,
         level_metadata,
-    } = &*_guard;
+        ..
+    } = secrets_regex;
 
     let mut secret_ranges = vec![];
     let mut byte_to_char_index = vec![0; text.len() + 1]; // Map byte index to char index
