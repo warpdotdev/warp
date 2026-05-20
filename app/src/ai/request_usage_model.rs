@@ -400,13 +400,14 @@ impl AIRequestUsageModel {
             workspace
                 .billing_metadata
                 .is_purchase_add_on_credits_policy_enabled()
+                && workspace
+                    .settings
+                    .addon_credits_settings
+                    .auto_reload_enabled
                 && PricingInfoModel::as_ref(ctx)
                     .addon_credits_options()
-                    .is_some_and(|options| {
-                        options.iter().any(|option| {
-                            !workspace.would_addon_purchase_reach_limit(option.price_usd_cents)
-                        })
-                    })
+                    .and_then(|options| workspace.get_auto_reload_price_cents(options))
+                    .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
         });
 
         // If you have provided your own API key,

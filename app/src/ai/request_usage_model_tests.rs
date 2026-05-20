@@ -80,6 +80,17 @@ fn set_addon_credits_pricing_info(app: &mut App) {
     });
 }
 
+fn enable_auto_reload(workspace: &mut Workspace) {
+    workspace
+        .settings
+        .addon_credits_settings
+        .auto_reload_enabled = true;
+    workspace
+        .settings
+        .addon_credits_settings
+        .selected_auto_reload_credit_denomination = Some(1000);
+}
+
 #[test]
 fn test_request_limit_info() {
     App::test((), |mut app| async move {
@@ -496,6 +507,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
             .billing_metadata
             .tier
             .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -523,6 +535,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_dis
             .billing_metadata
             .tier
             .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -548,6 +561,7 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_woul
             .billing_metadata
             .tier
             .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
         workspace
             .settings
             .addon_credits_settings
