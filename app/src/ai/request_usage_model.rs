@@ -377,7 +377,7 @@ impl AIRequestUsageModel {
     /// 3. user has bonus grants (either team grants or user grants)
     /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
     /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
-    /// 6. user's team can purchase add-on credits and Billing and Usage V2 is enabled
+    /// 6. user's team can purchase add-on credits within its monthly spend limit and Billing and Usage V2 is enabled
     /// 7. user has BYOK enabled and has provided at least one API key
     /// Use this method as the starting point for AI availability checking.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
@@ -397,10 +397,18 @@ impl AIRequestUsageModel {
             .is_some_and(|w| w.billing_metadata.is_enterprise_pay_as_you_go_enabled());
         let is_enterprise_auto_reload_enabled = current_workspace
             .is_some_and(|w| w.billing_metadata.is_enterprise_auto_reload_enabled());
-        let is_add_on_credits_policy_enabled = FeatureFlag::BillingAndUsagePageV2.is_enabled()
-            && current_workspace.is_some_and(|w| {
-                w.billing_metadata
+        let is_self_serve_auto_reload_enabled = FeatureFlag::BillingAndUsagePageV2.is_enabled()
+            && current_workspace.is_some_and(|workspace| {
+                workspace
+                    .billing_metadata
                     .is_purchase_add_on_credits_policy_enabled()
+                    && PricingInfoModel::as_ref(ctx)
+                        .addon_credits_options()
+                        .is_some_and(|options| {
+                            options.iter().any(|option| {
+                                !workspace.would_addon_purchase_reach_limit(option.price_usd_cents)
+                            })
+                        })
             });
 
         // If you have provided your own API key,
@@ -413,7 +421,7 @@ impl AIRequestUsageModel {
             || workspace_has_overages
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
-            || is_add_on_credits_policy_enabled
+            || is_self_serve_auto_reload_enabled
             || has_byo_api_key
     }
 

@@ -4,6 +4,7 @@ use chrono::Duration;
 use warpui::{App, ModelHandle};
 
 use crate::auth::AuthStateProvider;
+use crate::pricing::PricingInfoModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
@@ -17,6 +18,7 @@ use crate::workspaces::{
 
 use ai::api_keys::ApiKeyManager;
 use warp_core::features::FeatureFlag;
+use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 
 use super::*;
 
@@ -53,6 +55,22 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
+    });
+    app.add_singleton_model(|_| PricingInfoModel::new());
+    PricingInfoModel::handle(app).update(app, |model, ctx| {
+        model.update_pricing_info(
+            PricingInfo {
+                plans: vec![],
+                overages: OveragesPricing {
+                    price_per_request_usd_cents: 1,
+                },
+                addon_credits_options: vec![AddonCreditsOption {
+                    credits: 1000,
+                    price_usd_cents: 1000,
+                }],
+            },
+            ctx,
+        );
     });
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
@@ -511,6 +529,37 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_and_billing_v2_dis
             assert!(
                 !model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be false when add-on credit purchase is enabled without Billing and Usage V2",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_would_exceed_limit() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(true);
+
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        workspace
+            .settings
+            .addon_credits_settings
+            .max_monthly_spend_cents = Some(1000);
+        workspace.bonus_grants_purchased_this_month.cents_spent = 500;
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when add-on credit purchase would exceed the monthly spend limit",
             );
         });
     });
