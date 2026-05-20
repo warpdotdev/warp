@@ -22,6 +22,7 @@ use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::agent_view::orchestration_avatar::OrchestrationAvatar;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
     conversation_id_for_agent_id, conversation_navigation_card_with_icon,
+    dispatch_focus_or_open_child_agent_pane,
 };
 use crate::ai::blocklist::block::model::AIBlockModelHelper;
 use crate::ai::blocklist::block::{
@@ -50,6 +51,9 @@ const ORCHESTRATION_COLLAPSED_MAX_HEIGHT: f32 = 200.;
 struct OrchestrationParticipant {
     display_name: String,
     avatar: OrchestrationAvatar,
+    /// The participant's conversation, when resolved. `None` for the
+    /// orchestrator and unknown agents (avatar stays non-clickable).
+    conversation_id: Option<AIConversationId>,
 }
 
 impl OrchestrationParticipant {
@@ -57,6 +61,7 @@ impl OrchestrationParticipant {
         Self {
             display_name: "Orchestrator".to_string(),
             avatar: OrchestrationAvatar::Orchestrator,
+            conversation_id: None,
         }
     }
 
@@ -64,6 +69,7 @@ impl OrchestrationParticipant {
         Self {
             display_name: "Unknown agent".to_string(),
             avatar: OrchestrationAvatar::agent("Unknown agent".to_string()),
+            conversation_id: None,
         }
     }
 
@@ -123,6 +129,7 @@ fn participant_for_conversation(
     OrchestrationParticipant {
         display_name: display_name.clone(),
         avatar: OrchestrationAvatar::agent(display_name),
+        conversation_id: Some(conversation.id()),
     }
 }
 
@@ -199,11 +206,9 @@ fn render_transcript_row(
 
     let name = FormattedTextFragment::bold(&data.participant.display_name);
     let header_row_element: Box<dyn Element> = if let Some(state) = collapsible_state {
-        // When the row is collapsible, wrap the bold name and chevron in a single
-        // Hoverable so clicking either toggles the expansion state. Make the text
-        // non-selectable so click events are reliably captured by the Hoverable,
-        // and disable mouse interaction so the text element doesn't reset the
-        // pointing-hand cursor set by the Hoverable.
+        // Wrap the name + chevron in one clickable element so either toggles
+        // the section. Text is non-selectable + non-interactive so clicks
+        // register and the pointing-hand cursor isn't reset by the text.
         let header = render_formatted_text_element(vec![name], app)
             .set_selectable(false)
             .disable_mouse_interaction()
@@ -294,10 +299,37 @@ fn render_transcript_row(
         }
     }
 
+    let avatar = data.participant.avatar.render(app);
+    let avatar_element: Box<dyn Element> = if let (Some(conversation_id), Some(mouse_state)) = (
+        data.participant.conversation_id,
+        props
+            .state_handles
+            .transcript_avatar_handles
+            .get(data.message_id),
+    ) {
+        // Navigate to the child's pane: focus if already open, otherwise
+        // open a new pane.
+        let mouse_state = mouse_state.clone();
+        let self_terminal_view_id = props.terminal_view_id;
+        Hoverable::new(mouse_state, move |_| avatar)
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, app, _| {
+                dispatch_focus_or_open_child_agent_pane(
+                    conversation_id,
+                    self_terminal_view_id,
+                    ctx,
+                    app,
+                );
+            })
+            .finish()
+    } else {
+        avatar
+    };
+
     Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(
-            Container::new(data.participant.avatar.render(app))
+            Container::new(avatar_element)
                 .with_margin_right(12.)
                 .finish(),
         )

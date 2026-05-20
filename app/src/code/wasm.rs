@@ -7,7 +7,7 @@ use warpui::{
 };
 
 use super::{
-    buffer_location::FileLocation, editor_management::CodeSource,
+    buffer_location::LocalOrRemotePath, editor_management::CodeSource,
     local_code_editor::LocalCodeEditorView,
 };
 use crate::pane_group::{
@@ -43,11 +43,11 @@ pub enum CodeViewAction {
 pub enum CodeViewEvent {
     Pane(PaneEvent),
     TabChanged {
-        location: Option<FileLocation>,
+        location: Option<LocalOrRemotePath>,
         tab_index: usize,
     },
     FileOpened {
-        location: FileLocation,
+        location: LocalOrRemotePath,
         tab_index: usize,
     },
     RunTabConfigSkill {
@@ -85,7 +85,7 @@ struct TabDataMouseStateHandles {
 #[allow(unused)]
 #[derive(Clone)]
 pub struct TabData {
-    location: Option<FileLocation>,
+    location: Option<LocalOrRemotePath>,
     editor_view: ViewHandle<LocalCodeEditorView>,
     mouse_state_handles: TabDataMouseStateHandles,
     drag_position: Option<TabBarDragPosition>,
@@ -97,7 +97,7 @@ impl TabData {
     pub fn local_path(&self) -> Option<PathBuf> {
         self.location
             .as_ref()
-            .and_then(|loc| loc.to_local_path().map(|p| p.to_path_buf()))
+            .and_then(|loc| PathBuf::try_from(loc.clone()).ok())
     }
 }
 
@@ -138,11 +138,11 @@ impl CodeView {
 
     pub fn open_or_focus_existing(
         &mut self,
-        location: Option<FileLocation>,
+        location: Option<LocalOrRemotePath>,
         line_col: Option<LineAndColumnArg>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(path) = location.and_then(|loc| loc.to_local_path().map(|p| p.to_path_buf())) {
+        if let Some(path) = location.and_then(|loc| PathBuf::try_from(loc).ok()) {
             self.open_local(None, path, line_col, ctx);
         }
     }

@@ -31,6 +31,12 @@
       "skillPath": ".agents/skills/implement-specs/SKILL.md",
       "computedHash": "bd2787a63cfdc917275769ef2d9c7adc701cfaf1a74344b3a6248d4116a8923e"
     },
+    "pr-walkthrough": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/pr-walkthrough/SKILL.md",
+      "computedHash": "990e8549611cff4b82036d4c7cc50d23eb2cbb27272926142d3fd8ad17a5e18f"
+    },
     "resolve-merge-conflicts": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",

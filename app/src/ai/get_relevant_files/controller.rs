@@ -66,7 +66,7 @@ pub enum GetRelevantFilesRequestTarget {
     },
     Remote {
         session_context: SessionContext,
-        explicit_repo_path: Option<String>,
+        requested_codebase_path: Option<String>,
     },
 }
 #[derive(Debug, thiserror::Error)]
@@ -225,10 +225,10 @@ impl GetRelevantFilesController {
             }
             GetRelevantFilesRequestTarget::Remote {
                 session_context,
-                explicit_repo_path,
+                requested_codebase_path,
             } => self.send_remote_request(
                 session_context,
-                explicit_repo_path,
+                requested_codebase_path,
                 query,
                 partial_path_segments.cloned(),
                 action_id,
@@ -354,7 +354,7 @@ impl GetRelevantFilesController {
     fn send_remote_request(
         &mut self,
         session_context: SessionContext,
-        explicit_repo_path: Option<String>,
+        requested_codebase_path: Option<String>,
         query: String,
         partial_path_segments: Option<Vec<String>>,
         action_id: AIAgentActionId,
@@ -364,7 +364,7 @@ impl GetRelevantFilesController {
             query,
             partial_path_segments,
             session_context,
-            explicit_repo_path,
+            requested_codebase_path,
             action_id.clone(),
             ctx,
         ) {
@@ -443,10 +443,10 @@ impl GetRelevantFilesController {
     pub fn root_directory_for_remote_search(
         &self,
         session_context: &SessionContext,
-        explicit_repo_path: Option<&str>,
+        requested_codebase_path: Option<&str>,
         app: &AppContext,
     ) -> Option<PathBuf> {
-        remote_search::root_directory_for_search(session_context, explicit_repo_path, app)
+        remote_search::root_directory_for_search(session_context, requested_codebase_path, app)
     }
 
     pub fn cancel_request_for_action(

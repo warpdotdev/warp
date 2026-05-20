@@ -86,8 +86,8 @@ impl DirectoryColorAddPicker {
             // cache in `refresh_items`, so the noisier events (`Modified`/`Queried`) are
             // cheap when nothing relevant has changed.
             match event {
-                CodebaseIndexManagerEvent::NewIndexCreated
-                | CodebaseIndexManagerEvent::SyncStateUpdated
+                CodebaseIndexManagerEvent::NewIndexCreated { .. }
+                | CodebaseIndexManagerEvent::SyncStateUpdated { .. }
                 | CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { .. }
                 | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {
                     me.refresh_items(ctx);

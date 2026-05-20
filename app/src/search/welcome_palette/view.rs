@@ -391,7 +391,7 @@ impl WelcomePalette {
     /// Set the active query filter in the search bar to be `filter`.
     pub fn set_active_query_filter(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
         self.search_bar.update(ctx, |view, ctx| {
-            view.set_visible_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
+            view.set_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
         });
         ctx.notify();
     }
@@ -411,9 +411,7 @@ impl WelcomePalette {
     }
 
     pub fn active_query_filter(&self, app: &AppContext) -> Option<QueryFilter> {
-        self.search_bar_state
-            .as_ref(app)
-            .active_visible_query_filter()
+        self.search_bar_state.as_ref(app).active_query_filter()
     }
 
     pub fn is_mode_enabled(&self, mode: PaletteMode, app: &AppContext) -> bool {

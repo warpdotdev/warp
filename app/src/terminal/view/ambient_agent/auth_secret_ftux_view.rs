@@ -1,35 +1,38 @@
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
-    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement as _, Radius, Text,
+    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
+    Radius, Stack, Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use settings::Setting as _;
 
 use crate::ai::auth_secret_types::{
-    auth_secret_types_for_harness, build_managed_secret_value, AuthSecretTypeInfo,
+    auth_secret_types_for_harness, build_managed_secret_value, learn_more_url_for_harness,
+    AuthSecretTypeInfo,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::terminal::view::ambient_agent::auth_secret_ftux_dropdown::{
     AuthSecretFtuxDropdown, FtuxDropdownEvent,
 };
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::ui_components::icons::Icon as UiIcon;
 use warp_editor::editor::NavigationKey;
 
 const DESCRIPTION_FONT_SIZE: f32 = 14.;
@@ -39,8 +42,6 @@ const FIELD_LABEL_FONT_SIZE: f32 = 10.;
 const BUTTON_FONT_SIZE: f32 = 14.;
 
 const EDITOR_FONT_SIZE: f32 = 14.;
-
-const ROW_SPACING: f32 = 24.;
 
 const CONTENT_SECTION_SPACING: f32 = 12.;
 
@@ -54,48 +55,96 @@ const CORNER_RADIUS: f32 = 4.;
 
 const FIELD_EDITOR_MIN_HEIGHT: f32 = 32.;
 
+const TYPE_DESCRIPTION_FONT_SIZE: f32 = 12.;
+
+const CHECKBOX_SIZE: f32 = 14.;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthSecretFtuxAction {
     Skip,
     Cancel,
     Continue,
+    /// Cancel an in-progress creation form and return to the dropdown.
+    Back,
+    /// Open the harness-specific documentation in a browser.
+    LearnMore(&'static str),
+    /// Toggle the "Share with team" checkbox on the creation form.
+    ToggleTeamScope,
+    /// Toggle the compact-mode harness picker. Ignored when compact mode
+    /// is disabled (cloud mode).
+    ToggleHarnessMenu,
+    /// Picks a harness in compact mode. The view forwards to
+    /// `set_harness`, which clears in-progress creation state and
+    /// re-enters creation for the new harness's first type.
+    SelectHarness(Harness),
+}
+
+/// Lifecycle events the view emits to its host. Side effects (persist
+/// selection, mark FTUX complete, etc.) are the host's responsibility so the
+/// same view can be embedded in cloud mode or in a workspace-level modal.
+#[derive(Debug, Clone)]
+pub enum AuthSecretFtuxViewEvent {
+    /// User picked an existing secret from the in-view dropdown.
+    SecretSelected { harness: Harness, name: String },
+    /// User created a new secret via the form.
+    Created { harness: Harness, name: String },
+    /// User dismissed the form via Cancel.
+    Cancelled,
+    /// User skipped via the in-dropdown "Skip" item.
+    Skipped { harness: Harness },
+    /// `create_auth_secret` failed. The view also shows a toast.
+    Failed { error: String },
 }
 
 struct SecretCreationState {
     harness: Harness,
     secret_type_index: usize,
     is_saving: bool,
+    /// The exact name we fired at `create_auth_secret`. Set when
+    /// `handle_continue` dispatches; cleared on success / failure /
+    /// cancel. Used to filter the global `AuthSecretCreated` event so
+    /// another concurrent FTUX view's success can't close us.
+    pending_name: Option<String>,
 }
 
 pub struct AuthSecretFtuxView {
-    ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
+    harness: Harness,
     ftux_dropdown: ViewHandle<AuthSecretFtuxDropdown>,
     name_editor: ViewHandle<EditorView>,
     field_editors: Vec<ViewHandle<EditorView>>,
     creation_state: Option<SecretCreationState>,
-    cancel_mouse_state: MouseStateHandle,
+    back_button_mouse_state: MouseStateHandle,
+    share_with_team: bool,
     continue_mouse_state: MouseStateHandle,
+    learn_more_mouse_state: MouseStateHandle,
+    team_checkbox_mouse_state: MouseStateHandle,
+    /// Suppresses the in-dropdown "Skip" item; default `false` (cloud mode
+    /// keeps Skip, orchestration modal hides it).
+    skip_hidden: bool,
+    /// Compact (orchestration-modal) presentation: no description, dropdown
+    /// hides existing secrets and Skip, auto-enters creation for the first
+    /// secret type, and renders a harness picker above the form.
+    compact_mode: bool,
+    harness_picker_mouse_state: MouseStateHandle,
+    is_harness_menu_open: bool,
+    /// Lazily built; only in compact mode.
+    harness_menu: Option<ViewHandle<Menu<AuthSecretFtuxAction>>>,
 }
 
 impl AuthSecretFtuxView {
-    pub fn new(
-        ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
-        ctx: &mut ViewContext<Self>,
-    ) -> Self {
-        let name_editor = make_single_line_editor(Some("NICKNAME"), false, ctx);
+    pub fn new(harness: Harness, ctx: &mut ViewContext<Self>) -> Self {
+        let name_editor = make_single_line_editor(Some("e.g. My API Key"), false, ctx);
 
         ctx.subscribe_to_view(&name_editor, |me, _, event, ctx| {
             me.handle_form_editor_nav(0, event, ctx);
         });
 
-        let ambient_agent_model_for_dropdown = ambient_agent_model.clone();
-        let ftux_dropdown = ctx.add_typed_action_view(|ctx| {
-            AuthSecretFtuxDropdown::new(ambient_agent_model_for_dropdown, ctx)
-        });
+        let ftux_dropdown =
+            ctx.add_typed_action_view(|ctx| AuthSecretFtuxDropdown::new(harness, ctx));
 
-        ctx.subscribe_to_view(&ftux_dropdown, |_me, _, event, ctx| {
+        ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if matches!(event, FtuxDropdownEvent::Opened) {
-                let harness = _me.ambient_agent_model.as_ref(ctx).selected_harness();
+                let harness = me.harness;
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
                     model.ensure_auth_secrets_fetched(harness, ctx);
                 });
@@ -104,20 +153,13 @@ impl AuthSecretFtuxView {
 
         ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if let FtuxDropdownEvent::SecretSelected(name) = event {
-                let harness = me.ambient_agent_model.as_ref(ctx).selected_harness();
-                me.ambient_agent_model.update(ctx, |model, ctx| {
-                    model.set_harness_auth_secret_name(Some(name.clone()), ctx);
-                });
-                CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    // Persist the selection so the secret is sticky across sessions.
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name.clone());
-                    let _ = settings.last_selected_auth_secret.set_value(map, ctx);
-                });
                 me.clear_all_editor_buffers(ctx);
                 me.creation_state = None;
                 me.field_editors.clear();
+                ctx.emit(AuthSecretFtuxViewEvent::SecretSelected {
+                    harness: me.harness,
+                    name: name.clone(),
+                });
                 ctx.notify();
             }
         });
@@ -142,13 +184,29 @@ impl AuthSecretFtuxView {
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
                 HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
-                    if me.creation_state.is_some() {
+                    // Only consume the event when it matches the request
+                    // *this* view actually fired. Without the harness/name
+                    // match a concurrent FTUX view's success would close
+                    // us (or worse, emit a Created event the host then
+                    // routes to the wrong modal).
+                    let is_ours = me.creation_state.as_ref().is_some_and(|state| {
+                        state.is_saving
+                            && state.harness == *harness
+                            && state.pending_name.as_deref() == Some(name.as_str())
+                    });
+                    if is_ours {
                         me.handle_secret_created(*harness, name.clone(), ctx);
                     }
                 }
                 HarnessAvailabilityEvent::AuthSecretCreationFailed { error } => {
+                    // Only react if *we* are mid-save; otherwise this
+                    // failure belongs to another FTUX view's request.
                     if let Some(state) = me.creation_state.as_mut() {
+                        if !state.is_saving {
+                            return;
+                        }
                         state.is_saving = false;
+                        state.pending_name = None;
                         let window_id = ctx.window_id();
                         let message = format!("Failed to save API key: {error}");
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
@@ -158,30 +216,248 @@ impl AuthSecretFtuxView {
                                 ctx,
                             );
                         });
+                        ctx.emit(AuthSecretFtuxViewEvent::Failed {
+                            error: error.clone(),
+                        });
                         ctx.notify();
                     }
                 }
-                HarnessAvailabilityEvent::Changed | HarnessAvailabilityEvent::AuthSecretsLoaded => {
-                }
+                HarnessAvailabilityEvent::Changed
+                | HarnessAvailabilityEvent::AuthSecretsLoaded
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {}
             },
         );
 
-        ctx.subscribe_to_model(&ambient_agent_model, |me, _, event, ctx| {
-            if matches!(event, AmbientAgentViewModelEvent::HarnessSelected) {
-                me.clear_creation_state(ctx);
-                ctx.notify();
-            }
-        });
-
         Self {
-            ambient_agent_model,
+            harness,
             ftux_dropdown,
             name_editor,
             field_editors: Vec::new(),
             creation_state: None,
-            cancel_mouse_state: MouseStateHandle::default(),
+            back_button_mouse_state: MouseStateHandle::default(),
+            share_with_team: false,
             continue_mouse_state: MouseStateHandle::default(),
+            learn_more_mouse_state: MouseStateHandle::default(),
+            team_checkbox_mouse_state: MouseStateHandle::default(),
+            skip_hidden: false,
+            compact_mode: false,
+            harness_picker_mouse_state: MouseStateHandle::default(),
+            is_harness_menu_open: false,
+            harness_menu: None,
         }
+    }
+
+    /// Switch to the orchestration modal's compact presentation. See the
+    /// `compact_mode` field for what changes.
+    pub fn with_compact_mode(mut self, ctx: &mut ViewContext<Self>) -> Self {
+        self.compact_mode = true;
+        let dropdown = self.ftux_dropdown.clone();
+        dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_compact_mode(true, ctx);
+        });
+        // Auto-enter creation state for the harness's first secret type.
+        let harness = self.harness;
+        self.enter_creation_state(harness, 0, ctx);
+        // Build the harness picker menu lazily.
+        let menu = ctx.add_typed_action_view(|_ctx| {
+            Menu::new()
+                .with_width(220.)
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| match event {
+            MenuEvent::Close { .. } => {
+                if me.is_harness_menu_open {
+                    me.is_harness_menu_open = false;
+                    ctx.notify();
+                }
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+        self.harness_menu = Some(menu);
+        self.refresh_harness_menu(ctx);
+        self
+    }
+
+    /// Returns true when the view is rendering in the compact (modal)
+    /// presentation.
+    pub fn is_compact_mode(&self) -> bool {
+        self.compact_mode
+    }
+
+    /// Hide the in-dropdown "Skip" affordance. Used by modal hosts.
+    pub fn with_skip_hidden(mut self) -> Self {
+        self.skip_hidden = true;
+        self
+    }
+
+    /// Returns the harness this view is currently targeting.
+    pub fn harness(&self) -> Harness {
+        self.harness
+    }
+
+    /// Retarget at a new harness: clear in-progress creation state and
+    /// propagate the harness change to the embedded dropdown.
+    pub fn set_harness(&mut self, harness: Harness, ctx: &mut ViewContext<Self>) {
+        if self.harness == harness {
+            return;
+        }
+        self.harness = harness;
+        self.clear_creation_state(ctx);
+        let dropdown = self.ftux_dropdown.clone();
+        dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_harness(harness, ctx);
+        });
+        if self.compact_mode {
+            // Compact mode keeps the form always-visible, so re-enter
+            // creation state for the new harness's first secret type.
+            self.enter_creation_state(harness, 0, ctx);
+            self.refresh_harness_menu(ctx);
+        }
+        ctx.notify();
+    }
+
+    /// Rebuilds the compact harness picker's menu items. Only invoked in
+    /// compact mode; a no-op when the harness menu hasn't been built.
+    fn refresh_harness_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(menu) = self.harness_menu.clone() else {
+            return;
+        };
+        let current = self.harness;
+        let availability = HarnessAvailabilityModel::handle(ctx);
+        let entries: Vec<(Harness, String, bool)> = availability
+            .as_ref(ctx)
+            .available_harnesses()
+            .iter()
+            .filter(|entry| {
+                // Only show harnesses that support managed auth secrets,
+                // since this modal exists to create one.
+                !auth_secret_types_for_harness(entry.harness).is_empty()
+            })
+            .map(|entry| (entry.harness, entry.display_name.clone(), entry.enabled))
+            .collect();
+        let current_display = entries
+            .iter()
+            .find(|(h, _, _)| *h == current)
+            .map(|(_, name, _)| name.clone());
+        menu.update(ctx, |menu, menu_ctx| {
+            let mut items: Vec<MenuItem<AuthSecretFtuxAction>> = Vec::new();
+            for (harness, display_name, enabled) in &entries {
+                let mut fields = MenuItemFields::new(display_name)
+                    .with_icon(harness_display::icon_for(*harness));
+                if let Some(color) = harness_display::brand_color(*harness) {
+                    fields = fields.with_override_icon_color(Fill::from(color));
+                }
+                if *enabled {
+                    fields =
+                        fields.with_on_select_action(AuthSecretFtuxAction::SelectHarness(*harness));
+                } else {
+                    fields = fields.with_disabled(true);
+                }
+                items.push(MenuItem::Item(fields));
+            }
+            menu.set_items(items, menu_ctx);
+            if let Some(name) = &current_display {
+                menu.set_selected_by_name(name, menu_ctx);
+            }
+        });
+    }
+
+    fn handle_toggle_harness_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.compact_mode || self.harness_menu.is_none() {
+            return;
+        }
+        self.is_harness_menu_open = !self.is_harness_menu_open;
+        if self.is_harness_menu_open {
+            // Refresh in case the available-harnesses list changed since
+            // the last open.
+            self.refresh_harness_menu(ctx);
+            if let Some(menu) = &self.harness_menu {
+                ctx.focus(menu);
+            }
+        }
+        ctx.notify();
+    }
+
+    fn render_compact_harness_picker(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let harness = self.harness;
+        let display_name = harness_display::display_name(harness).to_string();
+        let icon_color: Fill = harness_display::brand_color(harness)
+            .map(Fill::from)
+            .unwrap_or_else(|| internal_colors::text_sub(theme, theme.surface_1()).into());
+
+        let leading_icon = ConstrainedBox::new(
+            harness_display::icon_for(harness)
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(16.)
+        .with_height(16.)
+        .finish();
+
+        let label = Text::new_inline(
+            display_name,
+            appearance.ui_font_family(),
+            DESCRIPTION_FONT_SIZE,
+        )
+        .with_color(theme.foreground().into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish();
+
+        let chevron = ConstrainedBox::new(
+            UiIcon::ChevronDown
+                .to_warpui_icon(internal_colors::text_sub(theme, theme.surface_1()).into())
+                .finish(),
+        )
+        .with_width(12.)
+        .with_height(12.)
+        .finish();
+
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(6.)
+            .with_child(leading_icon)
+            .with_child(label)
+            .with_child(chevron)
+            .finish();
+
+        let trigger = Hoverable::new(self.harness_picker_mouse_state.clone(), move |hover| {
+            let mut container = Container::new(row)
+                .with_padding_left(8.)
+                .with_padding_right(8.)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS)));
+            if hover.is_hovered() {
+                container = container.with_background(internal_colors::fg_overlay_1(theme));
+            }
+            container.finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(AuthSecretFtuxAction::ToggleHarnessMenu);
+        })
+        .finish();
+
+        let mut stack = Stack::new();
+        stack.add_child(trigger);
+        if self.is_harness_menu_open {
+            if let Some(menu) = &self.harness_menu {
+                stack.add_positioned_overlay_child(
+                    ChildView::new(menu).finish(),
+                    OffsetPositioning::offset_from_parent(
+                        warpui::geometry::vector::vec2f(0., 4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+        }
+        stack.finish()
     }
 
     pub fn has_creation_state(&self) -> bool {
@@ -272,10 +548,12 @@ impl AuthSecretFtuxView {
             editors.push(editor);
         }
         self.field_editors = editors;
+        self.share_with_team = false;
         self.creation_state = Some(SecretCreationState {
             harness,
             secret_type_index: type_index,
             is_saving: false,
+            pending_name: None,
         });
         self.ftux_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_display_label(Some(info.display_name.to_string()), ctx);
@@ -290,24 +568,22 @@ impl AuthSecretFtuxView {
     }
 
     fn handle_skip(&mut self, ctx: &mut ViewContext<Self>) {
-        let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-        CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.mark_harness_auth_ftux_completed(harness, ctx);
-        });
+        if self.skip_hidden {
+            return;
+        }
+        let harness = self.harness;
         self.clear_all_editor_buffers(ctx);
         self.creation_state = None;
         self.field_editors.clear();
         self.ftux_dropdown.update(ctx, |dropdown, _ctx| {
             dropdown.clear_display_label_quietly();
         });
+        ctx.emit(AuthSecretFtuxViewEvent::Skipped { harness });
         ctx.notify();
     }
 
     fn handle_cancel(&mut self, ctx: &mut ViewContext<Self>) {
-        let model = self.ambient_agent_model.clone();
-        model.update(ctx, |model, ctx| {
-            model.set_harness(Harness::Oz, ctx);
-        });
+        ctx.emit(AuthSecretFtuxViewEvent::Cancelled);
     }
 
     fn handle_continue(&mut self, ctx: &mut ViewContext<Self>) {
@@ -354,17 +630,31 @@ impl AuthSecretFtuxView {
 
         if let Some(state) = self.creation_state.as_mut() {
             state.is_saving = true;
+            state.pending_name = Some(name.clone());
         }
         ctx.notify();
 
+        let owner = self.resolve_secret_owner(ctx);
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.create_auth_secret(harness, name, value, ctx);
+            model.create_auth_secret(harness, name, value, owner, ctx);
         });
+    }
+
+    fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
+        if self.share_with_team {
+            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+                return SecretOwner::Team {
+                    team_uid: team.uid.uid(),
+                };
+            }
+        }
+        SecretOwner::CurrentUser
     }
 
     fn clear_creation_state(&mut self, ctx: &mut ViewContext<Self>) {
         if self.creation_state.is_some() {
             self.creation_state = None;
+            self.share_with_team = false;
             self.clear_all_editor_buffers(ctx);
             self.field_editors.clear();
             self.ftux_dropdown.update(ctx, |dropdown, ctx| {
@@ -395,38 +685,81 @@ impl AuthSecretFtuxView {
         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
             ts.add_ephemeral_toast(DismissibleToast::default(message), window_id, ctx);
         });
-        let vm = self.ambient_agent_model.clone();
-        vm.update(ctx, |model, ctx| {
-            model.set_harness_auth_secret_name(Some(name.clone()), ctx);
-        });
-        CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.mark_harness_auth_ftux_completed(harness, ctx);
-            // Persist the newly created secret so it is sticky across sessions.
-            let mut map = settings.last_selected_auth_secret.value().clone();
-            map.insert(harness.config_name().to_string(), name);
-            let _ = settings.last_selected_auth_secret.set_value(map, ctx);
-        });
         self.clear_creation_state(ctx);
+        ctx.emit(AuthSecretFtuxViewEvent::Created { harness, name });
         ctx.notify();
     }
 
     fn render_description(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let harness = self.ambient_agent_model.as_ref(app).selected_harness();
-        let display_name = harness_display::display_name(harness);
-        let description = format!(
-            "Please select an API key or create a new one to use \
-             {display_name} as a cloud agent."
-        );
-        Text::new_inline(
-            description,
-            appearance.ui_font_family(),
-            DESCRIPTION_FONT_SIZE,
+        let font_family = appearance.ui_font_family();
+        let sub_color = internal_colors::text_sub(theme, theme.surface_1());
+        let accent_color = theme.accent().into_solid();
+
+        let main_text = {
+            let description = if self.current_type_info().is_some() {
+                "Enter your credentials below.".to_string()
+            } else {
+                let display_name = harness_display::display_name(self.harness);
+                format!("Select an API key type to use {display_name} in the cloud with Oz.")
+            };
+            Text::new_inline(description, font_family, DESCRIPTION_FONT_SIZE)
+                .with_color(theme.foreground().into())
+                .soft_wrap(true)
+                .finish()
+        };
+
+        let privacy_text = Text::new_inline(
+            "Your credentials are encrypted end-to-end. ".to_string(),
+            font_family,
+            TYPE_DESCRIPTION_FONT_SIZE,
         )
-        .with_color(theme.foreground().into())
+        .with_color(sub_color)
         .soft_wrap(true)
-        .finish()
+        .finish();
+
+        let harness_name = harness_display::display_name(self.harness);
+        let learn_more_url = self
+            .current_type_info()
+            .map(|info| info.learn_more_url)
+            .unwrap_or_else(|| learn_more_url_for_harness(self.harness));
+        let learn_more_label =
+            format!("Learn more about authentication for {harness_name} in Warp.");
+        let learn_more = Hoverable::new(self.learn_more_mouse_state.clone(), move |state| {
+            let color = if state.is_hovered() {
+                accent_color
+            } else {
+                sub_color
+            };
+            Text::new_inline(
+                learn_more_label.clone(),
+                font_family,
+                TYPE_DESCRIPTION_FONT_SIZE,
+            )
+            .with_color(color)
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .soft_wrap(true)
+            .finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(AuthSecretFtuxAction::LearnMore(learn_more_url));
+        })
+        .finish();
+
+        let privacy_row = Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(privacy_text)
+            .with_child(learn_more)
+            .finish();
+
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(4.)
+            .with_child(main_text)
+            .with_child(privacy_row)
+            .finish()
     }
 
     fn render_field_label(&self, label: &str, app: &AppContext) -> Box<dyn Element> {
@@ -473,6 +806,49 @@ impl AuthSecretFtuxView {
         .finish()
     }
 
+    fn render_scope_checkbox(&self, app: &AppContext) -> Box<dyn Element> {
+        let has_team = UserWorkspaces::as_ref(app).current_team().is_some();
+        if !has_team {
+            return Empty::new().finish();
+        }
+
+        let appearance = Appearance::as_ref(app);
+        let zero = Coords::uniform(0.);
+        let checkbox = appearance
+            .ui_builder()
+            .checkbox(self.team_checkbox_mouse_state.clone(), Some(CHECKBOX_SIZE))
+            .with_style(UiComponentStyles {
+                margin: Some(zero),
+                ..Default::default()
+            })
+            .check(self.share_with_team)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(AuthSecretFtuxAction::ToggleTeamScope);
+            })
+            .with_cursor(warpui::platform::Cursor::PointingHand)
+            .finish();
+
+        let theme = appearance.theme();
+        let label_color = internal_colors::text_sub(theme, theme.surface_1());
+        let label = Text::new_inline(
+            "Share with team".to_string(),
+            appearance.ui_font_family(),
+            TYPE_DESCRIPTION_FONT_SIZE,
+        )
+        .with_color(label_color)
+        .finish();
+
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.)
+            .with_child(checkbox)
+            .with_child(label)
+            .finish()
+    }
+
     fn render_creation_form(&self, app: &AppContext) -> Box<dyn Element> {
         let Some(info) = self.current_type_info() else {
             return Empty::new().finish();
@@ -482,7 +858,11 @@ impl AuthSecretFtuxView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(FORM_FIELD_SPACING);
 
-        column.add_child(self.render_field_label("NICKNAME", app));
+        column.add_child(
+            Container::new(self.render_field_label("NAME", app))
+                .with_padding_top(CONTENT_SECTION_SPACING)
+                .finish(),
+        );
         column.add_child(self.render_editor_container(&self.name_editor, app));
 
         for (idx, field) in info.fields.iter().enumerate() {
@@ -496,6 +876,9 @@ impl AuthSecretFtuxView {
                 column.add_child(self.render_editor_container(editor, app));
             }
         }
+
+        column.add_child(self.render_scope_checkbox(app));
+
         column.finish()
     }
 
@@ -542,11 +925,16 @@ impl AuthSecretFtuxView {
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         row.add_child(Expanded::new(1., Empty::new().finish()).finish());
 
+        let (label, action) = if self.creation_state.is_some() {
+            ("Back", AuthSecretFtuxAction::Back)
+        } else {
+            ("Cancel", AuthSecretFtuxAction::Cancel)
+        };
         row.add_child(self.render_button(
-            "Cancel",
-            self.cancel_mouse_state.clone(),
+            label,
+            self.back_button_mouse_state.clone(),
             None,
-            AuthSecretFtuxAction::Cancel,
+            action,
             app,
         ));
 
@@ -592,7 +980,7 @@ fn make_single_line_editor(
 }
 
 impl Entity for AuthSecretFtuxView {
-    type Event = ();
+    type Event = AuthSecretFtuxViewEvent;
 }
 
 impl TypedActionView for AuthSecretFtuxView {
@@ -603,6 +991,19 @@ impl TypedActionView for AuthSecretFtuxView {
             AuthSecretFtuxAction::Skip => self.handle_skip(ctx),
             AuthSecretFtuxAction::Cancel => self.handle_cancel(ctx),
             AuthSecretFtuxAction::Continue => self.handle_continue(ctx),
+            AuthSecretFtuxAction::Back => self.clear_creation_state(ctx),
+            AuthSecretFtuxAction::LearnMore(url) => {
+                ctx.open_url(url);
+            }
+            AuthSecretFtuxAction::ToggleTeamScope => {
+                self.share_with_team = !self.share_with_team;
+                ctx.notify();
+            }
+            AuthSecretFtuxAction::ToggleHarnessMenu => self.handle_toggle_harness_menu(ctx),
+            AuthSecretFtuxAction::SelectHarness(harness) => {
+                self.is_harness_menu_open = false;
+                self.set_harness(*harness, ctx);
+            }
         }
     }
 }
@@ -615,22 +1016,36 @@ impl View for AuthSecretFtuxView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let mut column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(ROW_SPACING);
+            .with_main_axis_size(MainAxisSize::Min);
 
         let mut content_section = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CONTENT_SECTION_SPACING);
-        content_section.add_child(self.render_description(app));
-        content_section.add_child(ChildView::new(&self.ftux_dropdown).finish());
+        if self.compact_mode {
+            // Compact mode: render the harness picker at the top, skip the
+            // descriptive header (the modal title supplies context), and
+            // keep the existing-secrets dropdown trimmed to "+ New …"
+            // entries so the user can still switch secret types.
+            content_section.add_child(self.render_compact_harness_picker(app));
+            content_section.add_child(ChildView::new(&self.ftux_dropdown).finish());
+        } else {
+            content_section.add_child(self.render_description(app));
+            if self.creation_state.is_none() {
+                content_section.add_child(ChildView::new(&self.ftux_dropdown).finish());
+            }
+        }
         column.add_child(content_section.finish());
 
         if self.creation_state.is_some() {
             column.add_child(self.render_creation_form(app));
         }
 
-        column.add_child(self.render_bottom_row(app));
+        column.add_child(
+            Container::new(self.render_bottom_row(app))
+                .with_padding_top(CONTENT_SECTION_SPACING)
+                .finish(),
+        );
 
         column.finish()
     }

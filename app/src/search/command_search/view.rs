@@ -405,10 +405,7 @@ impl CommandSearchView {
 
     fn close(&self, ctx: &mut ViewContext<Self>) {
         let query = self.search_bar.as_ref(ctx).query(ctx);
-        let filter = self
-            .search_bar_state
-            .as_ref(ctx)
-            .active_visible_query_filter();
+        let filter = self.search_bar_state.as_ref(ctx).active_query_filter();
         ctx.emit(CommandSearchEvent::Close { query, filter });
     }
 
@@ -484,15 +481,13 @@ impl CommandSearchView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.search_bar.update(ctx, |search_bar, ctx| {
-            search_bar.set_visible_query_filter(filter_and_atom_text, ctx);
+            search_bar.set_query_filter(filter_and_atom_text, ctx);
         });
     }
 
     /// Returns the active query filters
     fn active_query_filter(&self, app: &AppContext) -> Option<QueryFilter> {
-        self.search_bar_state
-            .as_ref(app)
-            .active_visible_query_filter()
+        self.search_bar_state.as_ref(app).active_query_filter()
     }
 
     /// Emits the `ItemSelected` event containing the passed `CommandSearchEventPayload` and closes
@@ -545,10 +540,7 @@ impl CommandSearchView {
                 TelemetryEvent::CommandSearchResultAccepted {
                     result_index,
                     result_type: (&result_action).into(),
-                    query_filter: self
-                        .search_bar_state
-                        .as_ref(ctx)
-                        .active_visible_query_filter(),
+                    query_filter: self.search_bar_state.as_ref(ctx).active_query_filter(),
                     buffer_length: self.search_bar.as_ref(ctx).query(ctx).len(),
                     was_immediately_executed,
                 },

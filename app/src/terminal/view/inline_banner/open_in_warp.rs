@@ -57,7 +57,7 @@ fn file_title_text(openable_path: &OpenablePath) -> String {
                 if #[cfg(not(target_family = "wasm"))] {
                     // Language is a temporary variable to ensure our copy of the Arc<Language>
                     // lives long enough to borrow the display name for the duration of the function.
-                    let language = languages::language_by_filename(&openable_path.path);
+                    let language = languages::language_by_local_filename(&openable_path.path);
 
                     match language.as_ref().map(|language| language.display_name()) {
                         Some(display_name) => {

@@ -337,22 +337,10 @@ impl View {
             .map(|item| &item.search_result)
     }
 
-    pub fn set_fixed_query_filters(
-        &mut self,
-        title: String,
-        filters: Vec<QueryFilter>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.search_bar.update(ctx, |search_bar, ctx| {
-            search_bar.set_fixed_filters(title, filters, ctx);
-        });
-        ctx.notify();
-    }
-
     /// Set the active query filter in the search bar to be `filter`.
     pub fn set_active_query_filter(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
         self.search_bar.update(ctx, |view, ctx| {
-            view.set_visible_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
+            view.set_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
         });
         ctx.notify();
     }
@@ -385,9 +373,7 @@ impl View {
 
     /// Returns the active query filters
     pub fn active_query_filter(&self, app: &AppContext) -> Option<QueryFilter> {
-        self.search_bar_state
-            .as_ref(app)
-            .active_visible_query_filter()
+        self.search_bar_state.as_ref(app).active_query_filter()
     }
 
     pub fn is_mode_enabled(&self, mode: PaletteMode, app: &AppContext) -> bool {

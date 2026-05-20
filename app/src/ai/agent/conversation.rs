@@ -226,6 +226,10 @@ pub struct AIConversation {
     /// in the agent view.
     is_cli_agent_transcript: bool,
 
+    // TODO(advait): Group child-agent-only fields (parent_agent_id,
+    // agent_name, orchestration_harness_type, parent_conversation_id,
+    // is_remote_child, pinned) into a ChildAgentState sub-struct. See
+    // PR #10777 review.
     /// Server-side identifier of the parent agent that spawned this child, if any.
     /// In v1 this holds the parent's `server_conversation_token`; in v2 (OrchestrationV2)
     /// it holds the parent's `run_id`. Persisted as `parent_agent_id` for serde compat.
@@ -251,6 +255,10 @@ pub struct AIConversation {
     /// `OrchestrationConfigSnapshot` messages in the conversation's task list.
     /// Keyed by `plan_id`; snapshots with empty `plan_id` are ignored.
     orchestration_configs: HashMap<String, (OrchestrationConfig, OrchestrationConfigStatus)>,
+
+    /// Whether the user has pinned this child agent in the orchestration
+    /// pill bar. Persisted via `AgentConversationData.pinned`.
+    pinned: bool,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -304,6 +312,7 @@ impl AIConversation {
             is_remote_child: false,
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
+            pinned: false,
         }
     }
 
@@ -386,6 +395,7 @@ impl AIConversation {
             run_id,
             autoexecute_override,
             last_event_sequence,
+            pinned,
         ) = if let Some(data) = conversation_data {
             let server_conversation_token = data
                 .server_conversation_token
@@ -419,6 +429,7 @@ impl AIConversation {
                 AIConversationAutoexecuteMode::default()
             };
             let last_event_sequence = data.last_event_sequence;
+            let pinned = data.pinned;
 
             (
                 server_conversation_token,
@@ -434,6 +445,7 @@ impl AIConversation {
                 run_id,
                 autoexecute_override,
                 last_event_sequence,
+                pinned,
             )
         } else {
             (
@@ -450,6 +462,7 @@ impl AIConversation {
                 None,
                 AIConversationAutoexecuteMode::default(),
                 None,
+                false,
             )
         };
 
@@ -496,6 +509,7 @@ impl AIConversation {
             is_remote_child,
             last_event_sequence,
             orchestration_configs: HashMap::new(),
+            pinned,
         })
     }
 
@@ -536,6 +550,15 @@ impl AIConversation {
 
     pub fn credits_spent(&self) -> f32 {
         (self.conversation_usage_metadata.credits_spent * 10.0).round() / 10.0
+    }
+
+    /// Test-only helper that sets the conversation's credit total directly.
+    /// Used by unit tests that exercise downstream credit-aware logic
+    /// (e.g. the orchestration credit rollup) without having to wire up a
+    /// full `StreamFinished` event.
+    #[cfg(test)]
+    pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
+        self.conversation_usage_metadata.credits_spent = credits;
     }
 
     // Credits spent over the last block, where the block comprises
@@ -868,6 +891,18 @@ impl AIConversation {
     /// Updates the last observed v2 orchestration event sequence number.
     pub fn set_last_event_sequence(&mut self, sequence: i64) {
         self.last_event_sequence = Some(sequence);
+    }
+
+    /// Returns whether the user has pinned this conversation in the
+    /// orchestration pill bar.
+    pub fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+
+    /// Sets the persisted pin state. Callers must follow up with
+    /// `write_updated_conversation_state` to push the change to SQLite.
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
     }
 
     /// Returns true if this conversation was spawned by a parent orchestrator agent.
@@ -2456,6 +2491,7 @@ impl AIConversation {
                                         ctx.emit(
                                             BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                                                 conversation_id: self.id,
+                                                from_restore: false,
                                             },
                                         );
                                     }
@@ -2616,6 +2652,7 @@ impl AIConversation {
                             ) {
                                 ctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                                     conversation_id: self.id,
+                                    from_restore: false,
                                 });
                             }
                         }
@@ -3031,6 +3068,7 @@ impl AIConversation {
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
+                pinned: self.pinned,
             },
         };
         ctx.spawn(

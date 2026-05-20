@@ -7,7 +7,6 @@ use crate::{
     ai::{
         blocklist::{
             history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-            is_local_to_cloud_handoff_available,
             prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             usage::icon_for_context_window_usage,
             BlocklistAIInputModel,
@@ -367,7 +366,7 @@ impl AgentInputFooter {
         let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud")
+                .with_tooltip("Hand off to cloud (or type &)")
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -1983,6 +1982,7 @@ impl AgentInputFooter {
         &self,
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
+        is_cloud_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
@@ -2062,11 +2062,10 @@ impl AgentInputFooter {
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
             AgentToolbarItemKind::HandoffToCloud => {
-                if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) {
-                    return None;
-                }
-
-                if is_cloud_mode {
+                if !AISettings::as_ref(app)
+                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, app)
+                    || is_cloud_context
+                {
                     return None;
                 }
 
@@ -2156,9 +2155,15 @@ impl View for AgentInputFooter {
 
         let terminal_model = self.terminal_model.lock();
         let shared_status = terminal_model.shared_session_status();
+        let is_cloud_context = super::is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
 
         for item in &left_items {
-            if let Some(element) = self.render_toolbar_item(item, shared_status, app) {
+            if let Some(element) =
+                self.render_toolbar_item(item, shared_status, is_cloud_context, app)
+            {
                 left_buttons.add_child(element);
             }
         }
@@ -2179,7 +2184,9 @@ impl View for AgentInputFooter {
             );
         } else {
             for item in &right_items {
-                if let Some(element) = self.render_toolbar_item(item, shared_status, app) {
+                if let Some(element) =
+                    self.render_toolbar_item(item, shared_status, is_cloud_context, app)
+                {
                     right_buttons.add_child(element);
                 }
             }
@@ -2538,7 +2545,10 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::OpenHandoffPane => {
-                if is_local_to_cloud_handoff_available() {
+                if FeatureFlag::OzHandoff.is_enabled()
+                    && FeatureFlag::HandoffLocalCloud.is_enabled()
+                    && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+                {
                     ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
                 }
             }

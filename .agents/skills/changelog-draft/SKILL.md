@@ -237,6 +237,18 @@ The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections
 
 The JSON artifact retains `skipped`, `needs_review`, and `issue_reporters` for audit purposes — every PR in the range must appear in either `entries`, `skipped`, or `needs_review`.
 
+### Step 9 — Generate release-pipeline JSON
+
+Run the conversion script to deterministically produce `changelog-release.json` from the audit artifact:
+
+```bash
+python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
+  --input <output_dir>/changelog-draft.json \
+  --output <output_dir>/changelog-release.json
+```
+
+This produces the flat JSON structure consumed by the `create_release` workflow for Slack and the in-app "What's New" dialog. Do **not** generate this file manually — always use the script so the output is deterministic and consistent.
+
 ## Constraints
 
 - **Never** write to `channel_versions.json` or any production config file.

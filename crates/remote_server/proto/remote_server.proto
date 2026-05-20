@@ -37,6 +37,8 @@ message ClientMessage {
     IndexCodebase index_codebase = 21;
     DropCodebaseIndex drop_codebase_index = 22;
     GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
+    GetBranches get_branches = 24;
+    ResyncCodebase resync_codebase = 25;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -68,6 +70,7 @@ message ServerMessage {
     DiscardFilesResponse discard_files_response = 22;
     BufferConflictDetected buffer_conflict_detected = 23;
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
+    GetBranchesResponse get_branches_response = 25;
   }
 }
 
@@ -83,6 +86,8 @@ message Initialize {
   string user_email = 3;
   // Whether the user has enabled crash reporting in their privacy settings.
   bool crash_reporting_enabled = 4;
+  // Client-resolved codebase index limits for parity with local indexing.
+  optional CodebaseIndexLimits codebase_index_limits = 5;
 }
 
 // Sent by the client when its bearer credential rotates after initialization.
@@ -98,6 +103,14 @@ message Authenticate {
 // This is a notification (fire-and-forget) — the server does not send a response.
 message UpdatePreferences {
   bool crash_reporting_enabled = 1;
+  optional CodebaseIndexLimits codebase_index_limits = 2;
+}
+
+message CodebaseIndexLimits {
+  // Empty means unlimited.
+  optional uint64 max_indices_allowed = 1;
+  uint64 max_files_per_repo = 2;
+  uint64 embedding_generation_batch_size = 3;
 }
 
 // Sent by the client to cancel an in-progress request.
@@ -337,6 +350,15 @@ message IndexCodebase {
   string repo_path = 1;
   string auth_token = 2;
 }
+message ResyncCodebase {
+  string repo_path = 1;
+  string auth_token = 2;
+  CodebaseResyncMode mode = 3;
+}
+enum CodebaseResyncMode {
+  CODEBASE_RESYNC_MODE_FULL = 0;
+  CODEBASE_RESYNC_MODE_INCREMENTAL = 1;
+}
 
 message DropCodebaseIndex {
   string repo_path = 1;
@@ -399,7 +421,6 @@ enum CodebaseIndexStatusState {
   CODEBASE_INDEX_STATUS_STATE_STALE = 7;
   CODEBASE_INDEX_STATUS_STATE_FAILED = 8;
 }
-
 message CodebaseIndexStatus {
   string repo_path = 1;
   CodebaseIndexStatusState state = 2;

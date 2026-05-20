@@ -64,6 +64,10 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               byoApiKeyPolicy {
                 enabled
               }
+              usageVisibilityPolicy {
+                adminGranularity
+                maxPriorCycles
+              }
               pricing {
                 enablePayAsYouGo
                 autoReloadCreditDenomination
@@ -75,6 +79,24 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               status
               stripeSubscriptionId
               type
+            }
+          }
+          billingCycleUsageHistory {
+            currentPeriodStart
+            currentPeriodEnd
+            summaries {
+              periodStart
+              periodEnd
+              entries {
+                subjectType
+                subjectUid
+                subjectDisplayName
+                costType
+                usageBucket
+                usageSource
+                creditsUsed
+                costCents
+              }
             }
           }
           settings {

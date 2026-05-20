@@ -26,6 +26,8 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
@@ -896,7 +898,9 @@ impl Input {
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
-                if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
+                if !AISettings::as_ref(ctx)
+                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
+                {
                     return false;
                 }
                 let prompt = argument
@@ -914,12 +918,13 @@ impl Input {
                         WorkspaceAction::OpenLocalToCloudHandoffPane {
                             launch: Some(launch),
                             environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
                 } else {
                     // `/handoff` with no query enters `&` compose mode,
                     // same as the footer chip.
-                    self.activate_cloud_handoff_compose(ctx);
+                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
                 }
             }
             fork if command.name == commands::FORK.name => {

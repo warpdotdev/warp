@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use super::buffer_location::FileLocation;
+use super::buffer_location::LocalOrRemotePath;
 use crate::ai::skills::SkillOpenOrigin;
 use ai::skills::SkillReference;
 use serde::{Deserialize, Serialize};
@@ -120,7 +120,9 @@ pub enum CodeSource {
     /// Opened from project rules (WARP.md) file.
     ProjectRules { path: PathBuf },
     /// Opened from file tree (local or remote).
-    FileTree { location: FileLocation },
+    FileTree { location: LocalOrRemotePath },
+    /// Opened from command palette file search (local or remote).
+    CommandPalette { location: LocalOrRemotePath },
     /// Opened from macOS Finder via "Open With".
     Finder { path: PathBuf },
     /// Opened from a skill.
@@ -141,6 +143,7 @@ impl CodeSource {
             | Self::AIAction { .. }
             | Self::ProjectRules { .. }
             | Self::FileTree { .. }
+            | Self::CommandPalette { .. }
             | Self::Finder { .. }
             | Self::Skill { .. } => None,
         }
@@ -149,10 +152,12 @@ impl CodeSource {
     pub fn path(&self) -> Option<PathBuf> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location, .. } => match location {
-                FileLocation::Local(path) => Some(path.clone()),
-                FileLocation::Remote(_) => None,
-            },
+            Self::FileTree { location, .. } | Self::CommandPalette { location, .. } => {
+                match location {
+                    LocalOrRemotePath::Local(path) => Some(path.clone()),
+                    LocalOrRemotePath::Remote(_) => None,
+                }
+            }
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::Finder { path }
@@ -160,27 +165,29 @@ impl CodeSource {
         }
     }
 
-    /// Returns the `FileLocation` for file tree sources.
-    pub fn file_location(&self) -> Option<&FileLocation> {
+    /// Returns the `LocalOrRemotePath` for file tree sources.
+    pub fn file_location(&self) -> Option<&LocalOrRemotePath> {
         match self {
-            Self::FileTree { location } => Some(location),
+            Self::FileTree { location } | Self::CommandPalette { location } => Some(location),
             _ => None,
         }
     }
 
-    /// Returns the `FileLocation` for any source that has a backing file.
+    /// Returns the `LocalOrRemotePath` for any source that has a backing file.
     ///
     /// Unlike `path()` (which only returns local paths) and `file_location()`
     /// (which only covers `FileTree`), this covers every variant that maps to
     /// a file — local or remote.
-    pub fn location(&self) -> Option<FileLocation> {
+    pub fn location(&self) -> Option<LocalOrRemotePath> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location } => Some(location.clone()),
+            Self::FileTree { location } | Self::CommandPalette { location } => {
+                Some(location.clone())
+            }
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::Finder { path }
-            | Self::Skill { path, .. } => Some(FileLocation::Local(path.clone())),
+            | Self::Skill { path, .. } => Some(LocalOrRemotePath::Local(path.clone())),
         }
     }
 
@@ -215,9 +222,13 @@ impl CodeSource {
             Self::AIAction { .. } => "ai_action",
             Self::ProjectRules { .. } => "project_rules",
             Self::FileTree {
-                location: FileLocation::Remote(_),
+                location: LocalOrRemotePath::Remote(_),
             } => "remote_file_tree",
             Self::FileTree { .. } => "file_tree",
+            Self::CommandPalette {
+                location: LocalOrRemotePath::Remote(_),
+            } => "remote_command_palette",
+            Self::CommandPalette { .. } => "command_palette",
             Self::Finder { .. } => "finder",
             Self::Skill { .. } => "skill",
         }
@@ -232,7 +243,10 @@ impl CodeSource {
             self,
             Self::AIAction { .. }
                 | Self::FileTree {
-                    location: FileLocation::Remote(_),
+                    location: LocalOrRemotePath::Remote(_),
+                }
+                | Self::CommandPalette {
+                    location: LocalOrRemotePath::Remote(_),
                 }
         )
     }
@@ -286,12 +300,13 @@ impl CodeManager {
     pub fn deregister_pane(&mut self, source: &CodeSource) {
         self.source_to_pane_data.remove(&source.omit_line_col());
     }
-    /// Returns the locator for a code pane that already has the given `FileLocation`
+
+    /// Returns the locator for a code pane that already has the given `LocalOrRemotePath`
     /// open in the given pane group. Works for both local and remote files.
     pub fn get_locator_for_location_in_tab(
         &self,
         pane_group_id: EntityId,
-        location: &FileLocation,
+        location: &LocalOrRemotePath,
     ) -> Option<PaneViewLocator> {
         self.source_to_pane_data
             .iter()

@@ -204,18 +204,32 @@ where
         let conversation_id = self.conversation_id;
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
-            let BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-                exchange_id: event_exchange_id,
-                conversation_id: event_conversation_id,
-                ..
-            } = event
-            else {
-                return;
-            };
-            if *event_exchange_id == exchange_id {
-                callback(me, ctx);
-            } else if *event_conversation_id == conversation_id {
-                ctx.notify();
+            match event {
+                BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                    exchange_id: event_exchange_id,
+                    conversation_id: event_conversation_id,
+                    ..
+                } => {
+                    if *event_exchange_id == exchange_id {
+                        callback(me, ctx);
+                    } else if *event_conversation_id == conversation_id {
+                        ctx.notify();
+                    }
+                }
+                BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {
+                    // Cross-pane orchestration credit rollup: the collapsed
+                    // footer pill on an orchestrator's AIBlock derives its
+                    // headline number from descendant credits, which the
+                    // existing exchange-scoped notify path above doesn't
+                    // cover. Trigger a re-render on any usage metadata
+                    // change so the pill stays live. Filtering to only
+                    // descendants of this block's conversation would
+                    // require an O(depth) walk per event for every AI
+                    // block in the app; an unconditional notify is cheap
+                    // and tracks live status accurately.
+                    ctx.notify();
+                }
+                _ => {}
             }
         });
     }

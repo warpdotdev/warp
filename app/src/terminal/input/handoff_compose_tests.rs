@@ -1,4 +1,5 @@
 use super::HandoffComposeState;
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::server::ids::{ClientId, SyncId};
 use warpui::App;
 
@@ -10,7 +11,7 @@ fn preserves_explicit_environment_selection() {
         let explicit_environment_id = SyncId::ClientId(ClientId::new());
 
         state.update(&mut app, |state, ctx| {
-            state.activate(ctx);
+            state.activate(HandoffEntryPoint::Ampersand, ctx);
             state.ensure_default_environment_id(default_environment_id, ctx);
         });
         state.read(&app, |state, _| {

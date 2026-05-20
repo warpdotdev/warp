@@ -62,6 +62,7 @@ use super::network::{
     control_action_failure_reason_string, session_ended_reason_string,
     viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
 };
+use super::orchestration_viewer_model::OrchestrationViewerModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
@@ -100,6 +101,17 @@ pub struct TerminalManager {
     current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
     viewer_remote_update_guard: RemoteUpdateGuard,
     outbound_handlers_registered: bool,
+    /// Owns child discovery + status polling for an orchestrated ambient
+    /// agent run. Lazily created in `JoinedSuccessfully` on the first
+    /// ambient session join. `Arc<FairMutex<Option<...>>>` matches
+    /// `current_network` so the network-event closure can write into it
+    /// without `&mut self`. Behind `FeatureFlag::OrchestrationViewerPillBar`.
+    orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+    /// `true` for the root viewer pane of an orchestrator, `false` for
+    /// per-child viewer panes. Skipping polling on children avoids
+    /// duplicated REST traffic and grandchild double-registration via the
+    /// transitive `ancestor_run_id` filter.
+    enable_orchestration_polling: bool,
 }
 
 impl TerminalManager {
@@ -168,6 +180,7 @@ impl TerminalManager {
         initial_size: Vector2F,
         window_id: WindowId,
         is_cloud_mode: bool,
+        enable_orchestration_polling: bool,
         ctx: &mut AppContext,
     ) -> Self {
         // Create all the necessary channels we need for communication.
@@ -282,19 +295,29 @@ impl TerminalManager {
             current_network: Arc::new(FairMutex::new(None)),
             viewer_remote_update_guard: RemoteUpdateGuard::new(),
             outbound_handlers_registered: false,
+            orchestration_viewer_model: Arc::new(FairMutex::new(None)),
+            enable_orchestration_polling,
         }
     }
 
-    /// Create a new terminal manager for viewing a shared session.
+    /// Create a new terminal manager for viewing a shared session. See
+    /// [`Self::enable_orchestration_polling`] for the meaning of the flag.
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
+        enable_orchestration_polling: bool,
         ctx: &mut AppContext,
     ) -> Self {
-        let mut terminal_manager =
-            Self::new_internal(resources, initial_size, window_id, false, ctx);
+        let mut terminal_manager = Self::new_internal(
+            resources,
+            initial_size,
+            window_id,
+            false,
+            enable_orchestration_polling,
+            ctx,
+        );
 
         terminal_manager.connect_session(
             session_id,
@@ -305,15 +328,24 @@ impl TerminalManager {
         terminal_manager
     }
 
-    /// Create a new terminal manager for eventually viewing a cloud mode shared session that is
-    /// not yet available.
+    /// Create a new terminal manager for eventually viewing a cloud mode
+    /// shared session that is not yet available. See
+    /// [`Self::enable_orchestration_polling`] for the meaning of the flag.
     pub fn new_deferred(
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
+        enable_orchestration_polling: bool,
         ctx: &mut AppContext,
     ) -> Self {
-        Self::new_internal(resources, initial_size, window_id, true, ctx)
+        Self::new_internal(
+            resources,
+            initial_size,
+            window_id,
+            true,
+            enable_orchestration_polling,
+            ctx,
+        )
     }
 
     /// Connects a deferred terminal manager to a shared session.
@@ -349,7 +381,11 @@ impl TerminalManager {
         }
     }
 
-    pub fn attach_followup_session(&mut self, session_id: SessionId, ctx: &mut AppContext) -> bool {
+    pub fn attach_execution_session(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut AppContext,
+    ) -> bool {
         match std::mem::replace(&mut self.network_state, NetworkState::Connecting) {
             NetworkState::Active(network) => {
                 network.update(ctx, |network, _| {
@@ -367,7 +403,7 @@ impl TerminalManager {
             NetworkState::Connecting => {
                 self.network_state = NetworkState::Connecting;
                 log::warn!(
-                    "attach_followup_session called while already connecting to shared session"
+                    "attach_execution_session called while already connecting to shared session"
                 );
                 return false;
             }
@@ -438,6 +474,8 @@ impl TerminalManager {
             self.current_network.clone(),
             self.network_resources.prompt_type.clone(),
             self.viewer_remote_update_guard.clone(),
+            self.orchestration_viewer_model.clone(),
+            self.enable_orchestration_polling,
             ctx,
         );
         if !self.outbound_handlers_registered {
@@ -667,6 +705,11 @@ impl TerminalManager {
         self.network_state = NetworkState::Active(network);
     }
 
+    // Aggregating these into a struct would just shift the same set of
+    // fields into another type purely to placate Clippy without any
+    // readability win, since the closure body still needs each clone
+    // individually. Suppress the lint instead.
+    #[allow(clippy::too_many_arguments)]
     fn handle_network_events(
         network: &ModelHandle<Network>,
         view: &ViewHandle<TerminalView>,
@@ -674,6 +717,8 @@ impl TerminalManager {
         current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
         prompt_type: ModelHandle<PromptType>,
         viewer_remote_update_guard: RemoteUpdateGuard,
+        orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        enable_orchestration_polling: bool,
         ctx: &mut AppContext,
     ) {
         // We use a weak view handle instead of a strong reference because we may add a subscription to the view which moves a strong reference of the Model into the callback,
@@ -749,6 +794,26 @@ impl TerminalManager {
                         ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
                             model.register_ambient_session(terminal_view_id, task_id, ctx);
                         });
+
+                        // Spin up the orchestration viewer model on first
+                        // join (`is_none()` guards against reconnect dupes).
+                        if enable_orchestration_polling
+                            && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
+                            && orchestration_viewer_model.lock().is_none()
+                        {
+                            let weak_view_handle_for_orch = weak_view_handle.clone();
+                            let orchestration_viewer_model_slot =
+                                orchestration_viewer_model.clone();
+                            let handle = ctx.add_model(|model_ctx| {
+                                OrchestrationViewerModel::new(
+                                    task_id,
+                                    terminal_view_id,
+                                    weak_view_handle_for_orch,
+                                    model_ctx,
+                                )
+                            });
+                            *orchestration_viewer_model_slot.lock() = Some(handle);
+                        }
                     }
                 }
 
@@ -797,7 +862,18 @@ impl TerminalManager {
                     ) {
                         return;
                     }
+                    // Non-owner viewers (read-only) won't get a follow-up
+                    // session; owners may handoff via
+                    // `attach_execution_session` (same `TerminalManager`,
+                    // same orchestrator `task_id`), so keep their model.
+                    let is_owner = view.read(ctx, |terminal_view, app| {
+                        terminal_view.owned_ambient_agent_task_id(app).is_some()
+                    });
+                    if !is_owner {
+                        Self::stop_orchestration_polling(&orchestration_viewer_model);
+                    }
                 } else {
+                    Self::stop_orchestration_polling(&orchestration_viewer_model);
                     Self::shared_session_ended(&view, model.clone(), ctx);
                 }
                 view.update(ctx, |terminal_view, ctx| {
@@ -830,6 +906,9 @@ impl TerminalManager {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
+                // Viewer has been removed and will not re-attach; stop the
+                // children-polling background work.
+                Self::stop_orchestration_polling(&orchestration_viewer_model);
                 Self::shared_session_ended(&view, model.clone(), ctx);
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = viewer_removed_reason_string(reason);
@@ -852,6 +931,9 @@ impl TerminalManager {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
+                // Reconnection has been abandoned; stop the children-polling
+                // background work.
+                Self::stop_orchestration_polling(&orchestration_viewer_model);
                 Self::shared_session_ended(&view, model.clone(), ctx);
                 view.update(ctx, |terminal_view, ctx| {
                     terminal_view.show_persistent_toast(
@@ -1020,9 +1102,7 @@ impl TerminalManager {
                     {
                         return;
                     }
-                    view.input().update(ctx, |input, ctx| {
-                        input.process_remote_edits(block_id, operations.clone(), ctx);
-                    })
+                    view.apply_viewer_shared_session_input_update(block_id, operations.clone(), ctx);
                 })
             }
             NetworkEvent::RoleRequestInFlight(role_request_id) => {
@@ -1530,6 +1610,16 @@ impl TerminalManager {
         });
     }
 
+    /// Drops the [`OrchestrationViewerModel`] from the shared slot if one
+    /// exists. Called from terminal session-end paths. The model's
+    /// `ctx.spawn` continuations are entity-scoped, so dropping the
+    /// entity makes them no-ops; no explicit `.abort()` needed.
+    fn stop_orchestration_polling(
+        orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+    ) {
+        *orchestration_viewer_model.lock() = None;
+    }
+
     fn shared_session_ended(
         terminal_view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
@@ -1606,8 +1696,8 @@ impl TerminalManager {
                 if let Some(ambient_agent_view_model) =
                     terminal_view.ambient_agent_view_model().cloned()
                 {
-                    ambient_agent_view_model.update(ctx, |model, _| {
-                        model.record_ambient_execution_ended(ended_session_id);
+                    ambient_agent_view_model.update(ctx, |model, ctx| {
+                        model.record_ambient_execution_ended(ended_session_id, ctx);
                     });
                 }
                 terminal_view.on_ambient_agent_execution_ended(ctx);

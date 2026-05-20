@@ -95,6 +95,9 @@ while (( "$#" )); do
   esac
 done
 
+common_skills_match_lock() {
+  ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "$@" --verify-only --quiet >/dev/null 2>&1
+}
 if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
   COMMON_SKILLS_ARGS=()
   if [[ "${COMMON_SKILLS_TARGET}" = "project" || "${COMMON_SKILLS_TARGET}" = "global" ]]; then
@@ -108,6 +111,8 @@ if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
     else
       ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --force --prompt-for-target
     fi
+  elif common_skills_match_lock "${COMMON_SKILLS_ARGS[@]}"; then
+    :
   else
     if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
       ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "${COMMON_SKILLS_ARGS[@]}" --if-needed --quiet

@@ -207,7 +207,7 @@ impl SearchCodebaseExecutor {
 
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
         if session_context.is_remote() {
-            let explicit_repo_path = codebase_path
+            let requested_codebase_path = codebase_path
                 .as_deref()
                 .filter(|path| !path.is_empty() && *path != ".")
                 .map(ToOwned::to_owned);
@@ -216,7 +216,7 @@ impl SearchCodebaseExecutor {
                 TelemetryEvent::SearchCodebaseRequested {
                     action_id: id.clone(),
                     server_output_id,
-                    is_cross_repo: explicit_repo_path.is_some(),
+                    is_cross_repo: requested_codebase_path.is_some(),
                 },
                 ctx
             );
@@ -226,7 +226,7 @@ impl SearchCodebaseExecutor {
                     .as_ref(ctx)
                     .root_directory_for_remote_search(
                         &session_context,
-                        explicit_repo_path.as_deref(),
+                        requested_codebase_path.as_deref(),
                         ctx,
                     )
             });
@@ -257,7 +257,7 @@ impl SearchCodebaseExecutor {
                     controller.send_request(
                         GetRelevantFilesRequestTarget::Remote {
                             session_context,
-                            explicit_repo_path,
+                            requested_codebase_path,
                         },
                         query.clone(),
                         partial_paths.as_ref(),
@@ -440,13 +440,13 @@ impl SearchCodebaseExecutor {
         let SearchCodebaseRequest { codebase_path, .. } = request;
         let session_context = SessionContext::from_session(self.active_session.as_ref(app), app);
         if session_context.is_remote() {
-            let explicit_repo_path = codebase_path
+            let requested_codebase_path = codebase_path
                 .as_deref()
                 .filter(|path| !path.is_empty() && *path != ".");
             return self
                 .get_relevant_files_controller
                 .as_ref(app)
-                .root_directory_for_remote_search(&session_context, explicit_repo_path, app);
+                .root_directory_for_remote_search(&session_context, requested_codebase_path, app);
         }
 
         let codebase_path = codebase_path.as_deref().map(PathBuf::from);

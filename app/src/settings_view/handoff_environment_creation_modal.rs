@@ -1,11 +1,11 @@
+use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::cloud_environments;
 use crate::appearance::Appearance;
 use crate::modal::MODAL_BACKDROP_OPACITY;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings_view::update_environment_form::{
-    AuthSource, EnvironmentFormInitArgs, GithubAuthRedirectTarget, UpdateEnvironmentForm,
-    UpdateEnvironmentFormEvent,
+    EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
 };
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
@@ -19,6 +19,12 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 const DIALOG_WIDTH: f32 = 600.;
+
+#[derive(Clone, Copy, Debug)]
+enum HandoffEnvironmentCreationModalContext {
+    Handoff,
+    Orchestration,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum HandoffEnvironmentCreationModalEvent {
@@ -40,12 +46,29 @@ pub(crate) struct HandoffEnvironmentCreationModal {
 
 impl HandoffEnvironmentCreationModal {
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let environment_form = ctx.add_typed_action_view(|ctx| {
+        Self::new_impl(HandoffEnvironmentCreationModalContext::Handoff, ctx)
+    }
+
+    pub(crate) fn new_for_orchestration(ctx: &mut ViewContext<Self>) -> Self {
+        Self::new_impl(HandoffEnvironmentCreationModalContext::Orchestration, ctx)
+    }
+
+    fn new_impl(
+        context: HandoffEnvironmentCreationModalContext,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let environment_form = ctx.add_typed_action_view(move |ctx| {
             let mut form = UpdateEnvironmentForm::new(EnvironmentFormInitArgs::Create, ctx);
             form.set_github_auth_redirect_target(GithubAuthRedirectTarget::FocusCloudMode);
             form.set_show_header(false, ctx);
             form.set_should_handle_escape_from_editor(true);
             form.set_auth_source(AuthSource::CloudSetup);
+            match context {
+                HandoffEnvironmentCreationModalContext::Handoff => {}
+                HandoffEnvironmentCreationModalContext::Orchestration => {
+                    form.configure_for_orchestration_modal(ctx);
+                }
+            }
             form
         });
 
@@ -123,6 +146,13 @@ impl HandoffEnvironmentCreationModal {
             UpdateEnvironmentFormEvent::Updated { .. }
             | UpdateEnvironmentFormEvent::DeleteRequested { .. } => {}
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn uses_orchestration_form_configuration_for_test(&self, app: &AppContext) -> bool {
+        self.environment_form
+            .as_ref(app)
+            .uses_orchestration_modal_configuration_for_test()
     }
 
     fn render_dialog(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {

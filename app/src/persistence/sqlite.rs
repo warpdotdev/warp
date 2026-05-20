@@ -32,6 +32,7 @@ use persistence::model::AMBIENT_AGENT_PANE_KIND;
 use uuid::Uuid;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::platform::FullscreenState;
+use warpui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
 use warpui::{AppContext, SingletonEntity};
 
 use super::agent::{delete_agent_conversations, upsert_agent_conversation};
@@ -155,7 +156,7 @@ type DeleteCloudObjectFn =
 pub fn initialize(
     ctx: &mut AppContext,
     scope: PersistenceScope,
-) -> (Option<PersistedData>, Option<WriterHandles>) {
+) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     unsafe {
         // Set up logging before any SQLite calls.
         init_logging();
@@ -163,18 +164,7 @@ pub fn initialize(
     let database_path = database_file_path_for_scope(&scope);
     match init_db(&scope) {
         Ok(mut conn) => {
-            let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
-            let app_state = match read_sqlite_data(&mut conn, user_uid) {
-                Ok(app_state) => Some(app_state),
-                Err(err) => {
-                    send_telemetry_from_app_ctx!(
-                        TelemetryEvent::DatabaseReadError(err.to_string()),
-                        ctx
-                    );
-                    report_error!(anyhow::Error::new(err).context("Failed to read app state"));
-                    None
-                }
-            };
+            let persisted_data = read_persisted_data(&mut conn, ctx);
 
             let writer_handles = match start_writer(conn, database_path.clone()) {
                 Ok(writer_handles) => Some(writer_handles),
@@ -187,7 +177,7 @@ pub fn initialize(
                     None
                 }
             };
-            (app_state, writer_handles)
+            (persisted_data, writer_handles)
         }
         Err(err) => {
             send_telemetry_from_app_ctx!(
@@ -196,6 +186,21 @@ pub fn initialize(
             );
             report_db_error("initialization", err, &database_path);
             (None, None)
+        }
+    }
+}
+
+fn read_persisted_data(
+    conn: &mut SqliteConnection,
+    ctx: &mut AppContext,
+) -> Option<Box<PersistedData>> {
+    let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
+    match read_sqlite_data(conn, user_uid) {
+        Ok(app_state) => Some(Box::new(app_state)),
+        Err(err) => {
+            send_telemetry_from_app_ctx!(TelemetryEvent::DatabaseReadError(err.to_string()), ctx);
+            report_error!(anyhow::Error::new(err).context("Failed to read persisted data"));
+            None
         }
     }
 }
@@ -901,14 +906,21 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
 
             // In the database each individual field is nullable but in practice these
             // fields are either all null or all non-null as they together represent
-            // the stored window bound.
+            // the stored window bound. Bounds smaller than the platform minimum
+            // window size are treated as missing so that we fall back to default
+            // geometry on restore instead of replaying a corrupt size (see GH#10083).
             let (window_width, window_height, origin_x, origin_y) = match window.bounds {
-                Some(rect) => (
-                    Some(rect.size().x()),
-                    Some(rect.size().y()),
-                    Some(rect.origin().x()),
-                    Some(rect.origin().y()),
-                ),
+                Some(rect)
+                    if rect.size().x() >= MIN_WINDOW_WIDTH
+                        && rect.size().y() >= MIN_WINDOW_HEIGHT =>
+                {
+                    (
+                        Some(rect.size().x()),
+                        Some(rect.size().y()),
+                        Some(rect.origin().x()),
+                        Some(rect.origin().y()),
+                    )
+                }
                 _ => (None, None, None, None),
             };
 
@@ -1684,7 +1696,9 @@ fn get_all_mcp_server_installations(
 
     let improper_rows = rows_len - result.len();
     if improper_rows > 0 {
-        log::warn!("Skipping {improper_rows} rows from mcp_server_installations table due to malformation.");
+        log::warn!(
+            "Skipping {improper_rows} rows from mcp_server_installations table due to malformation."
+        );
     }
 
     Ok(result)
@@ -2792,13 +2806,18 @@ fn read_sqlite_data(
                 FullscreenState::from_i32(window.fullscreen_state).unwrap_or_default();
 
             // The origin and size of the bound should be all null or all non-null.
+            // Reject bounds smaller than the platform minimum window size so users
+            // with an already-corrupted warp.sqlite (see GH#10083) restore to
+            // default geometry instead of a sliver.
             let bounds = match (
                 window.window_width,
                 window.window_height,
                 window.origin_x,
                 window.origin_y,
             ) {
-                (Some(mut width), Some(mut height), Some(x), Some(y)) => {
+                (Some(mut width), Some(mut height), Some(x), Some(y))
+                    if width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT =>
+                {
                     // When fullscreen or maximized, the `inner_size` we snapshotted will be the
                     // size of the full screen. This will cause problems with winit. When you set
                     // maximized/fullscreen, setting the inner_size will by the size the window

@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
-
 use warpui::SingletonEntity;
 
-use crate::ai::blocklist::is_local_to_cloud_handoff_available;
 use crate::context_chips::{agent_footer_available_chips, available_chips, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::settings::AISettings;
@@ -157,6 +155,7 @@ impl AgentToolbarItemKind {
     /// Only items relevant to composing a cloud run are shown.
     pub(super) fn is_available_during_handoff_compose(&self) -> bool {
         match self {
+            Self::ContextChip(ContextChipKind::ShellGitBranch) => true,
             Self::ModelSelector | Self::VoiceInput | Self::FileAttach => true,
             Self::ContextChip(_)
             | Self::NLDToggle
@@ -218,7 +217,10 @@ impl AgentToolbarItemKind {
         {
             items.push(Self::ShareSession);
         }
-        if is_local_to_cloud_handoff_available() {
+        if FeatureFlag::OzHandoff.is_enabled()
+            && FeatureFlag::HandoffLocalCloud.is_enabled()
+            && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+        {
             items.push(Self::HandoffToCloud);
         }
         items.push(Self::VoiceInput);
@@ -247,7 +249,10 @@ impl AgentToolbarItemKind {
         {
             items.push(Self::ShareSession);
         }
-        if is_local_to_cloud_handoff_available() {
+        if FeatureFlag::OzHandoff.is_enabled()
+            && FeatureFlag::HandoffLocalCloud.is_enabled()
+            && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+        {
             items.push(Self::HandoffToCloud);
         }
         items

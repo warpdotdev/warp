@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::ai::AIRequestUsageModel;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
 use crate::code_review::comment_rendering::CommentViewCard;
@@ -23,7 +24,6 @@ use crate::{
 use indexmap::IndexMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::path::PathBuf;
 use string_offset::CharOffset;
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
@@ -183,7 +183,7 @@ pub struct CommentListView {
 
     /// Set once the user has manually collapsed or expanded the outdated section.
     is_outdated_section_collapsed: Option<bool>,
-    repo_path: PathBuf,
+    repo_path: Option<LocalOrRemotePath>,
     view_state: ViewState,
     /// The best available destination for sending review comments.
     /// Pushed down from RightPanelView.
@@ -196,7 +196,7 @@ pub struct CommentListView {
 
 impl CommentListView {
     pub fn new(
-        initial_repo_path: Option<PathBuf>,
+        initial_repo_path: Option<LocalOrRemotePath>,
         parent: WeakViewHandle<CodeReviewView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -224,7 +224,7 @@ impl CommentListView {
             comments_by_id: IndexMap::new(),
             is_collapsed: true,
             is_outdated_section_collapsed: None,
-            repo_path: initial_repo_path.unwrap_or_default(),
+            repo_path: initial_repo_path,
             view_state: ViewState::default(),
             overflow_menu: menu,
             review_destination: ReviewDestination::None,
@@ -367,7 +367,7 @@ impl CommentListView {
             let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
                 existing
                     .card
-                    .update_source(comment, Some(&self.repo_path), ctx);
+                    .update_source(comment, self.repo_path.as_ref(), ctx);
                 existing
             } else {
                 let card = CommentViewCard::new(
@@ -375,7 +375,7 @@ impl CommentListView {
                     false, /* always_use_static_diff */
                     false, /* disable_scrolling */
                     Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
-                    Some(&self.repo_path),
+                    self.repo_path.as_ref(),
                     ctx,
                 );
 

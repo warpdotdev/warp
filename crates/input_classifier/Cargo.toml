@@ -27,6 +27,9 @@ onnx = ["dep:rust-embed", "dep:tokenizers"]
 # Selects which BERT-tiny ONNX model bytes are embedded via rust-embed; enable exactly one.
 nld_classifier_v1 = ["onnx_candle"]
 nld_classifier_v2 = ["onnx_candle"]
+# Selects which shell-command heuristic behavior is used. If both are enabled, v2 wins.
+nld_heuristic_v1 = []
+nld_heuristic_v2 = []
 
 [dependencies]
 anyhow.workspace = true
@@ -54,3 +57,4 @@ tokenizers = { version = "0.21.4", optional = true }
 warp_completer.workspace = true
 
 [dev-dependencies]
+warp_features.workspace = true

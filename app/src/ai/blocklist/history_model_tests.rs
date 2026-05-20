@@ -547,6 +547,55 @@ fn test_merge_cloud_metadata_updates_already_restored_conversations() {
 }
 
 #[test]
+fn test_merge_cloud_metadata_refreshes_stale_restored_conversation_metadata() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let terminal_view_id = EntityId::new();
+        let token = "stale-metadata-token";
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_server_conversation_token(token.to_string());
+        conversation.set_server_metadata(create_server_metadata(
+            "Stale Conversation",
+            token,
+            1.0,
+            None,
+        ));
+        let conversation_id = conversation.id();
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        history_model.update(&mut app, |model, _| {
+            model.merge_cloud_conversation_metadata(vec![create_server_metadata(
+                "Refreshed Conversation",
+                token,
+                2.0,
+                None,
+            )]);
+        });
+
+        history_model.read(&app, |model, _| {
+            let token = ServerConversationToken::new(token.to_string());
+            let metadata = model
+                .get_server_conversation_metadata_by_server_token(&token)
+                .expect("metadata should be available by server token");
+            assert_eq!(metadata.title, "Refreshed Conversation");
+            assert_eq!(metadata.usage.credits_spent, 2.0);
+
+            let conversation_metadata = model
+                .conversation(&conversation_id)
+                .and_then(|conversation| conversation.server_metadata())
+                .expect("restored conversation metadata should be refreshed");
+            assert_eq!(conversation_metadata.title, "Refreshed Conversation");
+        });
+    });
+}
+
+#[test]
 fn test_merge_cloud_metadata_reuses_restored_conversation_id_for_token() {
     use crate::ai::agent::conversation::AIConversation;
 
@@ -1405,6 +1454,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         };
         let tasks = vec![warp_multi_agent_api::Task {
             id: "root-task".to_string(),
@@ -1598,6 +1648,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -1695,6 +1746,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -1781,6 +1833,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             }),
         )
         .expect("restored source conversation should build");

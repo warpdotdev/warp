@@ -1,5 +1,6 @@
-use super::validate_cli_installed;
+use super::{auth_check_command_for, validate_cli_installed};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use warp_cli::agent::Harness;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
     match err {
@@ -30,4 +31,53 @@ fn validate_cli_installed_includes_docs_url_in_error() {
     let (_, reason) = assert_harness_setup_failed(&err);
     assert!(reason.contains(url));
     assert!(reason.contains("Install it first"));
+}
+
+// --- Runtime error pattern tests ---
+
+#[test]
+fn claude_runtime_error_patterns_returns_slice() {
+    use super::claude_code::ClaudeHarness;
+    use super::ThirdPartyHarness;
+    // Patterns are initially empty until validated needles are filled in.
+    // The trait method must still be callable.
+    let _: &[&str] = ClaudeHarness.runtime_error_patterns();
+}
+
+#[test]
+fn codex_runtime_error_patterns_returns_slice() {
+    use super::codex::CodexHarness;
+    use super::ThirdPartyHarness;
+    let _: &[&str] = CodexHarness.runtime_error_patterns();
+}
+
+#[test]
+fn gemini_runtime_error_patterns_is_empty_by_default() {
+    use super::gemini::GeminiHarness;
+    use super::ThirdPartyHarness;
+    assert!(GeminiHarness.runtime_error_patterns().is_empty());
+}
+
+#[test]
+fn auth_check_command_for_gemini_is_none() {
+    assert!(auth_check_command_for(Harness::Gemini).is_none());
+}
+
+#[test]
+fn auth_check_command_for_oz_is_none() {
+    assert!(auth_check_command_for(Harness::Oz).is_none());
+}
+
+#[test]
+fn auth_check_command_for_unsupported_is_none() {
+    // OpenCode is mapped to HarnessKind::Unsupported and therefore has no
+    // auth check command of its own.
+    assert!(auth_check_command_for(Harness::OpenCode).is_none());
+}
+
+#[test]
+fn auth_check_command_for_unknown_is_none() {
+    // Harness::Unknown causes harness_kind to return Err; the helper still
+    // returns None instead of panicking.
+    assert!(auth_check_command_for(Harness::Unknown).is_none());
 }

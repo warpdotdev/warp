@@ -1,5 +1,20 @@
 use crate::ai::artifacts::Artifact;
 
+#[test]
+fn upload_target_deserializes_null_fields_as_empty() {
+    use super::UploadTarget;
+
+    let target: UploadTarget = serde_json::from_value(serde_json::json!({
+        "url": "https://example.com/upload",
+        "method": "PUT",
+        "headers": {},
+        "fields": null
+    }))
+    .unwrap();
+
+    assert_eq!(target.fields.len(), 0);
+}
+
 /// Assert that `Artifact`s serialize to the expected format for the /harness-support/report-artifact
 /// endpoint.
 /// If `Artifact` serialization changes, this test will catch it.

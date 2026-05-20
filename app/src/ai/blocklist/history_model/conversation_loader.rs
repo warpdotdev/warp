@@ -394,13 +394,11 @@ impl BlocklistAIHistoryModel {
 
             if let Some(conversation) = self.conversations_by_id.get_mut(&canonical_conversation_id)
             {
-                if conversation.server_metadata().is_none() {
-                    conversation.set_server_metadata(server_meta.clone());
-                    restored_conversations_updated += 1;
-                    log::debug!(
-                        "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
-                    );
-                }
+                conversation.set_server_metadata(server_meta.clone());
+                restored_conversations_updated += 1;
+                log::debug!(
+                    "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
+                );
             }
 
             let stale_metadata: Vec<(AIConversationId, AIConversationMetadata)> = self

@@ -85,9 +85,21 @@ pub(crate) fn claude_config_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    dirs::home_dir()
+    home_dir_for_claude_config()
         .map(|h| h.join(".claude"))
         .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+}
+
+/// In tests on Windows, `dirs::home_dir()` ignores `HOME`, so we check it
+/// manually so that tests can override the home directory.
+pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    dirs::home_dir()
 }
 
 /// Assemble a [`ClaudeTranscriptEnvelope`] from the Claude config directory.

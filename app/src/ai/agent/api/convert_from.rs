@@ -154,6 +154,10 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
             })
             .collect(),
         plan_id,
+        // Auth secret is a client-side dispatch concern populated by the
+        // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
+        // before Accept. The proto does not carry it.
+        harness_auth_secret_name: None,
     })
 }
 
@@ -175,6 +179,9 @@ fn convert_start_agent_v2_execution_mode(
                 harness_type: convert_start_agent_v2_harness_type(remote.harness)
                     .unwrap_or_default(),
                 title: remote.title,
+                // Auth secret is plumbed client-side via `RunAgentsRequest`;
+                // StartAgentV2 from the server never carries it.
+                auth_secret_name: None,
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
@@ -758,7 +765,9 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(request_computer_use.into())
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::Metadata;
+                use api::message::tool_call::subagent::{
+                    conversation_search_metadata::Target, Metadata,
+                };
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,
@@ -771,14 +780,23 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                         } else {
                             Some(cs_meta.query)
                         };
-                        let conversation_id = if cs_meta.conversation_id.is_empty() {
-                            None
-                        } else {
-                            Some(cs_meta.conversation_id)
+                        let (conversation_id, agent_run_id) = match cs_meta.target {
+                            Some(Target::ConversationId(conversation_id))
+                                if !conversation_id.is_empty() =>
+                            {
+                                (Some(conversation_id), None)
+                            }
+                            Some(Target::AgentRunId(agent_run_id)) if !agent_run_id.is_empty() => {
+                                (None, Some(agent_run_id))
+                            }
+                            Some(Target::ConversationId(_))
+                            | Some(Target::AgentRunId(_))
+                            | None => (None, None),
                         };
                         SubagentType::ConversationSearch {
                             query,
                             conversation_id,
+                            agent_run_id,
                         }
                     }
                     Some(Metadata::WarpDocumentationSearch(_)) => {

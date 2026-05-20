@@ -418,6 +418,7 @@ impl AmbientAgentRunner {
             let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
                 harness_type: args.harness,
                 model_id: None,
+                reasoning_level: None,
             });
             let harness_auth_secrets = args.claude_auth_secret.clone().map(|name| {
                 crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {

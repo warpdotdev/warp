@@ -6,13 +6,20 @@ use anyhow::{anyhow, Context, Result};
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
 #[cfg(not(target_family = "wasm"))]
+use instant::Instant;
+#[cfg(not(target_family = "wasm"))]
+use reqwest::Error as ReqwestError;
+#[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
 
 use crate::ai::agent::ReceivedMessageInput;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, ReadAgentMessageResponse};
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;
 
 pub(crate) const DEFAULT_AGENT_MESSAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_AGENT_MESSAGE_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Hydrates `new_message` agent events into full message payloads and delivery
 /// acknowledgements.
@@ -23,6 +30,8 @@ pub(crate) struct MessageHydrator {
     task_id: Option<AmbientAgentTaskId>,
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fetch_timeout: Duration,
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    retry_delay: Duration,
 }
 
 impl MessageHydrator {
@@ -37,6 +46,22 @@ impl MessageHydrator {
             task_scoped_server_api: Some(server_api),
             task_id: Some(task_id),
             fetch_timeout: DEFAULT_AGENT_MESSAGE_FETCH_TIMEOUT,
+            retry_delay: DEFAULT_AGENT_MESSAGE_RETRY_DELAY,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_fetch_timing(
+        ai_client: Arc<dyn AIClient>,
+        fetch_timeout: Duration,
+        retry_delay: Duration,
+    ) -> Self {
+        Self {
+            ai_client,
+            task_scoped_server_api: None,
+            task_id: None,
+            fetch_timeout,
+            retry_delay,
         }
     }
 
@@ -49,6 +74,7 @@ impl MessageHydrator {
             task_scoped_server_api: None,
             task_id: None,
             fetch_timeout,
+            retry_delay: DEFAULT_AGENT_MESSAGE_RETRY_DELAY,
         }
     }
 
@@ -109,14 +135,35 @@ impl MessageHydrator {
         &self,
         message_id: &str,
     ) -> Result<ReadAgentMessageResponse> {
-        let read_message = self.read_message(message_id);
-        let timeout = Timer::after(self.fetch_timeout);
-        futures::pin_mut!(read_message);
-        futures::pin_mut!(timeout);
+        let deadline = Instant::now() + self.fetch_timeout;
+        let mut last_error = None;
 
-        match futures::future::select(read_message, timeout).await {
-            Either::Left((result, _)) => result,
-            Either::Right(_) => Err(anyhow!("Timed out reading agent message {message_id}")),
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(message_read_timeout_error(message_id, last_error));
+            }
+
+            let read_message = self.read_message(message_id);
+            let timeout = Timer::after(remaining);
+            futures::pin_mut!(read_message);
+            futures::pin_mut!(timeout);
+
+            match futures::future::select(read_message, timeout).await {
+                Either::Left((Ok(message), _)) => return Ok(message),
+                Either::Left((Err(err), _)) if should_retry_message_read_error(&err) => {
+                    last_error = Some(err);
+                    let sleep_duration = self
+                        .retry_delay
+                        .min(deadline.saturating_duration_since(Instant::now()));
+                    if sleep_duration.is_zero() {
+                        return Err(message_read_timeout_error(message_id, last_error));
+                    }
+                    Timer::after(sleep_duration).await;
+                }
+                Either::Left((Err(err), _)) => return Err(err),
+                Either::Right(_) => return Err(message_read_timeout_error(message_id, last_error)),
+            }
         }
     }
 
@@ -167,5 +214,48 @@ impl MessageHydrator {
             }
         }
         failures
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn should_retry_message_read_error(err: &anyhow::Error) -> bool {
+    // Immediate read-after-event lag can surface as a short-lived 404 before
+    // the message row becomes readable. Restrict retries to status-preserving
+    // eventual-consistency/server responses plus clearly transient transport
+    // failures so permanent 4xxs fail fast instead of timing out.
+    if let Some(status) = message_read_error_status(err) {
+        return matches!(status, 404 | 408 | 429 | 500..=599);
+    }
+
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<ReqwestError>()
+            .is_some_and(is_transient_message_read_transport_error)
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn message_read_error_status(err: &anyhow::Error) -> Option<u16> {
+    err.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<HttpStatusError>()
+            .map(|http_err| http_err.status)
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn is_transient_message_read_transport_error(err: &ReqwestError) -> bool {
+    err.is_timeout() || err.is_connect()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn message_read_timeout_error(
+    message_id: &str,
+    last_error: Option<anyhow::Error>,
+) -> anyhow::Error {
+    let timeout_error = anyhow!("Timed out reading agent message {message_id}");
+    match last_error {
+        Some(err) => timeout_error.context(err),
+        None => timeout_error,
     }
 }

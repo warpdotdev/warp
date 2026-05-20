@@ -221,7 +221,7 @@ impl NotebookLinks {
                     match self.session_source.base_directory(ctx) {
                         Some(directory) => directory.join(clean_path),
                         None => {
-                            return Either::Right(future::ready(Err(ResolveError::MissingContext)))
+                            return Either::Right(future::ready(Err(ResolveError::MissingContext)));
                         }
                     }
                 } else {
@@ -260,7 +260,7 @@ impl NotebookLinks {
 
     /// Open a resolved link:
     /// * URLs are opened in the web browser or system-default application.
-    /// * Markdown files are opened in Warp (if the `FileNotebooks` feature flag is enabled).
+    /// * Markdown files are opened according to the user's Markdown Viewer preference.
     /// * Other files are opened in the configured editor or system-default application.
     pub fn open(&self, link: LinkTarget, ctx: &mut ModelContext<Self>) {
         match link {
@@ -275,11 +275,27 @@ impl NotebookLinks {
             }
             LinkTarget::LocalFile {
                 path,
+                line_and_column,
                 session,
                 is_markdown: true,
-                ..
             } => {
-                ctx.emit(LinkEvent::OpenFileNotebook { path, session });
+                #[cfg(not(feature = "local_fs"))]
+                let _ = line_and_column;
+
+                #[cfg(feature = "local_fs")]
+                {
+                    let settings = EditorSettings::as_ref(ctx);
+                    if *settings.prefer_markdown_viewer {
+                        ctx.emit(LinkEvent::OpenFileNotebook { path, session });
+                    } else {
+                        open_file(path, line_and_column, ctx);
+                    }
+                }
+
+                #[cfg(not(feature = "local_fs"))]
+                {
+                    ctx.emit(LinkEvent::OpenFileNotebook { path, session });
+                }
             }
             LinkTarget::LocalFile {
                 path,

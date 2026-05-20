@@ -334,12 +334,22 @@ impl TerminalManager {
         // If this session should be a shared-session creator, configure its initial
         // shared-session state before we construct the view, so that bootstrap
         // events can observe the correct pending status and source type.
-        if FeatureFlag::CreatingSharedSessions.is_enabled() {
-            if let IsSharedSessionCreator::Yes { source_type } = is_shared_session_creator {
+        match is_shared_session_creator {
+            IsSharedSessionCreator::Yes { source_type }
+                if FeatureFlag::CreatingSharedSessions.is_enabled() =>
+            {
                 model.lock().set_shared_session_status(
                     SharedSessionStatus::SharePendingPreBootstrap { source_type },
                 );
+                log::info!("Configured terminal to start sharing after bootstrap");
             }
+            IsSharedSessionCreator::Yes { .. } => {
+                log::warn!(
+                    "Session sharing was requested, but CreatingSharedSessions is disabled; \
+                     skipping shared-session startup"
+                );
+            }
+            IsSharedSessionCreator::No => {}
         }
 
         // Initialize the PtyController.
@@ -1313,6 +1323,7 @@ impl TerminalManager {
             log::warn!("Tried to share a session that's already being shared.");
             return;
         }
+        log::info!("Starting shared session");
 
         // Record the source type on the model so we can distinguish ambient agent
         // sessions from user-initiated shared sessions in the UI logic.
@@ -2266,6 +2277,12 @@ impl TerminalManager {
                     window_id,
                     sharer_remote_update_guard.clone(),
                     ctx,
+                );
+            }
+            TerminalViewEvent::StartSharingCurrentSession { .. } => {
+                log::warn!(
+                    "Ignoring request to start sharing current session because \
+                     CreatingSharedSessions is disabled"
                 );
             }
             TerminalViewEvent::StopSharingCurrentSession { reason } => {

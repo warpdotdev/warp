@@ -21,6 +21,8 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
+static const NSSize MIN_WINDOW_SIZE = {480.0, 192.0};
+static const NSSize TEST_MIN_WINDOW_SIZE = {124.0, 34.0};
 
 // A back-to-front ordered array of windows, identified by their `windowNumber`
 // property.
@@ -141,12 +143,20 @@ NSNumber *previouslyActiveAppPID;
     // we explicitly force callbacks to be synchronous if it's caused by the user instead
     // of another system call (such as the active screen changing)
     [warp_view setAsyncCallback:NO];
+
+    // While the user is dragging to resize the window, we want to present frames
+    // within transactions to ensure the resize is visually smooth and there is no
+    // stuttering resulting from asynchronous presentation.
+    [warp_view setPresentsWithTransaction:YES];
 }
 
 - (void)windowDidEndLiveResize:(NSNotification *)notification {
     WarpWindow *warp_window = notification.object;
     WarpHostView *warp_view = warp_window.contentView;
+
+    // Reset state changed in `windowWillStartLiveResize`.
     [warp_view setAsyncCallback:YES];
+    [warp_view setPresentsWithTransaction:NO];
 }
 
 - (void)setForceTermination {
@@ -285,6 +295,7 @@ static NSLayoutConstraint *configure_titlebar_height(NSWindow *window, CGFloat h
 void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, bool hideTitleBar) {
     window.testMode = testMode;
     window.hideTitleBar = hideTitleBar;
+    NSSize minWindowSize = testMode ? TEST_MIN_WINDOW_SIZE : MIN_WINDOW_SIZE;
 
     // Set the background color to clear to support window background transparency. When this is set
     // to NSColor.clearColor with alpha = 0 and window drop shadows are enabled, MacOS renders a
@@ -298,6 +309,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     window.acceptsMouseMovedEvents = YES;
     window.titlebarAppearsTransparent = hideTitleBar;
     window.titleVisibility = hideTitleBar ? NSWindowTitleHidden : NSWindowTitleVisible;
+    window.minSize = minWindowSize;
+    window.contentMinSize = minWindowSize;
+    if ([window respondsToSelector:@selector(setMinFullScreenContentSize:)]) {
+        window.minFullScreenContentSize = minWindowSize;
+    }
 }
 
 @implementation WarpWindow {

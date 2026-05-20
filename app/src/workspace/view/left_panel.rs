@@ -18,7 +18,7 @@ use warpui::{
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::code::buffer_location::FileLocation;
+use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
@@ -78,13 +78,14 @@ pub enum LeftPanelAction {
     ConversationListView,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
     WarpDrive(DrivePanelEvent),
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFileWithTarget {
-        location: FileLocation,
+        location: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
@@ -729,7 +730,7 @@ impl LeftPanelView {
                 );
 
                 ctx.emit(LeftPanelEvent::OpenFileWithTarget {
-                    location: FileLocation::Local(path.clone()),
+                    location: LocalOrRemotePath::Local(path.clone()),
                     target,
                     line_col: Some(line_col),
                 });

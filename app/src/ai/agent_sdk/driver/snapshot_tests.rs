@@ -147,6 +147,7 @@ impl HarnessSupportClient for TestClient {
                 url: format!("{}/upload/{}", self.server_base_url, f.filename),
                 method: "PUT".to_string(),
                 headers: HashMap::new(),
+                fields: Vec::new(),
             })
             .collect();
         let keep = targets.len().saturating_sub(self.drop_trailing_targets);

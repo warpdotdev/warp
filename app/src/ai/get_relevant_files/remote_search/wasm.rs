@@ -15,7 +15,7 @@ pub(super) enum RemoteSearchRequest {
 
 pub(super) fn root_directory_for_search(
     _session_context: &SessionContext,
-    _explicit_repo_path: Option<&str>,
+    _requested_codebase_path: Option<&str>,
     _app: &AppContext,
 ) -> Option<PathBuf> {
     None
@@ -25,7 +25,7 @@ pub(super) fn send_request(
     _query: String,
     _partial_paths: Option<Vec<String>>,
     _session_context: SessionContext,
-    _explicit_repo_path: Option<String>,
+    _requested_codebase_path: Option<String>,
     _action_id: AIAgentActionId,
     _ctx: &mut ModelContext<GetRelevantFilesController>,
 ) -> RemoteSearchRequest {

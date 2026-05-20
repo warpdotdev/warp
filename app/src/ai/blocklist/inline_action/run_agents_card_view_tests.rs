@@ -7,6 +7,7 @@ use ai::skills::SkillReference;
 use std::path::PathBuf;
 
 use super::RunAgentsEditState;
+use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 
 fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     make_request_with_skills(harness, mode, Vec::new())
@@ -30,6 +31,26 @@ fn make_request_with_skills(
             title: "Child agent".to_string(),
         }],
         plan_id: String::new(),
+        harness_auth_secret_name: None,
+    }
+}
+
+fn make_edit_state_with_orch_fields(
+    harness: &str,
+    mode: RunAgentsExecutionMode,
+) -> RunAgentsEditState {
+    let request = make_request(harness, mode);
+    RunAgentsEditState {
+        orch: OrchestrationEditState::from_run_agents_fields(
+            &request.model_id,
+            &request.harness_type,
+            &request.execution_mode,
+        ),
+        agent_run_configs: request.agent_run_configs,
+        base_prompt: request.base_prompt,
+        summary: request.summary,
+        skills: request.skills,
+        plan_id: request.plan_id,
     }
 }
 
@@ -115,7 +136,7 @@ fn cloud_with_opencode_disables_accept() {
 
 #[test]
 fn local_with_any_harness_does_not_disable_accept() {
-    for harness in ["oz", "claude", "gemini", "opencode"] {
+    for harness in ["oz", "gemini", "opencode"] {
         let state =
             RunAgentsEditState::from_request(&make_request(harness, RunAgentsExecutionMode::Local));
         assert!(
@@ -123,6 +144,33 @@ fn local_with_any_harness_does_not_disable_accept() {
             "Local + {harness} should allow Accept"
         );
     }
+}
+
+#[test]
+fn local_with_disabled_claude_or_codex_disables_accept() {
+    for (harness, expected) in [
+        (
+            "claude",
+            "Local Claude Code child agents are temporarily disabled.",
+        ),
+        (
+            "codex",
+            "Local Codex child agents are temporarily disabled.",
+        ),
+    ] {
+        let state = make_edit_state_with_orch_fields(harness, RunAgentsExecutionMode::Local);
+        assert_eq!(state.orch.accept_disabled_reason(), Some(expected));
+    }
+}
+
+#[test]
+fn from_request_sanitizes_disabled_local_harness_to_oz() {
+    let state =
+        RunAgentsEditState::from_request(&make_request("codex", RunAgentsExecutionMode::Local));
+
+    assert_eq!(state.orch.harness_type, "oz");
+    assert_eq!(state.orch.model_id, "");
+    assert!(state.orch.accept_disabled_reason().is_none());
 }
 
 #[test]
@@ -173,7 +221,7 @@ fn set_environment_id_updates_remote() {
 
 #[test]
 fn to_request_round_trips_request_fields() {
-    let req = make_request_with_skills(
+    let mut req = make_request_with_skills(
         "claude",
         RunAgentsExecutionMode::Remote {
             environment_id: "env-2".to_string(),
@@ -185,6 +233,7 @@ fn to_request_round_trips_request_fields() {
             SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
         ],
     );
+    req.plan_id = "plan-1".to_string();
     let state = RunAgentsEditState::from_request(&req);
     let round_tripped = state.to_request();
     assert_eq!(round_tripped.summary, req.summary);
@@ -194,6 +243,7 @@ fn to_request_round_trips_request_fields() {
     assert_eq!(round_tripped.execution_mode, req.execution_mode);
     assert_eq!(round_tripped.agent_run_configs, req.agent_run_configs);
     assert_eq!(round_tripped.skills, req.skills);
+    assert_eq!(round_tripped.plan_id, req.plan_id);
 }
 
 mod format_terminal_state_tests {
@@ -440,6 +490,19 @@ mod override_from_approved_config_tests {
         assert!(
             !*computer_use_enabled,
             "computer_use_enabled should default to false when original was Local"
+        );
+    }
+
+    #[test]
+    fn approved_local_disabled_harness_reports_disabled_reason_after_override() {
+        let mut state =
+            RunAgentsEditState::from_request(&make_request("oz", RunAgentsExecutionMode::Local));
+        state
+            .orch
+            .override_from_approved_config(&local_config("auto", "claude"));
+        assert_eq!(
+            state.orch.accept_disabled_reason(),
+            Some("Local Claude Code child agents are temporarily disabled.")
         );
     }
 }

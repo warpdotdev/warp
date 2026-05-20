@@ -37,7 +37,7 @@ pub fn validate_agent_mode_base_model_id(
 
     let llm_id: LLMId = model_id.into();
     let valid_ids = llm_prefs
-        .get_base_llm_choices_for_agent_mode()
+        .get_base_llm_choices_for_agent_mode(ctx)
         .map(|info| info.id.clone())
         .collect::<Vec<_>>();
 

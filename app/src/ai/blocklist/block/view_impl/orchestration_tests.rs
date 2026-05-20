@@ -77,6 +77,7 @@ fn start_agent_copy_uses_remote_labels_for_remote_children() {
         worker_host: String::new(),
         harness_type: String::new(),
         title: String::new(),
+        auth_secret_name: None,
     };
 
     assert_eq!(start_agent_success_suffix(&execution_mode), " remotely.");
@@ -254,6 +255,7 @@ fn transcript_metadata_uses_transcript_copy_without_technical_labels() {
     let recipients = vec![OrchestrationParticipant {
         display_name: "Agent 1".to_string(),
         avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
+        conversation_id: None,
     }];
 
     let metadata = transcript_metadata(&recipients, "Fix tests").expect("metadata");
@@ -285,6 +287,7 @@ fn transcript_metadata_preserves_non_orchestrator_recipients() {
         OrchestrationParticipant {
             display_name: "Agent 1".to_string(),
             avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
+            conversation_id: None,
         },
     ];
 

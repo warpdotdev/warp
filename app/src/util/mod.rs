@@ -11,6 +11,7 @@ pub mod links;
 pub mod openable_file_type;
 #[cfg(feature = "local_tty")]
 pub mod path;
+pub mod repo_detection;
 pub mod time_format;
 pub mod tooltips;
 pub(crate) mod traffic_lights;

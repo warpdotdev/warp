@@ -26,7 +26,7 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle
 
 use remote_server::manager::RemoteServerManager;
 
-use super::buffer_location::{FileLocation, SyncClock};
+use super::buffer_location::{LocalOrRemotePath, SyncClock};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -319,7 +319,7 @@ pub struct CharOffsetEdit {
 /// This allows multiple editors to share the same buffer when editing the same file,
 /// enabling consistent content synchronization and more efficient memory usage.
 pub struct GlobalBufferModel {
-    location_to_id: BiMap<FileLocation, FileId>,
+    location_to_id: BiMap<LocalOrRemotePath, FileId>,
     buffers: HashMap<FileId, InternalBufferState>,
 }
 
@@ -399,8 +399,8 @@ impl GlobalBufferModel {
         let paths_to_close: Vec<PathBuf> = ids_to_remove
             .iter()
             .filter_map(|id| match self.location_to_id.get_by_right(id) {
-                Some(FileLocation::Local(path)) => Some(path.clone()),
-                Some(FileLocation::Remote(_)) | None => None,
+                Some(LocalOrRemotePath::Local(path)) => Some(path.clone()),
+                Some(LocalOrRemotePath::Remote(_)) | None => None,
             })
             .collect();
 
@@ -435,7 +435,8 @@ impl GlobalBufferModel {
 
     fn cleanup_file_id(&mut self, file_id: FileId, _ctx: &mut ModelContext<Self>) {
         // Send didClose before removing the entry.
-        if let Some((FileLocation::Local(path), _)) = self.location_to_id.remove_by_right(&file_id)
+        if let Some((LocalOrRemotePath::Local(path), _)) =
+            self.location_to_id.remove_by_right(&file_id)
         {
             self.close_document_with_lsp(&path, _ctx);
         }
@@ -890,7 +891,7 @@ impl GlobalBufferModel {
     /// Look up the file path for a tracked buffer.
     pub fn file_path(&self, file_id: FileId) -> Option<&Path> {
         match self.location_to_id.get_by_right(&file_id) {
-            Some(FileLocation::Local(path)) => Some(path.as_path()),
+            Some(LocalOrRemotePath::Local(path)) => Some(path.as_path()),
             _ => None,
         }
     }
@@ -907,7 +908,7 @@ impl GlobalBufferModel {
     pub fn discard_unsaved_changes(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
         if let Some(id) = self
             .location_to_id
-            .get_by_left(&FileLocation::Local(path.to_path_buf()))
+            .get_by_left(&LocalOrRemotePath::Local(path.to_path_buf()))
             .cloned()
         {
             let path_clone = path.to_path_buf();
@@ -966,7 +967,7 @@ impl GlobalBufferModel {
         // Internal state cleanup is synchronous; only the LSP didClose notification
         // is dispatched asynchronously (with a no-op callback), so there is no race
         // between state removal and the close completing.
-        if let Some((FileLocation::Local(old_path), _)) =
+        if let Some((LocalOrRemotePath::Local(old_path), _)) =
             self.location_to_id.remove_by_right(&old_file_id)
         {
             self.close_document_with_lsp(&old_path, ctx);
@@ -1022,7 +1023,7 @@ impl GlobalBufferModel {
         // to avoid orphaning the previous FileId in `self.buffers`.
         if let Some(old_file_id) = self
             .location_to_id
-            .get_by_left(&FileLocation::Local(path.clone()))
+            .get_by_left(&LocalOrRemotePath::Local(path.clone()))
             .copied()
         {
             self.cleanup_file_id(old_file_id, ctx);
@@ -1036,7 +1037,7 @@ impl GlobalBufferModel {
         });
 
         self.location_to_id
-            .insert(FileLocation::Local(path.clone()), file_id);
+            .insert(LocalOrRemotePath::Local(path.clone()), file_id);
         self.buffers.insert(
             file_id,
             InternalBufferState {
@@ -1079,7 +1080,7 @@ impl GlobalBufferModel {
                 let version_matches_initial = buffer.as_ref(ctx).version_match(&initial_version);
                 let fid = me
                     .location_to_id
-                    .get_by_left(&FileLocation::Local(path_clone.clone()))
+                    .get_by_left(&LocalOrRemotePath::Local(path_clone.clone()))
                     .cloned();
                 let previous_version = fid
                     .and_then(|id| me.buffers.get(&id))
@@ -1119,15 +1120,19 @@ impl GlobalBufferModel {
     /// Dispatches to the appropriate private opener based on the location variant.
     /// If a buffer already exists for this location and is loaded, returns the
     /// existing `BufferState`.
-    pub fn open(&mut self, location: FileLocation, ctx: &mut ModelContext<Self>) -> BufferState {
+    pub fn open(
+        &mut self,
+        location: LocalOrRemotePath,
+        ctx: &mut ModelContext<Self>,
+    ) -> BufferState {
         match location {
             #[cfg(feature = "local_fs")]
-            FileLocation::Local(path) => self.open_local(path, false, ctx),
+            LocalOrRemotePath::Local(path) => self.open_local(path, false, ctx),
             #[cfg(not(feature = "local_fs"))]
-            FileLocation::Local(_) => {
+            LocalOrRemotePath::Local(_) => {
                 unimplemented!("Local buffers require the local_fs feature")
             }
-            FileLocation::Remote(remote_path) => self.open_remote_buffer(remote_path, ctx),
+            LocalOrRemotePath::Remote(remote_path) => self.open_remote_buffer(remote_path, ctx),
         }
     }
 
@@ -1148,7 +1153,7 @@ impl GlobalBufferModel {
     ) -> BufferState {
         if let Some(id) = self
             .location_to_id
-            .get_by_left(&FileLocation::Local(path.clone()))
+            .get_by_left(&LocalOrRemotePath::Local(path.clone()))
             .cloned()
         {
             debug_assert!(self.buffers.contains_key(&id));
@@ -1243,7 +1248,7 @@ impl GlobalBufferModel {
                 // This is needed to determine if we need a full sync later.
                 let file_id = me
                     .location_to_id
-                    .get_by_left(&FileLocation::Local(path_clone.clone()))
+                    .get_by_left(&LocalOrRemotePath::Local(path_clone.clone()))
                     .cloned();
                 let previous_version = file_id
                     .and_then(|id| me.buffers.get(&id))
@@ -1278,7 +1283,7 @@ impl GlobalBufferModel {
         });
 
         self.location_to_id
-            .insert(FileLocation::Local(path.to_path_buf()), file_id);
+            .insert(LocalOrRemotePath::Local(path.to_path_buf()), file_id);
         let source = if is_server_local {
             BufferSource::ServerLocal {
                 sync_clock: SyncClock::new(),
@@ -1348,7 +1353,7 @@ impl GlobalBufferModel {
 
         let file_id = self
             .location_to_id
-            .get_by_left(&FileLocation::Local(path.to_path_buf()))?;
+            .get_by_left(&LocalOrRemotePath::Local(path.to_path_buf()))?;
         let buffer = self.buffer_handle_for_id(*file_id, ctx)?;
 
         let buffer_ref = buffer.as_ref(ctx);
@@ -1498,7 +1503,7 @@ impl GlobalBufferModel {
             .location_to_id
             .iter()
             .filter_map(|(location, id)| {
-                let FileLocation::Local(path) = location else {
+                let LocalOrRemotePath::Local(path) = location else {
                     return None;
                 };
                 if !path.starts_with(workspace_path) {
@@ -1621,7 +1626,7 @@ impl GlobalBufferModel {
     /// all buffer states.
     fn find_remote_file_id(&self, host_id: &HostId, path: &str) -> Option<FileId> {
         let std_path = StandardizedPath::try_new(path).ok()?;
-        let location = FileLocation::Remote(RemotePath::new(host_id.clone(), std_path));
+        let location = LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), std_path));
         self.location_to_id.get_by_left(&location).copied()
     }
 
@@ -1638,7 +1643,7 @@ impl GlobalBufferModel {
         remote_path: RemotePath,
         ctx: &mut ModelContext<Self>,
     ) -> BufferState {
-        let location = FileLocation::Remote(remote_path.clone());
+        let location = LocalOrRemotePath::Remote(remote_path.clone());
 
         // Return existing buffer if already open.
         if let Some(id) = self.location_to_id.get_by_left(&location).cloned() {
@@ -2074,8 +2079,8 @@ impl GlobalBufferModel {
             self.location_to_id
                 .get_by_right(&file_id)
                 .and_then(|loc| match loc {
-                    FileLocation::Local(p) => Some(p.clone()),
-                    FileLocation::Remote(_) => None,
+                    LocalOrRemotePath::Local(p) => Some(p.clone()),
+                    LocalOrRemotePath::Remote(_) => None,
                 })
         else {
             return Err("force_reload: no local path for file_id={file_id:?}".to_string());
@@ -2437,7 +2442,7 @@ impl GlobalBufferModel {
         ctx: &mut ModelContext<Self>,
     ) -> BufferState {
         let remote_path = RemotePath::new(host_id, path);
-        let location = FileLocation::Remote(remote_path.clone());
+        let location = LocalOrRemotePath::Remote(remote_path.clone());
         let file_id = warp_util::file::FileId::new();
         let buffer = ctx.add_model(|_| Buffer::default());
         let version = ContentVersion::new();

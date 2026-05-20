@@ -338,7 +338,7 @@ impl ProjectContextModel {
         }
 
         let fut = DetectedRepositories::handle(ctx).update(ctx, |model, ctx| {
-            model.detect_possible_git_repo(
+            model.detect_possible_local_git_repo(
                 &path.to_string_lossy(),
                 RepoDetectionSource::ProjectRulesIndexing,
                 ctx,

@@ -1,7 +1,16 @@
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+use warp_core::features::FeatureFlag;
+use warp_core::semantic_selection::SemanticSelection;
 use warpui::{
-    elements::{ChildView, Container, CrossAxisAlignment, Expanded, Flex, ParentElement, Text},
+    elements::{
+        get_rich_content_position_id, ChildView, Container, CrossAxisAlignment, Expanded, Flex,
+        ParentElement, SavePosition, SelectableArea, SelectionHandle, Text,
+    },
     fonts::{Properties, Style, Weight},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
 use crate::{
@@ -9,6 +18,7 @@ use crate::{
         common::render_user_avatar, CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
     },
     appearance::Appearance,
+    terminal::{block_list_element::BlockListMenuSource, view::TerminalAction},
     ui_components::{blended_colors, icons::Icon},
     view_components::action_button::{ActionButton, ButtonSize, NakedTheme},
 };
@@ -21,6 +31,11 @@ pub struct PendingUserQueryBlock {
     prompt: String,
     user_display_name: String,
     profile_image_path: Option<String>,
+    view_id: EntityId,
+    selection_handle: SelectionHandle,
+    /// In an `RwLock` so the `SelectableArea` can update it synchronously when a selection ends,
+    /// allowing the terminal view to read the value immediately for copy-on-select.
+    selected_text: Arc<RwLock<Option<String>>>,
     close_button: Option<ViewHandle<ActionButton>>,
     send_now_button: Option<ViewHandle<ActionButton>>,
 }
@@ -58,9 +73,28 @@ impl PendingUserQueryBlock {
             prompt,
             user_display_name,
             profile_image_path,
+            view_id: ctx.view_id(),
+            selection_handle: Default::default(),
+            selected_text: Default::default(),
             close_button,
             send_now_button,
         }
+    }
+
+    /// Returns the currently selected prompt text within this block.
+    pub fn selected_text(&self, _ctx: &AppContext) -> Option<String> {
+        self.selected_text.read().clone()
+    }
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// Clears the text selection state and visual selection highlight.
+    pub fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        self.selection_handle.clear();
+        *self.selected_text.write() = None;
+        ctx.notify();
     }
 }
 
@@ -68,11 +102,13 @@ impl PendingUserQueryBlock {
 pub enum PendingUserQueryBlockAction {
     Dismiss,
     SendNow,
+    SelectText,
 }
 
 pub enum PendingUserQueryBlockEvent {
     Dismissed,
     SendNow,
+    TextSelected,
 }
 
 impl Entity for PendingUserQueryBlock {
@@ -89,6 +125,9 @@ impl TypedActionView for PendingUserQueryBlock {
             }
             PendingUserQueryBlockAction::SendNow => {
                 ctx.emit(PendingUserQueryBlockEvent::SendNow);
+            }
+            PendingUserQueryBlockAction::SelectText => {
+                ctx.emit(PendingUserQueryBlockEvent::TextSelected);
             }
         }
     }
@@ -125,7 +164,7 @@ impl View for PendingUserQueryBlock {
         )
         .with_style(properties)
         .with_color(dimmed_color)
-        .with_selectable(false)
+        .with_selectable(true)
         .finish();
 
         let queued_badge = Text::new(
@@ -141,10 +180,42 @@ impl View for PendingUserQueryBlock {
         .with_selectable(false)
         .finish();
 
-        let text_column = Flex::column()
+        let selectable_child = Flex::column()
             .with_child(prompt_text)
             .with_child(Container::new(queued_badge).with_margin_top(4.).finish())
             .finish();
+
+        let semantic_selection = SemanticSelection::as_ref(app);
+        let selected_text = self.selected_text.clone();
+        let view_id = self.view_id;
+        let mut text_column = SelectableArea::new(
+            self.selection_handle.clone(),
+            move |selection_args, _, _| {
+                *selected_text.write() = selection_args.selection;
+            },
+            SavePosition::new(
+                selectable_child,
+                get_rich_content_position_id(&view_id).as_str(),
+            )
+            .finish(),
+        )
+        .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+        .with_smart_select_fn(semantic_selection.smart_select_fn())
+        .on_selection_updated(|ctx, _| {
+            ctx.dispatch_typed_action(PendingUserQueryBlockAction::SelectText)
+        })
+        .on_selection_right_click(move |ctx, position| {
+            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
+                BlockListMenuSource::RichContentTextRightClick {
+                    rich_content_view_id: view_id,
+                    position_in_rich_content: position,
+                },
+            ))
+        });
+
+        if FeatureFlag::RectSelection.is_enabled() {
+            text_column = text_column.should_support_rect_select();
+        }
 
         let mut buttons_column = Flex::column().with_spacing(2.);
         if let Some(close_button) = &self.close_button {
@@ -157,7 +228,7 @@ impl View for PendingUserQueryBlock {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(avatar)
-            .with_child(Expanded::new(1., text_column).finish());
+            .with_child(Expanded::new(1., text_column.finish()).finish());
         if self.close_button.is_some() || self.send_now_button.is_some() {
             let buttons = Container::new(buttons_column.finish())
                 .with_margin_left(8.)

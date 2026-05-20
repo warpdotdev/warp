@@ -125,6 +125,9 @@ pub struct Menu<A: Action + Clone = ()> {
     /// Optional overrides for the depth-0 menu content padding.
     content_top_padding_override: Option<f32>,
     content_bottom_padding_override: Option<f32>,
+    /// Optional saved-position id whose last rendered width should override
+    /// the configured submenu width while this menu is rendered.
+    width_match_position_id: Option<String>,
     /// If false, selecting a menu item updates selection and emits menu events
     /// without dispatching the item's typed action directly from the menu.
     dispatch_item_actions: bool,
@@ -415,7 +418,8 @@ pub struct MenuItemFields<A: Action + Clone> {
     tooltip: Option<String>,
     tooltip_position: MenuTooltipPosition,
     right_side_label: Option<RightSideLabel>,
-    /// Optional override for the background color rendered when this item is
+    right_side_icon: Option<(icons::Icon, Option<Fill>)>,
+    /// Optional override for the background color
     /// hovered or selected. When `None`, the default hover/selected background
     /// from the theme is used (accent or dark overlay, depending on
     /// `highlight_on_hover`).
@@ -465,6 +469,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -494,6 +499,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -526,13 +532,14 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
         }
     }
 
-    /// Creates a new menu item with vertically stacked primary and secondary text.
+    /// Creates a new menu item with vertically stacked
     /// This is useful for items that need both a title and description/subtitle,
     /// such as slash commands with their descriptions.
     pub fn new_with_stacked_label<T: Into<String>>(title: T, subtitle: T) -> Self {
@@ -561,6 +568,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -594,6 +602,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -626,6 +635,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -655,6 +665,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: None,
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
+            right_side_icon: None,
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -700,6 +711,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: self.tooltip,
             tooltip_position: self.tooltip_position,
             right_side_label: self.right_side_label,
+            right_side_icon: self.right_side_icon,
             override_hover_background_color: self.override_hover_background_color,
             icon_size_override: self.icon_size_override,
             clip_config: self.clip_config,
@@ -834,6 +846,11 @@ impl<A: Action + Clone> MenuItemFields<A> {
         self
     }
 
+    pub fn with_right_side_icon(mut self, icon: icons::Icon) -> Self {
+        self.right_side_icon = Some((icon, None));
+        self
+    }
+
     pub fn into_item(self) -> MenuItem<A> {
         MenuItem::Item(self)
     }
@@ -964,6 +981,32 @@ impl<A: Action + Clone> MenuItemFields<A> {
         } else {
             None
         }
+    }
+
+    fn render_right_side_icon(
+        &self,
+        appearance: &Appearance,
+        color: Fill,
+    ) -> Option<Box<dyn Element>> {
+        let (icon, override_color) = self.right_side_icon.as_ref()?;
+        let icon_size = self
+            .icon_size_override
+            .unwrap_or_else(|| appearance.ui_font_size());
+        let icon_color = override_color.unwrap_or(color);
+        Some(
+            Shrinkable::new(
+                1.,
+                Container::new(
+                    ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+                        .with_width(icon_size)
+                        .with_height(icon_size)
+                        .finish(),
+                )
+                .with_margin_left(icon_size / 2.)
+                .finish(),
+            )
+            .finish(),
+        )
     }
 
     fn render_right_aligned_chevron(
@@ -1155,6 +1198,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
                         text_background_color,
                         appearance,
                     ));
+                }
+
+                if let Some(right_icon) = self.render_right_side_icon(appearance, primary_color) {
+                    label_row.add_child(right_icon);
                 }
             }
 
@@ -2100,6 +2147,7 @@ impl<A: Action + Clone> Menu<A> {
             pinned_header_builder: None,
             content_top_padding_override: None,
             content_bottom_padding_override: None,
+            width_match_position_id: None,
             dispatch_item_actions: true,
         }
     }
@@ -2181,6 +2229,9 @@ impl<A: Action + Clone> Menu<A> {
 
     pub fn set_width(&mut self, width: f32) {
         self.submenu_width = width;
+    }
+    pub fn set_width_match_position_id(&mut self, position_id: Option<String>) {
+        self.width_match_position_id = position_id;
     }
 
     pub fn set_border(&mut self, border: Option<Border>) {
@@ -2733,13 +2784,24 @@ impl<A: Action + Clone> View for Menu<A> {
             .as_ref()
             .filter(|st| st.is_suppressing())
             .and(self.menu.hovered_row_index);
+        let window_id = self.window_id(app);
+        let submenu_width = self
+            .width_match_position_id
+            .as_deref()
+            .and_then(|position_id| {
+                window_id.and_then(|window_id| {
+                    app.element_position_by_id_at_last_frame(window_id, position_id)
+                })
+            })
+            .map(|bounds| bounds.width())
+            .unwrap_or(self.submenu_width);
 
         self.menu.render(
             self.border,
-            self.submenu_width,
+            submenu_width,
             self.with_drop_shadow,
             self.origin,
-            self.window_id(app),
+            window_id,
             self.prevent_interaction_with_other_elements,
             self.dispatch_item_actions,
             self.ignore_hover_when_covered,

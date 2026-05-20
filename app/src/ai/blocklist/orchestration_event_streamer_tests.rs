@@ -9,6 +9,7 @@ use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+use mockall::predicate::eq;
 use std::sync::Arc;
 use warpui::App;
 
@@ -155,6 +156,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         run_id: None,
         autoexecute_override: None,
         last_event_sequence: Some(42),
+        pinned: false,
     };
     let conversation =
         AIConversation::new_restored(AIConversationId::new(), vec![task], Some(data))
@@ -301,6 +303,138 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
 }
 
 #[test]
+fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
+    use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+    use crate::persistence::ModelEvent;
+    use crate::server::server_api::ai::MockAIClient;
+    use crate::server::server_api::ServerApiProvider;
+    use crate::test_util::settings::initialize_settings_for_tests;
+    use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+    use std::sync::Arc;
+    use warpui::App;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        initialize_settings_for_tests(&mut app);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let run_id = "550e8400-e29b-41d4-a716-446655440201".to_string();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(run_id.clone());
+        let conversation_id: AIConversationId = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .with(eq(run_id.clone()), eq(42))
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.update(&mut app, |me, ctx| {
+            me.streams.entry(conversation_id).or_default().event_cursor = 42;
+            me.persist_event_cursor(conversation_id, 17, ctx);
+        });
+
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.streams
+                    .get(&conversation_id)
+                    .map(|stream| stream.event_cursor),
+                Some(42)
+            );
+        });
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.last_event_sequence()),
+                Some(42)
+            );
+        });
+
+        let _ = receiver.recv_timeout(std::time::Duration::from_secs(1));
+    });
+}
+
+#[test]
+fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
+    use crate::ai::agent::conversation::AIConversation;
+    use crate::ai::agent_events::AgentMessageEventMetadata;
+    use crate::server::server_api::ai::{AIClient, MockAIClient};
+    use crate::server::server_api::ServerApiProvider;
+    use std::sync::Arc;
+    use warpui::App;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_last_event_sequence(17);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.update(&mut app, |me, ctx| {
+            me.streams.entry(conversation_id).or_default().event_cursor = 17;
+            me.finish_dormant_claude_wake_listener(
+                conversation_id,
+                1,
+                Ok(Some(AgentMessageEventMetadata {
+                    sequence: 42,
+                    message_id: "message-123".to_string(),
+                    occurred_at: "2026-01-01T00:00:01Z".to_string(),
+                })),
+                ctx,
+            );
+        });
+
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.streams
+                    .get(&conversation_id)
+                    .map(|stream| stream.event_cursor),
+                Some(17)
+            );
+        });
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.last_event_sequence()),
+                Some(17)
+            );
+        });
+    });
+}
+
+#[test]
 fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
@@ -391,7 +525,21 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         consumer.on_event(ignored_event).await.unwrap(),
         AgentEventConsumerControlFlow::Continue
     );
-    assert_eq!(consumer.wake_sequence, None);
+    assert_eq!(consumer.wake_message, None);
+
+    let ignored_same_run_lifecycle = AgentRunEvent {
+        event_type: "run_restarted".to_string(),
+        run_id: "target-run".to_string(),
+        ref_id: None,
+        execution_id: None,
+        occurred_at: "2026-01-01T00:00:00Z".to_string(),
+        sequence: 7,
+    };
+    assert_eq!(
+        consumer.on_event(ignored_same_run_lifecycle).await.unwrap(),
+        AgentEventConsumerControlFlow::Continue
+    );
+    assert_eq!(consumer.wake_message, None);
 
     // The wake consumer uses the default no-op cursor persistence hook; it
     // should not persist SQLite or server cursors while waiting to wake Claude.
@@ -409,7 +557,10 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         consumer.on_event(target_event).await.unwrap(),
         AgentEventConsumerControlFlow::Stop
     );
-    assert_eq!(consumer.wake_sequence, Some(8));
+    let wake_message = consumer.wake_message.expect("wake message");
+    assert_eq!(wake_message.sequence, 8);
+    assert_eq!(wake_message.message_id, "message-2");
+    assert_eq!(wake_message.occurred_at, "2026-01-01T00:00:01Z");
 }
 
 #[test]

@@ -30,6 +30,7 @@ use crate::ai::agent::{
     PassiveSuggestionTriggerType, RunningCommand,
 };
 use crate::ai::agent::{DocumentContentAttachmentSource, FileContext};
+use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::ClaudeHarness;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -376,19 +377,20 @@ enum FollowUpTrigger {
     Auto,
     UserRequested,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalClaudeWakeTrigger {
     PendingEvents,
-    WakeOnlyStream,
+    WakeOnlyStream {
+        wake_message: AgentMessageEventMetadata,
+    },
 }
 
 impl LocalClaudeWakeTrigger {
     #[cfg(not(target_family = "wasm"))]
-    fn requires_pending_events(self) -> bool {
+    fn requires_pending_events(&self) -> bool {
         match self {
             Self::PendingEvents => true,
-            Self::WakeOnlyStream => false,
+            Self::WakeOnlyStream { .. } => false,
         }
     }
 }
@@ -578,7 +580,9 @@ impl BlocklistAIController {
 
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
-        if FeatureFlag::Orchestration.is_enabled() {
+        if FeatureFlag::OrchestrationV2.is_enabled() {
+            // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path once
+            // v2 event streaming no longer drains through OrchestrationEventService.
             let svc = OrchestrationEventService::handle(ctx);
             ctx.subscribe_to_model(&svc, move |me, event, ctx| {
                 let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
@@ -588,9 +592,11 @@ impl BlocklistAIController {
         if FeatureFlag::OrchestrationV2.is_enabled() {
             let streamer = OrchestrationEventStreamer::handle(ctx);
             ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
-                let OrchestrationEventStreamerEvent::DormantClaudeWakeReady { conversation_id } =
-                    event;
-                me.handle_dormant_claude_wake_ready(*conversation_id, ctx);
+                let OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
+                    conversation_id,
+                    wake_message,
+                } = event;
+                me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
             });
         }
         Self {
@@ -671,6 +677,21 @@ impl BlocklistAIController {
         }
 
         let (query, user_query_mode) = extract_user_query_mode(query);
+
+        // Attribute /orchestrate queries to the slash-command entry surface.
+        if matches!(user_query_mode, UserQueryMode::Orchestrate) {
+            send_telemetry_from_ctx!(
+                super::telemetry::BlocklistOrchestrationTelemetryEvent::OrchestrationEntered(
+                    super::telemetry::OrchestrationEnteredEvent {
+                        conversation_id,
+                        plan_id: None,
+                        entry_source:
+                            super::telemetry::OrchestrationEntrySource::SlashCommandOrchestrate,
+                    }
+                ),
+                ctx
+            );
+        }
 
         let should_prepend_finished_action_results = matches!(
             input_query.input_query,
@@ -1494,7 +1515,9 @@ impl BlocklistAIController {
         // subagent is or will be active — events will be delivered via the idle
         // path once the subagent session ends.
         let mut has_piggybacked_events = false;
-        if FeatureFlag::Orchestration.is_enabled() {
+        if FeatureFlag::OrchestrationV2.is_enabled() {
+            // TODO(QUALITY-733): Remove the legacy event-service piggyback path once v2 event
+            // delivery no longer reuses OrchestrationEventService queues.
             if will_trigger_server_subagent || has_active_subagent {
                 log::debug!(
                     "Skipping event piggyback for conversation {conversation_id:?}: \
@@ -1622,6 +1645,11 @@ impl BlocklistAIController {
             .cloned()
             .map(PathBuf::from);
         let task_id = conversation.task_id();
+        let wake_message_for_prepare = match &trigger {
+            LocalClaudeWakeTrigger::PendingEvents => None,
+            LocalClaudeWakeTrigger::WakeOnlyStream { wake_message } => Some(wake_message.clone()),
+        };
+        let trigger_for_callback = trigger.clone();
 
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let handle = ctx.spawn(
@@ -1634,6 +1662,7 @@ impl BlocklistAIController {
                     conversation,
                     parent_conversation,
                     working_dir,
+                    wake_message_for_prepare,
                 )
                 .await
             },
@@ -1641,6 +1670,20 @@ impl BlocklistAIController {
                 me.pending_local_claude_wakes.remove(&conversation_id);
                 match result {
                     Ok(Some(command)) => {
+                        if let LocalClaudeWakeTrigger::WakeOnlyStream { wake_message } =
+                            &trigger_for_callback
+                        {
+                            OrchestrationEventStreamer::handle(ctx).update(
+                                ctx,
+                                |streamer, ctx| {
+                                    streamer.persist_dormant_claude_wake_cursor(
+                                        conversation_id,
+                                        wake_message,
+                                        ctx,
+                                    );
+                                },
+                            );
+                        }
                         log::info!(
                             "Executing dormant Claude wake command: conversation_id={conversation_id:?} task_id={task_id:?}"
                         );
@@ -1660,18 +1703,22 @@ impl BlocklistAIController {
                         });
                     }
                     Ok(None) => {
-                        match trigger {
+                        match &trigger_for_callback {
                             LocalClaudeWakeTrigger::PendingEvents => {
                                 log::info!(
                                     "Falling back to generic pending-event injection after dormant Claude wake eligibility check: conversation_id={conversation_id:?} task_id={task_id:?}"
                                 );
                                 me.inject_pending_events_for_request(conversation_id, ctx);
                             }
-                            LocalClaudeWakeTrigger::WakeOnlyStream => {
+                            LocalClaudeWakeTrigger::WakeOnlyStream { wake_message } => {
                                 log::info!(
                                     "Retrying wake-only dormant Claude eligibility check: conversation_id={conversation_id:?} task_id={task_id:?}"
                                 );
-                                me.schedule_dormant_claude_wake_ready_retry(conversation_id, ctx);
+                                me.schedule_dormant_claude_wake_ready_retry(
+                                    conversation_id,
+                                    wake_message.clone(),
+                                    ctx,
+                                );
                             }
                         }
                     }
@@ -1679,12 +1726,16 @@ impl BlocklistAIController {
                         log::warn!(
                             "Failed to prepare dormant Claude wake command for {conversation_id:?} task_id={task_id:?}: {err:#}"
                         );
-                        match trigger {
+                        match &trigger_for_callback {
                             LocalClaudeWakeTrigger::PendingEvents => {
                                 me.schedule_pending_events_ready_retry(conversation_id, ctx);
                             }
-                            LocalClaudeWakeTrigger::WakeOnlyStream => {
-                                me.schedule_dormant_claude_wake_ready_retry(conversation_id, ctx);
+                            LocalClaudeWakeTrigger::WakeOnlyStream { wake_message } => {
+                                me.schedule_dormant_claude_wake_ready_retry(
+                                    conversation_id,
+                                    wake_message.clone(),
+                                    ctx,
+                                );
                             }
                         }
                     }
@@ -1714,12 +1765,13 @@ impl BlocklistAIController {
     fn schedule_dormant_claude_wake_ready_retry(
         &mut self,
         conversation_id: AIConversationId,
+        wake_message: AgentMessageEventMetadata,
         ctx: &mut ModelContext<Self>,
     ) {
         ctx.spawn(
             async move { Timer::after(Duration::from_secs(2)).await },
             move |me, _, ctx| {
-                me.handle_dormant_claude_wake_ready(conversation_id, ctx);
+                me.handle_dormant_claude_wake_ready(conversation_id, wake_message.clone(), ctx);
             },
         );
     }
@@ -1791,11 +1843,12 @@ impl BlocklistAIController {
     fn handle_dormant_claude_wake_ready(
         &mut self,
         conversation_id: AIConversationId,
+        wake_message: AgentMessageEventMetadata,
         ctx: &mut ModelContext<Self>,
     ) {
         if !self.maybe_prepare_local_claude_wake(
             conversation_id,
-            LocalClaudeWakeTrigger::WakeOnlyStream,
+            LocalClaudeWakeTrigger::WakeOnlyStream { wake_message },
             ctx,
         ) {
             log::info!(
@@ -2580,7 +2633,7 @@ impl BlocklistAIController {
                         }
                     }
                     Err(e) => {
-                        if matches!(e.as_ref(), AIApiError::QuotaLimit) {
+                        if matches!(e.as_ref(), AIApiError::QuotaLimit { .. }) {
                             // If the error is a quota limit, we want to refresh workspace metadata
                             // So the current state of AI overages is immediately up to date.
                             TeamUpdateManager::handle(ctx).update(
@@ -2726,7 +2779,7 @@ impl BlocklistAIController {
 
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
-                    if FeatureFlag::Orchestration.is_enabled() {
+                    if FeatureFlag::OrchestrationV2.is_enabled() {
                         self.handle_pending_events_ready(conversation_id, ctx);
                     }
                 }
@@ -2843,7 +2896,7 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        history_model.update(ctx, |history_model, _| {
+        history_model.update(ctx, |history_model, ctx| {
             // Update conversation cost and usage information before updating and
             // persisting the conversation.
             history_model.update_conversation_cost_and_usage_for_request(
@@ -2855,6 +2908,7 @@ impl BlocklistAIController {
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,
+                ctx,
             );
         });
 
@@ -2901,7 +2955,9 @@ impl BlocklistAIController {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(_)) => {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::QuotaLimit,
+                        RenderableAIError::QuotaLimit {
+                            user_display_message: None,
+                        },
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,

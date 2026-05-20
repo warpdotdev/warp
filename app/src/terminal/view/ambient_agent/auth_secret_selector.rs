@@ -119,12 +119,8 @@ impl AuthSecretSelector {
             MenuEvent::ItemSelected => {}
         });
 
-        let new_type_sidecar = ctx.add_typed_action_view(|_ctx| {
-            Menu::new()
-                .with_width(SIDECAR_WIDTH)
-                .with_drop_shadow()
-                .prevent_interaction_with_other_elements()
-        });
+        let new_type_sidecar = ctx
+            .add_typed_action_view(|_ctx| Menu::new().with_width(SIDECAR_WIDTH).with_drop_shadow());
 
         ctx.subscribe_to_view(&new_type_sidecar, |me, _, event, ctx| match event {
             MenuEvent::Close { .. } => {
@@ -152,7 +148,8 @@ impl AuthSecretSelector {
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
                 HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretCreated { .. } => {
+                | HarnessAvailabilityEvent::AuthSecretCreated { .. }
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
                     me.refresh_menu(ctx);
                     me.refresh_button(ctx);
                 }

@@ -287,6 +287,38 @@ pub fn test_long_running_block_bottom_padding() {
     });
 }
 
+#[test]
+pub fn empty_pre_bootstrap_block_is_not_long_running() {
+    warpui::r#async::block_on(async {
+        let mut block = TestBlockBuilder::new()
+            .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+            .build();
+
+        block.start();
+
+        let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
+        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+
+        assert!(!block.is_active_and_long_running());
+    });
+}
+
+#[test]
+pub fn non_empty_pre_bootstrap_block_can_be_long_running() {
+    warpui::r#async::block_on(async {
+        let mut block = TestBlockBuilder::new()
+            .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+            .build();
+
+        block.start();
+        block.input('x');
+
+        let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
+        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+
+        assert!(block.is_active_and_long_running());
+    });
+}
 // Tests that the command grid has a non-zero height even if `preexec` is never called.
 #[test]
 pub fn test_precmd_no_preexec() {
