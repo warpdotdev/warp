@@ -3,9 +3,9 @@ use super::features::external_editor::ExternalEditorView;
 use super::{
     flags,
     settings_page::{
-        build_sub_header, render_body_item, render_separator, Category, MatchData, PageType,
-        SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
-        TOGGLE_BUTTON_RIGHT_PADDING,
+        build_sub_header, render_body_item, render_dropdown_item, render_separator, Category,
+        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+        HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
     },
     LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
 };
@@ -20,8 +20,10 @@ use crate::{
     appearance::Appearance,
     code::{
         buffer_location::LocalOrRemotePath,
+        diff_layout::DiffLayout,
         lsp_telemetry::{LspControlActionType, LspEnablementSource, LspTelemetryEvent},
     },
+    code_review::telemetry_event::{CodeReviewDiffLayout, CodeReviewTelemetryEvent},
     send_telemetry_from_ctx,
     settings::{AISettings, CodeSettings},
     terminal::general_settings::GeneralSettings,
@@ -32,7 +34,7 @@ use crate::{
     },
     view_components::{
         action_button::{ActionButton, SecondaryTheme},
-        DismissibleToast,
+        DismissibleToast, Dropdown, DropdownItem,
     },
     workspace::tab_settings::TabSettings,
     workspace::ToastStack,
@@ -54,6 +56,7 @@ use lsp::{LspManagerModel, LspManagerModelEvent, LspServerModel, LspState};
 use pathfinder_color::ColorU;
 #[cfg(not(target_family = "wasm"))]
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
+use settings::Setting as _;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -240,6 +243,7 @@ pub struct CodeSettingsPageView {
     suggested_server_statuses: HashMap<(PathBuf, LSPServerType), LspRepoStatus>,
     #[cfg(feature = "local_fs")]
     external_editor_view: Option<ViewHandle<ExternalEditorView>>,
+    diff_layout_dropdown: ViewHandle<Dropdown<CodeSettingsPageAction>>,
 }
 
 impl CodeSettingsPageView {
@@ -394,6 +398,22 @@ impl CodeSettingsPageView {
 
         #[cfg(feature = "local_fs")]
         let external_editor_view;
+        let selected_diff_layout = *CodeSettings::as_ref(ctx).diff_layout;
+        let diff_layout_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            Self::init_diff_layout_dropdown(selected_diff_layout, &mut dropdown, ctx);
+            dropdown
+        });
+        ctx.subscribe_to_model(
+            &CodeSettings::handle(ctx),
+            |me, code_settings, _event, ctx| {
+                let selected_diff_layout = *code_settings.as_ref(ctx).diff_layout;
+                me.diff_layout_dropdown.update(ctx, |dropdown, ctx| {
+                    Self::init_diff_layout_dropdown(selected_diff_layout, dropdown, ctx);
+                });
+                ctx.notify();
+            },
+        );
         let page = if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
             #[cfg(feature = "local_fs")]
             {
@@ -415,6 +435,7 @@ impl CodeSettingsPageView {
             code_editor_review_widgets.extend([
                 Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
                     as Box<dyn SettingsWidget<View = Self>>,
+                Box::new(DiffLayoutCodeWidget),
                 Box::new(CodeReviewPanelToggleWidget::default()),
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
@@ -457,9 +478,30 @@ impl CodeSettingsPageView {
             suggested_server_statuses: HashMap::new(),
             #[cfg(feature = "local_fs")]
             external_editor_view,
+            diff_layout_dropdown,
         }
     }
 
+    fn init_diff_layout_dropdown(
+        selected_layout: DiffLayout,
+        dropdown: &mut Dropdown<CodeSettingsPageAction>,
+        ctx: &mut ViewContext<Dropdown<CodeSettingsPageAction>>,
+    ) {
+        dropdown.set_items(
+            vec![
+                DropdownItem::new(
+                    DiffLayout::Inline.label(),
+                    CodeSettingsPageAction::SetDiffLayout(DiffLayout::Inline),
+                ),
+                DropdownItem::new(
+                    DiffLayout::SideBySide.label(),
+                    CodeSettingsPageAction::SetDiffLayout(DiffLayout::SideBySide),
+                ),
+            ],
+            ctx,
+        );
+        dropdown.set_selected_by_name(selected_layout.label(), ctx);
+    }
     /// Set the active subpage and rebuild the page to show only the relevant widgets.
     pub fn set_active_subpage(
         &mut self,
@@ -498,6 +540,7 @@ impl CodeSettingsPageView {
                         widgets.extend([
                             Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
                                 as Box<dyn SettingsWidget<View = Self>>,
+                            Box::new(DiffLayoutCodeWidget),
                             Box::new(CodeReviewPanelToggleWidget::default()),
                             Box::new(CodeReviewDiffStatsToggleWidget::default()),
                             Box::new(ProjectExplorerToggleWidget::default()),
@@ -547,6 +590,7 @@ impl CodeSettingsPageView {
             code_editor_review_widgets.extend([
                 Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
                     as Box<dyn SettingsWidget<View = Self>>,
+                Box::new(DiffLayoutCodeWidget),
                 Box::new(CodeReviewPanelToggleWidget::default()),
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
@@ -668,6 +712,7 @@ pub enum CodeSettingsPageAction {
     ToggleCodeReviewPanel,
     ToggleShowCodeReviewDiffStats,
     ToggleAutoOpenCodeReviewPane,
+    SetDiffLayout(DiffLayout),
     ToggleProjectExplorer,
     ToggleGlobalSearch,
     /// Install (if needed) and enable a suggested LSP server.
@@ -884,6 +929,25 @@ impl TypedActionView for CodeSettingsPageView {
                             *GeneralSettings::as_ref(ctx)
                                 .auto_open_code_review_pane_on_first_agent_change
                         )
+                    },
+                    ctx
+                );
+                ctx.notify();
+            }
+            CodeSettingsPageAction::SetDiffLayout(layout) => {
+                let previous = *CodeSettings::as_ref(ctx).diff_layout;
+                if previous == *layout {
+                    return;
+                }
+
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.diff_layout.set_value(*layout, ctx));
+                });
+
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::DiffLayoutChanged {
+                        from: CodeReviewDiffLayout::from(previous),
+                        to: CodeReviewDiffLayout::from(*layout),
                     },
                     ctx
                 );
@@ -2638,6 +2702,37 @@ impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
                 })
                 .finish(),
             Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
+        )
+    }
+}
+
+struct DiffLayoutCodeWidget;
+
+impl SettingsWidget for DiffLayoutCodeWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "diff layout inline side by side code review split view"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !FeatureFlag::SideBySideDiffLayout.is_enabled() {
+            return Empty::new().finish();
+        }
+
+        render_dropdown_item(
+            appearance,
+            "Diff layout",
+            None,
+            None,
+            LocalOnlyIconState::Hidden,
+            None,
+            &view.diff_layout_dropdown,
         )
     }
 }

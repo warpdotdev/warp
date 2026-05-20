@@ -648,6 +648,7 @@ default = [
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
 ]
+side_by_side_diff_layout = []
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
 dhat_heap_profiling = ["dep:dhat"]

@@ -48,6 +48,7 @@ use crate::{
         },
         editor_state::CodeReviewEditorState,
         hidden_lines::calculate_hidden_lines,
+        hunk_alignment::{HunkAlignment, PaneLine, PaneLineKind},
         telemetry_event::{
             AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent,
             GitButtonKind, PaneStateChange,
@@ -123,11 +124,11 @@ use warpui::{
         },
         resizable_state_handle, Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
         ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
-        DragBarSide, Element, Empty, EventHandler, Flex, List, ListState, MainAxisAlignment,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-        Resizable, ResizableStateHandle, ScrollOffset, ScrollStateHandle, ScrollbarWidth, Stack,
-        Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        DragBarSide, Element, Empty, EventHandler, Expanded, Flex, List, ListState,
+        MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+        ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds,
+        Radius, Rect, Resizable, ResizableStateHandle, ScrollOffset, ScrollStateHandle,
+        ScrollbarWidth, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
     keymap::Keystroke,
     ui_components::{
@@ -151,8 +152,9 @@ use warpui::{
     ModelHandle, WeakViewHandle,
 };
 
+use crate::code::diff_layout::DiffLayout;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
-use crate::settings::AISettings;
+use crate::settings::{AISettings, CodeSettings};
 use crate::settings_view::SettingsSection;
 use crate::ui_components::{
     blended_colors::{neutral_2, neutral_3},
@@ -4222,6 +4224,176 @@ impl CodeReviewView {
         )
         .finish()
     }
+    fn effective_diff_layout(app: &AppContext) -> DiffLayout {
+        if FeatureFlag::SideBySideDiffLayout.is_enabled() {
+            *CodeSettings::as_ref(app).diff_layout
+        } else {
+            DiffLayout::Inline
+        }
+    }
+
+    fn render_side_by_side_header_cell(
+        label: &'static str,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        Container::new(
+            Text::new(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
+        )
+        .with_horizontal_padding(8.)
+        .with_vertical_padding(4.)
+        .finish()
+    }
+
+    fn render_side_by_side_pane_line(line: &PaneLine, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let line_number = match line {
+            PaneLine::Line { line_number, .. } => line_number.to_string(),
+            PaneLine::Gap { .. } => " ".to_string(),
+        };
+        let text = if line.text().is_empty() {
+            " ".to_string()
+        } else {
+            line.text().to_string()
+        };
+        let kind = line.kind();
+        let text_color = match kind {
+            Some(PaneLineKind::Add) => add_color(appearance),
+            Some(PaneLineKind::Delete) => remove_color(appearance),
+            Some(PaneLineKind::Context) | None => theme.main_text_color(theme.background()).into(),
+        };
+        let mut background = match kind {
+            Some(PaneLineKind::Add) => Some(add_color(appearance)),
+            Some(PaneLineKind::Delete) => Some(remove_color(appearance)),
+            Some(PaneLineKind::Context) | None => None,
+        };
+        if let Some(color) = &mut background {
+            color.a = 24;
+        }
+
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        row.add_child(
+            ConstrainedBox::new(
+                Text::new(
+                    line_number,
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(theme.disabled_text_color(theme.background()).into())
+                .with_line_height_ratio(CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO)
+                .soft_wrap(false)
+                .finish(),
+            )
+            .with_width(44.)
+            .finish(),
+        );
+        row.add_child(
+            Shrinkable::new(
+                1.,
+                Text::new(
+                    text,
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(text_color)
+                .with_line_height_ratio(CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO)
+                .with_clip(ClipConfig::end())
+                .soft_wrap(false)
+                .finish(),
+            )
+            .finish(),
+        );
+
+        let mut container = Container::new(row.finish())
+            .with_horizontal_padding(8.)
+            .with_vertical_padding(1.);
+        if let Some(color) = background {
+            container = container.with_background(warp_core::ui::theme::Fill::Solid(color));
+        }
+        container.finish()
+    }
+
+    fn render_side_by_side_row(
+        baseline: &PaneLine,
+        modified: &PaneLine,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Self::render_side_by_side_pane_line(baseline, appearance),
+                )
+                .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(Rect::new().with_background(theme.surface_3()).finish())
+                    .with_width(1.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Self::render_side_by_side_pane_line(modified, appearance),
+                )
+                .finish(),
+            )
+            .finish()
+    }
+
+    fn render_side_by_side_file_content(
+        file: &FileState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let alignment = HunkAlignment::from_diff_hunks(file.file_diff.hunks.as_ref());
+        let theme = appearance.theme();
+
+        let header = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Self::render_side_by_side_header_cell("Base", appearance),
+                )
+                .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(Rect::new().with_background(theme.surface_3()).finish())
+                    .with_width(1.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Self::render_side_by_side_header_cell("Modified", appearance),
+                )
+                .finish(),
+            )
+            .finish();
+
+        let mut rows = Flex::column().with_main_axis_size(MainAxisSize::Max);
+        rows.add_child(header);
+        for row in alignment.rows() {
+            rows.add_child(Self::render_side_by_side_row(
+                &row.baseline,
+                &row.modified,
+                appearance,
+            ));
+        }
+
+        Self::styled_file_content_container(rows.finish(), theme)
+    }
 
     /// Renders the header with diff mode dropdown and overflow menu.
     fn render_header(
@@ -4873,7 +5045,7 @@ impl CodeReviewView {
         if file.is_expanded {
             stack.add_child(
                 SavePosition::new(
-                    Container::new(self.render_file_content(file, appearance))
+                    Container::new(self.render_file_content(file, appearance, app))
                         .with_margin_top(
                             if is_item_being_scrolled && !is_first_item_with_no_scroll {
                                 // This is the height of the header bar needs to be present. Otherwise,
@@ -5236,7 +5408,12 @@ impl CodeReviewView {
     }
 
     /// Renders the file content (hunks for text files using LocalCodeEditorView, placeholder for binary)
-    fn render_file_content(&self, file: &FileState, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_file_content(
+        &self,
+        file: &FileState,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let diff_size = file.file_diff.size;
@@ -5286,6 +5463,8 @@ impl CodeReviewView {
                 .finish(),
                 theme,
             )
+        } else if Self::effective_diff_layout(app).is_side_by_side() {
+            Self::render_side_by_side_file_content(file, appearance)
         } else if let Some(editor_state) = file.editor_state.as_ref() {
             Hoverable::new(editor_state.editor_mouse_state.clone(), |_| {
                 Container::new(ChildView::new(&editor_state.editor).finish())
