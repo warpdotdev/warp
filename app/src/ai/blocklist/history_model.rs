@@ -595,6 +595,18 @@ impl BlocklistAIHistoryModel {
             .insert(ServerConversationToken::new(token), conversation_id);
     }
 
+    /// Sets a live conversation's server token, updates the reverse index,
+    /// and persists the rebound token to SQLite for restore/reopen flows.
+    pub fn set_server_conversation_token_for_conversation_and_persist(
+        &mut self,
+        conversation_id: AIConversationId,
+        token: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.set_server_conversation_token_for_conversation(conversation_id, token);
+        self.persist_conversation_state(conversation_id, ctx);
+    }
+
     /// Sets server metadata for a conversation and emits the ConversationMetadataUpdated event.
     /// This helper ensures we don't forget to emit the event when updating metadata.
     /// Updates in-memory conversations, or historical metadata if the conversation isn't loaded.
