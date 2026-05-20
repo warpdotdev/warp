@@ -32,8 +32,6 @@ use cvt::cvt;
 use nix::sys::socket;
 use parking_lot::Mutex;
 
-use crate::init_feature_flags;
-
 pub use self::client::TerminalServerClient;
 
 use super::spawner::PtyHandle;
@@ -61,7 +59,7 @@ pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
     // We initialize context-independent feature flags early, as the terminal
     // server process may need to reference them. User-controlled flags are overridden
     // soon after.
-    init_feature_flags();
+    crate::features::init_feature_flags();
     let event_loop = event_loop::EventLoop::new(args);
     event_loop.run()
 }

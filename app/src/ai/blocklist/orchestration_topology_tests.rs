@@ -1,11 +1,13 @@
 use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 use warpui::{App, EntityId, ModelHandle};
 
 #[test]
 fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -76,6 +78,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
 #[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -131,6 +134,7 @@ fn build_orchestrator_with_two_children(
 #[test]
 fn aggregated_status_is_in_progress_when_any_descendant_is_running() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
@@ -171,6 +175,7 @@ fn aggregated_status_is_in_progress_when_any_descendant_is_running() {
 #[test]
 fn aggregated_status_prefers_blocked_over_terminal_states() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
@@ -215,6 +220,7 @@ fn aggregated_status_prefers_blocked_over_terminal_states() {
 #[test]
 fn aggregated_status_falls_back_to_worst_terminal_outcome() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
@@ -254,6 +260,7 @@ fn aggregated_status_falls_back_to_worst_terminal_outcome() {
 #[test]
 fn aggregated_status_is_cancelled_when_no_errors_present() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
@@ -291,6 +298,7 @@ fn aggregated_status_is_cancelled_when_no_errors_present() {
 #[test]
 fn aggregated_status_is_success_when_orchestrator_and_all_descendants_succeeded() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
@@ -328,6 +336,7 @@ fn aggregated_status_is_success_when_orchestrator_and_all_descendants_succeeded(
 #[test]
 fn aggregated_status_respects_orchestrator_own_in_progress_state() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);

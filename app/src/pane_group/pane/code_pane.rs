@@ -1,8 +1,6 @@
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
 
-#[cfg(feature = "local_fs")]
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::{
     app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents},
     code::{
@@ -11,8 +9,6 @@ use crate::{
     },
     pane_group::PaneGroup,
 };
-#[cfg(feature = "local_fs")]
-use std::path::PathBuf;
 
 use super::{
     DetachType, PaneConfiguration, PaneContent, PaneId, PaneView, ShareableLink, ShareableLinkError,
@@ -138,18 +134,17 @@ impl PaneContent for CodePane {
                         model.active_file_changed(location.clone(), ctx);
                     });
 
-                    // Track the opened file in the OpenedFilesModel (local files only)
+                    // Track the opened file in the OpenedFilesModel
                     #[cfg(feature = "local_fs")]
-                    if let LocalOrRemotePath::Local(file_path) = location {
+                    {
                         use crate::code::opened_files::OpenedFilesModel;
                         use repo_metadata::repositories::DetectedRepositories;
 
-                        if let Some(repo_path) = DetectedRepositories::as_ref(ctx)
-                            .get_root_for_path(&LocalOrRemotePath::Local(file_path.to_path_buf()))
-                            .and_then(|r| PathBuf::try_from(r).ok())
+                        if let Some(repo_root) =
+                            DetectedRepositories::as_ref(ctx).get_root_for_path(location)
                         {
                             OpenedFilesModel::handle(ctx).update(ctx, |opened_files, ctx| {
-                                opened_files.file_opened(repo_path, file_path.clone(), ctx);
+                                opened_files.file_opened(repo_root, location, ctx);
                             });
                         }
                     }

@@ -8,6 +8,16 @@ pub fn initialize_settings_for_tests(app: &mut App) {
 }
 
 #[cfg(test)]
+pub fn initialize_history_persistence_for_tests(app: &mut App) {
+    use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+
+    initialize_settings_for_tests(app);
+
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+}
+
+#[cfg(test)]
 pub fn initialize_settings_for_tests_with_mode(
     app: &mut App,
     mode: warp_core::execution_mode::ExecutionMode,

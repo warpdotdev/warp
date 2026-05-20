@@ -56,6 +56,7 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
@@ -69,12 +70,12 @@ vim = { path = "crates/vim" }
 virtual-fs = { path = "crates/virtual_fs" }
 voice_input = { path = "crates/voice_input" }
 warp = { path = "app" }
+warp_assets = { path = "crates/warp_assets" }
 warp_cli = { path = "crates/warp_cli" }
 warp_completer = { path = "crates/warp_completer" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_features = { path = "crates/warp_features" }
-remote_server = { path = "crates/remote_server" }
 warp_files = { path = "crates/warp_files" }
 warp_graphql = { path = "crates/graphql" }
 warp_graphql_schema = { path = "crates/warp_graphql_schema" }

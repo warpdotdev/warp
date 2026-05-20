@@ -5232,7 +5232,7 @@ impl TelemetryEvent {
     #[cfg(not(target_family = "wasm"))]
     pub fn print_telemetry_events_json() -> anyhow::Result<()> {
         // We initialize the feature flags so that we can determine which telemetry events to print.
-        crate::init_feature_flags();
+        crate::features::init_feature_flags();
 
         let events: serde_json::Map<String, Value> = warp_core::telemetry::all_events()
             .filter_map(|event| {

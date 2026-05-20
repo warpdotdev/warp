@@ -15,7 +15,7 @@ use crate::{
             json_model::{JsonModel, JsonSerializer},
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     drive::items::{env_var_collection::WarpDriveEnvVarCollection, WarpDriveItem},
     external_secrets::ExternalSecret,
@@ -185,13 +185,6 @@ impl StringModel for EnvVarCollection {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::EnvVarCollection(server_envvar_collection) = server_cloud_object {
-            return Some(server_envvar_collection.model.clone().string_model);
-        }
         None
     }
 

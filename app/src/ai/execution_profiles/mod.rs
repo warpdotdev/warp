@@ -11,7 +11,7 @@ use crate::{
             json_model::{JsonModel, JsonSerializer},
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     settings::{
         AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
@@ -472,15 +472,6 @@ impl StringModel for AIExecutionProfile {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::AIExecutionProfile(server_ai_execution_profile) =
-            server_cloud_object
-        {
-            return Some(server_ai_execution_profile.model.clone().string_model);
-        }
-        None
     }
 
     fn should_clear_on_unique_key_conflict(&self) -> bool {

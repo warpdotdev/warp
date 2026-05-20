@@ -222,6 +222,7 @@ version-compare.workspace = true
 vte.workspace = true
 walkdir.workspace = true
 warp-workflows.workspace = true
+warp_assets.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
 warp_editor.workspace = true
@@ -646,6 +647,9 @@ default = [
     "cloud_mode_input_v2",
     "cloud_mode_setup_v2",
     "handoff_cloud_cloud",
+    "remote_codebase_indexing",
+    "solo_user_byok",
+    "billing_and_usage_page_v2",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -783,7 +787,7 @@ session_sharing = []
 session_sharing_acls = []
 skip_login = []
 # This feature should only be enabled when building a self-contained binary with the bundle script.
-standalone = []
+standalone = ["warp_assets/standalone"]
 prompt_suggestions_via_maa = []
 voice_input = ["dep:voice_input"]
 system_theme = []
@@ -948,6 +952,7 @@ open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
 solo_user_byok = []
+billing_and_usage_page_v2 = []
 configurable_toolbar = []
 warpify_footer = []
 hoa_onboarding_flow = []

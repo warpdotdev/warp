@@ -2,7 +2,7 @@ use warpui::{assets::asset_cache::AssetSource, App};
 
 use crate::{
     terminal::ssh::util::convert_script_to_one_line,
-    test_util::settings::initialize_settings_for_tests, Assets,
+    test_util::settings::initialize_settings_for_tests, ASSETS,
 };
 
 use super::*;
@@ -38,7 +38,7 @@ fn get_script(asset_source: AssetSource, ctx: &AppContext) -> String {
 #[test]
 /// See [assert_script_is_short_enough_mac] for more information.
 fn test_mac_warpification_script_size() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         app.read(|ctx| {

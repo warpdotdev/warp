@@ -9,7 +9,7 @@ use crate::{
             persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     server::{ids::SyncId, server_api::ai::AgentConfigSnapshot, sync_queue::QueueItem},
 };
@@ -103,13 +103,6 @@ impl StringModel for AgentConfig {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::CloudAgentConfig(server_config) = server_cloud_object {
-            return Some(server_config.model.clone().string_model);
-        }
         None
     }
 

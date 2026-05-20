@@ -23,8 +23,7 @@ use crate::appearance::Appearance;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
     CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-    GenericCloudObject, GenericServerObject, ObjectType, Revision, ServerCloudObject,
-    UpdateCloudObjectResult,
+    GenericCloudObject, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
 };
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 
@@ -311,15 +310,6 @@ impl CloudModelType for CloudWorkflowModel {
         SerializedModel::new(
             serde_json::to_string(&self.data).expect("failed to serialize workflow"),
         )
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Workflow(server_workflow) = server_cloud_object {
-            return Some(CloudWorkflowModel {
-                data: server_workflow.model.data.clone(),
-            });
-        }
-        None
     }
 
     async fn send_create_request(
