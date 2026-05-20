@@ -648,6 +648,8 @@ default = [
     "cloud_mode_setup_v2",
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
+    "solo_user_byok",
+    "billing_and_usage_page_v2",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -950,6 +952,7 @@ open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
 solo_user_byok = []
+billing_and_usage_page_v2 = []
 configurable_toolbar = []
 warpify_footer = []
 hoa_onboarding_flow = []
