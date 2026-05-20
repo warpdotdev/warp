@@ -252,6 +252,69 @@ fn test_powershell_escape() {
 }
 
 #[test]
+fn shell_quote_arg_posix_wraps_plain_value() {
+    assert_eq!(ShellFamily::Posix.shell_quote_arg("plain"), "'plain'");
+}
+
+#[test]
+fn shell_quote_arg_posix_preserves_metacharacters_literally() {
+    // Inside POSIX single-quote literal, nothing is expanded — neither
+    // `$(...)` nor backticks nor `$VAR`. The quote alone is enough.
+    assert_eq!(ShellFamily::Posix.shell_quote_arg("a$(rm)b"), "'a$(rm)b'");
+    assert_eq!(
+        ShellFamily::Posix.shell_quote_arg("hi`rm`there"),
+        "'hi`rm`there'"
+    );
+    assert_eq!(ShellFamily::Posix.shell_quote_arg("$HOME"), "'$HOME'");
+}
+
+#[test]
+fn shell_quote_arg_posix_preserves_embedded_newlines() {
+    // The whole reason we have this helper: `shell_escape` would emit
+    // `\<newline>` which bash/zsh parse as line continuation. Inside a
+    // single-quote literal, a real newline byte is preserved.
+    let quoted = ShellFamily::Posix.shell_quote_arg("foo\nbar");
+    assert_eq!(quoted, "'foo\nbar'");
+    assert!(
+        !quoted.contains("\\\n"),
+        "line-continuation slipped in: {quoted:?}"
+    );
+}
+
+#[test]
+fn shell_quote_arg_posix_escapes_embedded_single_quote() {
+    // POSIX single-quote literals can't contain `'` directly. The standard
+    // trick is to close, escape, and reopen: 'foo'\''bar'.
+    assert_eq!(ShellFamily::Posix.shell_quote_arg("a'b"), r"'a'\''b'");
+    // Multiple quotes still work.
+    assert_eq!(
+        ShellFamily::Posix.shell_quote_arg("'leading"),
+        r"''\''leading'"
+    );
+}
+
+#[test]
+fn shell_quote_arg_powershell_wraps_plain_value() {
+    assert_eq!(ShellFamily::PowerShell.shell_quote_arg("plain"), "'plain'");
+}
+
+#[test]
+fn shell_quote_arg_powershell_preserves_dollar_env_literally() {
+    // PowerShell single-quoted strings are literal — `$env:VAR` doesn't
+    // expand inside them.
+    assert_eq!(
+        ShellFamily::PowerShell.shell_quote_arg("leak$env:USERPROFILE"),
+        "'leak$env:USERPROFILE'"
+    );
+}
+
+#[test]
+fn shell_quote_arg_powershell_doubles_embedded_single_quote() {
+    // PowerShell single-quote literal escapes `'` by doubling it.
+    assert_eq!(ShellFamily::PowerShell.shell_quote_arg("a'b"), "'a''b'");
+}
+
+#[test]
 fn test_posix_unescape() {
     let shell_family = ShellFamily::Posix;
     // Escaped spaces

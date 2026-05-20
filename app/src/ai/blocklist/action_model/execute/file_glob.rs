@@ -367,17 +367,22 @@ async fn run_find_command(
 /// [`run_powershell_get_childitem_command`]. The path is escaped through
 /// [`ShellFamily::PowerShell`].
 fn build_get_childitem_command(patterns: &[String], target_path: &str) -> String {
-    // Agent-supplied glob patterns: shell-escape via PowerShell backticks so
-    // metacharacters (including `'`, `$x`, `$env:VAR`, backticks) can't break
-    // out of the argument. PowerShell consumes the escapes and hands
-    // `Get-ChildItem -Include` the literal patterns for its own matching.
+    // Agent-supplied glob patterns: single-quote literal wrapping. This
+    // preserves embedded newlines / metacharacters verbatim (see
+    // `build_git_grep_command` in `grep.rs` for the same reasoning); the
+    // shell passes the literal pattern to `-Include` for its own matching.
     let pattern_args = patterns
         .iter()
-        .map(|pattern| ShellFamily::PowerShell.shell_escape(pattern).into_owned())
+        .map(|pattern| ShellFamily::PowerShell.shell_quote_arg(pattern))
         .join(",");
     let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
+    // `-LiteralPath` suppresses PowerShell wildcard interpretation on the
+    // search root — a path that contains `*` / `?` / `[...]` is treated as
+    // a literal directory rather than as a wildcard pattern (which would
+    // otherwise change which directory we recurse into). Glob semantics
+    // for filtering are still applied via `-Include`.
     format!(
-        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_path} | ForEach-Object {{ $_.FullName }}"
+        "Get-ChildItem -File -Recurse -Include {pattern_args} -LiteralPath {escaped_path} | ForEach-Object {{ $_.FullName }}"
     )
 }
 

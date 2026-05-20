@@ -465,12 +465,12 @@ fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: She
     let family = ShellFamily::from(shell_type);
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
     for query in queries {
-        // Agent-supplied query: shell-escape so `$VAR`, `$(...)`, backticks,
-        // and other metacharacters never reach the user's shell unquoted.
-        // The shell consumes the escapes and hands `git grep` the literal
-        // query string for its own regex matching.
-        let escaped_query = family.shell_escape(query);
-        grep_command.push_str(format!(" -e {escaped_query}").as_str());
+        // Agent-supplied query: use single-quote literal wrapping so metacharacters,
+        // embedded quotes, AND embedded newlines all reach `git grep` verbatim.
+        // (`shell_escape` would emit `\<newline>` which bash/zsh parse as line
+        //  continuation, breaking the command for multi-line regexes.)
+        let quoted_query = family.shell_quote_arg(query);
+        grep_command.push_str(format!(" -e {quoted_query}").as_str());
     }
     let escaped_path = family.shell_escape(target_path);
     grep_command.push_str(format!(" {escaped_path}").as_str());
@@ -533,10 +533,11 @@ async fn run_git_grep_command(
 fn build_grep_command(queries: &[String], target_path: &str) -> String {
     let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
     for query in queries {
-        // Agent-supplied query: shell-escape so metacharacters never reach
-        // the shell unquoted (see `build_git_grep_command`).
-        let escaped_query = ShellFamily::Posix.shell_escape(query);
-        grep_command.push_str(format!(" -e {escaped_query}").as_str());
+        // Agent-supplied query: single-quote literal wrapping. See
+        // `build_git_grep_command` for why this beats `shell_escape` here
+        // (embedded newlines, in particular).
+        let quoted_query = ShellFamily::Posix.shell_quote_arg(query);
+        grep_command.push_str(format!(" -e {quoted_query}").as_str());
     }
     let escaped_path = ShellFamily::Posix.shell_escape(target_path);
     grep_command.push_str(format!(" {escaped_path}").as_str());
@@ -606,11 +607,15 @@ fn build_select_string_command(queries: &[String], target_path: &str) -> String 
     let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
     let patterns = queries
         .iter()
-        .map(|q| ShellFamily::PowerShell.shell_escape(q).into_owned())
+        .map(|q| ShellFamily::PowerShell.shell_quote_arg(q))
         .collect::<Vec<_>>()
         .join(",");
+    // `-LiteralPath` suppresses PowerShell wildcard interpretation on the
+    // directory we're scanning — a path containing `*` / `?` (valid on POSIX
+    // filesystems mounted through MSYS2 etc.) would otherwise be expanded
+    // by `Get-ChildItem` itself.
     format!(
-        "Get-ChildItem -Path {escaped_path} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {patterns}"
+        "Get-ChildItem -LiteralPath {escaped_path} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {patterns}"
     )
 }
 

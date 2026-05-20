@@ -136,14 +136,28 @@ mod path_quoting {
 
     #[test]
     fn is_file_path_powershell_escapes_metacharacters_with_backticks() {
-        // PowerShell uses backtick (\u{60}) as its escape character.
+        // PowerShell uses backtick (\u{60}) as its escape character, and
+        // `-LiteralPath` suppresses PowerShell's own wildcard interpretation
+        // — a path containing `*` / `?` / `[...]` is tested literally rather
+        // than as a glob pattern.
         let command =
             build_is_file_path_command("C:\\Users\\me\\My Stuff", ShellFamily::PowerShell);
-        // The escaped path appears inside the if-test, and the shell sees
-        // a single argument rather than splitting on space.
-        assert!(command.starts_with("if (Test-Path -PathType Leaf "));
+        assert!(command.starts_with("if (Test-Path -PathType Leaf -LiteralPath "));
         assert!(command.contains("My`\u{20}Stuff"));
         assert!(command.ends_with("{ exit 0 } else { exit 1 }"));
+    }
+
+    #[test]
+    fn is_file_path_powershell_uses_literal_path_to_block_wildcards() {
+        // The reason `-LiteralPath` matters: a POSIX path containing `*`
+        // (legal on macOS / Linux) would, without `-LiteralPath`, be treated
+        // by `Test-Path` as a wildcard pattern matching multiple files.
+        // With `-LiteralPath` the path is tested verbatim.
+        let command = build_is_file_path_command("/tmp/foo*bar", ShellFamily::PowerShell);
+        assert!(
+            command.contains("-LiteralPath "),
+            "expected -LiteralPath suppression of wildcards; got: {command}"
+        );
     }
 
     #[test]

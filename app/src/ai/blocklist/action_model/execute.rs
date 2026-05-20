@@ -1298,9 +1298,13 @@ async fn read_binary_file_context(
 fn build_is_file_path_command(path: &str, family: warp_util::path::ShellFamily) -> String {
     let escaped_path = family.shell_escape(path);
     match family {
-        warp_util::path::ShellFamily::PowerShell => {
-            format!("if (Test-Path -PathType Leaf {escaped_path}) {{ exit 0 }} else {{ exit 1 }}")
-        }
+        // `-LiteralPath` suppresses PowerShell wildcard interpretation, so a
+        // path that happens to contain `*` / `?` / `[...]` is tested as-is
+        // rather than as a wildcard pattern (which would either match the
+        // wrong file or always return true).
+        warp_util::path::ShellFamily::PowerShell => format!(
+            "if (Test-Path -PathType Leaf -LiteralPath {escaped_path}) {{ exit 0 }} else {{ exit 1 }}"
+        ),
         warp_util::path::ShellFamily::Posix => format!("test -f {escaped_path}"),
     }
 }

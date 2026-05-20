@@ -254,6 +254,31 @@ impl ShellFamily {
         Cow::Owned(result)
     }
 
+    /// Wraps an arbitrary string for safe insertion as a single shell argument,
+    /// preserving embedded newlines and metacharacters literally. Uses single-
+    /// quote literal form for both shell families:
+    ///
+    /// - **POSIX**: `'value'`, with each embedded `'` rewritten as `'\''`
+    ///   (close-quote, escaped quote, re-open-quote).
+    /// - **PowerShell**: `'value'`, with each embedded `'` doubled as `''`
+    ///   (PowerShell's single-quote literal escape).
+    ///
+    /// Unlike [`Self::shell_escape`] (which uses backslash/backtick escaping
+    /// and treats `\<newline>` as line continuation), this form is safe for
+    /// agent-supplied values that may contain arbitrary characters including
+    /// newlines — single-quote literals preserve every byte verbatim, with
+    /// no expansion or escape interpretation by the shell.
+    ///
+    /// Use this for free-form string arguments (grep queries, glob patterns,
+    /// etc.). For static filesystem paths that are known to be single-line,
+    /// [`Self::shell_escape`] produces tighter output.
+    pub fn shell_quote_arg(&self, value: &str) -> String {
+        match self {
+            Self::Posix => format!("'{}'", value.replace('\'', r"'\''")),
+            Self::PowerShell => format!("'{}'", value.replace('\'', "''")),
+        }
+    }
+
     /// Escapes the path to treat it as a single word within the shell.
     ///
     /// This function returns a [`Cow::Borrowed`] of the input string where possible and only

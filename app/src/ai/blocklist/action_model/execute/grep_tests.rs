@@ -84,11 +84,11 @@ mod path_quoting {
     #[test]
     fn git_grep_posix_escapes_target_path_spaces() {
         let cmd = build_git_grep_command(&["TODO".to_string()], "/tmp/my repo", ShellType::Bash);
-        // Plain query with no metacharacters lands as a bare literal arg —
-        // shell-escape is identity for "TODO".
+        // Query is wrapped in single-quote literal form (safe for embedded
+        // newlines, metacharacters, etc.); path uses backslash-escape.
         assert_eq!(
             cmd,
-            r#"git --no-pager grep --color=never --untracked -nIE -e TODO /tmp/my\ repo"#
+            r#"git --no-pager grep --color=never --untracked -nIE -e 'TODO' /tmp/my\ repo"#
         );
     }
 
@@ -108,66 +108,78 @@ mod path_quoting {
     }
 
     #[test]
-    fn git_grep_posix_escapes_command_substitution_in_query() {
-        // Agent-supplied query is also shell-escaped — without this, the
-        // shell would expand `$(rm -rf ~)` before passing the query to grep.
+    fn git_grep_posix_command_substitution_in_query_stays_literal() {
+        // Single-quote literal form neutralizes `$(...)` without per-char
+        // escaping — POSIX shells don't expand anything inside `'...'`.
         let cmd = build_git_grep_command(
             &["match$(rm -rf ~)me".to_string()],
             "/tmp/repo",
             ShellType::Bash,
         );
-        assert!(
-            !cmd.contains("$(rm"),
-            "unescaped command substitution survived in query: {cmd}"
-        );
-        assert!(cmd.contains(r"match\$\(rm\ -rf\ \~\)me"));
+        assert!(cmd.contains(" -e 'match$(rm -rf ~)me' "));
     }
 
     #[test]
-    fn git_grep_posix_escapes_backticks_in_query() {
+    fn git_grep_posix_backticks_in_query_stay_literal() {
+        // Same shape — inside POSIX single quotes, backticks are literal.
         let cmd =
             build_git_grep_command(&["a`rm -rf ~`b".to_string()], "/tmp/repo", ShellType::Bash);
-        for (i, c) in cmd.char_indices() {
-            if c == '`' {
-                assert!(
-                    i > 0 && cmd.as_bytes()[i - 1] == b'\\',
-                    "unescaped backtick at byte {i}: {cmd}"
-                );
-            }
-        }
+        assert!(cmd.contains(" -e 'a`rm -rf ~`b' "));
     }
 
     #[test]
-    fn git_grep_powershell_path_uses_powershell_escape() {
+    fn git_grep_posix_embedded_newline_in_query_is_preserved() {
+        // The reason we switched away from `shell_escape` for queries:
+        // shell_escape would emit `\<newline>` which bash/zsh parse as line
+        // continuation, breaking the command. Single-quote wrapping keeps
+        // the literal newline as part of the argument the grep tool sees.
+        let cmd = build_git_grep_command(&["foo\nbar".to_string()], "/tmp/repo", ShellType::Bash);
+        // The query has a literal newline inside the wrapping quotes, NOT
+        // a `\<newline>` line-continuation sequence.
+        assert!(cmd.contains(" -e 'foo\nbar' "));
+        assert!(
+            !cmd.contains("\\\n"),
+            "line-continuation slipped in: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn git_grep_posix_query_embedded_single_quote_is_escaped() {
+        // Inside POSIX single-quote literal, an embedded `'` must be
+        // expressed as `'\''` (close, escaped quote, reopen).
+        let cmd = build_git_grep_command(&["a'b".to_string()], "/tmp/repo", ShellType::Bash);
+        assert!(cmd.contains(r"'a'\''b'"), "got: {cmd}");
+    }
+
+    #[test]
+    fn git_grep_powershell_query_uses_single_quote_literal() {
         let cmd = build_git_grep_command(
             &["pattern".to_string()],
             "C:\\Users\\me\\repo",
             ShellType::PowerShell,
         );
-        // The drive-letter colon stays literal (PowerShell escape doesn't
-        // need to escape `:`); the path lands as a single argument.
         assert!(cmd.ends_with(" C:\\Users\\me\\repo"));
-        // Query has no metacharacters → literal `pattern`, not quoted.
-        assert!(cmd.contains(" -e pattern "));
+        // Query is single-quote-wrapped (PowerShell literal form).
+        assert!(cmd.contains(" -e 'pattern' "));
     }
 
     #[test]
-    fn git_grep_powershell_escapes_env_var_in_query() {
-        // PowerShell expands `$env:VAR` inside double quotes — without
-        // shell-escape, an agent-supplied query containing `$env:` would
-        // leak the env var into the grep pattern.
+    fn git_grep_powershell_env_var_in_query_stays_literal() {
+        // PowerShell single-quoted strings are literal — `$env:VAR` is NOT
+        // expanded inside them.
         let cmd = build_git_grep_command(
             &["leak$env:USERPROFILE".to_string()],
             "C:\\repo",
             ShellType::PowerShell,
         );
-        let mut iter = cmd.match_indices("$env:");
-        if let Some((idx, _)) = iter.next() {
-            assert!(
-                idx > 0 && &cmd[idx - 1..idx] == "`",
-                "unescaped $env: in query at byte {idx}: {cmd}"
-            );
-        }
+        assert!(cmd.contains(" -e 'leak$env:USERPROFILE' "));
+    }
+
+    #[test]
+    fn git_grep_powershell_query_embedded_single_quote_doubles() {
+        // PowerShell single-quote literal escapes `'` by doubling it.
+        let cmd = build_git_grep_command(&["a'b".to_string()], "C:\\repo", ShellType::PowerShell);
+        assert!(cmd.contains(" -e 'a''b' "), "got: {cmd}");
     }
 
     #[test]
@@ -175,7 +187,7 @@ mod path_quoting {
         let cmd = build_grep_command(&["TODO".to_string()], "/tmp/has space");
         assert_eq!(
             cmd,
-            r#"grep --color=never -nrIHE --devices=skip -e TODO /tmp/has\ space"#
+            r#"grep --color=never -nrIHE --devices=skip -e 'TODO' /tmp/has\ space"#
         );
     }
 
@@ -189,26 +201,26 @@ mod path_quoting {
     }
 
     #[test]
-    fn grep_posix_escapes_command_substitution_in_query() {
+    fn grep_posix_command_substitution_in_query_stays_literal() {
         let cmd = build_grep_command(&["a$(rm)b".to_string()], "/tmp/repo");
-        assert!(
-            !cmd.contains("$(rm"),
-            "unescaped command substitution survived in query: {cmd}"
-        );
-        assert!(cmd.contains(r"a\$\(rm\)b"));
+        assert!(cmd.contains(" -e 'a$(rm)b' "));
     }
 
     #[test]
-    fn select_string_powershell_escapes_target_path() {
+    fn select_string_powershell_uses_literal_path() {
+        // `-LiteralPath` suppresses PowerShell wildcard interpretation on
+        // the search directory — without it a path containing `*` / `?` /
+        // `[...]` would be expanded by Get-ChildItem itself.
         let cmd = build_select_string_command(&["TODO".to_string()], "C:\\Users\\me\\My Stuff");
-        // The path appears once, after `-Path `, with PowerShell-style
-        // backtick escapes for the space.
         assert!(
-            cmd.contains("-Path C:\\Users\\me\\My`\u{20}Stuff "),
-            "expected escaped path; got: {cmd}"
+            cmd.contains("-LiteralPath C:\\Users\\me\\My`\u{20}Stuff "),
+            "expected -LiteralPath escaped path; got: {cmd}"
         );
-        // Query has no metacharacters → literal `TODO`, not double-quoted.
-        assert!(cmd.ends_with("-Pattern TODO"));
+        assert!(
+            !cmd.contains("-Path "),
+            "wildcard-interpretable -Path leaked: {cmd}"
+        );
+        assert!(cmd.ends_with("-Pattern 'TODO'"));
     }
 
     #[test]
@@ -225,17 +237,8 @@ mod path_quoting {
     }
 
     #[test]
-    fn select_string_powershell_escapes_env_var_in_query() {
-        // PowerShell expands `$env:VAR` inside double quotes; the previous
-        // implementation only escaped `"` and would have passed
-        // `$env:USERPROFILE` straight through.
+    fn select_string_powershell_env_var_in_query_stays_literal() {
         let cmd = build_select_string_command(&["leak$env:USERPROFILE".to_string()], "C:\\repo");
-        let mut iter = cmd.match_indices("$env:");
-        if let Some((idx, _)) = iter.next() {
-            assert!(
-                idx > 0 && &cmd[idx - 1..idx] == "`",
-                "unescaped $env: in query at byte {idx}: {cmd}"
-            );
-        }
+        assert!(cmd.contains("-Pattern 'leak$env:USERPROFILE'"));
     }
 }

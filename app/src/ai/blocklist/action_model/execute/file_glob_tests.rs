@@ -58,16 +58,25 @@ fn find_handles_multiple_patterns() {
 }
 
 #[test]
-fn get_childitem_powershell_escapes_target_path() {
+fn get_childitem_powershell_uses_literal_path() {
     let cmd = build_get_childitem_command(&["*.rs".to_string()], "C:\\Users\\me\\My Code");
+    // `-LiteralPath` suppresses PowerShell wildcard interpretation on the
+    // search directory — a path containing `*` / `?` / `[...]` is treated
+    // as literal rather than as a glob pattern (which would otherwise
+    // change which directory we recurse into). Glob semantics for filtering
+    // are still applied via `-Include`.
     assert!(
-        cmd.contains("-Path C:\\Users\\me\\My`\u{20}Code "),
-        "expected escaped path; got: {cmd}"
+        cmd.contains("-LiteralPath C:\\Users\\me\\My`\u{20}Code"),
+        "expected -LiteralPath escaped path; got: {cmd}"
     );
-    // The pattern `*` is also backtick-escaped in PowerShell.
     assert!(
-        cmd.starts_with("Get-ChildItem -File -Recurse -Include `*.rs -Path "),
-        "expected escaped pattern; got: {cmd}"
+        !cmd.contains("-Path "),
+        "wildcard-interpretable -Path leaked: {cmd}"
+    );
+    // Pattern is single-quote-wrapped (PowerShell literal form).
+    assert!(
+        cmd.starts_with("Get-ChildItem -File -Recurse -Include '*.rs' -LiteralPath "),
+        "expected literal-wrapped pattern; got: {cmd}"
     );
 }
 
@@ -85,18 +94,11 @@ fn get_childitem_powershell_escapes_metacharacters_in_path() {
 }
 
 #[test]
-fn get_childitem_powershell_escapes_env_var_in_pattern() {
-    // Same risk shape on the pattern side: an agent pattern containing
-    // `$env:VAR` would have leaked the env value into the glob without
-    // backtick-escape.
+fn get_childitem_powershell_env_var_in_pattern_stays_literal() {
+    // PowerShell single-quoted literals don't expand `$env:`, so the pattern
+    // reaches `Get-ChildItem -Include` verbatim.
     let cmd = build_get_childitem_command(&["leak$env:USERPROFILE".to_string()], "C:\\repo");
-    let mut iter = cmd.match_indices("$env:");
-    if let Some((idx, _)) = iter.next() {
-        assert!(
-            idx > 0 && &cmd[idx - 1..idx] == "`",
-            "unescaped $env: in pattern at byte {idx}: {cmd}"
-        );
-    }
+    assert!(cmd.contains("-Include 'leak$env:USERPROFILE'"));
 }
 
 #[test]
