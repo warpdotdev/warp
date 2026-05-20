@@ -1064,6 +1064,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
