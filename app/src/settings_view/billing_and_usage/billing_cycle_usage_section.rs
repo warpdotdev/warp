@@ -611,6 +611,11 @@ impl BillingCycleUsageSectionView {
             .tier
             .usage_visibility_policy?
             .admin_granularity;
+        if admin_granularity == UsageVisibilityGranularity::FullBreakdown
+            && !workspace.billing_metadata.is_enterprise_plan()
+        {
+            return None;
+        }
         let (link_text, trailing_copy, action, leading_icon) =
             visibility_cta_for(admin_granularity)?;
 
