@@ -415,11 +415,10 @@ fn test_has_any_ai_remaining_true_with_payg_enabled() {
 }
 
 #[test]
-fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
+fn test_has_any_ai_remaining_true_with_auto_reload() {
     App::test((), |mut app| async move {
-        // Create a workspace with enterprise auto-reload enabled.
+        // Create a workspace with auto-reload enabled.
         let (_uid, mut workspace) = create_test_workspace();
-        workspace.billing_metadata.customer_type = CustomerType::Enterprise;
         workspace
             .billing_metadata
             .tier
@@ -436,7 +435,7 @@ fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
 
             assert!(
                 model.has_any_ai_remaining(ctx),
-                "expected has_any_ai_remaining to be true when enterprise auto-reload is enabled",
+                "expected has_any_ai_remaining to be true when auto-reload is enabled",
             );
         });
     });
