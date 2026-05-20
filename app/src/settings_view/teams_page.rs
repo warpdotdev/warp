@@ -2893,7 +2893,7 @@ impl TeamsWidget {
             .span(count_label)
             .with_style(UiComponentStyles {
                 font_family_id: Some(appearance.ui_font_family()),
-                font_color: Some(count_color.into()),
+                font_color: Some(count_color),
                 font_size: Some(12.),
                 ..Default::default()
             })
