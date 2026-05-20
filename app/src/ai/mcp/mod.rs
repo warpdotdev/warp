@@ -15,7 +15,7 @@ use crate::{
             persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     drive::{
         items::{mcp_server::WarpDriveMCPServer, WarpDriveItem},
@@ -224,13 +224,6 @@ impl StringModel for MCPServer {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::MCPServer(server_mcp_server) = server_cloud_object {
-            return Some(server_mcp_server.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

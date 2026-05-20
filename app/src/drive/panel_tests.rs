@@ -21,7 +21,7 @@ use crate::{
     },
     test_util::settings::initialize_settings_for_tests,
     workspaces::{team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces},
-    Assets, ObjectActions,
+    ObjectActions, ASSETS,
 };
 
 use super::DrivePanel;
@@ -52,7 +52,7 @@ fn initialize_app(app: &mut App) {
 
 #[test]
 fn test_warp_drive_sections_with_no_team() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         // Instead of being in the panel module and depending on DrivePanel, this test should be in the index module.

@@ -11,7 +11,7 @@ use crate::{
             persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     server::{ids::SyncId, sync_queue::QueueItem},
     workspaces::user_workspaces::UserWorkspaces,
@@ -178,14 +178,6 @@ impl StringModel for AmbientAgentEnvironment {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::AmbientAgentEnvironment(server_environment) = server_cloud_object
-        {
-            return Some(server_environment.model.clone().string_model);
-        }
         None
     }
 

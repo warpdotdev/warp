@@ -3596,8 +3596,10 @@ impl BillingAndUsagePageView {
                     right_side.add_child(admin_actions);
                 }
 
-                let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
-                right_side.add_child(admin_panel_button);
+                if team.billing_metadata.is_enterprise_plan() {
+                    let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
+                    right_side.add_child(admin_panel_button);
+                }
             }
         } else {
             let (plan_badge, compare_plans_button) =
