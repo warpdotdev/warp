@@ -79,7 +79,6 @@ const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your personal balance.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
-const MANAGED_AUTO_RELOAD_TOOLTIP: &str = "Managed by your admin";
 
 const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
@@ -1311,31 +1310,14 @@ impl BillingAndUsagePageV2View {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg = theme.background();
-        let auto_reload_info_icon = render_info_icon(
-            appearance,
-            AdditionalInfo::<BillingAndUsagePageAction> {
-                mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
-                on_click_action: None,
-                secondary_text: None,
-                tooltip_override_text: Some(MANAGED_AUTO_RELOAD_TOOLTIP.to_string()),
-            },
-        );
-        let auto_reload_header = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_children([
-                Text::new_inline(
-                    MANAGED_AUTO_RELOAD_HEADER,
-                    appearance.ui_font_family(),
-                    HEADER_FONT_SIZE,
-                )
-                .with_color(theme.foreground().into())
-                .with_style(Properties::default().weight(Weight::Medium))
-                .finish(),
-                Container::new(auto_reload_info_icon)
-                    .with_margin_left(4.)
-                    .finish(),
-            ])
-            .finish();
+        let auto_reload_header = Text::new_inline(
+            MANAGED_AUTO_RELOAD_HEADER,
+            appearance.ui_font_family(),
+            HEADER_FONT_SIZE,
+        )
+        .with_color(theme.foreground().into())
+        .with_style(Properties::default().weight(Weight::Medium))
+        .finish();
         let auto_reload_description = appearance
             .ui_builder()
             .paragraph(description_text)
