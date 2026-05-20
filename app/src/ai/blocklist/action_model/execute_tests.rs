@@ -97,3 +97,100 @@ mod binary_detection {
         assert!(block_on(is_file_content_binary_async(&missing)));
     }
 }
+
+/// Tests for the pure command builders behind [`is_file_path`] and
+/// [`is_git_repository`]. These pin the shell-quoting guarantee documented
+/// in #11132: an agent-supplied path containing shell metacharacters must
+/// survive verbatim into the underlying `test -f` / `Test-Path` / `git -C`
+/// invocation, regardless of the session's shell family.
+mod path_quoting {
+    use warp_util::path::ShellFamily;
+
+    use super::super::{build_is_file_path_command, build_is_git_repository_command};
+
+    #[test]
+    fn is_file_path_posix_emits_shell_escaped_path() {
+        // Plain path: nothing to escape; the path appears as-is after
+        // `test -f`, separated by a single space.
+        assert_eq!(
+            build_is_file_path_command("/tmp/plain", ShellFamily::Posix),
+            "test -f /tmp/plain"
+        );
+    }
+
+    #[test]
+    fn is_file_path_posix_escapes_spaces_and_metacharacters() {
+        // `(`, `)`, `$`, `~`, and space are all shell-significant in POSIX
+        // shells; `ShellFamily::Posix.shell_escape` backslash-escapes
+        // each one so the command sees a single literal argument. `~`
+        // also gets escaped here because the path doesn't START with `~`
+        // (which would trigger the tilde-expansion preservation special
+        // case in `shell_escape`).
+        let command =
+            build_is_file_path_command("/tmp/innocent$(touch ~/PROBE_RAN)", ShellFamily::Posix);
+        assert_eq!(command, r"test -f /tmp/innocent\$\(touch\ \~/PROBE_RAN\)");
+        // The shell must never see a bare `$(...)`, which would otherwise
+        // execute `touch ~/PROBE_RAN` before `test -f` runs.
+        assert!(!command.contains("$(touch"));
+    }
+
+    #[test]
+    fn is_file_path_powershell_escapes_metacharacters_with_backticks() {
+        // PowerShell uses backtick (\u{60}) as its escape character.
+        let command =
+            build_is_file_path_command("C:\\Users\\me\\My Stuff", ShellFamily::PowerShell);
+        // The escaped path appears inside the if-test, and the shell sees
+        // a single argument rather than splitting on space.
+        assert!(command.starts_with("if (Test-Path -PathType Leaf "));
+        assert!(command.contains("My`\u{20}Stuff"));
+        assert!(command.ends_with("{ exit 0 } else { exit 1 }"));
+    }
+
+    #[test]
+    fn is_git_repository_posix_escapes_path() {
+        let command = build_is_git_repository_command("/tmp/my repo", ShellFamily::Posix);
+        assert_eq!(command, r"git -C /tmp/my\ repo rev-parse");
+    }
+
+    #[test]
+    fn is_git_repository_posix_escapes_command_substitution() {
+        // The whole point of #11132: a path that *looks like* a backtick
+        // command substitution stays a literal path argument to `git -C`.
+        // Every backtick in the path is preceded by a backslash escape so
+        // the shell parses the whole thing as a single word.
+        let command = build_is_git_repository_command("/tmp/`rm -rf ~`/repo", ShellFamily::Posix);
+        assert_eq!(command, r"git -C /tmp/\`rm\ -rf\ \~\`/repo rev-parse");
+        // No bare backtick survives: every ` is preceded by a `\`.
+        for (i, c) in command.char_indices() {
+            if c == '`' {
+                let prev = command[..i].chars().next_back();
+                assert_eq!(
+                    prev,
+                    Some('\\'),
+                    "unescaped backtick at byte {i}: {command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn is_git_repository_powershell_escapes_path() {
+        let command =
+            build_is_git_repository_command("C:\\Users\\me\\dev repo", ShellFamily::PowerShell);
+        assert!(command.starts_with("git -C "));
+        assert!(command.ends_with(" rev-parse"));
+        // Space is escaped via backtick.
+        assert!(command.contains("dev`\u{20}repo"));
+    }
+
+    #[test]
+    fn empty_path_is_handled_safely() {
+        // `ShellFamily::shell_escape("")` returns `''` (the POSIX literal
+        // empty string). Make sure the builder doesn't produce an
+        // empty positional that splits weirdly.
+        let posix = build_is_file_path_command("", ShellFamily::Posix);
+        assert_eq!(posix, "test -f ''");
+        let pwsh = build_is_git_repository_command("", ShellFamily::PowerShell);
+        assert_eq!(pwsh, "git -C '' rev-parse");
+    }
+}

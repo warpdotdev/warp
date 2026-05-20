@@ -71,3 +71,104 @@ fn test_create_redacted_grep_error_event() {
         panic!("Expected GrepToolFailed event");
     }
 }
+
+/// Tests for the pure command builders behind [`run_git_grep_command`],
+/// [`run_grep_command`], and [`run_select_string_command`]. These pin the
+/// shell-quoting guarantee for #11132: an agent-supplied `target_path`
+/// containing shell metacharacters must survive verbatim into the
+/// underlying `git grep` / `grep` / `Select-String` invocation.
+mod path_quoting {
+    use super::super::{build_git_grep_command, build_grep_command, build_select_string_command};
+    use crate::terminal::shell::ShellType;
+
+    #[test]
+    fn git_grep_posix_escapes_target_path_spaces() {
+        let cmd = build_git_grep_command(&["TODO".to_string()], "/tmp/my repo", ShellType::Bash);
+        assert_eq!(
+            cmd,
+            r#"git --no-pager grep --color=never --untracked -nIE -e "TODO" /tmp/my\ repo"#
+        );
+    }
+
+    #[test]
+    fn git_grep_posix_escapes_command_substitution() {
+        // Path-level metacharacters get backslash-escaped; query-level
+        // double-quotes are kept (the query is regex literal, not a path).
+        let cmd = build_git_grep_command(
+            &["pattern".to_string()],
+            "/tmp/$(touch ~/PROBE_RAN)",
+            ShellType::Bash,
+        );
+        assert!(
+            !cmd.contains("$(touch"),
+            "unescaped command substitution survived: {cmd}"
+        );
+        assert!(cmd.contains(r"\$\(touch"));
+    }
+
+    #[test]
+    fn git_grep_powershell_path_uses_powershell_escape() {
+        // For PowerShell sessions, the path is escaped with backticks
+        // (`ShellFamily::PowerShell`) — POSIX backslash escapes are not
+        // valid in PowerShell.
+        let cmd = build_git_grep_command(
+            &["pattern".to_string()],
+            "C:\\Users\\me\\repo",
+            ShellType::PowerShell,
+        );
+        // The drive-letter colon stays literal (PowerShell escape doesn't
+        // need to escape `:`); the path lands as a single argument.
+        assert!(cmd.ends_with(" C:\\Users\\me\\repo"));
+        // PowerShell-escaped queries still use the existing
+        // backtick-double-quote helper.
+        assert!(cmd.contains(r#"-e "pattern""#));
+    }
+
+    #[test]
+    fn grep_posix_escapes_target_path() {
+        let cmd = build_grep_command(&["TODO".to_string()], "/tmp/has space");
+        assert_eq!(
+            cmd,
+            r#"grep --color=never -nrIHE --devices=skip -e "TODO" /tmp/has\ space"#
+        );
+    }
+
+    #[test]
+    fn grep_posix_escapes_metacharacters_in_path() {
+        let cmd = build_grep_command(&["a".to_string()], "/tmp/innocent$(rm -rf ~)");
+        assert!(
+            !cmd.contains("$(rm"),
+            "unescaped command substitution survived: {cmd}"
+        );
+    }
+
+    #[test]
+    fn select_string_powershell_escapes_target_path() {
+        let cmd = build_select_string_command(&["TODO".to_string()], "C:\\Users\\me\\My Stuff");
+        // The path appears once, after `-Path `, with PowerShell-style
+        // backtick escapes for the space.
+        assert!(
+            cmd.contains("-Path C:\\Users\\me\\My`\u{20}Stuff "),
+            "expected escaped path; got: {cmd}"
+        );
+        // Pattern is kept as a backtick-double-quoted PowerShell string.
+        assert!(cmd.ends_with(r#"-Pattern "TODO""#));
+    }
+
+    #[test]
+    fn select_string_powershell_escapes_command_substitution() {
+        // PowerShell expands `$x` and `$env:USER` inside double quotes; we
+        // need every metacharacter shell-escaped via backtick.
+        let cmd =
+            build_select_string_command(&["q".to_string()], "C:\\Users\\$env:USERPROFILE\\repo");
+        // No bare `$env:` survives in the rendered command — it's always
+        // preceded by a backtick.
+        let mut iter = cmd.match_indices("$env:");
+        if let Some((idx, _)) = iter.next() {
+            assert!(
+                idx > 0 && &cmd[idx - 1..idx] == "`",
+                "unescaped $env: at byte {idx}: {cmd}"
+            );
+        }
+    }
+}

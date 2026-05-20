@@ -100,7 +100,6 @@ use crate::{
     terminal::{
         model::session::{active_session::ActiveSession, ExecuteCommandOptions, Session},
         model_events::ModelEventDispatcher,
-        shell::ShellType,
         ShellLaunchData, TerminalModel,
     },
     BlocklistAIHistoryModel,
@@ -1290,14 +1289,26 @@ async fn read_binary_file_context(
     })
 }
 
+/// Builds the shell command run by [`is_file_path`] for a given shell family.
+///
+/// The `path` is passed through [`ShellFamily::shell_escape`] so that any
+/// shell metacharacters (spaces, `$`, backticks, `$(...)`, etc.) survive
+/// verbatim into the underlying `test -f` / `Test-Path` rather than being
+/// expanded by the shell before the probe runs.
+fn build_is_file_path_command(path: &str, family: warp_util::path::ShellFamily) -> String {
+    let escaped_path = family.shell_escape(path);
+    match family {
+        warp_util::path::ShellFamily::PowerShell => {
+            format!("if (Test-Path -PathType Leaf {escaped_path}) {{ exit 0 }} else {{ exit 1 }}")
+        }
+        warp_util::path::ShellFamily::Posix => format!("test -f {escaped_path}"),
+    }
+}
+
 /// Returns true if the given path is a regular file on the session's filesystem.
 /// Runs a shell command on the session so it works for both local and remote sessions.
 async fn is_file_path(path: &str, session: &Session) -> bool {
-    let command = if session.shell().shell_type() == ShellType::PowerShell {
-        format!("if (Test-Path -PathType Leaf \"{path}\") {{ exit 0 }} else {{ exit 1 }}")
-    } else {
-        format!("test -f \"{path}\"")
-    };
+    let command = build_is_file_path_command(path, session.shell_family());
     session
         .execute_command(&command, None, None, ExecuteCommandOptions::default())
         .await
@@ -1305,9 +1316,21 @@ async fn is_file_path(path: &str, session: &Session) -> bool {
         .unwrap_or(false)
 }
 
+/// Builds the shell command run by [`is_git_repository`].
+///
+/// `git -C` accepts a single positional path argument; we shell-escape it
+/// so the command behaves identically regardless of which shell parses it.
+fn build_is_git_repository_command(
+    absolute_path: &str,
+    family: warp_util::path::ShellFamily,
+) -> String {
+    let escaped_path = family.shell_escape(absolute_path);
+    format!("git -C {escaped_path} rev-parse")
+}
+
 /// Returns true if git is installed and the given path is in a git repository.
 async fn is_git_repository(absolute_path: &str, session: &Session) -> anyhow::Result<bool> {
-    let git_command = format!("git -C \"{absolute_path}\" rev-parse");
+    let git_command = build_is_git_repository_command(absolute_path, session.shell_family());
     let command_output = session
         .execute_command(
             git_command.as_str(),

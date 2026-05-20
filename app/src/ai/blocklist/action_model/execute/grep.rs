@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use warp_util::path::ShellFamily;
 use warp_util::standardized_path::StandardizedPath;
 
 use futures::future::BoxFuture;
@@ -463,16 +464,12 @@ async fn run_ripgrep(queries: &[String], absolute_path: String) -> Result<GrepRe
     }
 }
 
-/// Assumes that git is installed in the user's session.
-async fn run_git_grep_command(
-    queries: &[String],
-    target_path: &str,
-    session: &Session,
-    shell_launch_data: Option<ShellLaunchData>,
-    shell_type: ShellType,
-    execute_directory: &str,
-) -> Result<GrepResult, GrepError> {
-    // This command works on all the shells we support (even PowerShell).
+/// Builds the `git grep` command run by [`run_git_grep_command`].
+///
+/// The `target_path` is shell-escaped via [`ShellFamily::shell_escape`] so
+/// the underlying `git grep` receives the literal path regardless of any
+/// metacharacters in it (`$`, backticks, parens, spaces, etc.).
+fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
     for query in queries {
         let escaped_query = format!(
@@ -485,7 +482,23 @@ async fn run_git_grep_command(
         );
         grep_command.push_str(format!(" -e {escaped_query}").as_str());
     }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let family = ShellFamily::from(shell_type);
+    let escaped_path = family.shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_path}").as_str());
+    grep_command
+}
+
+/// Assumes that git is installed in the user's session.
+async fn run_git_grep_command(
+    queries: &[String],
+    target_path: &str,
+    session: &Session,
+    shell_launch_data: Option<ShellLaunchData>,
+    shell_type: ShellType,
+    execute_directory: &str,
+) -> Result<GrepResult, GrepError> {
+    // This command works on all the shells we support (even PowerShell).
+    let grep_command = build_git_grep_command(queries, target_path, shell_type);
 
     let command_output = session
         .execute_command(
@@ -524,6 +537,18 @@ async fn run_git_grep_command(
             .with_command(grep_command)
             .with_output(output.into()))
     }
+}
+
+/// Builds the POSIX `grep` command run by [`run_grep_command`]. POSIX-only —
+/// the path is escaped through [`ShellFamily::Posix`].
+fn build_grep_command(queries: &[String], target_path: &str) -> String {
+    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
+    for query in queries {
+        grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
+    }
+    let escaped_path = ShellFamily::Posix.shell_escape(target_path);
+    grep_command.push_str(format!(" {escaped_path}").as_str());
+    grep_command
 }
 
 async fn run_grep_command(
@@ -540,11 +565,7 @@ async fn run_grep_command(
     // * "-I" ignores binary files
     // * "-H" prints file name headers
     // * "-E" uses extended regex expressions
-    let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
-    for query in queries {
-        grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
-    }
-    grep_command.push_str(format!(" \"{target_path}\"").as_str());
+    let grep_command = build_grep_command(queries, target_path);
 
     let command_output = session
         .execute_command(
@@ -585,6 +606,22 @@ async fn run_grep_command(
     }
 }
 
+/// Builds the PowerShell `Select-String` command run by
+/// [`run_select_string_command`]. The `target_path` is escaped through
+/// [`ShellFamily::PowerShell`] so PowerShell metacharacters in the path
+/// (backticks, `$x`, `$env:USERPROFILE`, etc.) are passed verbatim.
+fn build_select_string_command(queries: &[String], target_path: &str) -> String {
+    let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
+    format!(
+        "Get-ChildItem -Path {escaped_path} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
+        queries
+            .iter()
+            .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 /// Runs a PowerShell `Select-String` command.
 async fn run_select_string_command(
     queries: &[String],
@@ -595,15 +632,7 @@ async fn run_select_string_command(
 ) -> Result<GrepResult, GrepError> {
     // We enable the `-CaseSensitive` flag to match the default behavior of grep.
     // TODO(CODE-239): Make this command more efficient when searching a file.
-    let select_string_command = format!(
-        "Get-ChildItem -Path \"{}\" -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
-        target_path,
-        queries
-            .iter()
-            .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
-            .collect::<Vec<_>>()
-            .join(",")
-    );
+    let select_string_command = build_select_string_command(queries, target_path);
 
     let command_output = session
         .execute_command(

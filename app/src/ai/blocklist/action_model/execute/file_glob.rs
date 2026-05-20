@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
+use warp_util::path::ShellFamily;
 use warpui::r#async::FutureExt as AsyncFutureExt;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -281,18 +282,26 @@ async fn run_git_ls_files_command(
     }
 }
 
+/// Builds the POSIX `find` command run by [`run_find_command`]. POSIX-only —
+/// the path is escaped through [`ShellFamily::Posix`] so metacharacters in
+/// the directory name don't get expanded by the user's shell before `find`
+/// receives them.
+fn build_find_command(patterns: &[String], target_path: &str) -> String {
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| format!(" -name '{pattern}'"))
+        .join(" -o");
+    let escaped_path = ShellFamily::Posix.shell_escape(target_path);
+    format!("find {escaped_path} -type f {pattern_args}")
+}
+
 /// Uses the find command for Unix-like environments to find files matching patterns.
 async fn run_find_command(
     patterns: &[String],
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    // Build a find command with -name for each pattern
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!(" -name '{pattern}'"))
-        .join(" -o");
-    let find_command = format!("find \"{target_path}\" -type f {pattern_args}");
+    let find_command = build_find_command(patterns, target_path);
 
     let command_output = session
         .execute_command(
@@ -325,19 +334,27 @@ async fn run_find_command(
     }
 }
 
+/// Builds the PowerShell `Get-ChildItem` command run by
+/// [`run_powershell_get_childitem_command`]. The path is escaped through
+/// [`ShellFamily::PowerShell`].
+fn build_get_childitem_command(patterns: &[String], target_path: &str) -> String {
+    let pattern_args = patterns
+        .iter()
+        .map(|pattern| format!("'{pattern}'"))
+        .join(",");
+    let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
+    format!(
+        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path {escaped_path} | ForEach-Object {{ $_.FullName }}"
+    )
+}
+
 /// Uses PowerShell's Get-ChildItem to find files matching patterns.
 async fn run_powershell_get_childitem_command(
     patterns: &[String],
     target_path: &str,
     session: &Session,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .map(|pattern| format!("'{pattern}'"))
-        .join(",");
-    let command = format!(
-        "Get-ChildItem -File -Recurse -Include {pattern_args} -Path \"{target_path}\" | ForEach-Object {{ $_.FullName }}"
-    );
+    let command = build_get_childitem_command(patterns, target_path);
 
     let command_output = session
         .execute_command(
@@ -369,3 +386,7 @@ fn non_empty_lines(str: &str) -> impl Iterator<Item = &str> {
 impl Entity for FileGlobExecutor {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "file_glob_tests.rs"]
+mod tests;
