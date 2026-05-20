@@ -861,10 +861,10 @@ impl TerminalManager {
                         terminal_view.owned_ambient_agent_task_id(app).is_some()
                     });
                     if !is_owner {
-                        Self::stop_orchestration_polling(&orchestration_viewer_model);
+                        Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                     }
                 } else {
-                    Self::stop_orchestration_polling(&orchestration_viewer_model);
+                    Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                     Self::shared_session_ended(&view, model.clone(), ctx);
                 }
                 view.update(ctx, |terminal_view, ctx| {
@@ -899,7 +899,7 @@ impl TerminalManager {
                 };
                 // Viewer has been removed and will not re-attach; stop the
                 // children-polling background work.
-                Self::stop_orchestration_polling(&orchestration_viewer_model);
+                Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                 Self::shared_session_ended(&view, model.clone(), ctx);
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = viewer_removed_reason_string(reason);
@@ -924,7 +924,7 @@ impl TerminalManager {
                 };
                 // Reconnection has been abandoned; stop the children-polling
                 // background work.
-                Self::stop_orchestration_polling(&orchestration_viewer_model);
+                Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                 Self::shared_session_ended(&view, model.clone(), ctx);
                 view.update(ctx, |terminal_view, ctx| {
                     terminal_view.show_persistent_toast(
@@ -1605,10 +1605,34 @@ impl TerminalManager {
     /// exists. Called from terminal session-end paths. The model's
     /// `ctx.spawn` continuations are entity-scoped, so dropping the
     /// entity makes them no-ops; no explicit `.abort()` needed.
+    ///
+    /// Under `FeatureFlag::OrchestrationViewerStreamer`, the model also
+    /// holds a viewer-mode registration on the shared
+    /// [`OrchestrationEventStreamer`]; we unregister explicitly here so
+    /// the streamer can refcount-tear-down the ancestor SSE on the last
+    /// pane close. The unregister API is idempotent (see spec
+    /// § `Risks and mitigations: Drop refcount race`), so calling it
+    /// when the flag is off (or when the streamer has already removed the
+    /// entry) is harmless.
     fn stop_orchestration_polling(
         orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        ctx: &mut AppContext,
     ) {
-        *orchestration_viewer_model.lock() = None;
+        let Some(handle) = orchestration_viewer_model.lock().take() else {
+            return;
+        };
+        if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
+            let parent_task_id = handle.as_ref(ctx).parent_task_id();
+            let consumer_id = handle.id();
+            crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::handle(
+                ctx,
+            )
+            .update(ctx, move |streamer, _ctx| {
+                streamer.unregister_viewer_mode_consumer(parent_task_id, consumer_id);
+            });
+        }
+        // `handle` drops here, releasing the per-pane viewer model.
+        drop(handle);
     }
 
     fn shared_session_ended(

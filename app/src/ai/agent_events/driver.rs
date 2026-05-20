@@ -18,11 +18,45 @@ pub(crate) const DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS: &[u64] = &[30];
 pub(crate) const DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT: Duration = Duration::from_secs(14 * 60);
 pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
 
+/// Selects which server-side filter shape an [`AgentEventSource`] should use
+/// when opening a stream.
+///
+/// The existing per-run-ids filter (`AgentEventFilter::RunIds`) maps to the
+/// `?run_ids[]=` query parameter on the SSE endpoint and is used by both the
+/// orchestrator-owner per-conversation stream and the dormant Claude wake
+/// listener. The ancestor filter (`AgentEventFilter::AncestorRunId`) maps to
+/// the new `?ancestor_run_id=` shape added in `warp-server` for the
+/// orchestration-viewer-polling spec (`specs/orch-viewer-polling/TECH.md`) and
+/// streams events for any direct child of the supplied parent run.
+#[derive(Clone, Debug)]
+pub(crate) enum AgentEventFilter {
+    /// One stream per multiplexed set of run IDs. Matches today's
+    /// `?run_ids[]=` endpoint.
+    RunIds(Vec<String>),
+    /// Stream events for every direct child of the supplied parent run.
+    /// Matches the `?ancestor_run_id=` endpoint added by PR 2 of
+    /// `specs/orch-viewer-polling/TECH.md`.
+    AncestorRunId(String),
+}
+
+impl AgentEventFilter {
+    /// Returns a short debug label used in driver log lines so we don't have
+    /// to format the full `Vec<String>` payload on every retry.
+    pub(crate) fn log_label(&self) -> String {
+        match self {
+            AgentEventFilter::RunIds(ids) => format!("run_ids={ids:?}"),
+            AgentEventFilter::AncestorRunId(id) => format!("ancestor_run_id={id}"),
+        }
+    }
+}
+
 /// Configuration for the shared agent-event stream driver.
 #[derive(Clone, Debug)]
 pub(crate) struct AgentEventDriverConfig {
-    /// Run IDs whose events should be multiplexed into a single stream.
-    pub run_ids: Vec<String>,
+    /// Wire-level filter selecting which run IDs the stream serves. Either a
+    /// concrete multiplexed list of run IDs or an ancestor-scoped child set;
+    /// see [`AgentEventFilter`].
+    pub filter: AgentEventFilter,
     /// Last fully handled event sequence. Events at or below this cursor are
     /// ignored on reconnect so the consumer only sees new work.
     pub since_sequence: i64,
@@ -44,16 +78,22 @@ pub(crate) struct AgentEventDriverConfig {
 
 impl AgentEventDriverConfig {
     /// Build the production reconnecting configuration used by long-lived
-    /// orchestration and harness listeners.
-    pub(crate) fn retry_forever(run_ids: Vec<String>, since_sequence: i64) -> Self {
+    /// orchestration and harness listeners, parameterised on the wire filter.
+    pub(crate) fn retry_forever(filter: AgentEventFilter, since_sequence: i64) -> Self {
         Self {
-            run_ids,
+            filter,
             since_sequence,
             reconnect_backoff_steps: DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
             permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
             proactive_reconnect_after: Some(DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT),
             failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
         }
+    }
+
+    /// Convenience: build a `retry_forever` config from a concrete list of
+    /// run IDs. Lets existing call sites keep their current ergonomics.
+    pub(crate) fn retry_forever_run_ids(run_ids: Vec<String>, since_sequence: i64) -> Self {
+        Self::retry_forever(AgentEventFilter::RunIds(run_ids), since_sequence)
     }
 }
 
@@ -120,13 +160,13 @@ cfg_if::cfg_if! {
     }
 }
 
-/// Opens a stream of parsed agent events for one or more run IDs.
+/// Opens a stream of parsed agent events for the supplied filter.
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 pub(crate) trait AgentEventSource: Send + Sync {
     async fn open_stream(
         &self,
-        run_ids: &[String],
+        filter: &AgentEventFilter,
         since_sequence: i64,
     ) -> Result<AgentEventSourceStream>;
 }
@@ -147,13 +187,21 @@ impl ServerApiAgentEventSource {
 impl AgentEventSource for ServerApiAgentEventSource {
     async fn open_stream(
         &self,
-        run_ids: &[String],
+        filter: &AgentEventFilter,
         since_sequence: i64,
     ) -> Result<AgentEventSourceStream> {
-        let stream = self
-            .server_api
-            .stream_agent_events(run_ids, since_sequence)
-            .await?;
+        let stream = match filter {
+            AgentEventFilter::RunIds(run_ids) => {
+                self.server_api
+                    .stream_agent_events(run_ids, since_sequence)
+                    .await?
+            }
+            AgentEventFilter::AncestorRunId(ancestor_run_id) => {
+                self.server_api
+                    .stream_agent_events_for_ancestor(ancestor_run_id, since_sequence)
+                    .await?
+            }
+        };
 
         let stream = stream.filter_map(|event_result| async move {
             match event_result {
@@ -235,7 +283,7 @@ where
         // this returns Ok. Wait for the `AgentEventSourceItem::Open`
         // event below before declaring connectivity, so a server
         // outage doesn't reset `failures` between every retry.
-        let mut stream = match source.open_stream(&config.run_ids, since_sequence).await {
+        let mut stream = match source.open_stream(&config.filter, since_sequence).await {
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
@@ -246,7 +294,7 @@ where
                 };
                 let backoff = agent_event_backoff(failures, backoff_steps);
                 log_stream_failure(
-                    &config.run_ids,
+                    &config.filter,
                     failures,
                     backoff,
                     &err,
@@ -298,7 +346,10 @@ where
                     failures = 0;
                     has_connected_once = true;
                     notify_driver_state(consumer, AgentEventDriverState::Connected).await;
-                    log::info!("Agent event stream opened for {:?}", config.run_ids);
+                    log::info!(
+                        "Agent event stream opened for {}",
+                        config.filter.log_label()
+                    );
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Event(event)))) => {
                     failures = 0;
@@ -329,7 +380,7 @@ where
                     };
                     let backoff = agent_event_backoff(failures, backoff_steps);
                     log_stream_failure(
-                        &config.run_ids,
+                        &config.filter,
                         failures,
                         backoff,
                         &err,
@@ -354,8 +405,8 @@ where
                     failures += 1;
                     let backoff = agent_event_backoff(failures, config.reconnect_backoff_steps);
                     log::warn!(
-                        "Agent event stream closed for {:?}, reconnecting in {backoff:?}",
-                        config.run_ids
+                        "Agent event stream closed for {}, reconnecting in {backoff:?}",
+                        config.filter.log_label()
                     );
                     notify_driver_state(
                         consumer,
@@ -389,22 +440,19 @@ async fn notify_driver_state<C: AgentEventConsumer>(
 }
 
 fn log_stream_failure(
-    run_ids: &[String],
+    filter: &AgentEventFilter,
     failures: usize,
     backoff: Duration,
     err: &anyhow::Error,
     failures_before_error_log: usize,
 ) {
+    let label = filter.log_label();
     if agent_event_failures_exceeded_threshold(failures, failures_before_error_log) {
         log::error!(
-            "Agent event stream failed {failures} consecutive times for {:?}, retrying in {backoff:?}: {err:#}",
-            run_ids
+            "Agent event stream failed {failures} consecutive times for {label}, retrying in {backoff:?}: {err:#}"
         );
     } else {
-        log::warn!(
-            "Agent event stream failed for {:?}, retrying in {backoff:?}: {err:#}",
-            run_ids
-        );
+        log::warn!("Agent event stream failed for {label}, retrying in {backoff:?}: {err:#}");
     }
 }
 

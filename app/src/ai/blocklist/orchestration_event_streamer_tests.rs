@@ -1383,8 +1383,8 @@ fn is_known_child_dedupes_per_parent_after_first_observation() {
         let consumer_id = warpui::EntityId::new();
         let placeholder_conv_id =
             crate::ai::agent::conversation::AIConversation::new(true, false).id();
-        streamer.update(&mut app, |me, _| {
-            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id);
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id, ctx);
         });
 
         streamer.read(&app, |me, _| {
@@ -1432,9 +1432,9 @@ fn is_known_child_isolated_per_parent() {
         let consumer_id = warpui::EntityId::new();
         let placeholder_conv_id =
             crate::ai::agent::conversation::AIConversation::new(true, false).id();
-        streamer.update(&mut app, |me, _| {
-            me.register_viewer_mode_consumer(parent_a, placeholder_conv_id, consumer_id);
-            me.register_viewer_mode_consumer(parent_b, placeholder_conv_id, consumer_id);
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_a, placeholder_conv_id, consumer_id, ctx);
+            me.register_viewer_mode_consumer(parent_b, placeholder_conv_id, consumer_id, ctx);
             me.viewer_mode_orchestrators
                 .get_mut(&parent_a)
                 .expect("entry A")
@@ -1478,9 +1478,9 @@ fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() 
 
         // Register two panes for the same orchestrator. Refcount should be 2
         // and both placeholders should be recorded.
-        streamer.update(&mut app, |me, _| {
-            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a);
-            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b);
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a, ctx);
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b, ctx);
         });
 
         streamer.read(&app, |me, _| {
