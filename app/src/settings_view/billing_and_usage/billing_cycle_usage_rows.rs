@@ -148,6 +148,12 @@ fn build_other_members_usage_row(entries: &[BillingCycleUsageEntry]) -> MemberUs
     }
 }
 
+struct GroupedSubjectUsage {
+    subject_type: AiCreditsUsageAndCostSubjectType,
+    display_name: String,
+    entries: Vec<BillingCycleUsageEntry>,
+}
+
 /// Per-member rows for `PerUserTotals` viewers. Iterates the workspace member
 /// list so zero-usage members still get a row. Service accounts and other
 /// non-member subjects surface as extra rows at the bottom.
@@ -157,14 +163,7 @@ pub fn build_member_usage_rows(
     source_filter: SourceFilter,
 ) -> Vec<MemberUsageRow> {
     // Group entries by subject for joining against the member list below.
-    let mut grouped: HashMap<
-        String,
-        (
-            AiCreditsUsageAndCostSubjectType,
-            String,
-            Vec<BillingCycleUsageEntry>,
-        ),
-    > = HashMap::new();
+    let mut grouped: HashMap<String, GroupedSubjectUsage> = HashMap::new();
     let mut unknown_counter = 0usize;
 
     for entry in entries
@@ -182,17 +181,15 @@ pub fn build_member_usage_rows(
                 format!("{:?}:unknown-{unknown_counter}", entry.subject_type)
             }
         };
-        let group = grouped.entry(key).or_insert_with(|| {
-            (
-                entry.subject_type.clone(),
-                entry
-                    .subject_display_name
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                Vec::new(),
-            )
+        let group = grouped.entry(key).or_insert_with(|| GroupedSubjectUsage {
+            subject_type: entry.subject_type.clone(),
+            display_name: entry
+                .subject_display_name
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string()),
+            entries: Vec::new(),
         });
-        group.2.push(entry.clone());
+        group.entries.push(entry.clone());
     }
 
     let mut rows: Vec<MemberUsageRow> = Vec::with_capacity(members.len());
@@ -208,7 +205,7 @@ pub fn build_member_usage_rows(
         seen_keys.insert(key.clone());
 
         let (segments, total_credits, total_cost_cents) = match grouped.remove(&key) {
-            Some((_, _, entries)) => aggregate_segments(entries.iter()),
+            Some(group) => aggregate_segments(group.entries.iter()),
             None => (Vec::new(), 0, 0),
         };
 
@@ -226,19 +223,19 @@ pub fn build_member_usage_rows(
     }
 
     // Subjects not in the member list (typically service accounts) render after.
-    for (key, (subject_type, display_name, entries)) in grouped {
+    for (key, group) in grouped {
         if seen_keys.contains(&key) {
             continue;
         }
         // All entries in a group share the same subject_uid by construction
         // (it's part of the grouping key), so first.is representative.
-        let subject_uid = entries.first().and_then(|e| e.subject_uid.clone());
-        let (segments, total_credits, total_cost_cents) = aggregate_segments(entries.iter());
+        let subject_uid = group.entries.first().and_then(|e| e.subject_uid.clone());
+        let (segments, total_credits, total_cost_cents) = aggregate_segments(group.entries.iter());
         rows.push(MemberUsageRow {
-            subject_type,
+            subject_type: group.subject_type,
             subject_key: key,
             subject_uid,
-            display_name,
+            display_name: group.display_name,
             total_credits,
             total_cost_cents,
             base_limit: None,

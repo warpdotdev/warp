@@ -122,11 +122,6 @@ impl BillingCycleUsageSectionView {
         AuthStateProvider::as_ref(app).get().user_email()
     }
 
-    /// Whether the current viewer has admin/owner permissions on the current
-    /// team. Mirrors the convention used by the other settings pages (main,
-    /// ai, billing-and-usage v1/v2, teams): Owners always count as admins,
-    /// and non-owner Admins count only when the tier's `multi_admin_policy`
-    /// is enabled.
     fn viewer_is_admin(app: &AppContext) -> bool {
         let Some(team) = UserWorkspaces::as_ref(app).current_team() else {
             return false;
