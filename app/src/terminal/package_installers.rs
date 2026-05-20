@@ -81,5 +81,5 @@ fn is_at_context_package_installer_prefix(buffer_text: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "package_installers_test.rs"]
+#[path = "package_installers_tests.rs"]
 mod tests;

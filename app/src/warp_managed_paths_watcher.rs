@@ -118,6 +118,7 @@ fn filter_repository_update(
     let mut filtered = RepositoryUpdate {
         commit_updated: update.commit_updated,
         index_lock_detected: update.index_lock_detected,
+        remote_ref_updated: update.remote_ref_updated,
         ..Default::default()
     };
 
@@ -195,6 +196,7 @@ fn filesystem_event_to_repository_update(event: &BulkFilesystemWatcherEvent) -> 
             .collect(),
         commit_updated: false,
         index_lock_detected: false,
+        remote_ref_updated: false,
     }
 }
 
@@ -411,6 +413,7 @@ mod tests {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         let filtered =
@@ -436,6 +439,7 @@ mod tests {
             )]),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         let filtered =

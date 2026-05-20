@@ -322,5 +322,5 @@ pub fn open_file_path_with_editor(
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

@@ -8,5 +8,4 @@ pub enum PaletteMode {
     WarpDrive,
     Files,
     Conversations,
-    ConversationsAndRepos,
 }

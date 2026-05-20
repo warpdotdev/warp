@@ -1,7 +1,9 @@
 use super::*;
 use crate::{
     ai::request_usage_model::{RequestLimitInfo, RequestLimitRefreshDuration},
+    auth::AuthStateProvider,
     test_util::settings::initialize_settings_for_tests,
+    workspaces::user_workspaces::UserWorkspaces,
 };
 use chrono::Utc;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -28,6 +30,11 @@ fn create_test_request_limit_info(
         max_files_per_repo: 5000,
         embedding_generation_batch_size: 100,
     }
+}
+
+fn add_ai_enablement_dependencies_for_test(app: &mut App) {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
 // FocusedTerminalInfo Tests
@@ -383,6 +390,33 @@ fn test_toolbar_command_map_matched_agent() {
     });
 }
 
+#[test]
+fn orchestration_v2_enables_orchestration_when_ai_is_enabled() {
+    let _orchestration_v2_flag = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        add_ai_enablement_dependencies_for_test(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            assert!(settings.is_orchestration_enabled(ctx));
+        });
+    });
+}
+
+#[test]
+fn orchestration_v2_disabled_disables_orchestration() {
+    let _orchestration_v2_flag = FeatureFlag::OrchestrationV2.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        add_ai_enablement_dependencies_for_test(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            assert!(!settings.is_orchestration_enabled(ctx));
+        });
+    });
+}
 #[test]
 fn test_should_display_quota_reset_banner_with_empty_history() {
     App::test((), |mut app| async move {

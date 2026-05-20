@@ -164,6 +164,11 @@ pub trait PathCompletionContext: Send + Sync {
     /// This is used to expand '~' and '$HOME' in user input.
     fn home_directory(&self) -> Option<&str>;
 
+    /// `CDPATH`/`cdpath` from the shell, colon-separated. Used to extend `cd` argument completions.
+    fn cdpath(&self) -> Option<&str> {
+        None
+    }
+
     fn shell_family(&self) -> ShellFamily;
 
     /// The current working directory, which is used to determine how relative path suggestions

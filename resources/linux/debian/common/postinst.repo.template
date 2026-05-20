@@ -80,16 +80,38 @@ Qh6Vm3FbRCkKqx2FzF6lCwA=
 SIGNINGKEY
 
 # If our package repository hasn't been configured yet, set it up.
+#
+# apt supports two source-list formats: the legacy one-line `.list` format and
+# the RFC 822-style `.sources` (DEB822) format. Newer apt (e.g. Ubuntu 26.04's
+# `apt modernize-sources`) converts `.list` files to `.sources`. If we only
+# check for `.list` here, a post-modernization upgrade ends up writing a fresh
+# `.list` alongside the converted `.sources`, producing duplicate-source
+# warnings on every `apt update` (#10011).
+#
+# Behavior:
+#   - If neither `.sources` nor `.list` exists, write `.sources` (the modern
+#     format the reporter recommended; supported by every apt version Warp's
+#     packages target).
+#   - If either format already exists, leave it alone. We don't migrate a
+#     legacy `.list` to `.sources` here — that's the user's tooling's job
+#     (`apt modernize-sources` handles it cleanly), and overwriting their
+#     potentially-edited file would be hostile.
 if [ -d "$APT_SOURCE_LIST_DIR" ]; then
-	APT_SOURCE_LIST="${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.list"
-	if [ ! -f "$APT_SOURCE_LIST" ]; then
+	APT_SOURCE_LIST_LEGACY="${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.list"
+	APT_SOURCE_LIST_DEB822="${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.sources"
+	if [ ! -f "$APT_SOURCE_LIST_LEGACY" ] && [ ! -f "$APT_SOURCE_LIST_DEB822" ]; then
 		# If the source list directory exists but our repository isn't
-		# configured within it, install our repo.
-		cat > "$APT_SOURCE_LIST" <<EOF
+		# configured in either format, install our repo.
+		cat > "$APT_SOURCE_LIST_DEB822" <<EOF
 ### THIS FILE IS AUTOMATICALLY CONFIGURED ###
 # You may comment out this entry, but other modifications to the file may be lost.
 
-deb [arch=@@ARCH@@ signed-by=$SIGNING_KEY_PATH] https://releases.warp.dev/linux/deb @@CHANNEL@@ main
+Types: deb
+URIs: https://releases.warp.dev/linux/deb
+Suites: @@CHANNEL@@
+Components: main
+Architectures: @@ARCH@@
+Signed-By: $SIGNING_KEY_PATH
 EOF
 	fi
 fi

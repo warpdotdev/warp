@@ -144,5 +144,5 @@ fn deepest_matching_subcommand_signature<'a>(
 }
 
 #[cfg(test)]
-#[path = "lookup_test.rs"]
+#[path = "lookup_tests.rs"]
 mod test;

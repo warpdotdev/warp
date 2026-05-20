@@ -56,7 +56,6 @@ use crate::{
         },
     },
     settings::cloud_preferences::Preference,
-    util::sync::Condition,
     workflows::{
         workflow::Workflow,
         workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum},
@@ -83,6 +82,7 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
 use warpui::{duration_with_jitter, AppContext};
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -3217,6 +3217,25 @@ impl UpdateManager {
     }
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+        self.create_object_online(
+            CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
+            owner,
+            client_id,
+            Default::default(),
+            false,
+            None,
+            ctx,
+        )
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn create_scheduled_ambient_agent_online(
         &mut self,
         scheduled_ambient_agent: ScheduledAmbientAgent,
@@ -4804,5 +4823,5 @@ impl Entity for UpdateManager {
 impl SingletonEntity for UpdateManager {}
 
 #[cfg(test)]
-#[path = "update_manager_test.rs"]
+#[path = "update_manager_tests.rs"]
 mod tests;

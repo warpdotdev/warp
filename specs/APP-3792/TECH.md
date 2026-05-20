@@ -159,7 +159,6 @@ Cache invalidation behavior:
 Extend `crates/remote_server/proto/remote_server.proto` with request/response and push messages for remote indexing. Names can be adjusted during implementation, but the protocol needs these concepts:
 
 - `IndexCodebase { repo_path }`
-- `ListCodebaseIndexStatuses {}`
 - `DropCodebaseIndex { repo_path }`
 - `GetFragmentMetadataFromHash { repo_path, content_hashes }`
 - `CodebaseIndexStatusesSnapshot { statuses }`
@@ -167,16 +166,13 @@ Extend `crates/remote_server/proto/remote_server.proto` with request/response an
 
 `IndexCodebase` is the only client-triggered indexing command in v1. The client owns all product decisions about feature flags, speedbump acceptance, automatic indexing settings, and retry affordances before it sends this message. The daemon treats the message as an explicit request to index, retry, or rebuild the repo path.
 
-`CodebaseIndexStatusesSnapshot` is the primary status bootstrap path. After daemon initialization and after a client reconnects, the daemon should push the complete set of identity-scoped repo statuses it loaded from SQLite. The client uses this snapshot to populate settings and initial tool-advertisement state without asking for every repo one-by-one.
+`CodebaseIndexStatusesSnapshot` is the status bootstrap and full-resync path. After daemon initialization and after a client reconnects, the daemon must push the complete set of identity-scoped repo statuses it loaded from SQLite. The client uses this snapshot to populate settings and initial tool-advertisement state without asking for every repo one-by-one.
 
-`ListCodebaseIndexStatuses` is an explicit bulk resync fallback for the same data. Use it when the client needs immediate settings state before the snapshot arrives, detects that it missed the initial snapshot, or wants to resync after a reconnect/app resume.
-
-There is intentionally no per-repo status fetch in v1. The daemon and client should always converge through the initial `CodebaseIndexStatusesSnapshot`, `CodebaseIndexStatusUpdated` deltas, and the bulk `ListCodebaseIndexStatuses` resync fallback. When a user navigates to a repo that is not already in the synchronized status set, the daemon should push `CodebaseIndexStatusUpdated` for that repo as soon as it recognizes the repo, usually `Not enabled` for a first-seen repo. The client should not ask the daemon for just that repo.
+There is intentionally no per-repo status fetch or client-initiated bulk status fetch in v1. The daemon and client should always converge through the pushed `CodebaseIndexStatusesSnapshot` after initialize/reconnect plus `CodebaseIndexStatusUpdated` deltas. When a user navigates to a repo that is not already in the synchronized status set, the daemon should push `CodebaseIndexStatusUpdated` for that repo as soon as it recognizes the repo, usually `Not enabled` for a first-seen repo. The client should not ask the daemon for just that repo.
 
 `GetFragmentMetadataFromHash` is used after client-side backend retrieval. The backend returns content hashes for candidate fragments, but only the daemon has the remote snapshot metadata needed to map those hashes back to remote file paths, ranges, symbols, and other fragment metadata. The daemon must verify every requested content hash belongs to the enabled repo's current or last-ready snapshot before returning metadata. Content bytes should be read through the APP-3790 remote `ReadFileContext` path rather than this RPC.
 
 All new remote-indexing RPCs are scoped to the identity-partitioned remote-server daemon socket. Authorization requirements by message:
-- `ListCodebaseIndexStatuses` returns only identity-scoped user metadata for the connected identity.
 - `DropCodebaseIndex` mutates only identity-scoped user metadata for the connected identity and must carry a request-scoped bearer credential, either in the proto payload or authenticated request envelope, before it calls the backend to revoke or delete that user's repo/root association.
 - `GetFragmentMetadataFromHash` requires that the connected identity has enabled the repo and that every requested content hash belongs to that repo's current or last-ready snapshot. It must not read cross-repo metadata from the shared cache.
 - `IndexCodebase` must carry a request-scoped bearer credential, either in the proto payload or authenticated request envelope, because it can trigger config fetches, embedding generation, and index sync.
@@ -204,11 +200,10 @@ In `app/src/remote_server/mod.rs`, register the indexing manager as a daemon sin
 
 In `app/src/remote_server/server_model.rs`, add handler arms for the new RPCs:
 - `IndexCodebase`: check cache first; if miss, failed, stale, or invalid, enqueue/build index and immediately push queued/indexing status. Retrying a failed repo is the same message after the client chooses retry.
-- `ListCodebaseIndexStatuses`: return the current identity-scoped status snapshot for all repos known to the daemon.
 - `DropCodebaseIndex`: remove or update the connected identity's user metadata for that repo, stop watcher registration if no enabled identities still need it, push disabled/not-enabled status, and call the backend to revoke or delete that user/repo/root association for synced remote index data. The shared machine-local Merkle/snapshot cache may remain for other identities or future reuse, and content-addressed backend blobs may remain subject to backend retention or deduplication policy, but dropped roots must become inaccessible for retrieval by that user/repo.
 - `GetFragmentMetadataFromHash`: verify each content hash belongs to the enabled repo's current or last-ready snapshot, map hashes to fragment metadata, and return remote file paths/ranges plus metadata needed by retrieval. Do not read file bytes or make backend calls in this handler.
 Update the existing `NavigatedToDirectory` handling so that when the daemon recognizes a git repo that is not in the current identity-scoped status set, it computes the repo's cached status and pushes `CodebaseIndexStatusUpdated` immediately. First-seen repos should become explicit `Not enabled` entries rather than remaining absent from client state.
-Subscribe once to indexing manager events and fan out `CodebaseIndexStatusUpdated` deltas to connected clients after the initial snapshot. On disconnect/reconnect, push `CodebaseIndexStatusesSnapshot` again and allow clients to resync explicitly via `ListCodebaseIndexStatuses`; push messages are the primary steady-state path, while explicit requests are fallback/resync paths.
+Subscribe once to indexing manager events and fan out `CodebaseIndexStatusUpdated` deltas to connected clients after the initial snapshot. On disconnect/reconnect, push `CodebaseIndexStatusesSnapshot` again; push messages are the primary steady-state path, and reconnect is the full-resync boundary.
 
 ### 3.6 Fetch and respect server-backed config on the daemon
 The daemon should call `codebase_context_config` through its `StoreClient` before sync work and at the cadence expected by the local implementation. Server-backed values such as embedding config, embedding cadence, generation batch size, and sync batching should be owned by the backend and respected on the remote host.
@@ -238,10 +233,9 @@ Public APIs should cover the upstream callers explicitly:
 - `request_index(session_id, repo_path, auth_token)` to send `IndexCodebase` after client-side feature/preference/speedbump decisions.
 - `drop_index(session_id, repo_path, auth_token)` to send `DropCodebaseIndex` and optimistically move the entry to disabled/not-enabled only after daemon acknowledgement.
 - `apply_status_snapshot(host_id, statuses)` to replace/reconcile the initial daemon-provided status set for settings and tool-advertisement bootstrap.
-- `refresh_host_statuses(host_id)` to send `ListCodebaseIndexStatuses` only when the client missed the daemon snapshot or needs explicit bulk resync.
 
 Event handling:
-- On `RemoteServerManagerEvent::SessionConnected`/`SessionReconnected`, record host capability, wait for the daemon's `CodebaseIndexStatusesSnapshot`, and clear any local unavailable marker for entries on that host. If the snapshot is missing or settings needs immediate state, call `refresh_host_statuses(host_id)` for a bulk resync.
+- On `RemoteServerManagerEvent::SessionConnected`/`SessionReconnected`, record host capability, enter an awaiting-snapshot state, and clear any local unavailable marker only after the daemon's `CodebaseIndexStatusesSnapshot` arrives. If the snapshot does not arrive within the expected protocol window, treat the session as out of sync and reconnect or mark the host unavailable/unsupported rather than issuing a separate status request.
 - On `CodebaseIndexStatusesSnapshot`, replace or reconcile all identity-scoped entries for that host and notify settings/speedbump/tool subscribers.
 - On `NavigatedToDirectory`, update the session's active repo and wait for/apply the daemon-pushed `CodebaseIndexStatusUpdated` if this is a newly known repo. The speedbump or auto-indexing flow should act on the explicit status, such as `Not enabled`, rather than inferring a missing state locally. Do not issue a per-repo status request on navigation.
 - On `CodebaseIndexStatusUpdated`, upsert the keyed `RemoteIndexState`, notify settings/speedbump/tool subscribers, and preserve a ready root hash when the daemon reports stale with a last-ready root.
@@ -329,7 +323,7 @@ The daemon should not independently check the feature flag. If it receives a val
 Break the implementation into small PRs that keep behavior behind `FeatureFlag::RemoteCodebaseIndexing` until the end-to-end path is ready.
 
 ### PR 1: Basic daemon/client handshake
-Add the remote-server protocol capability and no-op status synchronization path first. The daemon should advertise remote-indexing support, push an empty or SQLite-backed `CodebaseIndexStatusesSnapshot` after initialization/reconnect, accept `ListCodebaseIndexStatuses`, and push `CodebaseIndexStatusUpdated { status: Not enabled }` when navigation reveals a first-seen git repo. The client should add `RemoteCodebaseIndexModel` enough to apply snapshots and pushed repo-status updates, track unsupported/unavailable hosts, and prove settings/tool callers can observe the synchronized status set without exposing `SearchCodebase` yet.
+Add the remote-server protocol capability and no-op status synchronization path first. The daemon should advertise remote-indexing support, push an empty or SQLite-backed `CodebaseIndexStatusesSnapshot` after initialization/reconnect, and push `CodebaseIndexStatusUpdated { status: Not enabled }` when navigation reveals a first-seen git repo. The client should add `RemoteCodebaseIndexModel` enough to apply snapshots and pushed repo-status updates, track unsupported/unavailable hosts, and prove settings/tool callers can observe the synchronized status set without exposing `SearchCodebase` yet.
 
 ### PR 2: ServerApi token-refresh policy
 Make `ServerApi` configurable with an injectable token source and `allowed_to_refresh_token` policy. Keep the existing client path on refresh-enabled behavior, add refresh-disabled daemon tests, and verify missing/expired/revoked daemon credentials return actionable auth errors instead of entering the client refresh flow.
@@ -361,7 +355,7 @@ Expose remote entries in settings, add the remote-aware speedbump/auto-indexing 
 - **Daemon egress blocked.** Mitigation: product shows failed/unreachable with retry. Keep client-proxied `StoreClient` as a follow-up only if real deployments require it.
 - **Binary size increase.** Reusing indexing code brings tree-sitter/chunking/GraphQL dependencies into the daemon. Mitigation: measure daemon binary size before landing, keep daemon entrypoints narrow, and extract a smaller indexing crate later only if needed.
 - **Config drift between local and remote indexing.** Mitigation: daemon fetches server-backed config via `codebase_context_config`; client owns user/feature gate decisions before sending `IndexCodebase`.
-- **Status push loss during disconnect.** Mitigation: identity-scoped status is cached on the daemon; reconnect pushes `CodebaseIndexStatusesSnapshot`, and clients can explicitly resync with `ListCodebaseIndexStatuses`.
+- **Status push loss during disconnect.** Mitigation: identity-scoped status is cached on the daemon; reconnect pushes a fresh `CodebaseIndexStatusesSnapshot`, and clients treat reconnect as the full-resync boundary before trusting incremental deltas.
 - **Snapshot corruption/version skew.** Mitigation: match local snapshot behavior by deleting bad snapshots and rebuilding.
 - **Credential exposure.** Mitigation: use APP-3801 token provider, never persist tokens, redact protocol logs, and ensure agent context never includes auth material.
 - **Proxy-socket auth bypass.** Mitigation: require request-scoped auth tokens on remote client/server proto messages before handlers make auth-required outbound Warp service requests; reject missing or invalid tokens instead of relying on daemon-stored credentials as ambient authority.

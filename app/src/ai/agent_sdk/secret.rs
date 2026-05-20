@@ -12,8 +12,8 @@ use warp_cli::{
     agent::OutputFormat,
     scope::ObjectScope,
     secret::{
-        AnthropicMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs, ListSecretsArgs,
-        SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
+        AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
+        ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
     },
     GlobalOptions,
 };
@@ -105,6 +105,11 @@ enum SecretInput {
         session_token: Option<String>,
         region: Option<String>,
     },
+    /// OpenAI API key secret with optional base URL.
+    OpenaiApiKey {
+        value_args: ValueArgs,
+        base_url: Option<String>,
+    },
 }
 
 impl SecretInput {
@@ -137,6 +142,10 @@ impl SecretInput {
                 session_token,
                 region,
             ),
+            SecretInput::OpenaiApiKey {
+                value_args,
+                base_url,
+            } => read_openai_api_key_secret_value(&value_args, base_url),
         }
     }
 }
@@ -171,6 +180,17 @@ fn create_secret(ctx: &mut AppContext, args: CreateSecretArgs) -> Result<()> {
                     secret_access_key: a.secret_access_key,
                     session_token: a.session_token,
                     region: a.region,
+                },
+                a.common.description,
+                a.common.scope,
+            ),
+        },
+        Some(CreateProvider::Codex(codex)) => match codex.method {
+            CodexMethod::ApiKey(a) => (
+                a.common.name,
+                SecretInput::OpenaiApiKey {
+                    value_args: a.value,
+                    base_url: a.base_url,
                 },
                 a.common.description,
                 a.common.scope,
@@ -556,6 +576,11 @@ fn make_simple_secret_value(secret_type: SecretType, raw: &str) -> ManagedSecret
             // Bedrock secrets are multi-field and handled via SecretInput::Bedrock.
             unreachable!("Bedrock secrets should not go through make_simple_secret_value")
         }
+        SecretType::OpenaiApiKey => {
+            // OpenAI API key secrets are handled via SecretInput::OpenaiApiKey so the optional
+            // base URL can be plumbed through alongside the API key.
+            unreachable!("OpenAI API key secrets should not go through make_simple_secret_value")
+        }
     }
 }
 
@@ -583,7 +608,67 @@ fn make_secret_value_from_gql_type(
                 "Bedrock API key secrets cannot be updated via `--value`; re-create the secret instead"
             ))
         }
+        ManagedSecretType::OpenaiApiKey => Ok(ManagedSecretValue::openai_api_key(raw, None)),
     }
+}
+
+/// Read an OpenAI API key secret from CLI flags or interactive prompts.
+///
+/// The API key value is read from `--value-file`, stdin, or an interactive password prompt (in
+/// that order), matching the behavior of other simple secret types.
+///
+/// `base_url` is optional. When `--base-url` is provided we use it verbatim (an empty value is
+/// treated as "no base URL"). When it is not provided and we are running interactively, we
+/// prompt for it; pressing Enter at the prompt skips the base URL. In non-interactive mode we
+/// silently default to no base URL, since the vast majority of users use the provider's default
+/// endpoint.
+fn read_openai_api_key_secret_value(
+    value_args: &ValueArgs,
+    base_url: Option<String>,
+) -> Result<Option<ManagedSecretValue>> {
+    let api_key = match read_simple_secret_value(value_args)? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+
+    // The base URL is optional. An empty `--base-url` flag, empty interactive submission, or
+    // omission in non-interactive mode all map to `None` so we never persist a blank string.
+    let base_url: Option<String> = match base_url {
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }
+        None => {
+            if !io::stdin().is_terminal() {
+                // Non-interactive: leave the base URL unset rather than prompting or failing.
+                None
+            } else {
+                match inquire::Text::new("OpenAI base URL (optional, press Enter to skip):")
+                    .with_help_message("e.g. https://us.api.openai.com/v1 for a regional endpoint")
+                    .prompt()
+                {
+                    Ok(value) => {
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed.to_owned())
+                        }
+                    }
+                    Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+    };
+
+    Ok(Some(ManagedSecretValue::openai_api_key(api_key, base_url)))
 }
 
 /// Read a Bedrock API key secret from dedicated CLI flags or interactive prompts.
@@ -772,5 +857,6 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::AnthropicApiKey => "Anthropic API Key".to_string(),
         ManagedSecretType::AnthropicBedrockAccessKey => "Anthropic Bedrock Access Key".to_string(),
         ManagedSecretType::AnthropicBedrockApiKey => "Anthropic Bedrock API Key".to_string(),
+        ManagedSecretType::OpenaiApiKey => "OpenAI API Key".to_string(),
     }
 }

@@ -21,6 +21,7 @@ query GetUser($requestContext: RequestContext!) {
           }
         }
         experiments
+        globalSkills
         isOnWorkDomain
         isOnboarded
         profile {
@@ -134,6 +135,7 @@ pub enum PrincipalType {
 pub struct User {
     pub anonymous_user_info: Option<AnonymousUserInfo>,
     pub experiments: Option<Vec<Experiment>>,
+    pub global_skills: Vec<String>,
     pub is_onboarded: bool,
     pub is_on_work_domain: bool,
     pub profile: FirebaseProfile,

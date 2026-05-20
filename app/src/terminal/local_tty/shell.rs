@@ -418,6 +418,15 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
+    #[cfg(test)]
+    pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
+        Self {
+            shell_type,
+            shell_path,
+            args,
+        }
+    }
+
     pub fn shell_path(&self) -> &Path {
         &self.shell_path
     }

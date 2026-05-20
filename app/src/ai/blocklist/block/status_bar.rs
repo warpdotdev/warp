@@ -1,3 +1,4 @@
+use markdown_parser::FormattedTextFragment;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use super::{
@@ -22,11 +23,9 @@ use crate::{
         AgentViewController, EphemeralMessageModel,
     },
     terminal::input::{
-        buffer_model::InputBufferModel,
-        message_bar::common::render_standard_message_bar,
-        message_bar::{Message, MessageItem},
-        slash_command_model::SlashCommandModel,
-        suggestions_mode_model::InputSuggestionsModeModel,
+        buffer_model::InputBufferModel, message_bar::common::render_wrapping_standard_message_bar,
+        slash_command_model::SlashCommandModel, suggestions_mode_model::InputSuggestionsModeModel,
+        HandoffComposeState,
     },
 };
 use warp_multi_agent_api as api;
@@ -96,7 +95,6 @@ struct StateHandles {
     stop_button: MouseStateHandle,
     take_over_button: MouseStateHandle,
     hide_cli_responses_button: MouseStateHandle,
-    github_auth_link: MouseStateHandle,
     /// Tracks hover/press state for the inline `Check now` affordance rendered next to
     /// `Last seen by agent ...` while the agent is polling a long-running command.
     force_refresh_button: MouseStateHandle,
@@ -159,6 +157,7 @@ impl BlocklistAIStatusBar {
         input_suggestions_model: ModelHandle<InputSuggestionsModeModel>,
         slash_command_model: ModelHandle<SlashCommandModel>,
         ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
+        handoff_compose_state: ModelHandle<HandoffComposeState>,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -294,6 +293,11 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
+        ctx.observe(&AITipModel::handle(ctx), |me, tip_model, ctx| {
+            me.current_tip = tip_model.as_ref(ctx).current_tip().cloned();
+            ctx.notify();
+        });
+
         let summarization_cancel_dialog =
             ctx.add_typed_action_view(|_| SummarizationCancelDialog::default());
         ctx.subscribe_to_view(
@@ -348,6 +352,7 @@ impl BlocklistAIStatusBar {
                 input_suggestions_model,
                 slash_command_model,
                 context_model.clone(),
+                handoff_compose_state,
                 terminal_model.clone(),
                 ctx,
             )
@@ -886,14 +891,16 @@ impl BlocklistAIStatusBar {
             .as_ref()
             .map(|ambient_agent_view_model| ambient_agent_view_model.as_ref(app))?;
 
+        // The step indicator is only meaningful while a spawn is in flight. Terminal states
+        // (`Failed`, `NeedsGithubAuth`, `Cancelled`) still carry an `AgentProgress` for
+        // telemetry purposes, so guard on `is_waiting_for_session()` rather than relying on
+        // `agent_progress()` being `None`.
+        if !ambient_agent_model.is_waiting_for_session() {
+            return None;
+        }
+
         let progress = ambient_agent_model.agent_progress()?;
-        let progress_text = if progress.harness_started_at.is_some() {
-            "Starting Environment (Step 3/3)"
-        } else if progress.claimed_at.is_some() {
-            "Creating Environment (Step 2/3)"
-        } else {
-            "Connecting to Host (Step 1/3)"
-        };
+        let progress_text = progress.setup_status_text();
         Some(render_warping_indicator_base(
             WarpingIndicatorProps {
                 icon: None,
@@ -911,7 +918,10 @@ impl BlocklistAIStatusBar {
         ))
     }
 
-    fn render_cloud_mode_setup_terminal_message(&self, app: &AppContext) -> Option<Message> {
+    fn render_cloud_mode_setup_terminal_message(
+        &self,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         if !FeatureFlag::CloudModeSetupV2.is_enabled() {
             return None;
         }
@@ -924,48 +934,42 @@ impl BlocklistAIStatusBar {
         let error_color = theme.ansi_fg_red();
 
         if let Some(auth_url) = ambient_agent_model.github_auth_url() {
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::Triangle,
-                    color: Some(error_color),
-                },
-                MessageItem::Text {
-                    content: "Missing GitHub authentication. ".into(),
-                    color: Some(error_color),
-                },
-                MessageItem::hyperlink(
-                    "Authenticate GitHub",
-                    auth_url.to_owned(),
-                    self.state_handles.github_auth_link.clone(),
-                ),
-            ]));
-        }
-
-        if let Some(error_message) = ambient_agent_model.error_message() {
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::Triangle,
-                    color: Some(error_color),
-                },
-                MessageItem::Text {
-                    content: error_message.to_owned().into(),
-                    color: Some(error_color),
-                },
-            ]));
+            let error_message = ambient_agent_model
+                .github_auth_error_message()
+                .unwrap_or("Missing GitHub authentication.");
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::Triangle,
+                error_color,
+                error_color,
+                vec![
+                    FormattedTextFragment::plain_text(format!("{error_message} ")),
+                    FormattedTextFragment::hyperlink("Authenticate GitHub", auth_url.to_owned()),
+                ],
+                app,
+            ));
         }
 
         if ambient_agent_model.is_cancelled() {
             let color = theme.disabled_text_color(theme.background()).into_solid();
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::StopFilled,
-                    color: Some(color),
-                },
-                MessageItem::Text {
-                    content: "Cloud agent run cancelled".into(),
-                    color: Some(color),
-                },
-            ]));
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::StopFilled,
+                color,
+                color,
+                vec![FormattedTextFragment::plain_text(
+                    "Cloud agent run cancelled",
+                )],
+                app,
+            ));
+        }
+
+        if let Some(error_message) = ambient_agent_model.error_message() {
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::Triangle,
+                error_color,
+                error_color,
+                vec![FormattedTextFragment::plain_text(error_message.to_owned())],
+                app,
+            ));
         }
 
         None
@@ -1144,7 +1148,7 @@ impl View for BlocklistAIStatusBar {
         if let Some(cloud_mode_setup_terminal_message) =
             self.render_cloud_mode_setup_terminal_message(app)
         {
-            return render_standard_message_bar(cloud_mode_setup_terminal_message, None, app);
+            return cloud_mode_setup_terminal_message;
         }
         let status_element =
             if let Some(cloud_mode_setup_status) = self.render_cloud_mode_setup_status(app) {
@@ -1154,10 +1158,11 @@ impl View for BlocklistAIStatusBar {
                     .ambient_agent_view_model
                     .as_ref()
                     .is_some_and(|ambient_agent_view_model| {
+                        let terminal_model = self.terminal_model.lock();
                         is_cloud_agent_pre_first_exchange(
                             Some(ambient_agent_view_model),
                             &self.agent_view_controller,
-                            &self.terminal_model,
+                            &terminal_model,
                             app,
                         )
                     })

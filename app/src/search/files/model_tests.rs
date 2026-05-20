@@ -398,7 +398,7 @@ mod integration_tests {
             "src/lib.rs",
             "src/components/button.tsx",
             "src/components/input.tsx",
-            "tests/integration_test.rs",
+            "tests/integration_tests.rs",
             "README.md",
         ];
 
@@ -434,7 +434,7 @@ mod integration_tests {
             "src/components/button.tsx",
             "src/components/input.tsx",
             "src/utils/button_helper.rs",
-            "tests/button_test.rs",
+            "tests/button_tests.rs",
         ];
 
         let query = "comp button";

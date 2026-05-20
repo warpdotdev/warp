@@ -1826,5 +1826,5 @@ impl Entity for CloudModel {
 impl SingletonEntity for CloudModel {}
 
 #[cfg(test)]
-#[path = "model_test.rs"]
+#[path = "model_tests.rs"]
 mod tests;

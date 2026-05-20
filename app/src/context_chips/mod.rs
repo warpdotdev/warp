@@ -6,6 +6,7 @@ pub mod directory_fetcher;
 pub mod display;
 pub mod display_chip;
 pub mod display_menu;
+pub(crate) mod git_branch_on_click;
 pub(crate) mod logging;
 pub mod node_version_popup;
 pub mod prompt;

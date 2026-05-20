@@ -1,7 +1,51 @@
 use crate::ai::agent::api::convert_conversation::*;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
+};
 use crate::ai::agent::{AIAgentInput, UserQueryMode};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
+use crate::persistence::model::ConversationUsageMetadata;
+use crate::server::ids::ServerId;
+use chrono::Utc;
 use std::collections::HashMap;
 use warp_multi_agent_api as api;
+
+fn test_server_metadata(
+    server_token: &str,
+    ambient_agent_task_id: Option<AmbientAgentTaskId>,
+) -> ServerAIConversationMetadata {
+    ServerAIConversationMetadata {
+        title: "test conversation".to_string(),
+        working_directory: None,
+        harness: AIAgentHarness::Oz,
+        usage: ConversationUsageMetadata {
+            was_summarized: false,
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            credits_spent_for_last_block: None,
+            token_usage: vec![],
+            tool_usage_metadata: Default::default(),
+        },
+        metadata: ServerMetadata {
+            uid: ServerId::default(),
+            revision: Revision::now(),
+            metadata_last_updated_ts: Utc::now().into(),
+            trashed_ts: None,
+            folder_id: None,
+            is_welcome_object: false,
+            creator_uid: None,
+            last_editor_uid: None,
+            current_editor_uid: None,
+        },
+        permissions: ServerPermissions::mock_personal(),
+        ambient_agent_task_id,
+        server_conversation_token: ServerConversationToken::new(server_token.to_string()),
+        artifacts: vec![],
+    }
+}
+
 fn test_skill() -> api::Skill {
     api::Skill {
         descriptor: Some(api::SkillDescriptor {
@@ -23,6 +67,40 @@ fn test_skill() -> api::Skill {
             line_range: None,
         }),
     }
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
+    let conversation_id = AIConversationId::new();
+    let ambient_agent_task_id: AmbientAgentTaskId =
+        "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+
+    let conversation = convert_conversation_data_to_ai_conversation(
+        conversation_id,
+        &conversation_data,
+        test_server_metadata("server-token", Some(ambient_agent_task_id)),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+
+    assert_eq!(conversation.id(), conversation_id);
+    assert_eq!(conversation.task_id(), Some(ambient_agent_task_id));
+    assert_eq!(
+        conversation.run_id(),
+        Some(ambient_agent_task_id.to_string())
+    );
 }
 
 #[test]
@@ -639,6 +717,8 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                                     command_id: "command_1".to_string(),
                                     output: "1".to_string(),
                                     exit_code: 0,
+                                    start_ts: None,
+                                    finish_ts: None,
                                 },
                             )),
                         },
@@ -669,6 +749,8 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                                     command_id: "command_2".to_string(),
                                     output: "3".to_string(),
                                     exit_code: 0,
+                                    start_ts: None,
+                                    finish_ts: None,
                                 },
                             )),
                         },
@@ -1395,6 +1477,8 @@ fn test_exchanges_grouped_by_request_id() {
                                     command_id: "cmd1".to_string(),
                                     output: "Done".to_string(),
                                     exit_code: 0,
+                                    start_ts: None,
+                                    finish_ts: None,
                                 },
                             )),
                         },
@@ -1977,5 +2061,74 @@ fn test_create_then_edit_then_create_version_tracking() {
         create_b_version,
         Some(default_version),
         "Created doc B should have default version (v1), independent of doc A"
+    );
+}
+
+/// Verify that a `SystemQuery::HandoffRehydration` message does not produce
+/// a displayed input when restoring a conversation. It must be treated as
+/// hidden, so the exchange should have zero user-visible inputs.
+#[test]
+fn test_handoff_rehydration_system_query_is_hidden() {
+    let messages = vec![
+        // HandoffRehydration system query – should be hidden
+        api::Message {
+            id: "msg_handoff".to_string(),
+            task_id: "task1".to_string(),
+            server_message_data: "".to_string(),
+            citations: vec![],
+            message: Some(api::message::Message::SystemQuery(
+                api::message::SystemQuery {
+                    r#type: Some(api::message::system_query::Type::HandoffRehydration(
+                        api::message::HandoffRehydration {
+                            instructions: "restore handoff state".to_string(),
+                        },
+                    )),
+                    context: None,
+                },
+            )),
+            request_id: "req1".to_string(),
+            timestamp: None,
+        },
+        // Agent output that follows the hidden system query
+        api::Message {
+            id: "msg_output".to_string(),
+            task_id: "task1".to_string(),
+            server_message_data: "".to_string(),
+            citations: vec![],
+            message: Some(api::message::Message::AgentOutput(
+                api::message::AgentOutput {
+                    text: "I have restored the handoff state.".to_string(),
+                },
+            )),
+            request_id: "req1".to_string(),
+            timestamp: None,
+        },
+    ];
+
+    let task = api::Task {
+        id: "task1".to_string(),
+        messages,
+        dependencies: None,
+        description: "".to_string(),
+        summary: "".to_string(),
+        server_data: "".to_string(),
+    };
+
+    let exchanges = task.into_exchanges();
+    assert_eq!(exchanges.len(), 1, "Should produce exactly one exchange");
+
+    let exchange = &exchanges[0];
+    // The HandoffRehydration should NOT appear as input
+    assert!(
+        exchange.input.is_empty(),
+        "HandoffRehydration must not produce a displayed input, got: {:?}",
+        exchange.input
+    );
+
+    // The agent output should still be present
+    let output = exchange.output_status.output().expect("should have output");
+    assert!(
+        !output.get().messages.is_empty(),
+        "Agent output should still be rendered"
     );
 }

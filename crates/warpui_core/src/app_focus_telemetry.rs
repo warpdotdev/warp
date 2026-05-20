@@ -83,5 +83,5 @@ impl AppFocusInfo {
 }
 
 #[cfg(test)]
-#[path = "app_focus_telemetry_test.rs"]
+#[path = "app_focus_telemetry_tests.rs"]
 mod tests;

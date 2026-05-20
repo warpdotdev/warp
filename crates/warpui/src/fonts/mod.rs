@@ -3,7 +3,7 @@
 pub mod font_kit;
 
 #[cfg(test)]
-#[path = "text_layout_test.rs"]
+#[path = "text_layout_tests.rs"]
 mod text_layout_tests;
 
 pub use warpui_core::fonts::*;

@@ -210,5 +210,5 @@ impl MerkleTree {
 }
 
 #[cfg(test)]
-#[path = "tree_test.rs"]
+#[path = "tree_tests.rs"]
 mod tests;

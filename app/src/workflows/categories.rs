@@ -1298,5 +1298,5 @@ impl VoltronFeatureViewMeta for CategoriesView {
 }
 
 #[cfg(test)]
-#[path = "categories_test.rs"]
+#[path = "categories_tests.rs"]
 mod tests;

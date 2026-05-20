@@ -42,6 +42,7 @@ body:
         - macOS
         - Linux
         - Windows
+        - Cross-platform
     validations:
       required: true
   - type: dropdown

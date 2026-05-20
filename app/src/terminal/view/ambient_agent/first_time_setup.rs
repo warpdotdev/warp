@@ -5,14 +5,15 @@
 
 use crate::{
     ai::{
-        cloud_environments, request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
+        ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget},
+        cloud_environments,
+        request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
         AIRequestUsageModel,
     },
     appearance::Appearance,
     server::{cloud_objects::update_manager::UpdateManager, ids::ClientId},
     settings_view::update_environment_form::{
-        AuthSource, EnvironmentFormInitArgs, GithubAuthRedirectTarget, UpdateEnvironmentForm,
-        UpdateEnvironmentFormEvent,
+        EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
     },
     ui_components::blended_colors,
 };

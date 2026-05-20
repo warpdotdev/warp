@@ -15,9 +15,8 @@ use warpui::SingletonEntity;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
-    ConversationOrTask,
+    AgentRunDisplayStatus,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
@@ -30,8 +29,8 @@ use crate::ui_components::icon_with_status::IconWithStatusVariant;
 /// Resolution order:
 /// 1. A [`CLIAgentSessionsModel`] session with a known agent wins. Plugin-backed sessions
 ///    surface rich status; command-detected sessions don't.
-/// 2. A task-backed run defers to [`conversation_or_task_agent_icon_variant`] so the
-///    terminal chrome and the matching conversation list card stay in lockstep.
+/// 2. A task-backed run uses task status and harness so the terminal chrome and the
+///    matching conversation list card stay in lockstep.
 /// 3. Live ambient pre-dispatch or a selected local conversation falls through to the
 ///    no-task waterfall.
 /// 4. Everything else returns `None` so the caller renders a plain-terminal indicator.
@@ -56,7 +55,14 @@ pub(crate) fn terminal_view_agent_icon_variant(
     // Defer to the card helper when we have task data and no CLI session takes precedence.
     if cli_agent_session.is_none() {
         if let Some(task) = task_data.as_ref() {
-            return conversation_or_task_agent_icon_variant(&ConversationOrTask::Task(task), app);
+            let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
+            let harness = task
+                .agent_config_snapshot
+                .as_ref()
+                .and_then(|config| config.harness.as_ref())
+                .map(|harness| harness.harness_type)
+                .unwrap_or(Harness::Oz);
+            return Some(agent_icon_variant_for_run(harness, status, true));
         }
     }
 
@@ -80,36 +86,18 @@ pub(crate) fn terminal_view_agent_icon_variant(
     agent_icon_variant_from_terminal_inputs(&inputs)
 }
 
-/// Returns the agent-icon variant for a [`ConversationOrTask`] card row.
-///
-/// Both tasks and conversations resolve their harness through [`ConversationOrTask::harness`].
-pub(crate) fn conversation_or_task_agent_icon_variant(
-    src: &ConversationOrTask<'_>,
-    app: &AppContext,
-) -> Option<IconWithStatusVariant> {
-    let status = src.status(app);
-    let harness = src.harness(app).unwrap_or(Harness::Oz);
-    let is_ambient = match src {
-        ConversationOrTask::Task(_) => true,
-        ConversationOrTask::Conversation(metadata) => BlocklistAIHistoryModel::as_ref(app)
-            .get_server_conversation_metadata(&metadata.nav_data.id)
-            .is_some_and(|m| m.ambient_agent_task_id.is_some()),
-    };
-    Some(agent_icon_variant_for_run(harness, status, is_ambient))
-}
-
 pub(crate) fn agent_conversation_entry_icon_variant(
     entry: &AgentConversationEntry,
-) -> Option<IconWithStatusVariant> {
+) -> IconWithStatusVariant {
     let status = entry.display.status.to_conversation_status();
     let is_ambient = matches!(entry.provenance, AgentConversationProvenance::AmbientRun)
         || entry.backing.has_ambient_run
         || entry.identity.ambient_agent_task_id.is_some();
-    Some(agent_icon_variant_for_run(
+    agent_icon_variant_for_run(
         entry.display.harness.unwrap_or(Harness::Oz),
         status,
         is_ambient,
-    ))
+    )
 }
 
 /// Primitive inputs to the terminal-view waterfall, gathered once from the live
@@ -190,7 +178,7 @@ fn agent_icon_variant_from_terminal_inputs(
 /// [`IconWithStatusVariant`]. Falls back to the Oz variant for [`Harness::Oz`] and
 /// [`Harness::Unknown`], the latter so a future-server harness this client doesn't
 /// recognize doesn't render an unbranded gray circle.
-fn agent_icon_variant_for_run(
+pub(crate) fn agent_icon_variant_for_run(
     harness: Harness,
     status: ConversationStatus,
     is_ambient: bool,

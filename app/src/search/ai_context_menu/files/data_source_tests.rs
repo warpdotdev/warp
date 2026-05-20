@@ -520,7 +520,7 @@ fn test_mixed_file_directory_search() {
         ("src/components/ui", true),
         ("src/components/ui/modal.rs", false),
         ("tests/components", true),
-        ("tests/components/button_test.rs", false),
+        ("tests/components/button_tests.rs", false),
     ];
 
     let query = "components";

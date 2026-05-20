@@ -32,7 +32,7 @@ use crate::{
 
 use ai::diff_validation::DiffDelta;
 use itertools::Itertools;
-use languages::{language_by_filename, language_by_name, Language};
+use languages::{language_by_filename, language_by_local_filename, language_by_name, Language};
 use line_ending::LineEnding;
 use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
@@ -67,6 +67,7 @@ use warp_editor::{
     },
     selection::{SelectionMode, SelectionModel, TextUnit},
 };
+use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
     XAxisAnchor, YAxisAnchor,
@@ -1151,8 +1152,21 @@ impl CodeEditorModel {
     }
 
     /// Set the language of the syntax map based on the file path.
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
+    pub fn set_language_with_path(
+        &mut self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let language = language_by_filename(path);
+
+        if let Some(language) = language {
+            self.set_language(language, ctx);
+        }
+    }
+
+    /// Set the language of the syntax map based on the local filesystem path.
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
+        let language = language_by_local_filename(path);
 
         if let Some(language) = language {
             self.set_language(language, ctx);

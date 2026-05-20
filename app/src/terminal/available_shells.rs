@@ -990,5 +990,5 @@ pub fn register(app: &mut impl warpui::AddSingletonModel) {
 
 #[cfg(test)]
 #[cfg(not(windows))]
-#[path = "available_shells_test.rs"]
+#[path = "available_shells_tests.rs"]
 mod tests;

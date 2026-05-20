@@ -117,5 +117,5 @@ pub fn open_docker_container(url: &Url, ctx: &mut AppContext) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "docker_test.rs"]
+#[path = "docker_tests.rs"]
 mod tests;

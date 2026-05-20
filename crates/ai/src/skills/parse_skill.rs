@@ -202,5 +202,5 @@ fn truncate_skill_description(description: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "parse_skill_test.rs"]
+#[path = "parse_skill_tests.rs"]
 mod parse_skill_test;

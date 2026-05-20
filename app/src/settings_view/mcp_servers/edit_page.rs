@@ -1,12 +1,13 @@
-#[cfg(not(target_family = "wasm"))]
-use std::sync::Arc;
-use std::{collections::HashMap, path::Path};
-
+#[cfg(feature = "local_fs")]
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "local_fs")]
 use parking_lot::Mutex;
 use pathfinder_geometry::vector::vec2f;
+use std::collections::HashMap;
+use std::path::Path;
+#[cfg(feature = "local_fs")]
+use std::sync::Arc;
 use uuid::Uuid;
 use warp_core::{
     send_telemetry_from_ctx,
@@ -59,6 +60,9 @@ use crate::{
     workspace::ToastStack,
     GlobalResourceHandlesProvider,
 };
+
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 
 const DEFAULT_JSON_TEXT: &str = r#"{
     "": {
@@ -124,7 +128,7 @@ pub struct MCPServersEditPageView {
     log_out_icon_button_mouse_handle: MouseStateHandle,
     editing_disabled_banner: ViewHandle<Banner<()>>,
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "local_fs")]
     #[allow(dead_code)]
     database_connection: Option<Arc<Mutex<SqliteConnection>>>,
 }
@@ -175,7 +179,7 @@ impl MCPServersEditPageView {
                     true,
                 ),
             );
-            editor.set_language_with_path(Path::new("mcp.json"), ctx);
+            editor.set_language_with_local_path(Path::new("/mcp.json"), ctx);
             editor
         });
 
@@ -192,15 +196,14 @@ impl MCPServersEditPageView {
             .with_icon(Icon::Warning)
         });
 
-        #[cfg(not(target_family = "wasm"))]
-        let database_connection =
-            crate::persistence::database_file_path()
-                .to_str()
-                .and_then(|db_url| {
-                    crate::persistence::establish_ro_connection(db_url)
-                        .ok()
-                        .map(|conn| Arc::new(Mutex::new(conn)))
-                });
+        #[cfg(feature = "local_fs")]
+        let database_connection = database_file_path_for_scope(&PersistenceScope::App)
+            .to_str()
+            .and_then(|db_url| {
+                establish_ro_connection(db_url)
+                    .ok()
+                    .map(|conn| Arc::new(Mutex::new(conn)))
+            });
 
         Self {
             server_card_item_id: None,
@@ -215,7 +218,7 @@ impl MCPServersEditPageView {
             log_out_icon_button_mouse_handle: Default::default(),
             editing_disabled_banner,
 
-            #[cfg(not(target_family = "wasm"))]
+            #[cfg(feature = "local_fs")]
             database_connection,
         }
     }

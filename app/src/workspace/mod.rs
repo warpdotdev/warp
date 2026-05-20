@@ -1,5 +1,6 @@
 mod action;
 mod active_session;
+pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
 mod cli_install;
@@ -53,8 +54,8 @@ use warpui::keymap::{BindingDescription, EditableBinding};
 use warpui::AppContext;
 
 pub use action::{
-    CommandSearchOptions, InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+    AutoCloudHandoffTrigger, CommandSearchOptions, InitContent, RestoreConversationLayout,
+    TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 pub use active_session::ActiveSession;
 pub use global_actions::{
@@ -115,6 +116,7 @@ pub fn init(app: &mut AppContext) {
     tab_configs::session_config_modal::init(app);
     view::launch_modal::oz_launch::init(app);
     view::openwarp_launch_modal::init(app);
+    view::orchestration_launch_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
     view::free_tier_limit_hit_modal::init(app);
@@ -227,6 +229,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:reset_openwarp_launch_modal_state",
                     "[Debug] Reset OpenWarp Launch Modal State",
                     WorkspaceAction::ResetOpenWarpLaunchModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_orchestration_launch_modal",
+                    "[Debug] Open Orchestration Launch Modal",
+                    WorkspaceAction::OpenOrchestrationLaunchModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_orchestration_launch_modal_state",
+                    "[Debug] Reset Orchestration Launch Modal State",
+                    WorkspaceAction::ResetOrchestrationLaunchModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(

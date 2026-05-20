@@ -135,7 +135,7 @@ impl ReferenceEntryWithUi {
         let content = trimmed.to_string();
         let file_path = self.entry.file_path.clone();
         self.editor_view.update(ctx, |view, ctx| {
-            view.set_language_with_path(&file_path, ctx);
+            view.set_language_with_local_path(&file_path, ctx);
             let state = InitialBufferState::plain_text(&content);
             view.reset(state, ctx);
         });
@@ -346,7 +346,7 @@ impl FindReferencesView {
             view.set_interaction_state(InteractionState::Disabled, ctx);
 
             // Set up syntax highlighting based on file extension
-            view.set_language_with_path(&file_path, ctx);
+            view.set_language_with_local_path(&file_path, ctx);
 
             // Reset with the reference line content
             let state = InitialBufferState::plain_text(&content);

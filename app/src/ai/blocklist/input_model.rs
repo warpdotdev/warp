@@ -149,8 +149,8 @@ pub struct BlocklistAIInputModel {
 
     agent_view_controller: ModelHandle<AgentViewController>,
 
-    /// Handle to the per-pane context model. Used to read pending attachments / blocks when
-    /// deciding whether to force-lock the input to AI mode (see
+    /// Handle to the per-pane context model. Used to read pending image / file attachments
+    /// when deciding whether to force-lock the input to AI mode (see
     /// [`BlocklistAIContextModel::has_locking_attachment`]).
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
 
@@ -276,10 +276,9 @@ impl BlocklistAIInputModel {
                         );
                     } else if me.has_locking_attachment(ctx) {
                         // Interaction patterns that should fully bypass NLD on
-                        // entry: image / file attachment in progress / attached, or block
-                        // already in pending context. Force-lock to AI regardless of the
-                        // user's NLD setting so the classifier never gets a chance to drop
-                        // the buffer back to shell.
+                        // entry: image / file attachment in progress / attached.
+                        // Force-lock to AI regardless of the user's NLD setting so the
+                        // classifier never gets a chance to drop the buffer back to shell.
                         me.set_input_config_internal(
                             InputConfig {
                                 input_type: InputType::AI,
@@ -514,10 +513,10 @@ impl BlocklistAIInputModel {
             return false;
         }
 
-        // Defense in depth: while there is a pending attachment (image / file) or block,
-        // the classifier must never have a chance to flip the input back to shell mode, even
-        // per-keystroke. The `EnteredAgentView` subscriber and `set_input_mode_agent` already
-        // lock at entry; this guard protects the window if any future caller forgets.
+        // Defense in depth: while there is a pending image / file attachment, the classifier
+        // must never have a chance to flip the input back to shell mode, even per-keystroke.
+        // The `EnteredAgentView` subscriber and `set_input_mode_agent` already lock at entry;
+        // this guard protects the window if any future caller forgets.
         if self.has_locking_attachment(app) {
             return false;
         }
@@ -713,7 +712,6 @@ impl BlocklistAIInputModel {
 
                     // If we have history entries (i.e., a live session), check for
                     // close matches to short-circuit as shell input.
-                    // TODO(vorporeal): decide if we still want to do this with NldImprovements.
                     if let Some(history_entries) = history_entries {
                         if has_any_close_matches(
                             &buffer_cloned,

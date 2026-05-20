@@ -4,8 +4,13 @@ mod native;
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 mod oauth;
+#[cfg(not(target_family = "wasm"))]
+mod utils;
 #[cfg(target_family = "wasm")]
 mod wasm;
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod utils_tests;
 
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;

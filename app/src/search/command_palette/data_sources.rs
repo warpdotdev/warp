@@ -31,7 +31,6 @@ pub struct DataSourceStore {
     warp_drive_data_source: ModelHandle<warp_drive::DataSource>,
     launch_config_data_source: ModelHandle<launch_config::DataSource>,
     new_session_data_source: Option<ModelHandle<NewSessionDataSource>>,
-    historical_conversation_data_source: ModelHandle<conversations::DataSource>,
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     repo_data_source: ModelHandle<RepoDataSource>,
     tabs_data_source: Option<ModelHandle<tabs::DataSource>>,
@@ -57,9 +56,6 @@ impl DataSourceStore {
             && cfg!(feature = "local_tty"))
         .then_some(ctx.add_model(|ctx| NewSessionDataSource::new(binding_source, ctx)));
 
-        let historical_conversation_data_source: ModelHandle<conversations::DataSource> =
-            ctx.add_model(|_| conversations::DataSource::historical());
-
         let all_conversation_data_source: ModelHandle<conversations::DataSource> =
             ctx.add_model(|_| conversations::DataSource::new());
 
@@ -71,7 +67,6 @@ impl DataSourceStore {
             warp_drive_data_source,
             launch_config_data_source,
             new_session_data_source,
-            historical_conversation_data_source,
             all_conversation_data_source,
             repo_data_source,
             tabs_data_source: None,
@@ -130,8 +125,7 @@ impl DataSourceStore {
 
             if FeatureFlag::CommandPaletteFileSearch.is_enabled() && !is_shared_session_viewer {
                 let file_search_model = FileSearchModel::as_ref(ctx);
-                let repo_root = file_search_model.repo_root(ctx);
-                let is_in_git_repo = repo_root.is_some();
+                let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
 
                 let files_data_source = if is_in_git_repo {
                     ctx.add_model(|_| files::data_source::FileDataSource::new())
@@ -155,11 +149,6 @@ impl DataSourceStore {
                 mixer.add_sync_source(
                     self.all_conversation_data_source.clone(),
                     HashSet::from([QueryFilter::Conversations]),
-                );
-
-                mixer.add_sync_source(
-                    self.historical_conversation_data_source.clone(),
-                    HashSet::from([QueryFilter::HistoricalConversations]),
                 );
             }
 
@@ -337,5 +326,5 @@ impl Entity for DataSourceStore {
 }
 
 #[cfg(test)]
-#[path = "data_sources_test.rs"]
+#[path = "data_sources_tests.rs"]
 mod tests;

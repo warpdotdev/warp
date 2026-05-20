@@ -707,5 +707,5 @@ impl NodeMask {
 }
 
 #[cfg(test)]
-#[path = "node_test.rs"]
+#[path = "node_tests.rs"]
 mod tests;

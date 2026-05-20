@@ -14,6 +14,10 @@ eval $("$APT_CONFIG" shell APT_TRUSTED_KEYRING_DIR 'Dir::Etc::trustedparts/d')
 rm -f "${APT_TRUSTED_KEYRING_DIR}@@REPO_NAME@@.gpg"
 
 # Use apt-config to determine the location of the source list config directory,
-# then delete our entry.
+# then delete our entry. We may have written either the legacy `.list` format
+# (older installs) or the modern `.sources` (DEB822) format introduced in the
+# postinst, so remove both filenames to ensure a clean purge regardless of
+# which format was last written. `rm -f` is silent on missing files.
 eval $("$APT_CONFIG" shell APT_SOURCE_LIST_DIR 'Dir::Etc::sourceparts/d')
 rm -f "${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.list"
+rm -f "${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.sources"

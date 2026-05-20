@@ -106,20 +106,20 @@
 /app/src/terminal/view/inline_banner/ @harryalbert
 
 # Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / warpifying
-/app/src/ai/blocklist/ @zachbai
-/app/src/root_view.rs @zachbai
+/app/src/ai/blocklist/ @zachbai @MaggieShan
+/app/src/root_view.rs @zachbai @MaggieShan
 /app/src/terminal/bootstrap.rs @zachbai
-/app/src/terminal/warpify/ @zachbai
-/app/src/settings_view/warpify_page.rs @zachbai
+/app/src/terminal/warpify/ @zachbai @MaggieShan
+/app/src/settings_view/warpify_page.rs @zachbai @MaggieShan
 /app/assets/bundled/bootstrap/ @zachbai
-/crates/warp_completer/ @zachbai @szgupta @alokedesai
+/crates/warp_completer/ @zachbai @szgupta @alokedesai @acarl005
 
 # Agent mode
 /app/src/ai/agent/ @zachbai
 
 # Vertical tabs
-/app/src/workspace/view/vertical_tabs.rs @zachbai
-/app/src/workspace/view/vertical_tabs/ @zachbai
+/app/src/workspace/view/vertical_tabs.rs @johnturcoo
+/app/src/workspace/view/vertical_tabs/ @johnturcoo
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M
@@ -131,6 +131,7 @@
 
 # Rich input
 /app/src/terminal/view/use_agent_footer/ @Advait-M
+/app/src/terminal/view/use_agent_footer/warpify_footer.rs @MaggieShan
 /app/src/terminal/input/cli_agent.rs @Advait-M
 
 # UI framework
@@ -149,6 +150,17 @@
 /app/src/platform/mac/ @alokedesai
 /resources/linux/ @acarl005
 
+# Windows and Linux (and winit) platform
+/crates/warpui/src/windowing/winit/ @acarl005 @vorporeal @alokedesai
+/app/src/terminal/local_tty/windows/ @abhishekp106 @vorporeal @acarl005
+/app/src/autoupdate/windows.rs @acarl005
+/app/src/autoupdate/linux.rs @vorporeal
+/app/src/app_services/windows/ @acarl005
+/app/src/app_services/linux/ @vorporeal
+/app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
+/app/assets/bundled/bootstrap/pwsh.ps1 @acarl005
+/app/assets/bundled/bootstrap/pwsh_init_shell.ps1 @acarl005
+
 # /pr-comments
 /app/src/search/slash_command_menu/static_commands/commands.rs @lucieleblanc
 
@@ -156,7 +168,9 @@
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
 
 # Long-running shell commands
-/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala
+/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli_controller.rs @vkodithala @MaggieShan
 
 # Vim
 /crates/vim/ @liliwilson

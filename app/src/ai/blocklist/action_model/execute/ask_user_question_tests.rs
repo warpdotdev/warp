@@ -45,7 +45,7 @@ fn should_autoexecute_returns_false_when_autoapprove_is_enabled_and_profile_alwa
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
         let action = build_action("ask-user-question");
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, true, false, ctx)
+            history.start_new_conversation(terminal_view_id, true, false, false, ctx)
         });
 
         profiles.update(&mut app, |profiles, ctx| {
@@ -128,7 +128,7 @@ fn should_autoexecute_returns_true_when_autoapprove_is_enabled_and_profile_allow
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
         let action = build_action("ask-user-question");
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, true, false, ctx)
+            history.start_new_conversation(terminal_view_id, true, false, false, ctx)
         });
         let result = executor.update(&mut app, |executor, ctx| {
             let input = ExecuteActionInput {
@@ -150,7 +150,7 @@ fn execute_returns_sync_skipped_question_ids_when_autoapprove_is_enabled() {
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
         let action = build_action("ask-user-question");
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, true, false, ctx)
+            history.start_new_conversation(terminal_view_id, true, false, false, ctx)
         });
 
         let execution = executor.update(&mut app, |executor, ctx| {
@@ -261,7 +261,7 @@ fn should_autoexecute_uses_active_terminal_profile_permission() {
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
         let action = build_action("ask-user-question");
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, false, false, ctx)
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
 
         profiles.update(&mut app, |profiles, ctx| {

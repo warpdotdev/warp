@@ -10,7 +10,7 @@ use warpui::{
     fonts::{Properties, Weight::Bold},
     platform::Cursor,
     text_layout::ClipConfig,
-    AppContext, Element, EventContext, SingletonEntity,
+    AppContext, Element, EntityId, EventContext, SingletonEntity,
 };
 
 use crate::{
@@ -19,11 +19,15 @@ use crate::{
             api::ServerConversationToken,
             conversation::{AIConversation, AIConversationId},
         },
-        agent_conversations_model::AgentConversationsModel,
+        agent_conversations_model::{
+            entry::AgentConversationEntryId, AgentConversationNavigationSubject,
+            AgentConversationsModel,
+        },
         blocklist::BlocklistAIHistoryModel,
     },
+    terminal::view::TerminalAction,
     ui_components::{blended_colors, icons::Icon},
-    workspace::{RestoreConversationLayout, WorkspaceAction},
+    workspace::{RestoreConversationLayout, WorkspaceAction, WorkspaceRegistry},
 };
 
 pub(crate) fn conversation_id_for_agent_id(
@@ -40,6 +44,79 @@ pub(crate) fn conversation_id_for_agent_id(
         })
 }
 
+/// True if the conversation is open in some other visible pane. Hidden
+/// child-agent panes are excluded so unopened children don't look
+/// "already open".
+pub(crate) fn is_conversation_open_in_other_visible_view(
+    conversation_id: AIConversationId,
+    self_terminal_view_id: EntityId,
+    app: &AppContext,
+) -> bool {
+    let Some(owner) =
+        BlocklistAIHistoryModel::as_ref(app).terminal_view_id_for_conversation(&conversation_id)
+    else {
+        return false;
+    };
+    if owner == self_terminal_view_id {
+        return false;
+    }
+    pane_group_id_containing_terminal_view(owner, app).is_some()
+}
+
+/// Finds the pane group containing the given terminal view across all
+/// visible panes/tabs. Used to distinguish same-tab vs cross-tab focus.
+pub(crate) fn pane_group_id_containing_terminal_view(
+    terminal_view_id: EntityId,
+    app: &AppContext,
+) -> Option<EntityId> {
+    let registry = WorkspaceRegistry::as_ref(app);
+    for (_, workspace_handle) in registry.all_workspaces(app) {
+        let workspace = workspace_handle.as_ref(app);
+        for pane_group_handle in workspace.tab_views() {
+            let pane_group = pane_group_handle.as_ref(app);
+            for pane_id in pane_group.visible_pane_ids() {
+                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
+                    if terminal_view.id() == terminal_view_id {
+                        return Some(pane_group_handle.id());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Navigates to a child agent's pane: focuses an existing sibling pane,
+/// activates the owning tab, or splits off a new pane.
+pub(crate) fn dispatch_focus_or_open_child_agent_pane(
+    conversation_id: AIConversationId,
+    self_terminal_view_id: EntityId,
+    ctx: &mut EventContext,
+    app: &AppContext,
+) {
+    if let Some(owner_view_id) =
+        BlocklistAIHistoryModel::as_ref(app).terminal_view_id_for_conversation(&conversation_id)
+    {
+        if owner_view_id != self_terminal_view_id {
+            if let Some(owner_pane_group_id) =
+                pane_group_id_containing_terminal_view(owner_view_id, app)
+            {
+                let self_pane_group_id =
+                    pane_group_id_containing_terminal_view(self_terminal_view_id, app);
+                if Some(owner_pane_group_id) == self_pane_group_id {
+                    ctx.dispatch_typed_action(TerminalAction::RevealChildAgent { conversation_id });
+                } else {
+                    ctx.dispatch_typed_action(WorkspaceAction::FocusTerminalViewInWorkspace {
+                        terminal_view_id: owner_view_id,
+                    });
+                }
+                return;
+            }
+        }
+    }
+    ctx.dispatch_typed_action(TerminalAction::OpenChildAgentInNewPane { conversation_id });
+}
+
 pub(crate) fn parent_conversation_id(
     active_conversation: &AIConversation,
     app: &AppContext,
@@ -54,19 +131,14 @@ pub(crate) fn parent_conversation_id(
 pub(crate) fn conversation_navigation_action(
     conversation_id: AIConversationId,
     app: &AppContext,
-) -> WorkspaceAction {
-    AgentConversationsModel::as_ref(app)
-        .get_conversation(&conversation_id)
-        .and_then(|conversation| {
-            conversation.get_open_action(Some(RestoreConversationLayout::SplitPane), app)
-        })
-        .unwrap_or(WorkspaceAction::RestoreOrNavigateToConversation {
-            pane_view_locator: None,
-            window_id: None,
+) -> Option<WorkspaceAction> {
+    AgentConversationsModel::resolve_open_action(
+        AgentConversationNavigationSubject::Entry(AgentConversationEntryId::Conversation(
             conversation_id,
-            terminal_view_id: None,
-            restore_layout: Some(RestoreConversationLayout::SplitPane),
-        })
+        )),
+        Some(RestoreConversationLayout::SplitPane),
+        app,
+    )
 }
 
 pub(crate) fn parent_conversation_navigation_card(
@@ -79,7 +151,7 @@ pub(crate) fn parent_conversation_navigation_card(
         .conversation(&parent_conversation_id)
         .and_then(|conversation| conversation.title())
         .unwrap_or_else(|| "Parent conversation".to_string());
-    let action = conversation_navigation_action(parent_conversation_id, app);
+    let action = conversation_navigation_action(parent_conversation_id, app)?;
     Some(conversation_navigation_card(
         parent_title,
         Some("Back to parent conversation".to_string()),

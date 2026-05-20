@@ -167,5 +167,5 @@ pub trait UiComponent {
 }
 
 #[cfg(test)]
-#[path = "components_test.rs"]
+#[path = "components_tests.rs"]
 mod tests;

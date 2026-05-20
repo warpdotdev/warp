@@ -1000,15 +1000,14 @@ impl CodeDiffView {
                 let file_path = diff.base.file_path.clone();
 
                 // Set up the editor buffer with the pre-loaded content.
-                let path = Path::new(&file_path);
+                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 editor.update(ctx, |editor_view, ctx| {
-                    editor_view.set_language_with_path(path, ctx);
+                    editor_view.set_language_with_local_path(Path::new(&file_path), ctx);
                     let state = InitialBufferState::plain_text(&diff.base.content);
                     editor_view.reset(state, ctx);
                 });
 
                 // Create the InlineDiffView which applies diffs to the editor buffer.
-                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 let diff_viewer = ctx.add_typed_action_view(|ctx| {
                     InlineDiffView::new(
                         editor.clone(),

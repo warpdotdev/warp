@@ -86,5 +86,5 @@ impl std::fmt::Display for AppId {
 }
 
 #[cfg(test)]
-#[path = "app_id_test.rs"]
+#[path = "app_id_tests.rs"]
 mod tests;

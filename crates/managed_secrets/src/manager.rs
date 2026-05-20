@@ -195,6 +195,9 @@ impl ManagedSecretManager {
                             v.aws_region,
                         )
                     }
+                    GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
+                        ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
+                    }
                     GqlManagedSecretValue::Unknown => {
                         return Err(anyhow::anyhow!(
                             "Unknown secret value type for secret: {}",

@@ -215,7 +215,7 @@ fn test_end_to_end() {
             delta.layout_delta(
                 &text_layout,
                 None,
-                RenderLayoutOptions::default(),
+                &RenderLayoutOptions::default(),
                 None,
                 ctx,
             )

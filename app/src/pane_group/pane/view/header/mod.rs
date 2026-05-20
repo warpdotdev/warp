@@ -1194,5 +1194,5 @@ fn render_draggable_placeholder_element(
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

@@ -324,5 +324,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "uniform_list_test.rs"]
+#[path = "uniform_list_tests.rs"]
 mod tests;

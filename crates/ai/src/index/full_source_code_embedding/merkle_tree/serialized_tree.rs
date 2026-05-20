@@ -196,5 +196,5 @@ impl SerializedMerkleNode {
 }
 
 #[cfg(test)]
-#[path = "serialized_tree_test.rs"]
+#[path = "serialized_tree_tests.rs"]
 mod tests;

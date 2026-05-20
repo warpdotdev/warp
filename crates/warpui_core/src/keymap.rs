@@ -1066,5 +1066,5 @@ impl Keystroke {
 }
 
 #[cfg(test)]
-#[path = "keymap_test.rs"]
+#[path = "keymap_tests.rs"]
 mod tests;

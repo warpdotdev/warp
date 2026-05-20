@@ -341,5 +341,5 @@ impl Collection {
 }
 
 #[cfg(test)]
-#[path = "linux_test.rs"]
+#[path = "linux_tests.rs"]
 mod tests;

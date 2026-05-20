@@ -97,5 +97,5 @@ pub(crate) fn parse_markdown_content(content: &str) -> Result<ParsedMarkdown> {
 }
 
 #[cfg(test)]
-#[path = "parser_test.rs"]
+#[path = "parser_tests.rs"]
 mod parser_test;

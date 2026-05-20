@@ -735,5 +735,5 @@ pub(crate) mod styles {
 }
 
 #[cfg(test)]
-#[path = "panel_test.rs"]
+#[path = "panel_tests.rs"]
 mod tests;

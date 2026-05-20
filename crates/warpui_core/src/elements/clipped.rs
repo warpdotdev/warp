@@ -95,5 +95,5 @@ impl Element for Clipped {
 }
 
 #[cfg(test)]
-#[path = "clipped_test.rs"]
+#[path = "clipped_tests.rs"]
 mod tests;

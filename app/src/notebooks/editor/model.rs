@@ -1,5 +1,12 @@
+use crate::notebooks::file::MarkdownDisplayMode;
 use base64::{prelude::BASE64_STANDARD, Engine as _};
-use std::{any::Any, borrow::Cow, collections::HashMap, ops::Range, time::Duration};
+use std::{
+    any::Any,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    ops::Range,
+    time::Duration,
+};
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -111,6 +118,7 @@ pub struct NotebooksEditorModel {
     resize_tx: async_channel::Sender<()>,
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
+    default_mermaid_display_mode: MarkdownDisplayMode,
 }
 
 #[derive(Clone)]
@@ -158,15 +166,6 @@ impl NotebooksEditorModel {
             && FeatureFlag::EditableMarkdownMermaid.is_enabled()
     }
 
-    fn render_mermaid_diagrams_in_state(state: &InteractionState) -> bool {
-        FeatureFlag::MarkdownMermaid.is_enabled()
-            && (matches!(state, InteractionState::Selectable)
-                || (Self::editable_markdown_mermaid_enabled()
-                    && matches!(
-                        state,
-                        InteractionState::Editable | InteractionState::EditableWithInvalidSelection
-                    )))
-    }
     pub fn new(
         text_styles: RichTextStyles,
         rte_window_id: WindowId,
@@ -239,6 +238,7 @@ impl NotebooksEditorModel {
             rte_window_id,
             resize_tx,
             file_link_resolution_context: None,
+            default_mermaid_display_mode: MarkdownDisplayMode::Raw,
         }
     }
 
@@ -285,6 +285,33 @@ impl NotebooksEditorModel {
         self.file_link_resolution_context = file_link_resolution_context;
     }
 
+    pub fn set_default_mermaid_display_mode(
+        &mut self,
+        mode: MarkdownDisplayMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.default_mermaid_display_mode == mode {
+            return;
+        }
+        self.default_mermaid_display_mode = mode;
+
+        for command in self
+            .child_models
+            .model_handles::<NotebookCommand>()
+            .collect_vec()
+        {
+            command.update(ctx, |command, _| {
+                command.mermaid_display_mode = mode;
+            });
+        }
+
+        if self.sync_mermaid_render_offsets(ctx) {
+            self.rebuild_layout(ctx);
+        } else {
+            ctx.notify();
+        }
+    }
+
     /// Create a new model for searching the editor.
     pub fn new_search(&self, ctx: &mut ModelContext<Self>) -> ModelHandle<Searcher> {
         let buffer = self.content.clone();
@@ -320,8 +347,12 @@ impl NotebooksEditorModel {
                     self.content.clone(),
                     self.selection_model.clone(),
                     window_id,
+                    self.default_mermaid_display_mode,
                     ctx,
                 );
+                if self.sync_mermaid_render_offsets(ctx) {
+                    self.rebuild_layout(ctx);
+                }
             }
             _ => (),
         }
@@ -342,13 +373,49 @@ impl NotebooksEditorModel {
                 show_final_trailing_newline_when_non_empty,
             );
         });
-        let render_mermaid_diagrams = Self::render_mermaid_diagrams_in_state(new_state);
-        let relayout_needed = self.render_state.update(ctx, |render_state, _| {
-            render_state.set_render_mermaid_diagrams(render_mermaid_diagrams)
-        });
-        if relayout_needed {
+    }
+
+    /// Set the Mermaid display mode (Raw or Rendered) for the block at the given offset.
+    /// `block_offset` is the buffer's 0-indexed block marker position (i.e. `outline.start`).
+    /// Updates `mermaid_render_offsets` in the render state and triggers relayout if changed.
+    pub fn set_mermaid_render_mode(
+        &mut self,
+        block_offset: CharOffset,
+        mode: MarkdownDisplayMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(command) = self.child_models.model_at::<NotebookCommand>(block_offset) {
+            command.update(ctx, |cmd, _| {
+                cmd.mermaid_display_mode = mode;
+            });
+        }
+
+        if self.sync_mermaid_render_offsets(ctx) {
             self.rebuild_layout(ctx);
         }
+    }
+
+    fn sync_mermaid_render_offsets(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let new_offsets: HashSet<CharOffset> = self
+            .child_models
+            .model_handles::<NotebookCommand>()
+            .filter_map(|handle| {
+                if matches!(
+                    handle.as_ref(ctx).mermaid_display_mode,
+                    MarkdownDisplayMode::Rendered
+                ) {
+                    handle
+                        .as_ref(ctx)
+                        .start_offset(ctx)
+                        .map(|o| o + CharOffset::from(1))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        self.render_state
+            .update(ctx, |rs, _| rs.set_mermaid_render_offsets(new_offsets))
     }
 
     fn handle_content_model_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
@@ -1187,7 +1254,16 @@ impl NotebooksEditorModel {
             BlockType::Text(BufferBlockStyle::CodeBlock {
                 code_block_type: CodeBlockType::Mermaid,
             })
-        ) && Self::editable_markdown_mermaid_enabled()
+        ) && self
+            .child_models
+            .model_at::<NotebookCommand>(block_start)
+            .is_some_and(|command| {
+                matches!(
+                    command.as_ref(ctx).mermaid_display_mode,
+                    MarkdownDisplayMode::Rendered
+                )
+            })
+            && Self::editable_markdown_mermaid_enabled()
             && matches!(
                 self.interaction_state(ctx),
                 InteractionState::Selectable
@@ -1255,6 +1331,53 @@ impl NotebooksEditorModel {
 
     pub fn link_url_at(&self, offset: CharOffset, app: &AppContext) -> Option<String> {
         self.content.as_ref(app).link_url_at_offset(offset)
+    }
+
+    pub fn scroll_to_matching_header(
+        &mut self,
+        fragment: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(range) = self.find_matching_header(fragment, ctx) else {
+            return false;
+        };
+
+        self.render_state.update(ctx, |render_state, _| {
+            render_state
+                .request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(range.start));
+        });
+        true
+    }
+
+    fn find_matching_header(&self, fragment: &str, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        let target = fragment.strip_prefix('#')?;
+        if target.is_empty() {
+            return None;
+        }
+        let target = urlencoding::decode(target).ok()?;
+        let target = target.trim().to_lowercase();
+        if target.is_empty() {
+            return None;
+        }
+
+        let content = self.content.as_ref(ctx);
+        for outline in content.outline_blocks() {
+            if !matches!(
+                &outline.block_type,
+                BlockType::Text(BufferBlockStyle::Header { .. })
+            ) {
+                continue;
+            }
+
+            let heading = content
+                .text_in_range(outline.start + 1..outline.end)
+                .into_string();
+            if heading.trim().to_lowercase() == target {
+                return Some(outline.start..outline.end);
+            }
+        }
+
+        None
     }
 
     /// Whether or not there's an active command block selection.
@@ -2041,6 +2164,7 @@ impl ChildModels {
         content: ModelHandle<Buffer>,
         selection_model: ModelHandle<BufferSelectionModel>,
         rte_window_id: WindowId,
+        default_mermaid_display_mode: MarkdownDisplayMode,
         ctx: &mut ModelContext<T>,
     ) {
         // Resolve each existing model to its current offsets in the buffer, filtering out models
@@ -2124,7 +2248,7 @@ impl ChildModels {
                 outline.end
             );
             let new_model = ctx.add_model(|ctx| {
-                NotebookCommand::new(
+                let mut command = NotebookCommand::new(
                     outline.start,
                     outline.end,
                     interaction_state.clone(),
@@ -2132,7 +2256,9 @@ impl ChildModels {
                     selection_model.clone(),
                     rte_window_id,
                     ctx,
-                )
+                );
+                command.mermaid_display_mode = default_mermaid_display_mode;
+                command
             });
 
             self.models.insert(outline.start, Box::new(new_model));

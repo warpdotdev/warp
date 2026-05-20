@@ -4,13 +4,16 @@ use super::{
 use crate::{
     content::{
         buffer::{StyledBufferRun, StyledTextBlock},
-        edit::{ParsedUrl, highlight_urls, resolve_asset_source_relative_to_directory},
+        edit::{
+            ParsedUrl, highlight_urls, layout_mermaid_block_for_test,
+            resolve_asset_source_relative_to_directory,
+        },
         mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout},
         text::{BufferBlockStyle, CodeBlockType, TextStylesWithMetadata},
     },
     render::{
         layout::{TextLayout, add_link_to_style_and_font, markdown_inline_to_text_and_style_runs},
-        model::{BlockItem, test_utils::TEST_STYLES},
+        model::{BlockItem, RenderLayoutOptions, test_utils::TEST_STYLES},
     },
 };
 use std::path::Path;
@@ -362,13 +365,12 @@ fn test_layout_mermaid_block_uses_loaded_svg_aspect_ratio() {
                     ..
                 } => {
                     let intrinsic_size = svg.size();
-                    let expected_width = (800.
+                    let expected_width = 800.
                         - TEST_STYLES
                             .block_spacings
                             .from_block_style(&block_style)
                             .x_axis_offset()
-                            .as_f32())
-                    .min(intrinsic_size.width());
+                            .as_f32();
                     let expected_height =
                         expected_width * intrinsic_size.height() / intrinsic_size.width();
                     assert_eq!(*content_length, CharOffset::from(content.chars().count()));
@@ -379,6 +381,276 @@ fn test_layout_mermaid_block_uses_loaded_svg_aspect_ratio() {
                     assert_eq!(item.first_line_height(), config.height.as_f32());
                 }
                 item => panic!("expected MermaidDiagram block, got {item:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn test_unloaded_mermaid_diagram_uses_stable_full_width_placeholder_height() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let contents = "graph TD\nA[Unloaded] --> B[Placeholder]\n";
+            let block_style = BufferBlockStyle::CodeBlock {
+                code_block_type: CodeBlockType::Mermaid,
+            };
+            let spacing = TEST_STYLES.block_spacings.from_block_style(&block_style);
+            let (_asset_source, config) =
+                mermaid_diagram_layout(contents, &text_layout, spacing, ctx);
+            let expected_width = 800. - spacing.x_axis_offset().as_f32();
+            let expected_height = TEST_STYLES.base_line_height().as_f32() * 10.;
+
+            assert!(
+                (config.width.as_f32() - expected_width).abs() < 0.5,
+                "expected unloaded Mermaid diagram width {} to use full available width {}",
+                config.width.as_f32(),
+                expected_width,
+            );
+            assert!(
+                (config.height.as_f32() - expected_height).abs() < 0.5,
+                "expected unloaded Mermaid diagram height {} to use stable placeholder height {}",
+                config.height.as_f32(),
+                expected_height,
+            );
+        });
+    })
+}
+
+fn mermaid_code_block(contents: &str) -> StyledTextBlock {
+    let block_style = BufferBlockStyle::CodeBlock {
+        code_block_type: CodeBlockType::Mermaid,
+    };
+    StyledTextBlock {
+        block: vec![StyledBufferRun {
+            run: contents.to_string(),
+            text_styles: TextStylesWithMetadata::default(),
+            block_style: block_style.clone(),
+        }],
+        style: block_style,
+        content_length: CharOffset::from(contents.chars().count()),
+    }
+}
+
+fn mermaid_layout_options() -> RenderLayoutOptions {
+    RenderLayoutOptions {
+        render_mermaid_diagrams: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_empty_mermaid_block_lays_out_as_code_block() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let block = mermaid_code_block("\n");
+            let (item, _has_trailing_newline) =
+                layout_mermaid_block_for_test(block, &text_layout, mermaid_layout_options(), ctx)
+                    .expect("layout should succeed");
+
+            match item {
+                BlockItem::RunnableCodeBlock {
+                    code_block_type,
+                    pending_mermaid_asset,
+                    ..
+                } => {
+                    assert_eq!(code_block_type, CodeBlockType::Mermaid);
+                    assert!(
+                        pending_mermaid_asset.is_none(),
+                        "empty Mermaid blocks should not trigger a render"
+                    );
+                }
+                other => panic!("expected code block, got {other:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn test_non_parseable_mermaid_block_lays_out_as_code_block() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let block = mermaid_code_block("echo hi\n");
+            let (item, _) =
+                layout_mermaid_block_for_test(block, &text_layout, mermaid_layout_options(), ctx)
+                    .expect("layout should succeed");
+
+            // On first sight, the asset is still loading. We defer the Mermaid-diagram
+            // path until the render either succeeds or fails, so the block should lay out
+            // as a code block with the asset source attached so the view layer can watch it.
+            match item {
+                BlockItem::RunnableCodeBlock {
+                    code_block_type,
+                    pending_mermaid_asset,
+                    ..
+                } => {
+                    assert_eq!(code_block_type, CodeBlockType::Mermaid);
+                    assert!(
+                        pending_mermaid_asset.is_some(),
+                        "a freshly-seen Mermaid source should schedule an asset load"
+                    );
+                }
+                other => panic!("expected code block, got {other:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn test_invalid_mermaid_block_stays_as_code_block_after_load_fails() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let contents = "echo hi\n";
+        let asset_source = mermaid_asset_source(contents);
+
+        // Drive the asset load to completion (it should fail, since `echo hi` isn't
+        // valid Mermaid).
+        let pending = app.read(|ctx| {
+            let asset_cache = AssetCache::as_ref(ctx);
+            match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => handle.when_loaded(asset_cache),
+                _ => None,
+            }
+        });
+        if let Some(future) = pending {
+            future.await;
+        }
+
+        app.read(|ctx| {
+            let asset_cache = AssetCache::as_ref(ctx);
+            assert!(
+                matches!(
+                    asset_cache.load_asset::<ImageType>(asset_source.clone()),
+                    AssetState::FailedToLoad(_)
+                ),
+                "Mermaid render for invalid source should have failed"
+            );
+
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let block = mermaid_code_block(contents);
+            let (item, _) =
+                layout_mermaid_block_for_test(block, &text_layout, mermaid_layout_options(), ctx)
+                    .expect("layout should succeed");
+
+            match item {
+                BlockItem::RunnableCodeBlock {
+                    code_block_type,
+                    pending_mermaid_asset,
+                    ..
+                } => {
+                    assert_eq!(code_block_type, CodeBlockType::Mermaid);
+                    // Once the asset load has failed we don't need to keep watching the
+                    // asset handle; the state won't flip again until the source changes.
+                    assert!(
+                        pending_mermaid_asset.is_none(),
+                        "no watcher is needed after a Mermaid render failure"
+                    );
+                }
+                other => panic!("expected code block, got {other:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn test_valid_mermaid_block_lays_out_as_diagram_after_load() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let contents = "graph TD\nA[Start] --> B[Finish]\n";
+        let asset_source = mermaid_asset_source(contents);
+
+        // Drive the async Mermaid render to completion.
+        let pending = app.read(|ctx| {
+            let asset_cache = AssetCache::as_ref(ctx);
+            match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => handle.when_loaded(asset_cache),
+                _ => None,
+            }
+        });
+        if let Some(future) = pending {
+            future.await;
+        }
+
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let block = mermaid_code_block(contents);
+            let (item, _) =
+                layout_mermaid_block_for_test(block, &text_layout, mermaid_layout_options(), ctx)
+                    .expect("layout should succeed");
+
+            assert!(
+                matches!(item, BlockItem::MermaidDiagram { .. }),
+                "expected MermaidDiagram block once the asset is loaded, got {item:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_mermaid_block_skipped_when_render_disabled() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                800.,
+            );
+            let block = mermaid_code_block("graph TD\nA --> B\n");
+            let options = RenderLayoutOptions {
+                render_mermaid_diagrams: false,
+                ..Default::default()
+            };
+            let (item, _) = layout_mermaid_block_for_test(block, &text_layout, options, ctx)
+                .expect("layout should succeed");
+
+            // When Mermaid rendering is disabled globally, the block should lay out as a
+            // plain code block with no asset source attached.
+            match item {
+                BlockItem::RunnableCodeBlock {
+                    pending_mermaid_asset,
+                    ..
+                } => {
+                    assert!(pending_mermaid_asset.is_none());
+                }
+                other => panic!("expected code block, got {other:?}"),
             }
         });
     })

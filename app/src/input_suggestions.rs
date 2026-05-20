@@ -1245,5 +1245,5 @@ impl From<&AIQueryHistory> for AIQueryHistoryEntryDetails {
 }
 
 #[cfg(test)]
-#[path = "input_suggestions_test.rs"]
+#[path = "input_suggestions_tests.rs"]
 mod tests;

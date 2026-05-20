@@ -16,6 +16,7 @@ pub struct GenerateApiKeyVariables {
 pub struct GenerateApiKeyInput {
     pub name: String,
     pub team_id: Option<cynic::Id>,
+    pub agent_uid: Option<cynic::Id>,
     pub expires_at: Option<Time>,
 }
 

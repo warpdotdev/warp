@@ -1143,8 +1143,8 @@ impl View for CloudModeV2SlashCommandView {
                 row_position_id,
                 vec2f(SIDECAR_GAP, 0.),
                 PositionedElementOffsetBounds::WindowByPosition,
-                PositionedElementAnchor::BottomRight,
-                ChildAnchor::BottomLeft,
+                PositionedElementAnchor::TopRight,
+                ChildAnchor::TopLeft,
             ),
         );
         stack.finish()

@@ -203,6 +203,29 @@ impl RepoMetadataModel {
         }
     }
 
+    /// Returns a future that resolves once repository indexing has completed at least once.
+    ///
+    /// Callers should inspect [`Self::repository_state`] after awaiting this future to see whether
+    /// indexing succeeded or failed.
+    pub fn repository_indexed(
+        &self,
+        id: &RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) -> futures::future::BoxFuture<'static, ()> {
+        match id {
+            RepositoryIdentifier::Local(path) => {
+                let path = path.clone();
+                self.local
+                    .update(ctx, |local, _| local.repository_indexed(&path))
+            }
+            RepositoryIdentifier::Remote(remote_id) => {
+                let remote_id = remote_id.clone();
+                self.remote
+                    .update(ctx, |remote, _| remote.repository_indexed(&remote_id))
+            }
+        }
+    }
+
     /// Returns repository contents for the specified repository.
     pub fn get_repo_contents<'a>(
         &self,

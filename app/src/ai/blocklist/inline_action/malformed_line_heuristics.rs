@@ -191,5 +191,5 @@ fn range_intersects_or_contains_point(
 }
 
 #[cfg(test)]
-#[path = "malformed_line_heuristics_test.rs"]
+#[path = "malformed_line_heuristics_tests.rs"]
 mod tests;

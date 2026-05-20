@@ -8,10 +8,13 @@ use futures::StreamExt;
 use instant::Instant;
 use warpui::r#async::Timer;
 
+use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::AgentRunEvent;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;
 
 pub(crate) const DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
+pub(crate) const DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS: &[u64] = &[30];
 pub(crate) const DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT: Duration = Duration::from_secs(14 * 60);
 pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
 
@@ -23,9 +26,13 @@ pub(crate) struct AgentEventDriverConfig {
     /// Last fully handled event sequence. Events at or below this cursor are
     /// ignored on reconnect so the consumer only sees new work.
     pub since_sequence: i64,
-    /// Exponential-ish reconnect delays, in seconds, used after stream open
-    /// failures, stream errors, and clean stream termination.
+    /// Exponential-ish reconnect delays, in seconds, used after transient
+    /// stream failures (5xx, timeouts, connection resets).
     pub reconnect_backoff_steps: &'static [u64],
+    /// Reconnect delays for permanent HTTP errors (4xx other than 408/429).
+    /// Typically much slower than transient backoff to reduce log spam while
+    /// still allowing recovery if the error was spurious.
+    pub permanent_error_backoff_steps: &'static [u64],
     /// Optional deadline for proactively recycling an otherwise healthy stream
     /// before upstream infrastructure times it out (for example, before Cloud
     /// Run's 20-minute streaming timeout).
@@ -43,6 +50,7 @@ impl AgentEventDriverConfig {
             run_ids,
             since_sequence,
             reconnect_backoff_steps: DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+            permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
             proactive_reconnect_after: Some(DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT),
             failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
         }
@@ -73,6 +81,27 @@ pub(crate) enum AgentEventDriverState {
     /// A healthy stream was intentionally recycled after
     /// `proactive_reconnect_after`.
     ProactiveReconnect,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentMessageEventMetadata {
+    pub sequence: i64,
+    pub message_id: String,
+    pub occurred_at: String,
+}
+
+impl AgentMessageEventMetadata {
+    pub(crate) fn from_event(event: &AgentRunEvent) -> Option<Self> {
+        if event.event_type != "new_message" {
+            return None;
+        }
+
+        Some(Self {
+            sequence: event.sequence,
+            message_id: event.ref_id.clone()?,
+            occurred_at: event.occurred_at.clone(),
+        })
+    }
 }
 
 /// Parsed items emitted by an [`AgentEventSource`].
@@ -138,7 +167,20 @@ impl AgentEventSource for ServerApiAgentEventSource {
                         }
                     }
                 }
-                Err(err) => Some(Err(anyhow!("SSE stream error: {err:?}"))),
+                Err(err) => {
+                    let anyhow_err = match &err {
+                        reqwest_eventsource::Error::InvalidStatusCode(status_code, _) => {
+                            let status_err = HttpStatusError {
+                                status: status_code.as_u16(),
+                                body: format!("{err:?}"),
+                            };
+                            anyhow::Error::new(status_err)
+                                .context(format!("SSE stream error: {err:?}"))
+                        }
+                        _ => anyhow!("SSE stream error: {err:?}"),
+                    };
+                    Some(Err(anyhow_err))
+                }
             }
         });
 
@@ -197,7 +239,12 @@ where
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
-                let backoff = agent_event_backoff(failures, config.reconnect_backoff_steps);
+                let backoff_steps = if is_transient_http_error(&err) {
+                    config.reconnect_backoff_steps
+                } else {
+                    config.permanent_error_backoff_steps
+                };
+                let backoff = agent_event_backoff(failures, backoff_steps);
                 log_stream_failure(
                     &config.run_ids,
                     failures,
@@ -275,7 +322,12 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
                     failures += 1;
-                    let backoff = agent_event_backoff(failures, config.reconnect_backoff_steps);
+                    let backoff_steps = if is_transient_http_error(&err) {
+                        config.reconnect_backoff_steps
+                    } else {
+                        config.permanent_error_backoff_steps
+                    };
+                    let backoff = agent_event_backoff(failures, backoff_steps);
                     log_stream_failure(
                         &config.run_ids,
                         failures,
@@ -295,6 +347,9 @@ where
                     Timer::after(backoff).await;
                     break;
                 }
+                // Clean stream closure (server-side close, not an HTTP
+                // error) — always use the transient backoff schedule since
+                // there is no HTTP status to classify.
                 NextDriverItem::StreamItem(None) => {
                     failures += 1;
                     let backoff = agent_event_backoff(failures, config.reconnect_backoff_steps);

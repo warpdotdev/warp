@@ -1023,5 +1023,5 @@ fn advances(run: &CTRun) -> Cow<'_, [CGSize]> {
 }
 
 #[cfg(test)]
-#[path = "text_layout_test.rs"]
+#[path = "text_layout_tests.rs"]
 mod tests;

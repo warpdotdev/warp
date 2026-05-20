@@ -596,5 +596,5 @@ fn meta_keystroke_to_escape_sequence(
 }
 
 #[cfg(test)]
-#[path = "escape_sequences_test.rs"]
+#[path = "escape_sequences_tests.rs"]
 mod tests;

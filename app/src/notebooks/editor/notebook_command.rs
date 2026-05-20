@@ -27,14 +27,17 @@ use warp_editor::{
 
 use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
 use warp_util::user_input::UserInput;
-use warpui::{elements::Align, r#async::SpawnedFutureHandle, AppContext};
+use warpui::{
+    elements::Align, platform::Cursor, r#async::SpawnedFutureHandle, AppContext, AssetProvider as _,
+};
 use warpui::{
     elements::{
-        Border, Container, CrossAxisAlignment, Empty, Flex, MainAxisAlignment, MouseStateHandle,
-        ParentElement, Shrinkable, Text,
+        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
     },
     fonts::Properties,
     presenter::ChildView,
+    ui_components::components::{UiComponent, UiComponentStyles},
     Element, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
     WeakModelHandle, WindowId,
 };
@@ -45,7 +48,10 @@ use crate::{
     debounce::debounce,
     drive::workflows::arguments::ArgumentsState,
     editor::InteractionState,
+    features::FeatureFlag,
+    menu::MenuItemFields,
     notebooks::{
+        file::MarkdownDisplayMode,
         styles::block_footer_action_button,
         telemetry::{ActionEntrypoint, BlockInfo},
     },
@@ -55,14 +61,14 @@ use crate::{
         DEBOUNCE_INPUT_DECORATION_PERIOD,
     },
     themes::theme::{AnsiColorIdentifier, AnsiColors},
-    ui_components::icons::Icon,
+    ui_components::{buttons::icon_button, icons::Icon},
     util::{
         bindings::CustomAction,
         color::{ContrastingColor, MinimumAllowedContrast},
     },
-    view_components::{Dropdown, DropdownItem},
+    view_components::{dropdown::DropdownAction, Dropdown},
     workflows::{workflow::Workflow, WorkflowType},
-    Assets,
+    ASSETS,
 };
 
 use super::{
@@ -95,6 +101,8 @@ lazy_static! {
 struct MouseStateHandles {
     insert_button_state: MouseStateHandle,
     copy_button_state: MouseStateHandle,
+    mermaid_raw_button_state: MouseStateHandle,
+    mermaid_rendered_button_state: MouseStateHandle,
 }
 
 struct CachedHighlightKey {
@@ -118,6 +126,31 @@ struct CodeHighlightResult {
     colors: Vec<(Range<ByteOffset>, AnsiColorIdentifier)>,
 }
 
+enum CodeBlockDropdownIcon {
+    Image(Icon),
+    Tinted(Icon),
+}
+
+fn code_block_dropdown_icon(code_block_type: &CodeBlockType) -> CodeBlockDropdownIcon {
+    match code_block_type {
+        CodeBlockType::Mermaid => CodeBlockDropdownIcon::Image(Icon::MermaidLang),
+        CodeBlockType::Code { lang } => match lang.as_str() {
+            "Go" => CodeBlockDropdownIcon::Image(Icon::GoLang),
+            "C++" => CodeBlockDropdownIcon::Image(Icon::CppLang),
+            "JavaScript" => CodeBlockDropdownIcon::Image(Icon::JavaScriptLang),
+            "Python" => CodeBlockDropdownIcon::Image(Icon::PythonLang),
+            "Rust" => CodeBlockDropdownIcon::Image(Icon::RustLang),
+            "SQL" => CodeBlockDropdownIcon::Image(Icon::SqlLang),
+            "JSON" => CodeBlockDropdownIcon::Image(Icon::JsonLang),
+            "PHP" => CodeBlockDropdownIcon::Image(Icon::PhpLang),
+            "Kotlin" => CodeBlockDropdownIcon::Image(Icon::KotlinLang),
+            "PowerShell" => CodeBlockDropdownIcon::Tinted(Icon::Powershell),
+            _ => CodeBlockDropdownIcon::Tinted(Icon::Code1),
+        },
+        CodeBlockType::Shell => CodeBlockDropdownIcon::Tinted(Icon::Terminal),
+    }
+}
+
 /// Runnable command behavior for notebooks.
 pub struct NotebookCommand {
     start: Anchor,
@@ -128,6 +161,8 @@ pub struct NotebookCommand {
     mouse_state_handles: MouseStateHandles,
     is_selected: bool,
     block_type_dropdown: ViewHandle<Dropdown<EditorViewAction>>,
+    /// Display mode for this Mermaid block (Raw or Rendered).
+    pub mermaid_display_mode: MarkdownDisplayMode,
 
     #[cfg_attr(test, allow(dead_code))]
     debounce_highlighting_tx: Sender<()>,
@@ -162,21 +197,24 @@ impl NotebookCommand {
         let block_type_dropdown = ctx.add_typed_action_view(rte_window_id, |ctx| {
             let mut dropdown = Dropdown::new(ctx);
 
-            dropdown.set_top_bar_max_width(68.);
-            dropdown.set_menu_width(68., ctx);
+            dropdown.set_top_bar_max_width(96.);
+            dropdown.set_menu_width(160., ctx);
 
-            dropdown.add_items(
-                CodeBlockType::all()
-                    .map(|code_block_type| {
-                        DropdownItem::new(
-                            code_block_type.to_string().as_str(),
+            dropdown.set_rich_items(
+                CodeBlockType::all().map(|code_block_type| {
+                    let mut item = MenuItemFields::new(code_block_type.to_string())
+                        .with_on_select_action(DropdownAction::SelectActionAndClose(
                             EditorViewAction::CodeBlockTypeSelectedAtOffset {
-                                code_block_type,
+                                code_block_type: code_block_type.clone(),
                                 start_anchor: start.clone(),
                             },
-                        )
-                    })
-                    .collect(),
+                        ));
+                    item = match code_block_dropdown_icon(&code_block_type) {
+                        CodeBlockDropdownIcon::Image(icon) => item.with_image_icon(icon.into()),
+                        CodeBlockDropdownIcon::Tinted(icon) => item.with_icon(icon),
+                    };
+                    item.into_item()
+                }),
                 ctx,
             );
 
@@ -193,9 +231,8 @@ impl NotebookCommand {
 
         let syntax_config = {
             let ps = SyntaxSet::load_defaults_newlines();
-            if let Some(asset) = Assets::get("bundled/syntax_theme/base16.tmTheme") {
-                let binary = asset.data;
-                let mut cursor = std::io::Cursor::new(binary);
+            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+                let mut cursor = std::io::Cursor::new(asset);
                 match ThemeSet::load_from_reader(&mut cursor) {
                     Ok(theme) => Some((ps, theme)),
                     Err(e) => {
@@ -226,6 +263,7 @@ impl NotebookCommand {
             mouse_state_handles: Default::default(),
             is_selected: false,
             block_type_dropdown,
+            mermaid_display_mode: MarkdownDisplayMode::Raw,
             syntax_highlighting_handle: None,
             cached_highlight_delta: None,
             debounce_highlighting_tx,
@@ -617,6 +655,85 @@ impl RunnableCommandModel for NotebookCommand {
                 .with_vertical_padding(11.)
                 .finish(),
             )
+        }
+        if matches!(block_style, CodeBlockType::Mermaid)
+            && FeatureFlag::MarkdownMermaid.is_enabled()
+        {
+            let is_raw = matches!(self.mermaid_display_mode, MarkdownDisplayMode::Raw);
+            let start_anchor_raw = self.start.clone();
+            let start_anchor_rendered = self.start.clone();
+            let tooltip_builder_raw = appearance.ui_builder().clone();
+            let tooltip_builder_rendered = appearance.ui_builder().clone();
+
+            let active_highlight = UiComponentStyles {
+                background: Some(appearance.theme().surface_3().into()),
+                ..Default::default()
+            };
+
+            let raw_button = icon_button(
+                appearance,
+                Icon::Code1,
+                is_raw,
+                self.mouse_state_handles.mermaid_raw_button_state.clone(),
+            )
+            .with_active_styles(active_highlight)
+            .with_tooltip(move || {
+                tooltip_builder_raw
+                    .tool_tip("Raw".to_string())
+                    .build()
+                    .finish()
+            })
+            .build()
+            .with_cursor(Cursor::Arrow)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(EditorViewAction::MermaidDisplayModeSelected {
+                    start_anchor: start_anchor_raw.clone(),
+                    mode: MarkdownDisplayMode::Raw,
+                });
+            })
+            .finish();
+
+            let rendered_button = icon_button(
+                appearance,
+                Icon::Dataflow04,
+                !is_raw,
+                self.mouse_state_handles
+                    .mermaid_rendered_button_state
+                    .clone(),
+            )
+            .with_active_styles(active_highlight)
+            .with_tooltip(move || {
+                tooltip_builder_rendered
+                    .tool_tip("Rendered".to_string())
+                    .build()
+                    .finish()
+            })
+            .build()
+            .with_cursor(Cursor::Arrow)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(EditorViewAction::MermaidDisplayModeSelected {
+                    start_anchor: start_anchor_rendered.clone(),
+                    mode: MarkdownDisplayMode::Rendered,
+                });
+            })
+            .finish();
+
+            footer.add_child(
+                Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(2.)
+                        .with_child(raw_button)
+                        .with_child(rendered_button)
+                        .finish(),
+                )
+                .with_uniform_padding(2.)
+                .with_margin_left(8.)
+                .with_background(appearance.theme().background())
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().surface_3()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish(),
+            );
         }
         footer.add_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
         footer.add_child(

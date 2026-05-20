@@ -520,6 +520,7 @@ fn converts_remote_start_agent_with_environment_id() {
             worker_host: String::new(),
             harness_type: String::new(),
             title: String::new(),
+            auth_secret_name: None,
         }
     );
     assert_eq!(lifecycle_subscription, None);
@@ -560,6 +561,7 @@ fn converts_remote_start_agent_v2_with_skill_references() {
             worker_host: "worker-host".to_string(),
             harness_type: "claude-code".to_string(),
             title: "Remote child".to_string(),
+            auth_secret_name: None,
         }
     );
     assert_eq!(lifecycle_subscription, None);

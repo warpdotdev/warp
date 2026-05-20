@@ -534,5 +534,5 @@ pub fn command_matches_workflow(command: &str, workflow: &Workflow) -> bool {
 }
 
 #[cfg(test)]
-#[path = "command_parser_test.rs"]
+#[path = "command_parser_tests.rs"]
 mod tests;

@@ -209,9 +209,9 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::SummarizeConversation { prompt } => {
+            AIAgentInput::SummarizeConversation { prompt, context } => {
                 return Ok(api::request::Input {
-                    context: None,
+                    context: Some(convert_context(context.as_ref())),
                     r#type: Some(api::request::input::Type::SummarizeConversation(
                         api::request::input::SummarizeConversation {
                             prompt: prompt.unwrap_or_default(),
@@ -808,6 +808,8 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 api_context.git = Some(api::input_context::Git {
                     head,
                     branch: branch.unwrap_or_default(),
+                    repository: None,   // TODO: populate?
+                    pull_request: None, // TODO: populate?
                 });
             }
             AIAgentContext::Skills { skills } => {

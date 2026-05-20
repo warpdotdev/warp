@@ -134,7 +134,6 @@ pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN: &str = "Generating fix...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF: &str = "Creating diff...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_RUN_AGENTS: &str = "Spawning agents...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION: &str = "Preparing question...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_GENERATING_PLAN: &str = "Generating plan...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_UPDATING_PLAN: &str = "Updating plan...";
@@ -247,19 +246,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_last_message_run_agents = output_to_render.as_ref().is_some_and(|output| {
-        let output = output.get();
-        output.messages.last().is_some_and(|m| {
-            matches!(
-                m.message,
-                AIAgentOutputMessageType::Action(AIAgentAction {
-                    action: AIAgentActionType::RunAgents(_),
-                    ..
-                })
-            )
-        })
-    });
-
     let is_last_message_asking_user_question = output_to_render.as_ref().is_some_and(|output| {
         let output = output.get();
         output.messages.last().is_some_and(|m| {
@@ -345,8 +331,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN.to_string()
     } else if is_last_message_requesting_file_edits {
         LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF.to_string()
-    } else if is_last_message_run_agents && FeatureFlag::RunAgentsTool.is_enabled() {
-        LOAD_OUTPUT_MESSAGE_FOR_RUN_AGENTS.to_string()
     } else if is_last_message_asking_user_question {
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
@@ -2969,16 +2953,22 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     let appearance = Appearance::as_ref(app);
 
     let error_text = match props.error {
-        RenderableAIError::QuotaLimit => {
-            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-            let formatted_next_refresh_time = ai_request_usage_model
-                .next_refresh_time()
-                .format("%B %d")
-                .to_string();
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => {
+            if let Some(message) = user_display_message {
+                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else {
+                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
+                let formatted_next_refresh_time = ai_request_usage_model
+                    .next_refresh_time()
+                    .format("%B %d")
+                    .to_string();
 
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-            )
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
+                )
+            }
         }
         RenderableAIError::ServerOverloaded => {
             "Warp is currently overloaded. Please try again later.".to_string()

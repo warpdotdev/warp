@@ -73,6 +73,16 @@ impl GridHandler {
             // We can delegate to the old grid resizing logic, as there's no
             // flat storage for the alt screen.
             self.grid.resize(false, num_rows, num_cols, self.finished);
+
+            // Keep flat_storage's column count in sync so that rows
+            // scrolled into it later (via scroll_region_up) match the
+            // width the iterator expects. Without this, rows from the
+            // wider/narrower grid get pushed with process_grapheme_info_
+            // unchecked and RowIterator::next panics.
+            if !self.ansi_handler_state.is_alt_screen {
+                self.flat_storage.set_columns(num_cols);
+            }
+
             return;
         }
 

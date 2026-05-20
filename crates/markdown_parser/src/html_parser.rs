@@ -576,5 +576,5 @@ fn parse_style_into_dict(style: &str) -> HashMap<&str, &str> {
 }
 
 #[cfg(test)]
-#[path = "html_parser_test.rs"]
+#[path = "html_parser_tests.rs"]
 mod tests;

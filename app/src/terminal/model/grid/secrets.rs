@@ -1,16 +1,18 @@
+use std::sync::Arc;
 use std::{collections::HashSet, ops::RangeInclusive};
 
 use itertools::Itertools as _;
 
-use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels;
+use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels_using_regex;
 use crate::terminal::model::grid::{grapheme_cursor, Dimensions as _};
+use crate::terminal::model::secrets::SecretsRegex;
 use crate::terminal::model::terminal_model::RangeInModel;
 use crate::terminal::model::{
     grid::RespectDisplayedOutput,
     index::{Direction, Point},
     secrets::{
         IsObfuscated, ObfuscateSecrets, Secret, SecretAndHandle, SecretHandle, SecretLevel,
-        SECRETS_DFA,
+        SECRETS_REGEX,
     },
 };
 
@@ -226,12 +228,13 @@ impl GridHandler {
             end_point = end_point.max(*cleared_secrets_range.end());
         }
 
+        let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };
         let matches = self
             .regex_iter(
                 start_point,
                 end_point,
                 Direction::Right,
-                &SECRETS_DFA.read(),
+                &secrets_regex.dfas,
             )
             .collect_vec();
 
@@ -247,7 +250,7 @@ impl GridHandler {
             };
 
             // Determine the secret level by re-scanning the plaintext
-            let secret_level = self.determine_secret_level(&plaintext);
+            let secret_level = self.determine_secret_level(&plaintext, &secrets_regex);
 
             self.mark_secret_range(secret_match, is_obfuscated, plaintext, secret_level);
         }
@@ -272,8 +275,8 @@ impl GridHandler {
 
     /// Determines the secret level by re-scanning the plaintext using the rich content detection
     /// which includes secret level information
-    fn determine_secret_level(&self, plaintext: &str) -> SecretLevel {
-        let secrets_with_levels = find_secrets_in_text_with_levels(plaintext);
+    fn determine_secret_level(&self, plaintext: &str, regex: &SecretsRegex) -> SecretLevel {
+        let secrets_with_levels = find_secrets_in_text_with_levels_using_regex(plaintext, regex);
 
         // Find the first match that corresponds to our plaintext
         // In case of multiple matches, we return the highest priority level

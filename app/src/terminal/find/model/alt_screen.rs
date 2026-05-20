@@ -170,5 +170,5 @@ impl AltScreenFindRun {
 }
 
 #[cfg(test)]
-#[path = "alt_screen_test.rs"]
+#[path = "alt_screen_tests.rs"]
 mod tests;

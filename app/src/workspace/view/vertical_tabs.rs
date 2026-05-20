@@ -1,7 +1,10 @@
 pub mod telemetry;
 
-use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_status_ui::render_status_element;
+use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
 use crate::safe_triangle::SafeTriangle;
@@ -49,7 +52,7 @@ use crate::workspace::{
     PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
     VerticalTabsPaneDropTargetData, Workspace,
 };
-use languages::language_by_filename;
+use languages::language_by_local_filename;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -113,6 +116,10 @@ pub(super) const VERTICAL_TABS_DETAIL_SIDECAR_POSITION_ID: &str = "vertical_tabs
 /// Total size of the icon-with-status component rendered for each vertical-tabs row.
 /// Sub-components (circle, badge, cloud) are derived inside `render_icon_with_status`.
 const VERTICAL_TABS_ICON_SIZE: f32 = 24.;
+
+/// Icon size for the per-line conversation status pill in Summary mode. Pairs with
+/// `STATUS_ELEMENT_PADDING` (2px) for an overall ~14px element next to a 12pt title.
+const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
@@ -764,9 +771,17 @@ struct VerticalTabsSummaryBranchEntry {
     pull_request_label: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct VerticalTabsSummaryPrimaryLabel {
+    text: String,
+    /// Some when the contributing pane is a conversation with a known status. Drives the
+    /// per-line status pill prefix in Summary mode.
+    status: Option<ConversationStatus>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct VerticalTabsSummaryData {
-    primary_labels: Vec<String>,
+    primary_labels: Vec<VerticalTabsSummaryPrimaryLabel>,
     working_directories: Vec<String>,
     branch_entries: Vec<VerticalTabsSummaryBranchEntry>,
 }
@@ -837,9 +852,64 @@ fn push_normalized_unique_summary_text(
     values.push(normalized);
 }
 
+/// Push a primary label, preserving the first-seen display text and conversation status
+/// when the same normalized label is contributed by multiple panes.
+fn push_normalized_unique_summary_label(
+    values: &mut Vec<VerticalTabsSummaryPrimaryLabel>,
+    seen: &mut HashMap<String, ()>,
+    text: &str,
+    status: Option<ConversationStatus>,
+) {
+    let Some(normalized) = normalize_summary_text(text) else {
+        return;
+    };
+    if seen.contains_key(&normalized) {
+        return;
+    }
+    seen.insert(normalized.clone(), ());
+    values.push(VerticalTabsSummaryPrimaryLabel {
+        text: normalized,
+        status,
+    });
+}
+
+/// Stable sort that moves labels with a known `ConversationStatus` ahead of labels without
+/// one, while preserving the relative first-seen order within each group. Used in Summary
+/// mode so the visible 3-line title region (and the `+ N more` overflow) prioritizes
+/// conversation lines over plain terminal / non-conversation lines.
+fn sort_summary_primary_labels_status_first(values: &mut [VerticalTabsSummaryPrimaryLabel]) {
+    values.sort_by_key(|label| label.status.is_none());
+}
+
 fn normalize_summary_text(text: &str) -> Option<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!normalized.is_empty()).then_some(normalized)
+}
+
+/// Returns the conversation status for a terminal pane, used to render the per-line status
+/// pill prefix in Summary mode. Mirrors the status sources used by `render_detail_status_pill`
+/// in the detail sidecar — CLI agent sessions with rich status, Oz agent conversations, or
+/// ambient agent sessions. Returns `None` for plain terminals or conversations without status.
+fn summary_conversation_status_for_terminal(
+    terminal_view: &TerminalView,
+    app: &AppContext,
+) -> Option<ConversationStatus> {
+    let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
+    if let Some(session) = cli_agent_session
+        .filter(|s| s.listener.is_some())
+        .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
+        .filter(|s| agent_supports_rich_status(&s.agent))
+    {
+        return Some(session.status.to_conversation_status());
+    }
+
+    let is_ambient = terminal_view.is_ambient_agent_session(app);
+    let has_conversation = terminal_view
+        .selected_conversation_display_title(app)
+        .is_some();
+    (has_conversation || is_ambient)
+        .then(|| terminal_view.selected_conversation_status_for_display(app))
+        .flatten()
 }
 
 fn coalesce_summary_branch_entries(
@@ -869,21 +939,6 @@ fn summary_overflow_count(total_count: usize, visible_limit: usize) -> usize {
     total_count.saturating_sub(visible_limit)
 }
 
-fn format_summary_primary_labels(labels: &[String], visible_limit: usize) -> Option<String> {
-    const SEPARATOR: &str = " • ";
-    if labels.is_empty() {
-        return None;
-    }
-
-    let visible_count = labels.len().min(visible_limit);
-    let mut rendered = labels[..visible_count].join(SEPARATOR);
-    let overflow_count = summary_overflow_count(labels.len(), visible_limit);
-    if overflow_count > 0 {
-        rendered.push_str(&format!(" + {overflow_count} more"));
-    }
-    Some(rendered)
-}
-
 fn summary_search_text_fragments(
     summary: &VerticalTabsSummaryData,
     title_override: Option<&str>,
@@ -892,7 +947,12 @@ fn summary_search_text_fragments(
     if let Some(title_override) = title_override.and_then(normalize_summary_text) {
         fragments.push(title_override);
     }
-    fragments.extend(summary.primary_labels.iter().cloned());
+    fragments.extend(
+        summary
+            .primary_labels
+            .iter()
+            .map(|label| label.text.clone()),
+    );
     fragments.extend(summary.working_directories.iter().cloned());
     for entry in &summary.branch_entries {
         fragments.push(entry.branch_name.clone());
@@ -1374,10 +1434,7 @@ fn render_new_tab_button(
         )
         .build()
         .on_click(|ctx, _, position| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
-                position,
-                is_vertical_tabs: true,
-            });
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu { position });
         })
         .finish();
 
@@ -2677,7 +2734,7 @@ fn build_vertical_tabs_summary_data(
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
                 let title_text = terminal_view.terminal_title_from_shell();
-                let working_directory = terminal_view.display_working_directory(app);
+                let working_directory = resolved_terminal_working_directory(terminal_view, app);
                 let working_directory_text = working_directory
                     .clone()
                     .filter(|wd| !wd.trim().is_empty())
@@ -2695,10 +2752,12 @@ fn build_vertical_tabs_summary_data(
                     terminal_title_fallback_font(&agent_text),
                     terminal_view.last_completed_command_text(),
                 );
-                push_normalized_unique_summary_text(
+                let status = summary_conversation_status_for_terminal(terminal_view, app);
+                push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
                     primary_label.text(),
+                    status,
                 );
 
                 if let Some(working_directory) = working_directory {
@@ -2710,7 +2769,9 @@ fn build_vertical_tabs_summary_data(
                 }
 
                 if let (Some(repo_path), Some(branch_name)) = (
-                    terminal_view.current_repo_path().cloned(),
+                    terminal_view
+                        .current_local_repo_path()
+                        .map(Path::to_path_buf),
                     terminal_view
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
@@ -2728,10 +2789,11 @@ fn build_vertical_tabs_summary_data(
                 }
             }
             TypedPane::Code(_) => {
-                push_normalized_unique_summary_text(
+                push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
                     &pane_title,
+                    None,
                 );
                 push_normalized_unique_summary_text(
                     &mut working_directories,
@@ -2750,14 +2812,17 @@ fn build_vertical_tabs_summary_data(
             | TypedPane::AIDocument
             | TypedPane::ExecutionProfileEditor
             | TypedPane::Other => {
-                push_normalized_unique_summary_text(
+                push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
                     &pane_title,
+                    None,
                 );
             }
         }
     }
+
+    sort_summary_primary_labels_status_first(&mut primary_labels);
 
     VerticalTabsSummaryData {
         primary_labels,
@@ -2929,9 +2994,7 @@ fn terminal_pane_search_text_fragments(
     let terminal_view = terminal_pane.terminal_view(app);
     let terminal_view = terminal_view.as_ref(app);
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -3195,6 +3258,47 @@ impl PaneGroup {
     }
 }
 
+/// Returns the best available working-directory string for a terminal pane,
+/// incorporating cloud environment name and setup status for ambient agent sessions.
+fn resolved_terminal_working_directory(
+    terminal_view: &TerminalView,
+    app: &AppContext,
+) -> Option<String> {
+    let working_directory = terminal_view
+        .display_working_directory(app)
+        .filter(|wd| !wd.trim().is_empty());
+    cloud_agent_working_directory_and_env(terminal_view, working_directory.as_deref(), app)
+        .or(working_directory)
+}
+
+/// For cloud agent panes, builds a composite string from the environment name,
+/// setup status, and/or working directory. Returns `None` for non-cloud sessions.
+fn cloud_agent_working_directory_and_env(
+    terminal_view: &TerminalView,
+    working_directory: Option<&str>,
+    app: &AppContext,
+) -> Option<String> {
+    if !terminal_view.is_ambient_agent_session(app) {
+        return None;
+    }
+    let model_ref = terminal_view.ambient_agent_view_model()?.as_ref(app);
+
+    let env_name = model_ref
+        .selected_environment_id()
+        .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, app))
+        .map(|env| env.model().string_model.display_name());
+
+    let setup_status: Option<&str> = model_ref.agent_progress().map(|p| p.setup_status_text());
+
+    match (env_name, setup_status, working_directory) {
+        (Some(env), Some(status), _) => Some(format!("{env} · {status}")),
+        (Some(env), None, Some(wd)) => Some(format!("{env} · {wd}")),
+        (Some(env), None, None) => Some(env),
+        (None, Some(status), _) => Some(status.to_string()),
+        (None, None, _) => None,
+    }
+}
+
 fn render_terminal_row_content(
     props: &PaneProps<'_>,
     terminal_view: &TerminalView,
@@ -3207,9 +3311,7 @@ fn render_terminal_row_content(
     let primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
 
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
 
     let git_branch = terminal_view.current_git_branch(app);
@@ -3510,8 +3612,13 @@ fn render_summary_tab_item(
     summary_pane_kind_icons: Option<SummaryPaneKindIcons>,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    const MAX_VISIBLE_PRIMARY_LABELS: usize = 4;
+    // Region caps for v2 per-line rendering: each region shows at most 3 visible lines
+    // before collapsing the rest into a `+ N more` overflow line.
+    const MAX_VISIBLE_PRIMARY_LABELS: usize = 3;
+    const MAX_VISIBLE_WORKING_DIRECTORIES: usize = 3;
     const MAX_VISIBLE_BRANCH_LINES: usize = 3;
+    const REGION_GAP: f32 = 4.;
+    const INTRA_REGION_GAP: f32 = 2.;
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -3525,49 +3632,121 @@ fn render_summary_tab_item(
                 theme,
             )
         });
-    let primary_line_text =
-        format_summary_primary_labels(&summary.primary_labels, MAX_VISIBLE_PRIMARY_LABELS)
-            .unwrap_or_else(|| props.title.clone());
 
     let mut text_col = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Start);
-    text_col.add_child(
-        render_title_override(
-            &props,
-            12.,
+
+    // Title region. A custom-title or rename override short-circuits the per-label list and
+    // renders as a single line (no prefix slot, no overflow line).
+    if let Some(title_override) = render_title_override(
+        &props,
+        12.,
+        main_text_color,
+        ClipConfig::end(),
+        appearance,
+        app,
+    ) {
+        text_col.add_child(title_override);
+    } else if summary.primary_labels.is_empty() {
+        text_col.add_child(render_text_line(
+            &props.title,
             main_text_color,
             ClipConfig::end(),
             appearance,
-            app,
-        )
-        .unwrap_or_else(|| {
-            render_text_line(
-                &primary_line_text,
-                main_text_color,
-                ClipConfig::end(),
-                appearance,
-            )
-        }),
-    );
+        ));
+    } else {
+        let visible_labels: Vec<&VerticalTabsSummaryPrimaryLabel> = summary
+            .primary_labels
+            .iter()
+            .take(MAX_VISIBLE_PRIMARY_LABELS)
+            .collect();
+        let reserve_prefix_slot = visible_labels.iter().any(|label| label.status.is_some());
 
-    if !summary.working_directories.is_empty() {
+        for (idx, label) in visible_labels.iter().enumerate() {
+            let line = render_summary_primary_label_line(
+                label,
+                reserve_prefix_slot,
+                main_text_color,
+                appearance,
+            );
+            text_col.add_child(if idx == 0 {
+                line
+            } else {
+                Container::new(line)
+                    .with_margin_top(INTRA_REGION_GAP)
+                    .finish()
+            });
+        }
+
+        let hidden_label_count =
+            summary_overflow_count(summary.primary_labels.len(), MAX_VISIBLE_PRIMARY_LABELS);
+        if hidden_label_count > 0 {
+            text_col.add_child(
+                Container::new(render_summary_overflow_line(
+                    hidden_label_count,
+                    sub_text_color,
+                    appearance,
+                ))
+                .with_margin_top(INTRA_REGION_GAP)
+                .finish(),
+            );
+        }
+    }
+
+    // Working-directory region.
+    let visible_directory_count = summary
+        .working_directories
+        .len()
+        .min(MAX_VISIBLE_WORKING_DIRECTORIES);
+    for (idx, working_dir) in summary
+        .working_directories
+        .iter()
+        .take(MAX_VISIBLE_WORKING_DIRECTORIES)
+        .enumerate()
+    {
+        let margin = if idx == 0 {
+            REGION_GAP
+        } else {
+            INTRA_REGION_GAP
+        };
         text_col.add_child(
             Container::new(render_text_line(
-                &summary.working_directories.join(" • "),
+                working_dir,
                 sub_text_color,
                 ClipConfig::start(),
                 appearance,
             ))
-            .with_margin_top(1.)
+            .with_margin_top(margin)
+            .finish(),
+        );
+    }
+    let hidden_directory_count = summary_overflow_count(
+        summary.working_directories.len(),
+        MAX_VISIBLE_WORKING_DIRECTORIES,
+    );
+    if hidden_directory_count > 0 {
+        let margin = if visible_directory_count == 0 {
+            REGION_GAP
+        } else {
+            INTRA_REGION_GAP
+        };
+        text_col.add_child(
+            Container::new(render_summary_overflow_line(
+                hidden_directory_count,
+                sub_text_color,
+                appearance,
+            ))
+            .with_margin_top(margin)
             .finish(),
         );
     }
 
+    // Branch region. Each branch line gets the existing 4px top margin from APP-3875.
     for branch_entry in summary.branch_entries.iter().take(MAX_VISIBLE_BRANCH_LINES) {
         text_col.add_child(
             Container::new(render_summary_branch_line(branch_entry, appearance))
-                .with_margin_top(4.)
+                .with_margin_top(REGION_GAP)
                 .finish(),
         );
     }
@@ -3576,17 +3755,12 @@ fn render_summary_tab_item(
         summary_overflow_count(summary.branch_entries.len(), MAX_VISIBLE_BRANCH_LINES);
     if hidden_branch_count > 0 {
         text_col.add_child(
-            Container::new(
-                Text::new_inline(
-                    format!("+ {hidden_branch_count} more"),
-                    appearance.ui_font_family(),
-                    10.,
-                )
-                .with_clip(ClipConfig::end())
-                .with_color(sub_text_color.into())
-                .finish(),
-            )
-            .with_margin_top(4.)
+            Container::new(render_summary_overflow_line(
+                hidden_branch_count,
+                sub_text_color,
+                appearance,
+            ))
+            .with_margin_top(REGION_GAP)
             .finish(),
         );
     }
@@ -3600,6 +3774,61 @@ fn render_summary_tab_item(
         .finish();
 
     render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+}
+
+fn render_summary_primary_label_line(
+    label: &VerticalTabsSummaryPrimaryLabel,
+    reserve_prefix_slot: bool,
+    text_color: WarpThemeFill,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    // Reserve a slot wide enough for the status pill so non-conversation lines align with
+    // conversation lines in the same region. STATUS_ELEMENT_PADDING is the 2px padding inside
+    // the pill from `render_status_element`.
+    const STATUS_ELEMENT_PADDING: f32 = 2.;
+    let prefix_slot_size = VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE + STATUS_ELEMENT_PADDING * 2.;
+    let text = render_text_line(&label.text, text_color, ClipConfig::end(), appearance);
+
+    let prefix: Option<Box<dyn Element>> = match (label.status.as_ref(), reserve_prefix_slot) {
+        (Some(status), _) => Some(render_status_element(
+            status,
+            VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
+            appearance,
+        )),
+        (None, true) => Some(
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(prefix_slot_size)
+                .with_height(prefix_slot_size)
+                .finish(),
+        ),
+        (None, false) => None,
+    };
+
+    let Some(prefix) = prefix else {
+        return text;
+    };
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.)
+        .with_child(prefix)
+        .with_child(Shrinkable::new(1., text).finish())
+        .finish()
+}
+
+fn render_summary_overflow_line(
+    hidden_count: usize,
+    text_color: WarpThemeFill,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    Text::new_inline(
+        format!("+ {hidden_count} more"),
+        appearance.ui_font_family(),
+        10.,
+    )
+    .with_clip(ClipConfig::end())
+    .with_color(text_color.into())
+    .finish()
 }
 
 fn render_summary_pane_kind_icons(
@@ -3881,9 +4110,7 @@ fn render_terminal_primary_line_for_view(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -5297,7 +5524,7 @@ fn render_detail_status_pill(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let (icon, color) = status.status_icon_and_color(theme);
+    let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Standard);
     Container::new(
         Flex::row()
             .with_main_axis_size(MainAxisSize::Min)
@@ -5406,7 +5633,7 @@ fn render_terminal_detail_section(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_colors = detail_sidecar_text_colors(theme);
-    let working_directory = terminal_view.display_working_directory(app);
+    let working_directory = resolved_terminal_working_directory(terminal_view, app);
     let git_branch = terminal_view.current_git_branch(app);
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
     let agent_text = terminal_agent_text(terminal_view, app);
@@ -5617,7 +5844,8 @@ fn render_warp_drive_object_detail_section(
 }
 
 fn code_detail_kind_label(file_name: &str) -> Option<String> {
-    language_by_filename(Path::new(file_name)).map(|language| language.display_name().to_string())
+    language_by_local_filename(Path::new(file_name))
+        .map(|language| language.display_name().to_string())
 }
 
 fn typed_pane_warp_drive_object_type(typed: &TypedPane<'_>) -> Option<DriveObjectType> {
@@ -5870,9 +6098,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             let terminal_view = terminal_pane.terminal_view(app).as_ref(app);
             let terminal_title = terminal_view.terminal_title_from_shell();
             let git_branch = terminal_view.current_git_branch(app);
-            let working_directory = terminal_view
-                .display_working_directory(app)
-                .filter(|wd| !wd.trim().is_empty());
+            let working_directory = resolved_terminal_working_directory(terminal_view, app);
             let working_directory_text = working_directory
                 .clone()
                 .unwrap_or_else(|| terminal_title.clone());

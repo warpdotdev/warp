@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use warp_util::path::user_friendly_path;
 use warpui::{
     elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text},
     platform::Cursor,
+    text_layout::ClipConfig,
     ui_components::components::UiComponentStyles,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -147,22 +149,46 @@ impl RepoPicker {
         // workspaces() already returns entries sorted by most-recently-touched.
         // "+ Add new repo..." is a sticky footer (not a list item) so it is
         // not included here.
+        //
+        // Each item's `display_text` is the full user-friendly form
+        // (`~`-prefixed). The dropdown clips it at render width via
+        // `ClipConfig::start()`, so distinct paths with shared trailing
+        // segments stay readable without character-count approximation.
+        // The action carries the *raw* absolute path so consumers reading
+        // `RepoPickerEvent::Selected` keep getting a real filesystem path.
+        let home = dirs::home_dir().map(|p| p.display().to_string());
         let items: Vec<DropdownItem<RepoPickerAction>> = PersistedWorkspace::as_ref(ctx)
             .workspaces()
             .filter(|ws| ws.path.exists())
             .map(|ws| {
                 let path_str = ws.path.to_string_lossy().into_owned();
-                DropdownItem::new(path_str.clone(), RepoPickerAction::Select(path_str))
+                let display = user_friendly_path(&path_str, home.as_deref()).into_owned();
+                DropdownItem::new(display, RepoPickerAction::Select(path_str.clone()))
+                    .with_clip_config(ClipConfig::start())
+                    .with_tooltip(path_str)
             })
             .collect();
 
-        let path_to_select = select_path
+        let raw_to_select = select_path
             .or(self.selected.as_deref())
             .map(|s| s.to_owned());
+
+        // Mirror the raw path into `self.selected` so `selected_value()`
+        // returns a real filesystem path even before the user explicitly
+        // picks something. Load-bearing for `new_worktree_modal::on_open`,
+        // which reads `repo_picker.selected_value()` at modal-open time when
+        // its own `selected_repo` is still `None`.
+        if let Some(ref raw) = raw_to_select {
+            self.selected = Some(raw.clone());
+        }
+
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
-            if let Some(ref path) = path_to_select {
-                dropdown.set_selected_by_name(path.as_str(), ctx);
+            // Match by the action (which carries the raw absolute path) so two
+            // repos that left-clip to identical-looking labels can't be
+            // confused at preselection time.
+            if let Some(ref raw) = raw_to_select {
+                dropdown.set_selected_by_action(RepoPickerAction::Select(raw.clone()), ctx);
             }
         });
 
@@ -176,11 +202,14 @@ impl RepoPicker {
         self.dropdown.as_ref(ctx).is_expanded()
     }
 
-    /// Returns the currently shown selected repo path.
-    pub fn selected_value(&self, app: &AppContext) -> Option<String> {
-        self.selected
-            .clone()
-            .or_else(|| self.dropdown.as_ref(app).selected_item_label())
+    /// Returns the currently shown selected repo path (raw absolute path).
+    ///
+    /// `refresh_items` eagerly mirrors any pre-selected raw path into
+    /// `self.selected`, so we never need to fall back to the dropdown's
+    /// `selected_item_label` — that would return the `~`-abbreviated display
+    /// string, not a usable filesystem path.
+    pub fn selected_value(&self, _app: &AppContext) -> Option<String> {
+        self.selected.clone()
     }
 }
 

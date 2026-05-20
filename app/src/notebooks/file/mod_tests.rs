@@ -1,10 +1,12 @@
 use std::{path::Path, sync::Arc};
 
 use pathfinder_geometry::vector::vec2f;
+use string_offset::CharOffset;
 
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
@@ -28,9 +30,9 @@ use crate::{
     GlobalResourceHandles, GlobalResourceHandlesProvider,
 };
 
+use super::{FileNotebookView, FileState, MarkdownDisplayMode};
 use crate::notebooks::context_menu::MenuSource;
-
-use super::{FileNotebookView, FileState};
+use warp_editor::render::model::BlockItem;
 
 fn init_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -191,6 +193,53 @@ fn test_load_static() {
 
             // Rendering should not panic.
             file_notebook.render(ctx);
+        });
+    });
+}
+
+#[test]
+fn test_file_notebook_mermaid_blocks_default_to_rendered() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_static("Test Title", "```mermaid\ngraph TD\nA --> B\n```", ctx);
+        });
+        let render_state = handle.read(&app, |view, ctx| {
+            view.editor
+                .as_ref(ctx)
+                .model()
+                .as_ref(ctx)
+                .render_state()
+                .clone()
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+
+        handle.read(&app, |view, ctx| {
+            let editor = view.editor.as_ref(ctx);
+            let model = editor.model().as_ref(ctx);
+            let command = model
+                .notebook_command_for_block(CharOffset::zero())
+                .expect("Mermaid command should exist");
+            assert_eq!(
+                command.as_ref(ctx).mermaid_display_mode,
+                MarkdownDisplayMode::Rendered
+            );
+            assert!(matches!(
+                model
+                    .render_state()
+                    .as_ref(ctx)
+                    .content()
+                    .block_at_height(0.)
+                    .map(|item| item.item),
+                Some(BlockItem::MermaidDiagram { .. })
+            ));
         });
     });
 }

@@ -563,5 +563,5 @@ pub fn render_preview(
 }
 
 #[cfg(test)]
-#[path = "theme_test.rs"]
+#[path = "theme_tests.rs"]
 mod tests;

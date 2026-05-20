@@ -377,5 +377,5 @@ impl Entity for EventLoop {
 }
 
 #[cfg(test)]
-#[path = "event_loop_test.rs"]
+#[path = "event_loop_tests.rs"]
 mod tests;

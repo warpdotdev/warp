@@ -42,7 +42,7 @@ pub(crate) fn apply_selected_agent_model_update(
     // Check if the model is available to the viewer. If not, skip the update.
     // This handles cases where the viewer and sharer have different model permissions.
     let model_is_available = llm_prefs
-        .get_base_llm_choices_for_agent_mode()
+        .get_base_llm_choices_for_agent_mode(ctx)
         .any(|info| info.id == model_id);
     if !model_is_available {
         log::warn!("Skipping shared-session model update - {model_id} is unknown");
@@ -426,6 +426,10 @@ pub(crate) fn apply_cli_agent_state_update(
                     }
                 });
             }
+
+            view.update(ctx, |view, ctx| {
+                view.sync_agent_view_for_shared_third_party_viewer(ctx);
+            });
         }
         CLIAgentSessionState::Inactive => {
             // Session cleanup is handled by BlockCompleted events on the

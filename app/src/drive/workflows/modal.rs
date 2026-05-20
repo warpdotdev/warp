@@ -1947,5 +1947,5 @@ impl TypedActionView for WorkflowModal {
 }
 
 #[cfg(test)]
-#[path = "modal_test.rs"]
+#[path = "modal_tests.rs"]
 mod tests;

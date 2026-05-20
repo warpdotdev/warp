@@ -722,5 +722,5 @@ impl Glyph {
 }
 
 #[cfg(test)]
-#[path = "scene_test.rs"]
+#[path = "scene_tests.rs"]
 mod tests;

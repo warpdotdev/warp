@@ -509,5 +509,5 @@ impl<'a> Dimension<'a, TransformSummary> for CharOffset {
 }
 
 #[cfg(test)]
-#[path = "fold_map_test.rs"]
+#[path = "fold_map_tests.rs"]
 mod tests;

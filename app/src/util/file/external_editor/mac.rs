@@ -402,5 +402,5 @@ unsafe fn default_app_to_open_path(file_path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "mac_test.rs"]
+#[path = "mac_tests.rs"]
 mod tests;

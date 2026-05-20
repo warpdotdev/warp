@@ -53,6 +53,7 @@ pub struct FileArtifactUploadTarget {
     pub url: String,
     pub method: String,
     pub headers: Vec<FileArtifactUploadHeader>,
+    pub fields: Vec<FileArtifactUploadField>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -60,6 +61,51 @@ pub struct FileArtifactUploadTarget {
 pub struct FileArtifactUploadHeader {
     pub name: String,
     pub value: String,
+}
+
+/// A single multipart form field for a presigned POST upload target.
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "UploadField")]
+pub struct FileArtifactUploadField {
+    pub name: String,
+    pub value: FileArtifactUploadFieldValue,
+}
+
+/// The value of a multipart form field on a presigned POST upload target.
+#[derive(cynic::InlineFragments, Debug)]
+#[cynic(graphql_type = "UploadFieldValue")]
+pub enum FileArtifactUploadFieldValue {
+    StaticUploadFieldValue(StaticUploadFieldValue),
+    ContentCRC32CFieldValue(ContentCRC32CFieldValue),
+    ContentDataFieldValue(ContentDataFieldValue),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+/// Literal string value known at URL-generation time.
+#[derive(cynic::QueryFragment, Debug)]
+pub struct StaticUploadFieldValue {
+    pub value: String,
+}
+
+/// Signals the client to compute CRC32C of the upload, base64-encode the 4-byte
+/// big-endian result, and send it as the field's value. The GraphQL type
+/// carries no payload beyond a placeholder `_: Boolean`; the client only cares
+/// about the variant tag, but cynic's `QueryFragment` derive requires at least
+/// one field to select.
+#[derive(cynic::QueryFragment, Debug, Default)]
+pub struct ContentCRC32CFieldValue {
+    #[cynic(rename = "_")]
+    _placeholder: Option<bool>,
+}
+
+/// Signals the client to use the raw upload bytes as the field's value. Must
+/// be the final entry in `fields`. See [`ContentCRC32CFieldValue`] for why we
+/// select a placeholder `_: Boolean`.
+#[derive(cynic::QueryFragment, Debug, Default)]
+pub struct ContentDataFieldValue {
+    #[cynic(rename = "_")]
+    _placeholder: Option<bool>,
 }
 
 #[derive(cynic::InputObject, Debug)]

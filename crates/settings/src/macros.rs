@@ -39,7 +39,7 @@
 //! ```
 //!
 //! The macro also generates an `Event` type that is passed to subscribers of the
-//! setting group model. The name of the type is created by appended 'ChangedEvent'
+//! setting group model. The name of the type is created by appending 'ChangedEvent'
 //! to the name of the setting group:
 //!
 //! ```

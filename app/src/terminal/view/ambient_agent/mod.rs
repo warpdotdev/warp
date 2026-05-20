@@ -1,3 +1,6 @@
+mod auth_secret_ftux_dropdown;
+mod auth_secret_ftux_view;
+pub(crate) mod auth_secret_selector;
 mod block;
 mod first_time_setup;
 mod footer;
@@ -11,6 +14,12 @@ mod progress_ui_state;
 mod tips;
 mod view_impl;
 
+pub use auth_secret_ftux_view::{
+    AuthSecretFtuxAction, AuthSecretFtuxView, AuthSecretFtuxViewEvent,
+};
+pub use auth_secret_selector::{
+    AuthSecretSelector, AuthSecretSelectorAction, AuthSecretSelectorEvent,
+};
 pub use block::*;
 pub use first_time_setup::{FirstTimeCloudAgentSetupView, FirstTimeCloudAgentSetupViewEvent};
 pub use footer::{render_error_footer, render_loading_footer};
@@ -19,18 +28,19 @@ pub use host_selector::{
     Host, HostSelector, HostSelectorAction, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 pub use loading_screen::{render_cloud_mode_error_screen, render_cloud_mode_loading_screen};
+pub(crate) use model::should_disable_snapshot;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use model::PendingHandoff;
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-pub use model::{HandoffSubmissionState, SnapshotUploadStatus};
-pub use model_selector::{ModelSelector, ModelSelectorAction, ModelSelectorEvent};
+pub(crate) use model::{HandoffSubmissionState, SnapshotUploadStatus};
+pub use model_selector::{
+    HarnessSelection, ModelSelection, ModelSelector, ModelSelectorAction, ModelSelectorEvent,
+};
 pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};
 pub use progress_ui_state::AmbientAgentProgressUIState;
 pub use tips::{get_cloud_mode_tips, CloudModeTip};
 
-use parking_lot::FairMutex;
-use std::sync::Arc;
 use warp_core::features::FeatureFlag;
 use warpui::geometry::vector::Vector2F;
 use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
@@ -43,13 +53,12 @@ use crate::terminal::TerminalModel;
 use crate::terminal::TerminalView;
 
 /// Creates a cloud mode terminal view and manager for ambient agent sessions.
-///
-/// This is used when pushing a new ambient agent view onto an existing pane's navigation stack,
-/// or when creating a standalone ambient agent pane.
+/// See `viewer::TerminalManager::enable_orchestration_polling` for the flag.
 pub fn create_cloud_mode_view(
     resources: TerminalViewResources,
     view_bounds_size: Vector2F,
     window_id: WindowId,
+    enable_orchestration_polling: bool,
     ctx: &mut AppContext,
 ) -> (
     ViewHandle<TerminalView>,
@@ -63,6 +72,7 @@ pub fn create_cloud_mode_view(
             resources,
             view_bounds_size,
             window_id,
+            enable_orchestration_polling,
             ctx,
         )) as Box<dyn TerminalManager>
     });
@@ -97,10 +107,12 @@ pub fn create_cloud_mode_view(
                     let append_followup_scrollback = view_model_for_subscription
                         .as_ref(ctx)
                         .is_local_to_cloud_handoff();
-                    manager.connect_to_session(*session_id, append_followup_scrollback, ctx);
+                    if manager.connect_to_session(*session_id, append_followup_scrollback, ctx) {
+                        manager.start_cloud_mode_setup_command_tracking();
+                    }
                 }
-                AmbientAgentViewModelEvent::FollowupSessionReady { session_id } => {
-                    manager.attach_followup_session(*session_id, ctx);
+                AmbientAgentViewModelEvent::ExecutionSessionReady { session_id } => {
+                    manager.attach_execution_session(*session_id, ctx);
                 }
                 AmbientAgentViewModelEvent::EnteredSetupState
                 | AmbientAgentViewModelEvent::EnteredComposingState
@@ -114,11 +126,15 @@ pub fn create_cloud_mode_view(
                 | AmbientAgentViewModelEvent::NeedsGithubAuth
                 | AmbientAgentViewModelEvent::Cancelled
                 | AmbientAgentViewModelEvent::HarnessSelected
+                | AmbientAgentViewModelEvent::ViewerHarnessResolved
                 | AmbientAgentViewModelEvent::HostSelected
-                | AmbientAgentViewModelEvent::HarnessCommandStarted
+                | AmbientAgentViewModelEvent::HarnessModelSelected
+                | AmbientAgentViewModelEvent::HarnessCommandStarted { .. }
                 | AmbientAgentViewModelEvent::PendingHandoffChanged
                 | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
-                | AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility => {}
+                | AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility
+                | AmbientAgentViewModelEvent::AuthSecretSelected
+                | AmbientAgentViewModelEvent::RunLifecycleChanged => {}
             }
         });
     });
@@ -132,7 +148,7 @@ pub fn create_cloud_mode_view(
 pub fn is_cloud_agent_pre_first_exchange(
     ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
     agent_view_controller: &ModelHandle<AgentViewController>,
-    terminal_model: &Arc<FairMutex<TerminalModel>>,
+    terminal_model: &TerminalModel,
     app: &AppContext,
 ) -> bool {
     if !(FeatureFlag::CloudMode.is_enabled() && FeatureFlag::AgentView.is_enabled()) {
@@ -179,7 +195,6 @@ pub fn is_cloud_agent_pre_first_exchange(
     }
 
     terminal_model
-        .lock()
         .block_list()
         .is_executing_oz_environment_startup_commands()
 }

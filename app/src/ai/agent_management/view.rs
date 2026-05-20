@@ -35,7 +35,6 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
-use crate::ai::conversation_status_ui::render_status_element;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::app_state::PersistedAgentManagementFilters;
@@ -48,7 +47,9 @@ use crate::editor::{
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
 use crate::settings::ai::AISettings;
+use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
@@ -105,8 +106,9 @@ const CARD_CONTENT_PADDING: f32 = 12.;
 const CARD_BORDER_RADIUS: f32 = 4.;
 const CARD_MARGIN_BOTTOM: f32 = 8.;
 
-const STATUS_ICON_SIZE: f32 = 12.;
 const BUTTON_SIZE: f32 = 20.;
+/// Total size of the agent icon-with-status component rendered in each card's header row.
+const CARD_AGENT_ICON_SIZE: f32 = 24.;
 const CREATOR_AVATAR_FONT_SIZE: f32 = 10.;
 
 const SESSION_EXPIRED_TEXT: &str = "Sessions expire after one week and cannot be opened.";
@@ -1285,6 +1287,7 @@ impl AgentManagementView {
     ) {
         match kind {
             ConversationUpdateKind::Restored => {}
+            ConversationUpdateKind::MetadataChanged => self.get_tasks_from_model(ctx),
             ConversationUpdateKind::StatusSet {
                 prev_filter,
                 new_filter,
@@ -1718,8 +1721,13 @@ impl AgentManagementView {
 
         let title_text = Text::new_inline(entry.display.title.clone(), font_family, font_size)
             .with_color(theme.active_ui_text_color().into());
-        let status_icon =
-            render_status_element(&entry.display.status, STATUS_ICON_SIZE, appearance);
+        let status_icon = render_icon_with_status(
+            agent_conversation_entry_icon_variant(entry),
+            CARD_AGENT_ICON_SIZE,
+            0.,
+            theme,
+            internal_colors::fg_overlay_1(theme),
+        );
         let time_str = format_approx_duration_from_now_utc(entry.display.last_updated);
         let time_text = Text::new_inline(time_str, font_family, font_size)
             .with_color(theme.nonactive_ui_text_color().into());
@@ -1788,6 +1796,24 @@ impl AgentManagementView {
                     "Harness: {}",
                     availability.display_name_for(harness)
                 ));
+            }
+        }
+
+        if let Some(executor) = &entry.display.executor {
+            let same_as_creator =
+                executor.uid.is_some() && executor.uid == entry.display.creator.uid;
+            if !same_as_creator {
+                if let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
+                    let label = if executor
+                        .principal_type
+                        .is_some_and(|pt| pt.is_service_account())
+                    {
+                        "Agent"
+                    } else {
+                        "Executor"
+                    };
+                    metadata_parts.push(format!("{label}: {name}"));
+                }
             }
         }
 

@@ -249,5 +249,5 @@ impl Renderer {
 }
 
 #[cfg(test)]
-#[path = "renderer_test.rs"]
+#[path = "renderer_tests.rs"]
 mod tests;
