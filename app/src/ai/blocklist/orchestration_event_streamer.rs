@@ -175,6 +175,38 @@ struct ConversationStreamState {
     restore_fetch_failures: usize,
 }
 
+/// Per-orchestrator state for the viewer-mode SSE consumer added by
+/// `specs/orch-viewer-polling/TECH.md` (PR 1). Keyed on the orchestrator's
+/// `AmbientAgentTaskId` and reference-counted across viewer-mode consumer
+/// registrations so multiple viewer panes for the same orchestrator share a
+/// single ancestor-scoped SSE connection.
+///
+/// In PR 1 the SSE driver is not yet wired up; this struct only carries the
+/// shape, refcount, and known-child set so PR 2 can drop the driver in
+/// without touching the public API. See `Streamer ↔ viewer-model contract`
+/// and `PR 1 — Streamer viewer-mode plumbing` in the spec.
+#[derive(Default)]
+struct ViewerModeOrchestratorEntry {
+    /// Active viewer-mode consumers. Keyed on the consumer's `EntityId`
+    /// (typically the viewer pane's `terminal_view_id`); the value is that
+    /// pane's local orchestrator-placeholder `AIConversationId`. Multiple
+    /// panes viewing the same orchestrator each register independently and
+    /// the entry survives until the last one unregisters.
+    ///
+    /// `dead_code` is suppressed in PR 1 — the placeholder conversation IDs
+    /// recorded here are consumed by PR 2's per-pane cursor-persistence
+    /// path. Tests exercise the field, but `cargo check` of the non-test
+    /// build does not.
+    #[allow(dead_code)]
+    consumers: HashMap<EntityId, AIConversationId>,
+    /// Direct child `run_id`s observed via the ancestor SSE. Populated as
+    /// lifecycle events arrive (and seeded from the cold-start REST snapshot
+    /// in PR 2). Used by PR 2 to emit `ChildSpawned` exactly once on first
+    /// observation of each child; PR 1 exposes this via `is_known_child` for
+    /// the future emission logic.
+    known_children: HashSet<String>,
+}
+
 /// Async network coordinator for v2 orchestration event delivery via SSE.
 ///
 /// Holds at most one long-lived SSE connection per conversation. The
@@ -190,6 +222,11 @@ pub struct OrchestrationEventStreamer {
     server_api: Arc<ServerApi>,
     /// Per-conversation streaming state.
     streams: HashMap<AIConversationId, ConversationStreamState>,
+    /// Per-orchestrator viewer-mode entries (one ancestor SSE per
+    /// `parent_task_id`, shared across viewer panes). Pure-additive in PR 1;
+    /// PR 2 wires the SSE driver to this map. See
+    /// `specs/orch-viewer-polling/TECH.md`.
+    viewer_mode_orchestrators: HashMap<AmbientAgentTaskId, ViewerModeOrchestratorEntry>,
     /// Monotonic counter for SSE connection generations. Ensures stale
     /// callbacks from replaced connections are discarded.
     next_sse_generation: u64,
@@ -205,6 +242,32 @@ pub enum OrchestrationEventStreamerEvent {
     DormantClaudeWakeReady {
         conversation_id: AIConversationId,
         wake_message: AgentMessageEventMetadata,
+    },
+    /// First time the streamer has seen a particular `run_id` under
+    /// `parent_task_id`. Emitted exactly once per child by the viewer-mode
+    /// ancestor consumer; viewer-pane subscribers translate it into a local
+    /// placeholder conversation. See `Streamer ↔ viewer-model contract` in
+    /// `specs/orch-viewer-polling/TECH.md`.
+    ///
+    /// PR 1 declares the variant; PR 2 emits it from the SSE driver.
+    #[allow(dead_code)]
+    ChildSpawned {
+        parent_task_id: AmbientAgentTaskId,
+        run_id: String,
+    },
+    /// Lifecycle transition for a known child under `parent_task_id`. The
+    /// `status` field is the result of the
+    /// `LifecycleEventType -> ConversationStatus` mapping helper added
+    /// alongside this variant. Viewer-pane subscribers look up the
+    /// child's local placeholder via their own `run_id -> conversation_id`
+    /// map and write the status through `BlocklistAIHistoryModel`.
+    ///
+    /// PR 1 declares the variant; PR 2 emits it from the SSE driver.
+    #[allow(dead_code)]
+    ChildStatusChanged {
+        parent_task_id: AmbientAgentTaskId,
+        run_id: String,
+        status: ConversationStatus,
     },
 }
 
@@ -279,6 +342,7 @@ impl OrchestrationEventStreamer {
             ai_client,
             server_api,
             streams: HashMap::new(),
+            viewer_mode_orchestrators: HashMap::new(),
             next_sse_generation: 0,
             next_wake_generation: 0,
             killed_run_ids: HashSet::new(),
@@ -303,6 +367,7 @@ impl OrchestrationEventStreamer {
             ai_client,
             server_api,
             streams: HashMap::new(),
+            viewer_mode_orchestrators: HashMap::new(),
             next_sse_generation: 0,
             next_wake_generation: 0,
             killed_run_ids: HashSet::new(),
@@ -418,6 +483,105 @@ impl OrchestrationEventStreamer {
         if inserted || self_inserted {
             self.reevaluate_eligibility(conversation_id, ctx);
         }
+    }
+
+    // ---- Viewer-mode consumer registry (PR 1 of spec) ----------------
+
+    /// Registers a viewer-mode consumer (a shared-session viewer pane) for the
+    /// orchestrator identified by `parent_task_id`. Reference-counted: multiple
+    /// viewer panes viewing the same orchestrator share the per-orchestrator
+    /// entry (and, in PR 2, the underlying ancestor SSE). Each consumer
+    /// supplies its own pane-local orchestrator-placeholder
+    /// `AIConversationId`; the streamer keeps that mapping so PR 2 can persist
+    /// per-pane cursors and route events back to the correct placeholder.
+    ///
+    /// Idempotent: re-registering the same `consumer_id` updates the recorded
+    /// placeholder conversation but does not double-count the refcount.
+    ///
+    /// PR 1 only manages the entry shape and bookkeeping; the SSE driver
+    /// itself is wired in PR 2. See
+    /// `specs/orch-viewer-polling/TECH.md` (§ `PR 1 — Streamer viewer-mode
+    /// plumbing`).
+    ///
+    /// `dead_code` is suppressed in PR 1: the only caller in this PR is the
+    /// test module. PR 2 (`OrchestrationViewerModel`) will call this on
+    /// construction.
+    #[allow(dead_code)]
+    pub fn register_viewer_mode_consumer(
+        &mut self,
+        parent_task_id: AmbientAgentTaskId,
+        orchestrator_placeholder_conv_id: AIConversationId,
+        consumer_id: EntityId,
+    ) {
+        let entry = self
+            .viewer_mode_orchestrators
+            .entry(parent_task_id)
+            .or_default();
+        let was_present = entry
+            .consumers
+            .insert(consumer_id, orchestrator_placeholder_conv_id)
+            .is_some();
+        log::info!(
+            "register_viewer_mode_consumer for parent_task_id={parent_task_id}: \
+             consumer_id={consumer_id:?} (refcount={}, was_present={was_present})",
+            entry.consumers.len()
+        );
+        // TODO(PR 2): Open / reuse the ancestor SSE for `parent_task_id`. The
+        // SSE-open path is the only piece left to wire in here; PR 1 is
+        // pure-additive bookkeeping and the new feature flag
+        // (`OrchestrationViewerStreamer`) defaults OFF so this method is
+        // reachable but inert until PR 2 lands.
+        let _ = FeatureFlag::OrchestrationViewerStreamer;
+    }
+
+    /// Pair to [`Self::register_viewer_mode_consumer`]. Drops `consumer_id`
+    /// from `parent_task_id`'s entry; when the last viewer unregisters, the
+    /// entry itself is removed. Idempotent and safe to call on an
+    /// already-removed entry — see the spec's `Drop refcount race` risk.
+    ///
+    /// `dead_code` is suppressed in PR 1 for the same reason as
+    /// [`Self::register_viewer_mode_consumer`].
+    #[allow(dead_code)]
+    pub fn unregister_viewer_mode_consumer(
+        &mut self,
+        parent_task_id: AmbientAgentTaskId,
+        consumer_id: EntityId,
+    ) {
+        let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id) else {
+            // Idempotent: late `Drop` impl, double-unregister, or unregister
+            // after the entry was already torn down. Just no-op.
+            return;
+        };
+        let removed = entry.consumers.remove(&consumer_id).is_some();
+        let remaining = entry.consumers.len();
+        if removed {
+            log::info!(
+                "unregister_viewer_mode_consumer for parent_task_id={parent_task_id}: \
+                 consumer_id={consumer_id:?} (remaining={remaining})"
+            );
+        }
+        if remaining == 0 {
+            // TODO(PR 2): Tear down the ancestor SSE for `parent_task_id` here
+            // (last viewer pane closed). Until PR 2 wires the SSE-open side,
+            // this branch only drops the bookkeeping entry.
+            self.viewer_mode_orchestrators.remove(&parent_task_id);
+        }
+    }
+
+    /// Returns `true` iff the streamer's viewer-mode entry for
+    /// `parent_task_id` has previously observed `run_id` (either through a
+    /// lifecycle event on the ancestor SSE or, in PR 2, via the cold-start
+    /// REST snapshot). Used by the ancestor consumer's emission logic to
+    /// emit `ChildSpawned` exactly once per child; returns `false` if no
+    /// viewer-mode entry exists for the parent.
+    ///
+    /// PR 1 exposes this helper alongside the entry shape; PR 2 calls it from
+    /// the SSE event handler.
+    #[allow(dead_code)]
+    pub fn is_known_child(&self, parent_task_id: AmbientAgentTaskId, run_id: &str) -> bool {
+        self.viewer_mode_orchestrators
+            .get(&parent_task_id)
+            .is_some_and(|entry| entry.known_children.contains(run_id))
     }
 
     // ---- Event subscriptions from BlocklistAIHistoryModel -------------
@@ -941,6 +1105,15 @@ impl OrchestrationEventStreamer {
     /// `start_agent` with cloud `execution_mode`. Either way the actual
     /// run lives elsewhere (and that process owns the inbox), so this
     /// process should not open its own SSE for the conversation.
+    ///
+    /// Shared-session viewer placeholders are excluded *only* when the new
+    /// `OrchestrationViewerStreamer` flag is off. When the flag is on, the
+    /// streamer serves them via its viewer-mode entry path (PR 1
+    /// bookkeeping + PR 2 ancestor SSE), so they must not be excluded here.
+    /// `is_remote_child()` stays excluded unconditionally — owner-side
+    /// remote children still receive events through their parent's existing
+    /// per-run-ids SSE. See `specs/orch-viewer-polling/TECH.md`,
+    /// § `Risks and mitigations: is_remote_run_view relaxation scope`.
     fn is_remote_run_view(
         &self,
         conversation_id: AIConversationId,
@@ -948,7 +1121,15 @@ impl OrchestrationEventStreamer {
     ) -> bool {
         BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.is_viewing_shared_session() || c.is_remote_child())
+            .is_some_and(|c| {
+                if c.is_remote_child() {
+                    return true;
+                }
+                if c.is_viewing_shared_session() {
+                    return !FeatureFlag::OrchestrationViewerStreamer.is_enabled();
+                }
+                false
+            })
     }
 
     fn should_skip_sse_for_dormant_local_claude_child(
@@ -1495,6 +1676,55 @@ fn parse_occurred_at(s: &str) -> prost_types::Timestamp {
                 nanos: now.timestamp_subsec_nanos() as i32,
             }
         })
+}
+
+/// Maps an `api::LifecycleEventType` (server-sourced) to the
+/// `ConversationStatus` used by the shared-session viewer's orchestration
+/// pill bar.
+///
+/// This mirrors the collapsing rules in
+/// `orchestration_viewer_model::conversation_status_from_state`
+/// (`AmbientAgentTaskState` → `ConversationStatus`): working states all
+/// collapse to `InProgress`, terminals map one-for-one, and the
+/// forward-compat catch-all (`Unspecified`) maps to `Error` to match how
+/// `AmbientAgentTaskState::Unknown` is treated today.
+///
+/// `Blocked` is mapped with an empty `blocked_action`. The wire event
+/// currently does not carry a `blocked_action` payload, matching the REST
+/// path. See `specs/orch-viewer-polling/TECH.md`,
+/// § `Risks and mitigations: Blocked payload`.
+///
+/// PR 1 only adds the helper; the call site lives in PR 2's ancestor SSE
+/// emission logic.
+#[allow(dead_code, deprecated)]
+pub(super) fn conversation_status_from_lifecycle_event_type(
+    event_type: api::LifecycleEventType,
+) -> ConversationStatus {
+    match event_type {
+        // Working states. Legacy `Started` and `Restarted` collapse to
+        // `InProgress`, matching `convert_lifecycle_events` above and the
+        // viewer's `AmbientAgentTaskState::{Queued,Pending,Claimed,InProgress}`
+        // → `InProgress` rule.
+        api::LifecycleEventType::InProgress
+        | api::LifecycleEventType::Started
+        | api::LifecycleEventType::Restarted => ConversationStatus::InProgress,
+        // Terminals.
+        api::LifecycleEventType::Succeeded | api::LifecycleEventType::Idle => {
+            ConversationStatus::Success
+        }
+        // Both `Failed` and `Errored` collapse to `Error`, matching the
+        // viewer's `AmbientAgentTaskState::{Failed,Error}` rule.
+        api::LifecycleEventType::Failed | api::LifecycleEventType::Errored => {
+            ConversationStatus::Error
+        }
+        api::LifecycleEventType::Cancelled => ConversationStatus::Cancelled,
+        api::LifecycleEventType::Blocked => ConversationStatus::Blocked {
+            blocked_action: String::new(),
+        },
+        // Forward-compat catch-all: matches the viewer's
+        // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
+        api::LifecycleEventType::Unspecified => ConversationStatus::Error,
+    }
 }
 
 fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<api::AgentEvent> {

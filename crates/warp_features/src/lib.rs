@@ -722,6 +722,13 @@ pub enum FeatureFlag {
     /// and switches the view to its transcript.
     OrchestrationViewerPillBar,
 
+    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
+    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
+    /// viewer-mode entry. Off by default; flipping it on activates the
+    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
+    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
+    OrchestrationViewerStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,

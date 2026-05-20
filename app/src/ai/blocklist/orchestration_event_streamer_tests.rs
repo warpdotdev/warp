@@ -1227,6 +1227,429 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
     });
 }
 
+// ---- PR 1 of `specs/orch-viewer-polling/TECH.md` ----
+//
+// The tests below cover the pure-additive surface added in PR 1:
+// `conversation_status_from_lifecycle_event_type`, `is_known_child`,
+// the `register_viewer_mode_consumer` / `unregister_viewer_mode_consumer`
+// refcount, and the `is_remote_run_view` flag-gated relaxation. PR 1
+// does not wire any of these into a live event path, so the tests are
+// either pure-function or short App fixtures that drive the bookkeeping
+// directly.
+
+#[test]
+fn lifecycle_event_type_in_progress_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+fn lifecycle_event_type_succeeded_maps_to_success() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded),
+        ConversationStatus::Success
+    );
+}
+
+#[test]
+fn lifecycle_event_type_failed_maps_to_error() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed),
+        ConversationStatus::Error
+    );
+}
+
+#[test]
+fn lifecycle_event_type_errored_maps_to_error() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored),
+        ConversationStatus::Error
+    );
+}
+
+#[test]
+fn lifecycle_event_type_cancelled_maps_to_cancelled() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled),
+        ConversationStatus::Cancelled
+    );
+}
+
+#[test]
+fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
+    // Matches the REST path on `AmbientAgentTaskState::Blocked`: empty
+    // `blocked_action`. See `Risks and mitigations: Blocked payload` in
+    // `specs/orch-viewer-polling/TECH.md`.
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked),
+        ConversationStatus::Blocked {
+            blocked_action: String::new(),
+        }
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_idle_maps_to_success() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle),
+        ConversationStatus::Success
+    );
+}
+
+#[test]
+fn unknown_lifecycle_maps_to_error() {
+    // `Unspecified` is the proto's forward-compat catch-all. The viewer's
+    // `AmbientAgentTaskState::Unknown` similarly collapses to `Error`;
+    // matching that keeps the pill bar in a defined state for any future
+    // wire-level variant the client doesn't recognize.
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified),
+        ConversationStatus::Error
+    );
+}
+
+fn make_parent_task_id_for_test(byte: u8) -> AmbientAgentTaskId {
+    // Stable, distinct task IDs per byte; the UUID itself is not load-bearing.
+    let mut bytes = [0u8; 16];
+    bytes[0] = 0x55;
+    bytes[1] = 0x0e;
+    bytes[2] = 0x84;
+    bytes[3] = 0x00;
+    bytes[4] = 0xe2;
+    bytes[5] = 0x9b;
+    bytes[6] = 0x41;
+    bytes[7] = 0xd4;
+    bytes[8] = 0xa7;
+    bytes[9] = 0x16;
+    bytes[10] = 0x44;
+    bytes[11] = 0x66;
+    bytes[12] = 0x55;
+    bytes[13] = 0x44;
+    bytes[14] = 0x00;
+    bytes[15] = byte;
+    let uuid = uuid::Uuid::from_bytes(bytes);
+    let s = uuid.to_string();
+    s.parse().expect("valid task id")
+}
+
+#[test]
+fn is_known_child_dedupes_per_parent_after_first_observation() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xa1);
+        let run_id = "child-run-1";
+
+        // Before any registration, the entry doesn't exist and the run is unknown.
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.is_known_child(parent_task_id, run_id),
+                "unknown parent_task_id must report run as not-known"
+            );
+        });
+
+        // Register a consumer to materialize the entry, then seed the known
+        // set (simulating PR 2's emission path which will populate this on
+        // the first lifecycle event observed for a new run_id).
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, _| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id);
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.is_known_child(parent_task_id, run_id),
+                "newly-registered viewer-mode entry must report unseen run as not-known"
+            );
+        });
+
+        // First observation: seed `known_children` (PR 2's emission path).
+        streamer.update(&mut app, |me, _| {
+            me.viewer_mode_orchestrators
+                .get_mut(&parent_task_id)
+                .expect("entry exists")
+                .known_children
+                .insert(run_id.to_string());
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_task_id, run_id),
+                "after first observation the run must be known"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_known_child_isolated_per_parent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_a = make_parent_task_id_for_test(0xb1);
+        let parent_b = make_parent_task_id_for_test(0xb2);
+        let shared_run_id = "child-run-shared";
+
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, _| {
+            me.register_viewer_mode_consumer(parent_a, placeholder_conv_id, consumer_id);
+            me.register_viewer_mode_consumer(parent_b, placeholder_conv_id, consumer_id);
+            me.viewer_mode_orchestrators
+                .get_mut(&parent_a)
+                .expect("entry A")
+                .known_children
+                .insert(shared_run_id.to_string());
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_a, shared_run_id),
+                "run_id seeded under parent A must be known to parent A"
+            );
+            assert!(
+                !me.is_known_child(parent_b, shared_run_id),
+                "per-parent isolation: run_id seeded under parent A must NOT be known to parent B"
+            );
+        });
+    });
+}
+
+#[test]
+fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xc1);
+        let consumer_a = warpui::EntityId::new();
+        let consumer_b = warpui::EntityId::new();
+        // Each pane has its own orchestrator-placeholder conversation; PR 2
+        // uses the recorded value to persist per-pane cursors.
+        let placeholder_a = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        let placeholder_b = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+
+        // Register two panes for the same orchestrator. Refcount should be 2
+        // and both placeholders should be recorded.
+        streamer.update(&mut app, |me, _| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a);
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b);
+        });
+
+        streamer.read(&app, |me, _| {
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("entry must exist after registration");
+            assert_eq!(entry.consumers.len(), 2, "two viewer panes => refcount=2");
+            assert_eq!(entry.consumers.get(&consumer_a), Some(&placeholder_a));
+            assert_eq!(entry.consumers.get(&consumer_b), Some(&placeholder_b));
+        });
+
+        // Unregister pane A. Entry must stay alive (pane B still registered).
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_a);
+        });
+        streamer.read(&app, |me, _| {
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("entry must remain while at least one consumer is registered");
+            assert_eq!(entry.consumers.len(), 1);
+            assert!(entry.consumers.contains_key(&consumer_b));
+        });
+
+        // Unregister pane B. Entry should now be removed.
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_b);
+        });
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.viewer_mode_orchestrators.contains_key(&parent_task_id),
+                "entry must be removed once the last consumer unregisters"
+            );
+        });
+
+        // Double-unregister must be a no-op. Covers the `Drop` refcount race
+        // documented in `Risks and mitigations: Drop refcount race`.
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_a);
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_b);
+        });
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.viewer_mode_orchestrators.contains_key(&parent_task_id),
+                "entry must stay absent after double-unregister"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_remote_run_view_excludes_shared_session_viewer_when_streamer_flag_off() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        // OrchestrationV2 is the parent feature that gates the rest of the
+        // streamer; without it `on_restored_conversations` early-returns and
+        // most paths are inert. Enable it but leave OrchestrationViewerStreamer
+        // OFF (the default).
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(false);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        // Build a shared-session viewer conversation by passing
+        // `is_viewing_shared_session = true` to `AIConversation::new`.
+        let conversation = AIConversation::new(true, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.read(&app, |me, ctx| {
+            assert!(
+                me.is_remote_run_view(conversation_id, ctx),
+                "flag OFF: shared-session viewer conversations stay excluded"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_remote_run_view_includes_shared_session_viewer_when_streamer_flag_on() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let conversation = AIConversation::new(true, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.read(&app, |me, ctx| {
+            assert!(
+                !me.is_remote_run_view(conversation_id, ctx),
+                "flag ON: shared-session viewer conversations are eligible"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_remote_run_view_excludes_remote_child_under_both_flag_states() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    // Remote-child placeholders represent owner-side runs hosted elsewhere;
+    // the parent's existing per-run-ids SSE delivers their events. The
+    // viewer-streamer flag is orthogonal — `is_remote_child()` conversations
+    // must remain excluded regardless. See `Risks and mitigations:
+    // is_remote_run_view relaxation scope` in the spec.
+    for streamer_flag in [false, true] {
+        App::test((), |mut app| async move {
+            let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+            let _streamer_guard =
+                FeatureFlag::OrchestrationViewerStreamer.override_enabled(streamer_flag);
+
+            let history_model =
+                app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+            let mut conversation = AIConversation::new(false, false);
+            conversation.mark_as_remote_child();
+            let conversation_id = conversation.id();
+            let terminal_view_id = warpui::EntityId::new();
+            history_model.update(&mut app, |model, ctx| {
+                model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            });
+
+            let mock = MockAIClient::new();
+            let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+            let server_api = ServerApiProvider::new_for_test().get();
+
+            let streamer = app.add_singleton_model(|ctx| {
+                OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+            });
+
+            streamer.read(&app, |me, ctx| {
+                assert!(
+                    me.is_remote_run_view(conversation_id, ctx),
+                    "remote-child conversations must be excluded under any flag value (streamer_flag={streamer_flag})"
+                );
+            });
+        });
+    }
+}
+
 #[test]
 fn reevaluate_eligibility_does_not_reconnect_when_watched_run_ids_unchanged() {
     App::test((), |mut app| async move {
