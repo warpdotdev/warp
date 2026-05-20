@@ -2216,7 +2216,7 @@ impl TeamsWidget {
 
         // 6) Optional outgrow CTA
         let pricing_info_model = view.pricing_info_model.as_ref(app);
-        if let Some(cta) = self.render_outgrow_cta(
+        if let Some(cta) = self.render_outgrow_upgrade_cta(
             team_metadata,
             has_admin_permissions,
             pricing_info_model,
@@ -2933,8 +2933,8 @@ impl TeamsWidget {
             .finish()
     }
 
-    // "Want to upgrade your team? <Do X>"
-    fn render_outgrow_cta(
+    /// "Need more seats? <Upgrade to ...> ..."
+    fn render_outgrow_upgrade_cta(
         &self,
         team: &Team,
         has_admin_permissions: bool,
@@ -2944,26 +2944,18 @@ impl TeamsWidget {
         if team.billing_metadata.is_delinquent_due_to_payment_issue() {
             return None;
         }
-        let cta = Self::grow_team_warning_cta(
+        match Self::grow_team_warning_cta(
             GrowTeamWarning::SeatCapReached,
             has_admin_permissions,
             &team.billing_metadata,
             pricing_info,
-        );
-        match cta {
-            GrowTeamWarningCta::Upgrade => Some(self.render_outgrow_upgrade_line(team, appearance)),
+        ) {
             GrowTeamWarningCta::UpdateBilling
             | GrowTeamWarningCta::ContactSupport
-            | GrowTeamWarningCta::None => None,
+            | GrowTeamWarningCta::None => return None,
+            GrowTeamWarningCta::Upgrade => {}
         }
-    }
 
-    /// "Need more seats? <Upgrade to ...> ..." — routes through self-serve upgrade.
-    fn render_outgrow_upgrade_line(
-        &self,
-        team: &Team,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
         let team_uid = team.uid;
         let (link_text, suffix) = Self::outgrow_upgrade_line_copy(&team.billing_metadata);
         let prefix = self.render_sub_text("Need more seats? ".to_string(), appearance, None);
@@ -2982,13 +2974,15 @@ impl TeamsWidget {
             .finish();
         let suffix = self.render_sub_text(suffix.to_string(), appearance, None);
 
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(prefix)
-            .with_child(link)
-            .with_child(suffix)
-            .finish()
+        Some(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_child(prefix)
+                .with_child(link)
+                .with_child(suffix)
+                .finish(),
+        )
     }
 
     fn render_approved_domains_section(
