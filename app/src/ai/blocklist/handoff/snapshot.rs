@@ -134,6 +134,9 @@ pub(crate) fn spawn_handoff_snapshot_upload(
     ctx.spawn(
         upload_handoff_snapshot(paths, target),
         move |_workspace, (derived_workspace, upload_result), ctx| {
+            // The model's `set_pending_handoff_workspace` emits
+            // `HandoffSnapshotPrepared`; the workspace just forwards the
+            // derived workspace + upload outcome.
             model_handle.update(ctx, |model, model_ctx| {
                 if !model.is_local_to_cloud_handoff() {
                     return;

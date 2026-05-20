@@ -362,6 +362,16 @@ impl EventLoop {
                         });
                     }
                 }
+                OrderedTerminalEventType::AmbientSetupPhaseEnded => {
+                    // Canonical setup-complete signal from the sharer. Legacy
+                    // AppendedExchange-driven teardowns remain idempotently as
+                    // a fallback for pre-feature sharers.
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.tear_down_ambient_setup_phase(ctx);
+                        });
+                    }
+                }
             }
 
             if Some(self.next_event_no) == self.catching_up_to_event_no {

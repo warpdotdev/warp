@@ -5763,6 +5763,9 @@ impl TerminalView {
                     }
                 }
 
+                // Compat fallback for viewers connected to pre-feature sharers
+                // that don't emit AmbientSetupPhaseEnded. Idempotent with the
+                // canonical event_loop arm.
                 if self.is_ambient_agent_session(ctx)
                     && self
                         .model
@@ -7484,6 +7487,24 @@ impl TerminalView {
         &self,
     ) -> Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>> {
         self.ambient_agent_view_model.as_ref()
+    }
+
+    /// Tear down the Cloud Mode Setup V2 UI in response to a
+    /// setup-phase-ended signal: clear the BlockList
+    /// executing-startup-commands flag AND finish/collapse the active
+    /// ambient setup command group. Owns both pieces of state so callers
+    /// (the shared-session viewer arm, legacy fallbacks) don't have to
+    /// orchestrate two unrelated mutations. Idempotent across both.
+    pub(crate) fn tear_down_ambient_setup_phase(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(false);
+        if let Some(ambient_model) = self.ambient_agent_view_model.clone() {
+            ambient_model.update(ctx, |model, ctx| {
+                model.tear_down_active_setup_command_group(ctx);
+            });
+        }
     }
 
     fn ambient_agent_task_id_for_details_panel_from_model(

@@ -4,6 +4,7 @@ use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, ScrollbackBlock, WindowSize,
 };
+use warpui::platform::WindowStyle;
 use warpui::units::Lines;
 use warpui::{App, ViewHandle};
 
@@ -32,6 +33,18 @@ fn ordered_terminal_event_from_bytes(
 fn terminal_view(app: &mut App) -> ViewHandle<TerminalView> {
     initialize_app_for_terminal_view(app);
     add_window_with_terminal(app, None)
+}
+
+/// Cloud-mode terminal view counterpart to [`terminal_view`]. Sets up the
+/// singletons and constructs a `TerminalView` with `is_cloud_mode = true` so
+/// `ambient_agent_view_model()` is `Some(..)`.
+fn cloud_mode_terminal_view(app: &mut App) -> ViewHandle<TerminalView> {
+    initialize_app_for_terminal_view(app);
+    let tips_model = app.add_model(|_| Default::default());
+    let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        TerminalView::new_for_test_with_cloud_mode(tips_model, None, true, ctx)
+    });
+    terminal
 }
 
 fn completed_block(command: &str, output: &str) -> SerializedBlock {
@@ -603,5 +616,233 @@ fn test_pty_bytes_buffered_before_command_execution_started() {
             .trim()
             .to_string();
         assert_eq!(command_grid, "abc");
+    })
+}
+
+#[test]
+fn test_ambient_setup_phase_ended_clears_setup_state() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        // Share the view's own `TerminalModel` with the event loop so the
+        // event loop's mutations are observable through both the model and
+        // the view's `ambient_agent_view_model()`.
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        // Seed setup state the way the production viewer would: the
+        // BlockList flag is true while setup commands are running, and the
+        // default `SetupCommandState` already has the initial group marked
+        // as running and expanded.
+        model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(true);
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        // Sanity-check the seeded state.
+        assert!(model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(setup_state.is_running(initial_group_id));
+            assert!(setup_state.should_expand(initial_group_id));
+        });
+
+        // Dispatch the new marker; expect the BlockList flag to clear, the
+        // setup group to finish, and the group's expansion to collapse.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
+    })
+}
+
+#[test]
+fn test_ambient_setup_phase_ended_when_flag_already_false() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        // BlockList flag starts at the default `false`; we intentionally do not
+        // call set_is_executing_oz_environment_startup_commands(true) so the
+        // marker arrives against a tree that never observed setup phase.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        // Flag stays cleared, and the unconditional teardown leaves the
+        // initial setup group finished and collapsed.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
+    })
+}
+
+#[test]
+fn test_ambient_setup_phase_ended_is_idempotent() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(true);
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        // First dispatch tears down the setup state.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        // Second dispatch must be a no-op: the BlockList flag stays cleared
+        // and the setup group remains finished + collapsed.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 1,
+                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
     })
 }
