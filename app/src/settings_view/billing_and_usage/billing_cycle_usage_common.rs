@@ -311,8 +311,8 @@ pub fn render_breakdown_tooltip(
             )
             .finish(),
     )
-    .with_min_width(240.)
-    .with_max_width(360.)
+    .with_min_width(200.)
+    .with_max_width(320.)
     .finish()
 }
 
@@ -381,7 +381,7 @@ fn render_tooltip_row(
     let right = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(credits_col)
-        .with_child(Container::new(divider).with_horizontal_margin(6.).finish())
+        .with_child(Container::new(divider).with_horizontal_margin(3.).finish())
         .with_child(cost_col)
         .finish();
 

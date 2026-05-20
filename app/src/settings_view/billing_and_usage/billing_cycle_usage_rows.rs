@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 
 use itertools::Itertools as _;
+use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
     elements::{
-        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-        Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable,
-        Stack, Text,
+        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+        DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+        Radius, Shrinkable, Stack, Text,
     },
     platform::Cursor,
+    ui_components::components::UiComponent,
     AppContext, Element, EventContext, SingletonEntity,
 };
 
@@ -70,6 +73,8 @@ impl SourceFilter {
 pub struct MemberUsageRow {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_key: String,
+    /// Used to deep-link `ServiceAccount` rows to their Oz agent page.
+    pub subject_uid: Option<String>,
     pub display_name: String,
     pub total_credits: i64,
     pub total_cost_cents: i64,
@@ -78,9 +83,7 @@ pub struct MemberUsageRow {
     pub base_limit: Option<i64>,
     /// Sorted by cost-type then bucket order; zero-credit entries dropped.
     pub segments: Vec<BarSegment>,
-    /// Denominator the row's stacked bar fills against. Always populated by
-    /// `build_rows` — the underlying row builders leave it at 0 since the
-    /// scaling rule depends on visibility, not on any single row in isolation.
+    /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: i64,
 }
 
@@ -116,6 +119,7 @@ pub fn build_own_usage_row(
     MemberUsageRow {
         subject_type: AiCreditsUsageAndCostSubjectType::User,
         subject_key: SELF_OWN_KEY.to_string(),
+        subject_uid: viewer_uid.map(str::to_string),
         display_name: viewer_display_name,
         total_credits,
         total_cost_cents,
@@ -134,6 +138,7 @@ fn build_other_members_usage_row(entries: &[BillingCycleUsageEntry]) -> MemberUs
     MemberUsageRow {
         subject_type: AiCreditsUsageAndCostSubjectType::Team,
         subject_key: OTHER_MEMBERS_KEY.to_string(),
+        subject_uid: None,
         display_name: "Other members".to_string(),
         total_credits,
         total_cost_cents,
@@ -210,6 +215,7 @@ pub fn build_member_usage_rows(
         rows.push(MemberUsageRow {
             subject_type: AiCreditsUsageAndCostSubjectType::User,
             subject_key: key,
+            subject_uid: Some(member.uid.as_str().to_string()),
             display_name: member.email.clone(),
             total_credits,
             total_cost_cents,
@@ -224,10 +230,14 @@ pub fn build_member_usage_rows(
         if seen_keys.contains(&key) {
             continue;
         }
+        // All entries in a group share the same subject_uid by construction
+        // (it's part of the grouping key), so first.is representative.
+        let subject_uid = entries.first().and_then(|e| e.subject_uid.clone());
         let (segments, total_credits, total_cost_cents) = aggregate_segments(entries.iter());
         rows.push(MemberUsageRow {
             subject_type,
             subject_key: key,
+            subject_uid,
             display_name,
             total_credits,
             total_cost_cents,
@@ -339,16 +349,40 @@ fn render_usage_tooltip_content(row: &MemberUsageRow, appearance: &Appearance) -
     )
 }
 
+/// Small text-only tooltip surfaced on hover of the service-account info
+/// icon. Mirrors the visual treatment of `render_aggregate_legend_tooltip`.
+fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text = Text::new_inline(
+        "This is an automated agent on your team.".to_string(),
+        appearance.ui_font_family(),
+        12.,
+    )
+    .with_color(theme.sub_text_color(theme.background()).into())
+    .finish();
+    Container::new(text)
+        .with_background_color(theme.background().into_solid())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+        .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(6.)
+        .with_drop_shadow(
+            DropShadow::new_with_standard_offset_and_spread(ColorU::new(0, 0, 0, 48))
+                .with_offset(vec2f(0., 4.)),
+        )
+        .finish()
+}
+
 /// Builds one row card (stacked bar + name/totals).
 fn build_row_card(
     row: &MemberUsageRow,
     team_max_credits: i64,
+    mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let card_bg = theme.background().into_solid();
     let main = blended_colors::text_main(theme, card_bg);
-    let sub = blended_colors::text_sub(theme, card_bg);
 
     let bar = render_stacked_bar(
         &row.segments,
@@ -357,35 +391,74 @@ fn build_row_card(
         appearance,
     );
 
-    let display_name_text = Text::new_inline(
-        row.display_name.clone(),
-        appearance.ui_font_family(),
-        appearance.ui_font_size(),
-    )
-    .with_color(main)
-    .finish();
+    let is_service_account = matches!(
+        row.subject_type,
+        AiCreditsUsageAndCostSubjectType::ServiceAccount
+    );
+    // Service accounts with a known UID deep-link to their Oz agent page,
+    // mirroring the web admin panel's `getOzAgentHref` behavior.
+    let agent_href = if is_service_account {
+        row.subject_uid.as_deref().map(|uid| {
+            format!(
+                "{}/agents/{}",
+                ChannelState::oz_root_url(),
+                urlencoding::encode(uid)
+            )
+        })
+    } else {
+        None
+    };
+
+    let display_name_element: Box<dyn Element> = if let Some(href) = agent_href {
+        let link_state =
+            mouse_states.tooltip_mouse_state(&format!("{}__agent_link", row.subject_key));
+        appearance
+            .ui_builder()
+            .link(row.display_name.clone(), Some(href), None, link_state)
+            .build()
+            .finish()
+    } else {
+        Text::new_inline(
+            row.display_name.clone(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(main)
+        .finish()
+    };
 
     let mut name_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(display_name_text);
+        .with_child(display_name_element);
 
-    if matches!(
-        row.subject_type,
-        AiCreditsUsageAndCostSubjectType::ServiceAccount
-    ) {
-        name_row.add_child(
-            Container::new(
-                Text::new_inline(
-                    "(agent)".to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(sub)
-                .finish(),
-            )
-            .with_margin_left(6.)
-            .finish(),
-        );
+    if is_service_account {
+        let info_state =
+            mouse_states.tooltip_mouse_state(&format!("{}__agent_info", row.subject_key));
+        let info_icon = Hoverable::new(info_state, move |state| {
+            let info_color = appearance
+                .theme()
+                .sub_text_color(appearance.theme().background());
+            let icon = ConstrainedBox::new(Icon::Info.to_warpui_icon(info_color).finish())
+                .with_width(ROW_ICON_SIZE)
+                .with_height(ROW_ICON_SIZE)
+                .finish();
+            let mut stack = Stack::new();
+            stack.add_child(icon);
+            if state.is_hovered() {
+                stack.add_positioned_overlay_child(
+                    render_service_account_info_tooltip(appearance),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -TOOLTIP_GAP),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
+            }
+            stack.finish()
+        })
+        .finish();
+        name_row.add_child(Container::new(info_icon).with_margin_left(6.).finish());
     }
 
     // Credit + cost cluster: `[coin] X[/limit]   [card] $cost`.
@@ -471,18 +544,38 @@ fn render_member_row(
     row: &MemberUsageRow,
     team_max_credits: i64,
     tooltip_mouse_state: MouseStateHandle,
+    mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     // No segments => no tooltip needed.
     if row.segments.is_empty() {
-        return build_row_card(row, team_max_credits, appearance);
+        return build_row_card(row, team_max_credits, mouse_states, appearance);
     }
+
+    // The info icon sits inside the row card, so hovering it would otherwise
+    // trigger both this row's breakdown tooltip and the icon's own tooltip
+    // on top of each other. Pull the icon's hover state up so we can
+    // suppress the breakdown tooltip while the icon is hovered.
+    let info_state = matches!(
+        row.subject_type,
+        AiCreditsUsageAndCostSubjectType::ServiceAccount
+    )
+    .then(|| mouse_states.tooltip_mouse_state(&format!("{}__agent_info", row.subject_key)));
 
     Hoverable::new(tooltip_mouse_state, move |state| {
         let mut stack = Stack::new();
-        stack.add_child(build_row_card(row, team_max_credits, appearance));
+        stack.add_child(build_row_card(
+            row,
+            team_max_credits,
+            mouse_states,
+            appearance,
+        ));
 
-        if state.is_hovered() {
+        let info_hovered = info_state
+            .as_ref()
+            .is_some_and(|s| s.lock().is_ok_and(|guard| guard.is_hovered()));
+
+        if state.is_hovered() && !info_hovered {
             stack.add_positioned_overlay_child(
                 render_usage_tooltip_content(row, appearance),
                 OffsetPositioning::offset_from_parent(
@@ -737,6 +830,7 @@ fn render_member_row_list(
             row,
             row.bar_max_credits,
             tooltip_state,
+            mouse_states,
             appearance,
         ));
     }

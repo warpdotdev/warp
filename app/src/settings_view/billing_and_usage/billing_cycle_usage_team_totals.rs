@@ -19,9 +19,28 @@ use crate::{
     },
     ui_components::blended_colors,
     workspaces::workspace::{
-        AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
+        AiCreditsUsageBucket, AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility,
+        UsageVisibilityGranularity,
     },
 };
+
+fn collapse_segments_to_cost_type(segments: Vec<BarSegment>) -> Vec<BarSegment> {
+    let mut out: Vec<BarSegment> = Vec::new();
+    for seg in segments {
+        if let Some(existing) = out.iter_mut().find(|s| s.cost_type == seg.cost_type) {
+            existing.credits += seg.credits;
+            existing.cost_cents += seg.cost_cents;
+        } else {
+            out.push(BarSegment {
+                cost_type: seg.cost_type,
+                usage_bucket: AiCreditsUsageBucket::Aggregate,
+                credits: seg.credits,
+                cost_cents: seg.cost_cents,
+            });
+        }
+    }
+    out
+}
 
 /// Pill-shaped bar at the bottom of each team-totals card.
 const CARD_BAR_HEIGHT: f32 = 8.;
@@ -83,6 +102,19 @@ pub fn build_team_total_card_summaries(
             total_cost_cents: cloud_cost,
             limit_cents: None,
         });
+    }
+
+    // Visibility tiers below FullBreakdown don't expose per-bucket detail,
+    // so collapse bucket-dimensioned segments into single per-cost-type lines.
+    // Otherwise we get a "Base (AI)" row + a separate bare "Base" row in the team aggregate card.
+    if !matches!(
+        visibility.granularity,
+        UsageVisibilityGranularity::FullBreakdown
+    ) {
+        for summary in &mut summaries {
+            summary.segments =
+                collapse_segments_to_cost_type(std::mem::take(&mut summary.segments));
+        }
     }
 
     summaries
