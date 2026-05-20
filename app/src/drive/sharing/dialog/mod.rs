@@ -2603,7 +2603,7 @@ impl SharingDialog {
             Icon::ArrowLeft,
             false,
             self.ui_state_handles.qr_back_button.clone(),
-            ThemeFill::Solid(foreground.into()),
+            ThemeFill::Solid(foreground),
         )
         .with_style(icon_button_styles)
         .with_hovered_styles(icon_hover_styles)
@@ -2638,7 +2638,7 @@ impl SharingDialog {
             Icon::X,
             false,
             self.ui_state_handles.qr_close_button.clone(),
-            ThemeFill::Solid(foreground.into()),
+            ThemeFill::Solid(foreground),
         )
         .with_style(icon_button_styles)
         .with_hovered_styles(icon_hover_styles)
