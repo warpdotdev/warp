@@ -9,7 +9,6 @@ pub mod image;
 pub(crate) mod link_detection;
 pub mod links;
 pub mod openable_file_type;
-#[cfg(not(target_family = "wasm"))]
 pub mod path;
 pub mod repo_detection;
 pub mod time_format;

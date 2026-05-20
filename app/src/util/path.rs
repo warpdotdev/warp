@@ -1,3 +1,4 @@
+#[cfg(not(target_family = "wasm"))]
 use std::{
     borrow::Cow,
     env,
@@ -5,7 +6,9 @@ use std::{
     path::{self, Path, PathBuf},
 };
 
+#[cfg(not(target_family = "wasm"))]
 use is_executable::IsExecutable as _;
+#[cfg(not(target_family = "wasm"))]
 use itertools::Itertools as _;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity};
@@ -62,6 +65,7 @@ pub fn display_path_with_host(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn file_exists_and_is_executable(path: &Path) -> bool {
     // We need to check that the file exists, as the `is_executable` crate doesn't validate this on
     // Windows.
@@ -75,6 +79,7 @@ pub fn file_exists_and_is_executable(path: &Path) -> bool {
 /// Callers that need to resolve against a different PATH (e.g. one
 /// captured from the user's interactive login shell) should use
 /// [`resolve_executable_in_path`] directly.
+#[cfg(not(target_family = "wasm"))]
 pub fn resolve_executable(command: &str) -> Option<Cow<'_, Path>> {
     let path_var = env::var_os("PATH").unwrap_or_default();
     resolve_executable_in_path(command, &path_var)
@@ -87,6 +92,7 @@ pub fn resolve_executable(command: &str) -> Option<Cow<'_, Path>> {
 /// captured from the user's interactive login shell, matching how
 /// MCP/LSP find binaries). Callers that want the process's PATH should
 /// use [`resolve_executable`] instead.
+#[cfg(not(target_family = "wasm"))]
 pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &OsStr) -> Option<Cow<'a, Path>> {
     if command.contains(path::MAIN_SEPARATOR) {
         let path = Path::new(command);
@@ -100,6 +106,7 @@ pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &OsStr) -> Opt
     None
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn resolve_executable_in_dir(path_dir: &Path, command: &str) -> Option<PathBuf> {
     let resolved = path_dir.join(command);
     if file_exists_and_is_executable(&resolved) {
@@ -132,6 +139,6 @@ fn windows_path_extensions() -> impl Iterator<Item = String> {
         .into_iter()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "path_tests.rs"]
 mod tests;
