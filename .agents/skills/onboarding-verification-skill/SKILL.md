@@ -1,21 +1,34 @@
 ---
 name: onboarding-verification-skill
-description: Launch two parallel Oz cloud agents with computer use to download and install the latest stable Linux Warp build, then capture screenshots while walking through first-time onboarding in both logged-out and logged-in states. Use this whenever the user asks to test, document, screenshot, or walk through the Warp first-time install/onboarding experience in a cloud Linux environment.
+description: Launch two parallel Oz cloud agents with computer use to download and install the latest stable Linux Warp build, capture screenshots while walking through first-time onboarding in both logged-out and logged-in states, then selectively fan out follow-up cloud agents for distinct onboarding branches proposed by those initial explorers. Use this whenever the user asks to test, document, screenshot, or walk through the Warp first-time install/onboarding experience in a cloud Linux environment.
 ---
 
 # Onboarding verification skill
 
-Use this skill to verify the first-time Warp install and onboarding flow on Linux.
+Use this skill to verify the first-time Warp install and onboarding flow on Linux with broader branch coverage than a single linear walkthrough.
 
-The parent agent should not perform the walkthrough locally. Launch two parallel Oz cloud agents with computer use. Both children install the latest stable Warp Linux package appropriate for their platform and capture screenshots at every visible onboarding step until Warp reaches a usable terminal session. One child verifies the login-free flow. The other child verifies the logged-in flow using the managed secret `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN`.
+The parent agent should not perform the walkthrough locally. Launch two parallel Oz cloud agents with computer use. Both initial children install the latest stable Warp Linux package appropriate for their platform and capture screenshots at every visible onboarding step until Warp reaches a usable terminal session. One child verifies the login-free flow. The other child verifies the logged-in flow using the managed secret `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN`.
+
+Those two baseline explorers are also responsible for noticing meaningful alternate onboarding branches and returning concrete plans for follow-up cloud agents. The parent agent should synthesize those plans, deduplicate overlapping suggestions, and launch a bounded second wave of targeted follow-up agents to improve coverage of paths a real user might encounter.
 
 ## Parent workflow
 
 1. Launch exactly two remote Oz cloud agents in a single parallel `run_agents` batch with computer use enabled.
 2. Use no environment-specific assumptions unless the user provided an environment. If no environment was provided, omit the environment ID and let Warp choose the default remote environment.
-3. Give both child agents the shared child prompt below, plus the appropriate flow-specific prompt.
-4. Wait for both child agents' reports before summarizing results.
-5. Treat the authenticated child as blocked if `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` is missing or does not authenticate successfully.
+3. Give both baseline child agents the shared child prompt below, plus the appropriate flow-specific prompt.
+4. Wait for both baseline agents' reports. Each report must include:
+   - The completed baseline walkthrough result and artifacts.
+   - A concise list of observed UI quality issues, suspected bugs, error states, or rough edges, with screenshots when visible.
+   - A prioritized follow-up coverage plan describing distinct onboarding paths worth exploring with additional cloud agents.
+5. Treat the authenticated baseline child as blocked if `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` is missing or does not authenticate successfully.
+6. Build a combined coverage map from the two baseline reports. Deduplicate suggestions that reach the same visible state or exercise the same decision surface.
+7. Launch a second `run_agents` batch with computer use enabled for the most valuable follow-up onboarding branches:
+   - Prefer branches that materially change visible UI, available controls, downstream screens, auth state, or setup outcomes.
+   - Favor paths likely to expose correctness, polish, layout, truncation, loading, or validation problems.
+   - Default to at most four follow-up agents total unless the user explicitly asked for exhaustive coverage or the baseline reports show more than four clearly distinct high-value branches.
+   - Do not launch speculative follow-ups when the baseline agents did not observe a concrete branch point; report that coverage stopped after the baseline pass instead.
+8. Give each follow-up child the shared child prompt, the follow-up flow prompt below, the logged-out or logged-in flow prompt that matches its assigned auth state, and one synthesized branch assignment from the baseline reports.
+9. Wait for all follow-up reports before summarizing coverage, issues, artifacts, and any still-unexplored branches worth a later run.
 
 ## Managed FTUE auth secret
 
@@ -25,16 +38,29 @@ The parent agent should not perform the walkthrough locally. Launch two parallel
 - Treat the private token file as local scratch material only. Do not read it into chat, print it, stage it, commit it, upload it, or include it in artifacts. Delete it after the managed secret is updated.
 - Children should receive the secret only through the managed environment variable injected into the remote run.
 
-Use a `run_agents` call shaped like this:
+Use the initial `run_agents` call shaped like this:
 
 ```text
-summary: Launching two cloud agents with computer use to compare logged-out and logged-in Warp onboarding screenshots.
+summary: Launching two baseline cloud agents with computer use to compare logged-out and logged-in Warp onboarding screenshots and propose follow-up coverage branches.
 remote.computer_use_enabled: true
 agent_run_configs:
 - name: "warp-onboarding-logged-out"
   prompt: the logged-out flow prompt below
 - name: "warp-onboarding-logged-in"
   prompt: the logged-in flow prompt below
+base_prompt: the shared child prompt below
+```
+
+When the baseline reports identify concrete follow-up branches, use a second `run_agents` call shaped like this:
+
+```text
+summary: Launching targeted cloud follow-up agents to explore distinct onboarding branches identified by the baseline onboarding explorers.
+remote.computer_use_enabled: true
+agent_run_configs:
+- name: "warp-onboarding-followup-theme-choice"
+  prompt: the follow-up flow prompt below, the logged-out flow prompt below, and one synthesized logged-out branch assignment
+- name: "warp-onboarding-followup-model-choice"
+  prompt: the follow-up flow prompt below, the logged-in flow prompt below, and one synthesized logged-in branch assignment
 base_prompt: the shared child prompt below
 ```
 
@@ -50,6 +76,8 @@ Goal:
 - Launch Warp in a fresh first-run state.
 - Take a screenshot at every visible onboarding step.
 - Continue until Warp reaches a usable terminal session, or stop and report a blocker if the assigned flow cannot proceed.
+- Notice alternate onboarding decisions that lead to meaningfully different screens, states, or outcomes, and return concrete follow-up cloud-agent plans for the parent orchestrator.
+- Treat visual polish, missing assets, misalignment, overlapping content, clipped text, poor contrast, broken loading states, unexpected errors, and confusing controls as verification findings rather than ignoring them.
 
 Install requirements:
 - Use official stable Warp downloads only.
@@ -79,17 +107,28 @@ Screenshot workflow:
 - Take one screenshot before every user action.
 - Take another screenshot after each action if the UI changes.
 - Use sequential filenames with a flow prefix, such as `01-logged-out-initial-window.png` or `01-logged-in-initial-window.png`.
+- If anything looks wrong, take an additional issue-focused screenshot that captures the problematic state as clearly as possible.
 - Maintain a manifest file in the artifact directory with, for each screenshot:
   - filename
   - timestamp
   - what was visible
   - what action was about to happen or just happened
+- For issue-focused screenshots, add the suspected issue category and the screen or step where it appeared.
 - Do not include secret values, refresh tokens, ID tokens, auth redirect URLs, or Authorization headers in the manifest, logs, shell history, screenshots, or final report.
 
 Onboarding behavior:
-- Choose the default or most conservative option at each step unless the flow-specific prompt says otherwise.
+- Baseline children choose the default or most conservative option at each step unless the flow-specific prompt says otherwise, while recording branch points that deserve separate follow-up coverage.
+- Follow-up children take the specifically assigned alternate branch, then use the default or most conservative option for unrelated decisions unless the branch assignment says otherwise.
 - If telemetry, shell, theme, editor-import, or agent integration choices appear, use the default path and document the choice in the manifest.
 - Continue until a normal terminal prompt is visible and usable.
+
+UI quality review:
+- Watch for screens that are visually broken, obviously unfinished, misaligned, truncated, clipped, crowded, low-contrast, unexpectedly blank, stuck loading, or inconsistent with adjacent steps.
+- Watch for actionable errors or validation states that appear during normal flow exploration, including auth failures, failed button transitions, controls that do not respond, duplicated overlays, missing images, or broken post-selection states.
+- For every suspicious state:
+  - Capture a screenshot.
+  - Record the screen, the action that led to it, what looked wrong, and whether it blocked progress.
+  - Describe the issue factually. If expected behavior is uncertain, say it appears suspicious rather than claiming a confirmed bug.
 
 Terminal verification:
 - Once a terminal session is visible, run a harmless flow-specific command:
@@ -98,6 +137,7 @@ Terminal verification:
 - Capture a final screenshot showing the usable terminal and command output.
 
 Report back:
+- Whether you were a baseline explorer or a follow-up branch explorer.
 - Which flow you ran: logged-out or logged-in.
 - OS and distro detected.
 - CPU architecture detected.
@@ -107,7 +147,23 @@ Report back:
 - Ordered screenshot list with short descriptions.
 - Artifact directory path.
 - Any built-in artifact IDs or attachment names if the harness supports artifact upload.
+- Any visual polish concern, suspected bug, error state, or unpolished/misaligned screen, including:
+  - screenshot filename
+  - screen or step
+  - action taken immediately before it appeared
+  - concise observed behavior
+  - whether it blocked progress
 - Any blocker, crash, missing dependency, display problem, auth failure, or step that required judgment.
+- For baseline explorers, include a `Follow-up coverage plan` section with zero or more proposed child-agent branches. Each proposal must include:
+  - suggested agent name
+  - logged-out or logged-in flow
+  - onboarding screen or decision point where the alternate branch begins
+  - exact alternate choice or action sequence to explore
+  - why it is materially distinct from the baseline path
+  - what user-visible state, setup outcome, or failure mode it could reveal
+  - any secret, auth, or environment dependency
+  - priority: high, medium, or low
+- For follow-up explorers, include whether the assigned branch was reachable and completed. If a new branch point appears while following the assigned path, record it as a later-run suggestion instead of recursively expanding the run yourself.
 
 Do not upload screenshots or logs to public external services. If the harness provides a built-in artifact or screenshot attachment mechanism, use that. Otherwise, leave the files in the artifact directory and report their paths.
 ```
@@ -127,6 +183,7 @@ Flow-specific goal:
 Flow-specific onboarding behavior:
 - If there is a skip, "continue without account", "not now", "login later", or equivalent option, use it.
 - Do not enter an email address, connect OAuth, paste an auth token, or create credentials.
+- Be especially alert for logged-out branch points around choosing terminal-only versus agentic experiences, customization/layout options, third-party integration toggles, and terminal theme selection. If they appear, propose follow-up branches that exercise materially different choices rather than trying all alternates inline.
 - Use the artifact directory `~/warp-onboarding-logged-out`.
 ```
 
@@ -192,14 +249,37 @@ Fallback authenticated path:
 Flow-specific onboarding behavior:
 - Choose login/sign-in rather than skip/login-later when presented with an auth choice.
 - After auth succeeds, continue through the remaining onboarding screens with default or conservative options.
+- Be especially alert for logged-in branch points around model selection, account-aware onboarding screens, AI/agent setup, workspace or project setup, and any decision that changes available product capability. If they appear, propose follow-up branches that exercise materially different choices rather than trying all alternates inline.
 - After the terminal verification succeeds, click the upper-right avatar/account control, open Settings from that menu, and capture an additional screenshot that clearly shows the logged-in user's email address in Warp settings or account/profile settings.
 - Include the account/settings email screenshot in the manifest and final report. The email address itself may be visible in the screenshot, but do not copy the email into logs, shell output, or the final text report unless the user explicitly asks for it.
 - Use the artifact directory `~/warp-onboarding-logged-in`.
 ```
 
+## Follow-up flow prompt
+
+Append this prompt to the shared child prompt for every second-wave child, followed by the matching logged-out or logged-in flow prompt and one branch assignment synthesized from the baseline reports:
+
+```text
+You own one follow-up onboarding branch selected by the parent orchestrator from an earlier baseline exploration report.
+
+Follow-up branch behavior:
+- Start from a fresh first-run Warp state and install the same latest stable Linux build using the shared instructions.
+- Respect the assigned auth state: remain logged out for logged-out assignments, or use the managed authenticated flow for logged-in assignments.
+- Follow the exact alternate onboarding choice or action sequence in the branch assignment.
+- Capture screenshots before and after each assigned branch decision, then continue to a usable terminal session if the path allows it.
+- Apply the same UI quality review standard as the baseline explorers and call out anything that looks broken, rough, misaligned, confusing, or unexpectedly error-prone.
+- If the assigned branch is not reachable, capture the closest relevant screen, report why it was unreachable, and do not silently substitute a different branch.
+- If the assigned branch reveals another interesting alternate path, record it as a later-run suggestion rather than recursively launching more agents yourself.
+
+Final report additions:
+- Repeat the exact branch assignment you attempted in concise non-sensitive terms.
+- State whether it was reachable, completed, blocked, or not applicable.
+- Compare the branch outcome against the likely baseline behavior when that comparison is visible from the UI.
+```
+
 ## Success criteria
 
-The walkthrough is successful when both child agents report:
+The run is successful when:
 
 - Warp stable was installed from an official Linux package or AppImage for the detected architecture.
 - Screenshots were captured for each onboarding screen and the final usable terminal.
@@ -207,6 +287,9 @@ The walkthrough is successful when both child agents report:
 - The logged-in child authenticated using `ONBOARDING_AGENT_FTUE_REFRESH_TOKEN` and reached a usable terminal in the authenticated FTUE path.
 - The logged-in child captured an additional post-login screenshot from the avatar/settings flow showing the logged-in user's email address.
 - Each terminal session was usable enough to run its flow-specific `echo` command.
+- Both baseline explorers returned either concrete follow-up coverage proposals or an explicit explanation that they did not observe meaningful additional branch points.
+- The parent orchestrator launched targeted second-wave agents for the highest-value concrete branch proposals, unless there were no such proposals or a prerequisite blocker made them infeasible.
+- Every reported visual polish concern, suspected bug, or error state includes a screenshot reference whenever the issue was visible on screen.
 
 ## Common failure handling
 

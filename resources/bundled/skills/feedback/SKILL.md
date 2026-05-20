@@ -14,7 +14,7 @@ Treat Warp client, Warp app, Warp terminal, and Warp UX feedback as `warpdotdev/
 - If those repos are not available, draft the issue from the user's report alone rather than blocking on more context.
 - This skill is strictly for issue drafting, duplicate detection, confirmation, and filing. Never modify code, generate patches, propose implementation diffs, or open a pull request as part of this workflow.
 - If you cannot file an issue, say so explicitly in the response instead of attempting another side effect.
-- The helper script applies the `in-app-feedback` label to filed issues for tracking.
+- The helper script applies the `in-app-feedback` label to filed issues in `warpdotdev/warp` for normal Warp feedback, and requires that target repo to be passed explicitly.
 - Never post anything publicly until the user has explicitly confirmed the final drafted issue title and description.
 
 ## Code access boundaries
@@ -179,12 +179,13 @@ Use the bundled helper script `scripts/file_feedback_issue.py` to file the issue
 
 - `--use gh`: creates the issue with `gh issue create`. Requires `gh` to be installed and authenticated for `github.com`. Prints a `created` result with `issue_url` on success, or `unavailable` when `gh` is missing or unauthenticated. Does not silently fall back to the browser.
 - `--use browser`: opens the prefilled new-issue page in the browser so the user can upload image attachments via GitHub's web UI. Prints a `browser_opened` result on success. If the browser cannot be opened, automatically falls back to `gh issue create` and prints a `created` result with `browser_unavailable: true`; if both are unavailable, prints `failed`. Use this whenever the user attached one or more images to the query.
-- The script always targets `warpdotdev/warp` on `github.com`.
+- The script never supplies a default repository; always pass the target repo explicitly.
 
 Write the final body to a temporary UTF-8 file and pass the final title directly as an argument. When the user has no image attachments:
 
 ```bash
 python3 scripts/file_feedback_issue.py \
+  --repo <target-repo> \
   --use gh \
   --title "<title>" \
   --body-file <body-file>
@@ -196,6 +197,7 @@ When the user has one or more image attachments:
 # Opens the prefilled new-issue page in the browser so the user can drop
 # their images into the issue body via GitHub's web UI.
 python3 scripts/file_feedback_issue.py \
+  --repo <target-repo> \
   --use browser \
   --title "<title>" \
   --body-file <body-file>

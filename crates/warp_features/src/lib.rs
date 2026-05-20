@@ -952,7 +952,6 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,
     FeatureFlag::MarkdownTables,
     FeatureFlag::GitOperationsInCodeReview,
-    FeatureFlag::GitCredentialRefresh,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).

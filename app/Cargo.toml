@@ -634,6 +634,7 @@ default = [
     "skip_firebase_anonymous_user",
     "settings_file",
     "directory_tab_colors",
+    "git_credential_refresh",
     "configurable_context_window",
     "oz_handoff",
     "handoff_local_cloud",
