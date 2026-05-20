@@ -598,11 +598,14 @@ impl AgentDriverRunner {
         output_format: OutputFormat,
     ) -> Result<(), AgentDriverError> {
         // Extract the task ID as early as possible for best-effort setup observability.
-        // Local CLI-created runs may not have a task yet, so those setup events no-op.
+        // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
         let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let setup_events = SetupClientEventReporter::new(task_id, server_api.clone(), background);
+        let setup_events = match task_id {
+            Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
+            None => SetupClientEventReporter::noop(server_api.clone(), background),
+        };
         setup_events
             .post_timeline_event(SetupTimelineEvent::WorkerContainerReady)
             .await;

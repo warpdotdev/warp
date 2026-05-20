@@ -15,13 +15,23 @@ pub(crate) struct SetupClientEventReporter {
 }
 
 impl SetupClientEventReporter {
+    /// Constructs a reporter for setup events associated with an existing Oz run.
     pub(crate) fn new(
-        run_id: Option<AmbientAgentTaskId>,
+        run_id: AmbientAgentTaskId,
         ai_client: Arc<dyn AIClient>,
         background: Arc<Background>,
     ) -> Self {
         Self {
-            run_id,
+            run_id: Some(run_id),
+            ai_client,
+            background,
+        }
+    }
+
+    /// Constructs a reporter for setup paths that are intentionally not backed by an Oz run.
+    pub(crate) fn noop(ai_client: Arc<dyn AIClient>, background: Arc<Background>) -> Self {
+        Self {
+            run_id: None,
             ai_client,
             background,
         }

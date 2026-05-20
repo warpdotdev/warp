@@ -1622,11 +1622,16 @@ impl AgentDriver {
         );
         let setup_events = foreground
             .spawn(|me, ctx| {
-                SetupClientEventReporter::new(
-                    me.task_id,
-                    ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
-                    ctx.background_executor(),
-                )
+                let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                match me.task_id {
+                    Some(task_id) => {
+                        SetupClientEventReporter::new(task_id, ai_client, ctx.background_executor())
+                    }
+                    None => {
+                        log::error!("No task ID found for driver - cannot report client events");
+                        SetupClientEventReporter::noop(ai_client, ctx.background_executor())
+                    }
+                }
             })
             .await?;
 
