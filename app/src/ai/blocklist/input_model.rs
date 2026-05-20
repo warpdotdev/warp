@@ -493,15 +493,6 @@ impl BlocklistAIInputModel {
         &mut self,
         new_config: InputConfig,
         is_input_buffer_empty: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.set_input_config_with_source(new_config, is_input_buffer_empty, None, ctx);
-    }
-
-    pub fn set_input_config_with_source(
-        &mut self,
-        new_config: InputConfig,
-        is_input_buffer_empty: bool,
         decision_source: Option<NldDecisionSource>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -619,7 +610,7 @@ impl BlocklistAIInputModel {
         self.set_input_config(
             new_config,
             // We know the buffer is currently empty, as it was just submitted.
-            true, ctx,
+            true, None, ctx,
         );
     }
 
@@ -785,9 +776,8 @@ impl BlocklistAIInputModel {
                         current_input_type,
                         is_agent_follow_up,
                     };
-                    let input_decision = classifier
-                        .detect_input_decision(input.clone(), &context)
-                        .await;
+                    let input_decision =
+                        classifier.detect_input_type(input.clone(), &context).await;
 
                     futures_lite::future::yield_now().await;
 

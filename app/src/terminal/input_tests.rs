@@ -4919,6 +4919,7 @@ fn test_alias_expansion_disabled_in_ai_input_mode() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -4947,6 +4948,7 @@ fn test_alias_expansion_disabled_in_ai_input_mode() {
                         is_locked: true,
                     },
                     false, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -5330,6 +5332,7 @@ fn test_voice_input_toggle_preserves_lock_state() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -5375,6 +5378,7 @@ fn test_voice_input_toggle_preserves_lock_state() {
                         is_locked: false, // Unlocked (auto-detection enabled)
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -5425,6 +5429,7 @@ fn test_input_type_button_explicit_lock() {
                         is_locked: false,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -5514,6 +5519,7 @@ fn test_auto_detection_toggle() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6183,13 +6189,13 @@ fn test_source_less_locked_config_clears_decision_source() {
                     input_type: InputType::Shell,
                     is_locked: true,
                 };
-                input_model.set_input_config_with_source(
+                input_model.set_input_config(
                     locked_shell_config,
                     true,
                     Some(NldDecisionSource::ShellPrefix),
                     ctx,
                 );
-                input_model.set_input_config(locked_shell_config, true, ctx);
+                input_model.set_input_config(locked_shell_config, true, None, ctx);
             });
         });
 
@@ -6221,6 +6227,7 @@ fn test_image_attachment_preserves_lock_state() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6261,6 +6268,7 @@ fn test_image_attachment_preserves_lock_state() {
                         is_locked: false,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6357,6 +6365,7 @@ fn test_ai_context_menu_preserves_lock_state() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6391,6 +6400,7 @@ fn test_ai_context_menu_preserves_lock_state() {
                         is_locked: false,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6458,6 +6468,7 @@ fn test_input_config_transitions() {
                         is_locked: true,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6711,6 +6722,7 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
                         is_locked: false,
                     },
                     false, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });
@@ -6772,6 +6784,7 @@ fn test_terminal_only_escape_locks_shell_mode() {
                         is_locked: false,
                     },
                     true, /* is_input_buffer_empty */
+                    None,
                     ctx,
                 );
             });

@@ -40,7 +40,7 @@ pub struct HeuristicClassifier;
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl InputClassifier for HeuristicClassifier {
-    async fn detect_input_decision(
+    async fn detect_input_type(
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
@@ -64,16 +64,15 @@ impl InputClassifier for HeuristicClassifier {
             );
         }
 
-        let input_type = self
-            .classify_input(input, context)
+        self.classify_input(input, context)
             .await
-            .map(|result| result.to_input_type())
-            .unwrap_or(context.current_input_type);
-
-        InputClassificationDecision::new(
-            input_type,
-            NldDecisionSource::NldClassifierFallbackHeuristic,
-        )
+            .map(|result| InputClassificationDecision::new(result.to_input_type(), result.source))
+            .unwrap_or_else(|_| {
+                InputClassificationDecision::new(
+                    context.current_input_type,
+                    NldDecisionSource::NldClassifierFallbackHeuristic,
+                )
+            })
     }
 
     async fn classify_input(
@@ -116,6 +115,7 @@ async fn natural_language_detection_heuristic(
     current_input_type: InputType,
     include_last_token: bool,
 ) -> ClassificationResult {
+    let source = NldDecisionSource::NldClassifierFallbackHeuristic;
     let word_tokens_count = word_tokens.len();
 
     let min_token_length = if matches!(current_input_type, InputType::AI) {
@@ -125,7 +125,7 @@ async fn natural_language_detection_heuristic(
     };
 
     if min_token_length > word_tokens_count as u8 {
-        return ClassificationResult::pure_shell();
+        return ClassificationResult::pure_shell(source);
     }
 
     let mut word_tokens = word_tokens.into_iter().map(Cow::Owned).collect_vec();
@@ -153,10 +153,10 @@ async fn natural_language_detection_heuristic(
     };
 
     if likely_english_token_count >= (updated_word_token_count as f32 * threshold) as usize {
-        return ClassificationResult::pure_ai();
+        return ClassificationResult::pure_ai(source);
     }
 
-    ClassificationResult::pure_shell()
+    ClassificationResult::pure_shell(source)
 }
 
 #[cfg(test)]

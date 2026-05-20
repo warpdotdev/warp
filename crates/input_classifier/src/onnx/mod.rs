@@ -32,11 +32,6 @@ pub enum Model {
     BertTinyV2,
 }
 
-struct ClassificationWithSource {
-    result: ClassificationResult,
-    source: NldDecisionSource,
-}
-
 impl Model {
     fn bytes(&self) -> Option<Cow<'static, [u8]>> {
         Models::get(self.model_path()).map(|file| file.data)
@@ -91,75 +86,12 @@ impl OnnxClassifier {
 
         Err(anyhow::anyhow!("No onnx inference engine enabled"))
     }
-
-    async fn classify_input_with_source(
-        &self,
-        input: warp_completer::ParsedTokensSnapshot,
-        context: &Context,
-    ) -> anyhow::Result<ClassificationWithSource> {
-        // If we ever panicked while running inference, we should fall back to the heuristic classifier.
-        if self.has_panicked.has_panicked() {
-            let result = crate::heuristic_classifier::HeuristicClassifier
-                .classify_input(input, context)
-                .await?;
-            return Ok(ClassificationWithSource {
-                result,
-                source: NldDecisionSource::NldClassifierFallbackHeuristic,
-            });
-        }
-
-        // Given that we only can get here if we have never panicked, we don't have to
-        // worry about attempting to use an inference runner that is in an invalid state
-        // due to recovering after catching a panic unwind.
-        let inference_runner = std::panic::AssertUnwindSafe(&self.inference_runner);
-
-        let input_ref = &input;
-        match std::panic::catch_unwind(move || {
-            let start = instant::Instant::now();
-            let result = inference_runner.run_inference(input_ref);
-            let duration = start.elapsed();
-            let duration_ms = duration.as_secs_f32() * 1000.0;
-
-            match result {
-                Ok(result) => {
-                    log::debug!(
-                        "Inference took {duration_ms:.2} ms; p_shell: {:.5}, p_ai: {:.5}",
-                        result.p_shell,
-                        result.p_ai
-                    );
-                    Ok(result)
-                }
-                Err(e) => {
-                    log::error!("Failed to run inference (took {duration_ms:.2} ms): {e:#}");
-                    Err(e)
-                }
-            }
-        }) {
-            Ok(result) => result.map(|result| ClassificationWithSource {
-                result,
-                source: NldDecisionSource::NldClassifier,
-            }),
-            Err(_) => {
-                log::error!(
-                    "Caught panic while running inference; falling back to heuristic classifier."
-                );
-                self.has_panicked.on_panic();
-                let result = crate::heuristic_classifier::HeuristicClassifier
-                    .classify_input(input, context)
-                    .await?;
-                Ok(ClassificationWithSource {
-                    result,
-                    source: NldDecisionSource::NldClassifierFallbackHeuristic,
-                })
-            }
-        }
-    }
 }
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl InputClassifier for OnnxClassifier {
-    async fn detect_input_decision(
+    async fn detect_input_type(
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
@@ -198,11 +130,11 @@ impl InputClassifier for OnnxClassifier {
         }
 
         // Otherwise, defer all decision-making to the model.
-        self.classify_input_with_source(input, context)
+        self.classify_input(input, context)
             .await
             .map(|classification| {
                 InputClassificationDecision::new(
-                    classification.result.to_input_type(),
+                    classification.to_input_type(),
                     classification.source,
                 )
             })
@@ -219,9 +151,51 @@ impl InputClassifier for OnnxClassifier {
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
     ) -> anyhow::Result<ClassificationResult> {
-        self.classify_input_with_source(input, context)
-            .await
-            .map(|classification| classification.result)
+        // If we ever panicked while running inference, we should fall back to the heuristic classifier.
+        if self.has_panicked.has_panicked() {
+            return crate::heuristic_classifier::HeuristicClassifier
+                .classify_input(input, context)
+                .await;
+        }
+
+        // Given that we only can get here if we have never panicked, we don't have to
+        // worry about attempting to use an inference runner that is in an invalid state
+        // due to recovering after catching a panic unwind.
+        let inference_runner = std::panic::AssertUnwindSafe(&self.inference_runner);
+
+        let input_ref = &input;
+        match std::panic::catch_unwind(move || {
+            let start = instant::Instant::now();
+            let result = inference_runner.run_inference(input_ref);
+            let duration = start.elapsed();
+            let duration_ms = duration.as_secs_f32() * 1000.0;
+
+            match result {
+                Ok(result) => {
+                    log::debug!(
+                        "Inference took {duration_ms:.2} ms; p_shell: {:.5}, p_ai: {:.5}",
+                        result.p_shell,
+                        result.p_ai
+                    );
+                    Ok(result)
+                }
+                Err(e) => {
+                    log::error!("Failed to run inference (took {duration_ms:.2} ms): {e:#}");
+                    Err(e)
+                }
+            }
+        }) {
+            Ok(result) => result,
+            Err(_) => {
+                log::error!(
+                    "Caught panic while running inference; falling back to heuristic classifier."
+                );
+                self.has_panicked.on_panic();
+                crate::heuristic_classifier::HeuristicClassifier
+                    .classify_input(input, context)
+                    .await
+            }
+        }
     }
 }
 
@@ -306,7 +280,7 @@ mod tests {
             };
             let input = parsed_input_without_descriptions("help migrate database");
 
-            let decision = classifier.detect_input_decision(input, &context).await;
+            let decision = classifier.detect_input_type(input, &context).await;
 
             assert_eq!(decision.input_type, InputType::AI);
             assert_eq!(

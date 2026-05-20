@@ -8,9 +8,8 @@ use parking_lot::Mutex;
 use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
 
-use super::ClassificationResult;
-
-use super::Model;
+use super::{ClassificationResult, Model};
+use crate::NldDecisionSource;
 
 pub struct InferenceRunner {
     session: Mutex<Session>,
@@ -86,6 +85,7 @@ impl super::InferenceRunner for InferenceRunner {
         Ok(ClassificationResult {
             p_ai: probabilities[0],
             p_shell: probabilities[1],
+            source: NldDecisionSource::NldClassifier,
         })
     }
 }

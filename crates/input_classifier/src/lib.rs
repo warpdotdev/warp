@@ -61,19 +61,11 @@ impl InputClassificationDecision {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait InputClassifier: 'static + Send + Sync {
-    async fn detect_input_decision(
-        &self,
-        input: warp_completer::ParsedTokensSnapshot,
-        context: &Context,
-    ) -> InputClassificationDecision;
-
     async fn detect_input_type(
         &self,
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
-    ) -> InputType {
-        self.detect_input_decision(input, context).await.input_type
-    }
+    ) -> InputClassificationDecision;
 
     async fn classify_input(
         &self,
@@ -88,20 +80,24 @@ pub struct ClassificationResult {
     p_shell: f32,
     /// The probability that the input is a natural language query to AI.
     p_ai: f32,
+    /// The source that produced this classification.
+    pub source: NldDecisionSource,
 }
 
 impl ClassificationResult {
-    fn pure_ai() -> Self {
+    fn pure_ai(source: NldDecisionSource) -> Self {
         Self {
             p_shell: 0.0,
             p_ai: 1.0,
+            source,
         }
     }
 
-    fn pure_shell() -> Self {
+    fn pure_shell(source: NldDecisionSource) -> Self {
         Self {
             p_shell: 1.0,
             p_ai: 0.0,
+            source,
         }
     }
 

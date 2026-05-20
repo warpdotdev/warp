@@ -3454,7 +3454,7 @@ impl TerminalView {
             if !model.is_autodetection_enabled_for_current_context(ctx) {
                 if let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
-                    model.set_input_config(input_config, is_input_buffer_empty, ctx);
+                    model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
                 }
             }
             model
@@ -18739,6 +18739,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
+                None,
                 ctx,
             );
         });
@@ -21942,6 +21943,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
+                    None,
                     ctx,
                 );
             });

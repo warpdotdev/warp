@@ -365,6 +365,7 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -430,6 +431,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -901,6 +903,7 @@ fn cloud_mode_v1_agent_prefixed_query_spawns_cloud_agent() {
                         is_locked: false,
                     },
                     true,
+                    None,
                     ctx,
                 );
             });
@@ -5080,6 +5083,7 @@ fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
                             is_locked: true,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });

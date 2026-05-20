@@ -235,7 +235,10 @@ async fn handle_classify(
                 let result = classifier
                     .detect_input_type(parsed_input.clone(), &context)
                     .await;
-                println!("  {name}: {result} (probabilities unavailable)");
+                println!(
+                    "  {}: {} (probabilities unavailable)",
+                    name, result.input_type
+                );
             }
         }
     }
@@ -290,7 +293,7 @@ async fn handle_verify(
                     let result = classifier
                         .detect_input_type(parsed_input.clone(), &context)
                         .await;
-                    let is_correct = result == expected;
+                    let is_correct = result.input_type == expected;
                     if is_correct {
                         correct_count += 1;
                     }

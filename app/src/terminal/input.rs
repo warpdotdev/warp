@@ -3120,7 +3120,7 @@ impl Input {
             if let Some(input_config) = input_config_to_restore {
                 let is_buffer_empty = me.editor.as_ref(ctx).buffer_text(ctx).is_empty();
                 me.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_config(*input_config, is_buffer_empty, ctx);
+                    ai_input_model.set_input_config(*input_config, is_buffer_empty, None, ctx);
                 });
             }
 
@@ -3827,7 +3827,7 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).is_empty(ctx);
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            ai_input_model.set_input_config_with_source(
+            ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
@@ -3912,7 +3912,7 @@ impl Input {
         self.handoff_compose_state
             .update(ctx, |state, ctx| state.exit(ctx));
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            ai_input_model.set_input_config_with_source(
+            ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
@@ -3981,7 +3981,7 @@ impl Input {
             editor.buffer_text(ctx).is_empty()
         });
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            ai_input_model.set_input_config_with_source(
+            ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
@@ -5007,6 +5007,7 @@ impl Input {
                                 is_locked: true,
                             },
                             false,
+                            None,
                             ctx,
                         );
                     } else {
@@ -6123,7 +6124,7 @@ impl Input {
                     input_type: InputType::Shell,
                     is_locked: false, // Set to auto-detection mode
                 };
-                model.set_input_config(new_config, buffer_text.is_empty(), ctx);
+                model.set_input_config(new_config, buffer_text.is_empty(), None, ctx);
             });
         } else {
             // For non-empty buffer, run the actual auto-detection algorithm
@@ -6134,7 +6135,7 @@ impl Input {
                     input_type: current_config.input_type, // Keep current type temporarily
                     is_locked: false,                      // Enable auto-detection
                 };
-                model.set_input_config(new_config, buffer_text.is_empty(), ctx);
+                model.set_input_config(new_config, buffer_text.is_empty(), None, ctx);
             });
 
             // Then run auto-detection on the current buffer content
@@ -6181,7 +6182,7 @@ impl Input {
                             input_type,
                             is_locked: true,
                         };
-                        model.set_input_config_with_source(
+                        model.set_input_config(
                             new_config,
                             is_input_buffer_empty,
                             Some(NldDecisionSource::ManualToggle),
@@ -6249,7 +6250,7 @@ impl Input {
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |input_model, ctx| {
             let new_config = input_model.input_config().with_input_type(InputType::AI);
-            input_model.set_input_config_with_source(
+            input_model.set_input_config(
                 new_config,
                 is_input_buffer_empty,
                 Some(decision_source),
@@ -6532,7 +6533,7 @@ impl Input {
                     // If there is no AI enabled, ensure input is locked in command mode.
                     if !ai_settings.as_ref(ctx).is_any_ai_enabled(ctx) {
                         self.ai_input_model.update(ctx, |input_model, ctx| {
-                            input_model.set_input_config_with_source(
+                            input_model.set_input_config(
                                 InputConfig {
                                     input_type: InputType::Shell,
                                     is_locked: true,
@@ -8175,6 +8176,7 @@ impl Input {
                             is_locked: original_input_was_locked,
                         },
                         original_buffer.is_empty(),
+                        None,
                         ctx,
                     );
                 });
@@ -9713,7 +9715,7 @@ impl Input {
                                 });
 
                             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                                ai_input_model.set_input_config_with_source(
+                                ai_input_model.set_input_config(
                                     InputConfig {
                                         input_type: InputType::AI,
                                         is_locked: true,
@@ -9821,7 +9823,7 @@ impl Input {
                                 });
 
                             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                                ai_input_model.set_input_config_with_source(
+                                ai_input_model.set_input_config(
                                     InputConfig {
                                         input_type: InputType::Shell,
                                         is_locked: true,
@@ -13846,7 +13848,7 @@ impl Input {
                 } else {
                     NldDecisionSource::ManualToggle
                 };
-                ai_input_model.set_input_config_with_source(
+                ai_input_model.set_input_config(
                     new_config,
                     is_input_buffer_empty,
                     Some(decision_source),
@@ -13872,7 +13874,7 @@ impl Input {
                 input_type: InputType::Shell,
                 is_locked: true,
             };
-            ai_input_model.set_input_config_with_source(
+            ai_input_model.set_input_config(
                 new_config,
                 is_input_buffer_empty,
                 Some(NldDecisionSource::ManualToggle),
@@ -13898,7 +13900,7 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |model, ctx| {
-            model.set_input_config(config, is_input_buffer_empty, ctx);
+            model.set_input_config(config, is_input_buffer_empty, None, ctx);
         });
     }
 
@@ -13927,7 +13929,7 @@ impl Input {
             .unlocked_if_autodetection_enabled(true, ctx)
         };
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            ai_input_model.set_input_config_with_source(
+            ai_input_model.set_input_config(
                 new_config,
                 true,
                 Some(NldDecisionSource::ShellPrefix),
@@ -14155,7 +14157,7 @@ impl Input {
                 let new_config = ai_input_model
                     .input_config()
                     .unlocked_if_autodetection_enabled(is_in_fullscreen_agent_view, ctx);
-                ai_input_model.set_input_config_with_source(
+                ai_input_model.set_input_config(
                     new_config,
                     false,
                     new_config
