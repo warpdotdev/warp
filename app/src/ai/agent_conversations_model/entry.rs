@@ -4,12 +4,14 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::workspace::RestoreConversationLayout;
 use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
+use std::collections::{HashMap, HashSet};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
@@ -382,6 +384,81 @@ fn conversation_display_status(
         .unwrap_or(AgentRunDisplayStatus::ConversationSucceeded)
 }
 
+fn has_working_descendant_conversation(
+    parent_id: AIConversationId,
+    history_model: &BlocklistAIHistoryModel,
+) -> bool {
+    descendant_conversation_ids_in_spawn_order(history_model, parent_id)
+        .into_iter()
+        .filter_map(|id| history_model.conversation(&id))
+        .any(|conversation| conversation.status().is_in_progress())
+}
+
+fn has_working_descendant_task(
+    task_id: AmbientAgentTaskId,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    history_model: &BlocklistAIHistoryModel,
+    app: &AppContext,
+    visited: &mut HashSet<AmbientAgentTaskId>,
+) -> bool {
+    if !visited.insert(task_id) {
+        return false;
+    }
+
+    let Some(task) = tasks.get(&task_id) else {
+        return false;
+    };
+    let task_id_string = task_id.to_string();
+
+    tasks.values().any(|candidate| {
+        let is_direct_child = candidate
+            .parent_run_id
+            .as_deref()
+            .is_some_and(|parent_run_id| parent_run_id == task_id_string)
+            || task
+                .children
+                .iter()
+                .any(|child| child == &candidate.task_id.to_string());
+
+        if !is_direct_child {
+            return false;
+        }
+
+        AgentRunDisplayStatus::from_task(candidate, app).is_working()
+            || conversation_id_shadowed_by_task(candidate, history_model).is_some_and(
+                |conversation_id| {
+                    has_working_descendant_conversation(conversation_id, history_model)
+                },
+            )
+            || has_working_descendant_task(candidate.task_id, tasks, history_model, app, visited)
+    })
+}
+
+fn task_display_status(
+    task: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    history_model: &BlocklistAIHistoryModel,
+    app: &AppContext,
+) -> AgentRunDisplayStatus {
+    let status = AgentRunDisplayStatus::from_task(task, app);
+    if status.is_working() {
+        return status;
+    }
+
+    let local_conversation_has_working_descendant =
+        conversation_id_shadowed_by_task(task, history_model).is_some_and(|conversation_id| {
+            has_working_descendant_conversation(conversation_id, history_model)
+        });
+    let task_has_working_descendant =
+        has_working_descendant_task(task.task_id, tasks, history_model, app, &mut HashSet::new());
+
+    if local_conversation_has_working_descendant || task_has_working_descendant {
+        AgentRunDisplayStatus::ConversationInProgress
+    } else {
+        status
+    }
+}
+
 fn conversation_request_usage(
     metadata: &ConversationMetadata,
     history_model: &BlocklistAIHistoryModel,
@@ -413,6 +490,7 @@ fn conversation_artifacts(
 
 pub(super) fn entry_for_task(
     task: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -427,7 +505,7 @@ pub(super) fn entry_for_task(
                 server_conversation_token_for_conversation(conversation_id, None, history_model)
             })
         });
-    let status = AgentRunDisplayStatus::from_task(task, app);
+    let status = task_display_status(task, tasks, history_model, app);
     let has_active_session_id = task
         .active_execution_session_id()
         .and_then(parse_session_id)
