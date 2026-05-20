@@ -231,7 +231,7 @@ impl NotebookCommand {
 
         let syntax_config = {
             let ps = SyntaxSet::load_defaults_newlines();
-            if let Some(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme").ok() {
+            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
                 let mut cursor = std::io::Cursor::new(asset);
                 match ThemeSet::load_from_reader(&mut cursor) {
                     Ok(theme) => Some((ps, theme)),
