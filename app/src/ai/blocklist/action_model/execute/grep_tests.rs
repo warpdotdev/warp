@@ -84,16 +84,17 @@ mod path_quoting {
     #[test]
     fn git_grep_posix_escapes_target_path_spaces() {
         let cmd = build_git_grep_command(&["TODO".to_string()], "/tmp/my repo", ShellType::Bash);
+        // Plain query with no metacharacters lands as a bare literal arg —
+        // shell-escape is identity for "TODO".
         assert_eq!(
             cmd,
-            r#"git --no-pager grep --color=never --untracked -nIE -e "TODO" /tmp/my\ repo"#
+            r#"git --no-pager grep --color=never --untracked -nIE -e TODO /tmp/my\ repo"#
         );
     }
 
     #[test]
-    fn git_grep_posix_escapes_command_substitution() {
-        // Path-level metacharacters get backslash-escaped; query-level
-        // double-quotes are kept (the query is regex literal, not a path).
+    fn git_grep_posix_escapes_command_substitution_in_path() {
+        // Path-level metacharacters get backslash-escaped.
         let cmd = build_git_grep_command(
             &["pattern".to_string()],
             "/tmp/$(touch ~/PROBE_RAN)",
@@ -107,10 +108,37 @@ mod path_quoting {
     }
 
     #[test]
+    fn git_grep_posix_escapes_command_substitution_in_query() {
+        // Agent-supplied query is also shell-escaped — without this, the
+        // shell would expand `$(rm -rf ~)` before passing the query to grep.
+        let cmd = build_git_grep_command(
+            &["match$(rm -rf ~)me".to_string()],
+            "/tmp/repo",
+            ShellType::Bash,
+        );
+        assert!(
+            !cmd.contains("$(rm"),
+            "unescaped command substitution survived in query: {cmd}"
+        );
+        assert!(cmd.contains(r"match\$\(rm\ -rf\ \~\)me"));
+    }
+
+    #[test]
+    fn git_grep_posix_escapes_backticks_in_query() {
+        let cmd =
+            build_git_grep_command(&["a`rm -rf ~`b".to_string()], "/tmp/repo", ShellType::Bash);
+        for (i, c) in cmd.char_indices() {
+            if c == '`' {
+                assert!(
+                    i > 0 && cmd.as_bytes()[i - 1] == b'\\',
+                    "unescaped backtick at byte {i}: {cmd}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn git_grep_powershell_path_uses_powershell_escape() {
-        // For PowerShell sessions, the path is escaped with backticks
-        // (`ShellFamily::PowerShell`) — POSIX backslash escapes are not
-        // valid in PowerShell.
         let cmd = build_git_grep_command(
             &["pattern".to_string()],
             "C:\\Users\\me\\repo",
@@ -119,9 +147,27 @@ mod path_quoting {
         // The drive-letter colon stays literal (PowerShell escape doesn't
         // need to escape `:`); the path lands as a single argument.
         assert!(cmd.ends_with(" C:\\Users\\me\\repo"));
-        // PowerShell-escaped queries still use the existing
-        // backtick-double-quote helper.
-        assert!(cmd.contains(r#"-e "pattern""#));
+        // Query has no metacharacters → literal `pattern`, not quoted.
+        assert!(cmd.contains(" -e pattern "));
+    }
+
+    #[test]
+    fn git_grep_powershell_escapes_env_var_in_query() {
+        // PowerShell expands `$env:VAR` inside double quotes — without
+        // shell-escape, an agent-supplied query containing `$env:` would
+        // leak the env var into the grep pattern.
+        let cmd = build_git_grep_command(
+            &["leak$env:USERPROFILE".to_string()],
+            "C:\\repo",
+            ShellType::PowerShell,
+        );
+        let mut iter = cmd.match_indices("$env:");
+        if let Some((idx, _)) = iter.next() {
+            assert!(
+                idx > 0 && &cmd[idx - 1..idx] == "`",
+                "unescaped $env: in query at byte {idx}: {cmd}"
+            );
+        }
     }
 
     #[test]
@@ -129,7 +175,7 @@ mod path_quoting {
         let cmd = build_grep_command(&["TODO".to_string()], "/tmp/has space");
         assert_eq!(
             cmd,
-            r#"grep --color=never -nrIHE --devices=skip -e "TODO" /tmp/has\ space"#
+            r#"grep --color=never -nrIHE --devices=skip -e TODO /tmp/has\ space"#
         );
     }
 
@@ -143,6 +189,16 @@ mod path_quoting {
     }
 
     #[test]
+    fn grep_posix_escapes_command_substitution_in_query() {
+        let cmd = build_grep_command(&["a$(rm)b".to_string()], "/tmp/repo");
+        assert!(
+            !cmd.contains("$(rm"),
+            "unescaped command substitution survived in query: {cmd}"
+        );
+        assert!(cmd.contains(r"a\$\(rm\)b"));
+    }
+
+    #[test]
     fn select_string_powershell_escapes_target_path() {
         let cmd = build_select_string_command(&["TODO".to_string()], "C:\\Users\\me\\My Stuff");
         // The path appears once, after `-Path `, with PowerShell-style
@@ -151,23 +207,34 @@ mod path_quoting {
             cmd.contains("-Path C:\\Users\\me\\My`\u{20}Stuff "),
             "expected escaped path; got: {cmd}"
         );
-        // Pattern is kept as a backtick-double-quoted PowerShell string.
-        assert!(cmd.ends_with(r#"-Pattern "TODO""#));
+        // Query has no metacharacters → literal `TODO`, not double-quoted.
+        assert!(cmd.ends_with("-Pattern TODO"));
     }
 
     #[test]
-    fn select_string_powershell_escapes_command_substitution() {
-        // PowerShell expands `$x` and `$env:USER` inside double quotes; we
-        // need every metacharacter shell-escaped via backtick.
+    fn select_string_powershell_escapes_command_substitution_in_path() {
         let cmd =
             build_select_string_command(&["q".to_string()], "C:\\Users\\$env:USERPROFILE\\repo");
-        // No bare `$env:` survives in the rendered command — it's always
-        // preceded by a backtick.
         let mut iter = cmd.match_indices("$env:");
         if let Some((idx, _)) = iter.next() {
             assert!(
                 idx > 0 && &cmd[idx - 1..idx] == "`",
                 "unescaped $env: at byte {idx}: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn select_string_powershell_escapes_env_var_in_query() {
+        // PowerShell expands `$env:VAR` inside double quotes; the previous
+        // implementation only escaped `"` and would have passed
+        // `$env:USERPROFILE` straight through.
+        let cmd = build_select_string_command(&["leak$env:USERPROFILE".to_string()], "C:\\repo");
+        let mut iter = cmd.match_indices("$env:");
+        if let Some((idx, _)) = iter.next() {
+            assert!(
+                idx > 0 && &cmd[idx - 1..idx] == "`",
+                "unescaped $env: in query at byte {idx}: {cmd}"
             );
         }
     }

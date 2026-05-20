@@ -9,11 +9,14 @@ use crate::terminal::shell::ShellType;
 #[test]
 fn find_posix_escapes_target_path_spaces() {
     let cmd = build_find_command(&["*.rs".to_string()], "/tmp/my code");
-    assert_eq!(cmd, r#"find /tmp/my\ code -type f  -name '*.rs'"#);
+    // Both the path AND the pattern are shell-escaped. The `*` in the pattern
+    // is backslash-escaped at the shell level; the shell consumes the escape
+    // and hands `find` the literal `*` for its own glob matching.
+    assert_eq!(cmd, r"find /tmp/my\ code -type f  -name \*.rs");
 }
 
 #[test]
-fn find_posix_escapes_command_substitution() {
+fn find_posix_escapes_command_substitution_in_path() {
     let cmd = build_find_command(&["*.txt".to_string()], "/tmp/innocent$(touch ~/PROBE_RAN)");
     assert!(
         !cmd.contains("$(touch"),
@@ -23,7 +26,7 @@ fn find_posix_escapes_command_substitution() {
 }
 
 #[test]
-fn find_posix_escapes_backticks() {
+fn find_posix_escapes_backticks_in_path() {
     let cmd = build_find_command(&["*.md".to_string()], "/tmp/`rm`/here");
     assert!(
         !cmd.contains("/`rm`/"),
@@ -33,14 +36,25 @@ fn find_posix_escapes_backticks() {
 }
 
 #[test]
-fn find_handles_multiple_patterns() {
-    // Pattern args are joined with ` -o ` and must survive without the
-    // path-quoting changes affecting them.
-    let cmd = build_find_command(&["*.rs".to_string(), "*.toml".to_string()], "/tmp/repo");
-    assert_eq!(
-        cmd,
-        "find /tmp/repo -type f  -name '*.rs' -o -name '*.toml'"
+fn find_posix_escapes_single_quote_in_pattern() {
+    // The previous implementation wrapped each pattern in `'...'`. An agent
+    // glob containing a single quote closed the wrapper and let everything
+    // after it execute as shell input. After shell-escape, the single quote
+    // is backslash-escaped and the shell sees one token.
+    let cmd = build_find_command(&["evil'$(rm)".to_string()], "/tmp/repo");
+    assert!(
+        !cmd.contains("$(rm"),
+        "unescaped command substitution survived in pattern: {cmd}"
     );
+    assert!(cmd.contains(r"\'\$\(rm\)"));
+}
+
+#[test]
+fn find_handles_multiple_patterns() {
+    let cmd = build_find_command(&["*.rs".to_string(), "*.toml".to_string()], "/tmp/repo");
+    // Each pattern's `*` is backslash-escaped at the shell level; `find`
+    // still receives literal `*` characters for its glob matching.
+    assert_eq!(cmd, r"find /tmp/repo -type f  -name \*.rs -o -name \*.toml");
 }
 
 #[test]
@@ -50,13 +64,15 @@ fn get_childitem_powershell_escapes_target_path() {
         cmd.contains("-Path C:\\Users\\me\\My`\u{20}Code "),
         "expected escaped path; got: {cmd}"
     );
-    assert!(cmd.starts_with("Get-ChildItem -File -Recurse -Include '*.rs' -Path "));
+    // The pattern `*` is also backtick-escaped in PowerShell.
+    assert!(
+        cmd.starts_with("Get-ChildItem -File -Recurse -Include `*.rs -Path "),
+        "expected escaped pattern; got: {cmd}"
+    );
 }
 
 #[test]
-fn get_childitem_powershell_escapes_metacharacters() {
-    // PowerShell expands `$x` and `$env:USERPROFILE` inside `-Path "..."`;
-    // we need every metacharacter shell-escaped via backtick.
+fn get_childitem_powershell_escapes_metacharacters_in_path() {
     let cmd =
         build_get_childitem_command(&["*.txt".to_string()], "C:\\Users\\$env:USERPROFILE\\repo");
     let mut iter = cmd.match_indices("$env:");
@@ -64,6 +80,21 @@ fn get_childitem_powershell_escapes_metacharacters() {
         assert!(
             idx > 0 && &cmd[idx - 1..idx] == "`",
             "unescaped $env: at byte {idx}: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn get_childitem_powershell_escapes_env_var_in_pattern() {
+    // Same risk shape on the pattern side: an agent pattern containing
+    // `$env:VAR` would have leaked the env value into the glob without
+    // backtick-escape.
+    let cmd = build_get_childitem_command(&["leak$env:USERPROFILE".to_string()], "C:\\repo");
+    let mut iter = cmd.match_indices("$env:");
+    if let Some((idx, _)) = iter.next() {
+        assert!(
+            idx > 0 && &cmd[idx - 1..idx] == "`",
+            "unescaped $env: in pattern at byte {idx}: {cmd}"
         );
     }
 }

@@ -312,9 +312,13 @@ async fn run_git_ls_files_command(
 /// the directory name don't get expanded by the user's shell before `find`
 /// receives them.
 fn build_find_command(patterns: &[String], target_path: &str) -> String {
+    // Agent-supplied glob patterns: shell-escape so an embedded `'` (or any
+    // other metacharacter) can't break out of the argument and execute as
+    // shell input. The shell consumes the escapes and hands `find` the
+    // literal pattern for its own glob matching.
     let pattern_args = patterns
         .iter()
-        .map(|pattern| format!(" -name '{pattern}'"))
+        .map(|pattern| format!(" -name {}", ShellFamily::Posix.shell_escape(pattern)))
         .join(" -o");
     let escaped_path = ShellFamily::Posix.shell_escape(target_path);
     format!("find {escaped_path} -type f {pattern_args}")
@@ -363,9 +367,13 @@ async fn run_find_command(
 /// [`run_powershell_get_childitem_command`]. The path is escaped through
 /// [`ShellFamily::PowerShell`].
 fn build_get_childitem_command(patterns: &[String], target_path: &str) -> String {
+    // Agent-supplied glob patterns: shell-escape via PowerShell backticks so
+    // metacharacters (including `'`, `$x`, `$env:VAR`, backticks) can't break
+    // out of the argument. PowerShell consumes the escapes and hands
+    // `Get-ChildItem -Include` the literal patterns for its own matching.
     let pattern_args = patterns
         .iter()
-        .map(|pattern| format!("'{pattern}'"))
+        .map(|pattern| ShellFamily::PowerShell.shell_escape(pattern).into_owned())
         .join(",");
     let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
     format!(

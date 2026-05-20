@@ -40,14 +40,6 @@ use super::{
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";
 
-fn escape_double_quotes(s: &str) -> String {
-    s.replace('"', "\\\"")
-}
-
-fn powershell_escape_double_quotes(s: &str) -> String {
-    s.replace('"', "`\"")
-}
-
 /// Information about the Grep call that resulted in an error, used to send
 /// telemetry about the error.
 struct GrepError {
@@ -470,19 +462,16 @@ async fn run_ripgrep(queries: &[String], absolute_path: String) -> Result<GrepRe
 /// the underlying `git grep` receives the literal path regardless of any
 /// metacharacters in it (`$`, backticks, parens, spaces, etc.).
 fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
+    let family = ShellFamily::from(shell_type);
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
     for query in queries {
-        let escaped_query = format!(
-            "\"{}\"",
-            if shell_type == ShellType::PowerShell {
-                powershell_escape_double_quotes(query)
-            } else {
-                escape_double_quotes(query)
-            }
-        );
+        // Agent-supplied query: shell-escape so `$VAR`, `$(...)`, backticks,
+        // and other metacharacters never reach the user's shell unquoted.
+        // The shell consumes the escapes and hands `git grep` the literal
+        // query string for its own regex matching.
+        let escaped_query = family.shell_escape(query);
         grep_command.push_str(format!(" -e {escaped_query}").as_str());
     }
-    let family = ShellFamily::from(shell_type);
     let escaped_path = family.shell_escape(target_path);
     grep_command.push_str(format!(" {escaped_path}").as_str());
     grep_command
@@ -544,7 +533,10 @@ async fn run_git_grep_command(
 fn build_grep_command(queries: &[String], target_path: &str) -> String {
     let mut grep_command = "grep --color=never -nrIHE --devices=skip".to_string();
     for query in queries {
-        grep_command.push_str(format!(" -e \"{}\"", escape_double_quotes(query)).as_str());
+        // Agent-supplied query: shell-escape so metacharacters never reach
+        // the shell unquoted (see `build_git_grep_command`).
+        let escaped_query = ShellFamily::Posix.shell_escape(query);
+        grep_command.push_str(format!(" -e {escaped_query}").as_str());
     }
     let escaped_path = ShellFamily::Posix.shell_escape(target_path);
     grep_command.push_str(format!(" {escaped_path}").as_str());
@@ -612,13 +604,13 @@ async fn run_grep_command(
 /// (backticks, `$x`, `$env:USERPROFILE`, etc.) are passed verbatim.
 fn build_select_string_command(queries: &[String], target_path: &str) -> String {
     let escaped_path = ShellFamily::PowerShell.shell_escape(target_path);
+    let patterns = queries
+        .iter()
+        .map(|q| ShellFamily::PowerShell.shell_escape(q).into_owned())
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "Get-ChildItem -Path {escaped_path} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {}",
-        queries
-            .iter()
-            .map(|q| format!("\"{}\"", powershell_escape_double_quotes(q)))
-            .collect::<Vec<_>>()
-            .join(",")
+        "Get-ChildItem -Path {escaped_path} -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern {patterns}"
     )
 }
 
