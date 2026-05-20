@@ -45,11 +45,7 @@ use super::model_spec_scores::{
     REASONING_LEVEL_TITLE,
 };
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the resolved model supports it; otherwise it may use Warp-hosted inference. Warp runtime usage may still consume credits.";
-const BEDROCK_RUNTIME_CHARGES_TOOLTIP: &str =
-    "Model inference uses Bedrock. Warp runtime usage may still consume credits.";
-const API_KEY_RUNTIME_CHARGES_TOOLTIP: &str =
-    "Model inference uses your API key. Warp runtime usage may still consume credits.";
+const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the resolved model supports it; otherwise it may use Warp-hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -244,12 +240,11 @@ struct ModelSearchItem {
     id: LLMId,
     provider: LLMProvider,
     spec: Option<LLMSpec>,
-    provider_icon: Option<Icon>,
+    leading_icon: Icon,
     display_text: String,
     is_selected: bool,
     is_custom_endpoint: bool,
     disable_reason: Option<DisableReason>,
-    credential_icon: Option<Icon>,
     is_auto: bool,
     is_using_bedrock: bool,
     name_match_result: Option<FuzzyMatchResult>,
@@ -276,22 +271,24 @@ impl ModelSearchItem {
             .is_some();
         let is_auto = is_auto(llm);
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        let is_using_api_key =
+            is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+        let leading_icon = if is_using_bedrock {
+            Icon::Aws
+        } else if is_using_api_key {
+            Icon::Key
+        } else {
+            llm.provider.icon().unwrap_or(Icon::Oz)
+        };
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
             spec: llm.spec.clone(),
-            provider_icon: llm.provider.icon(),
+            leading_icon,
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
             disable_reason,
-            credential_icon: if is_using_bedrock {
-                Some(Icon::Aws)
-            } else if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
-                Some(Icon::Key)
-            } else {
-                None
-            },
             is_auto,
             is_using_bedrock,
             name_match_result: None,
@@ -325,11 +322,7 @@ impl SearchItem for ModelSearchItem {
         let icon_size = inline_styles::font_size(appearance);
         let icon_color = inline_styles::icon_color(appearance);
 
-        let icon = self
-            .provider_icon
-            .unwrap_or(Icon::Oz)
-            .to_warpui_icon(icon_color)
-            .finish();
+        let icon = self.leading_icon.to_warpui_icon(icon_color).finish();
 
         Container::new(
             ConstrainedBox::new(icon)
@@ -384,14 +377,6 @@ impl SearchItem for ModelSearchItem {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
-
-        if let Some(icon) = self.credential_icon {
-            let key_icon = ConstrainedBox::new(icon.to_warpui_icon(secondary_text_color).finish())
-                .with_width(font_size)
-                .with_height(font_size)
-                .finish();
-            row = row.with_child(Container::new(key_icon).with_margin_left(6.).finish());
-        }
 
         if self.is_selected {
             let selected_label = "(selected)";
@@ -526,16 +511,8 @@ impl SearchItem for ModelSearchItem {
                         text: AUTO_BEDROCK_TOOLTIP,
                         mouse_state: self.cost_row_tooltip_mouse_state.clone(),
                     })
-                } else if self.is_using_bedrock {
-                    Some(CostRowTooltip {
-                        text: BEDROCK_RUNTIME_CHARGES_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
                 } else {
-                    Some(CostRowTooltip {
-                        text: API_KEY_RUNTIME_CHARGES_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
+                    None
                 },
                 manage_button: Container::new(manage_button).finish(),
             }

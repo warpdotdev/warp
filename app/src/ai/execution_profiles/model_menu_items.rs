@@ -8,7 +8,7 @@ use std::sync::Arc;
 use warp_core::ui::Icon;
 use warpui::{
     elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, ParentElement, SavePosition,
+        ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, SavePosition,
         Shrinkable, Text,
     },
     fonts::{Properties, Style},
@@ -86,12 +86,12 @@ fn make_item_fields<A: Action + Clone>(
         .custom_llm_info_for_id(&llm.id)
         .is_some();
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-    let credential_icon = if is_using_bedrock {
-        Some(Icon::Aws)
+    let leading_icon = if is_using_bedrock {
+        Icon::Aws
     } else if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
-        Some(Icon::Key)
+        Icon::Key
     } else {
-        None
+        llm.provider.icon().unwrap_or(Icon::Oz)
     };
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
@@ -102,12 +102,11 @@ fn make_item_fields<A: Action + Clone>(
                     Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
                 let icon_container = Container::new(
-                    ConstrainedBox::new(if let Some(icon) = credential_icon {
-                        icon.to_warpui_icon(appearance.theme().foreground())
-                            .finish()
-                    } else {
-                        Empty::new().finish()
-                    })
+                    ConstrainedBox::new(
+                        leading_icon
+                            .to_warpui_icon(appearance.theme().foreground())
+                            .finish(),
+                    )
                     .with_height(appearance.ui_font_size())
                     .with_width(appearance.ui_font_size())
                     .finish(),
@@ -134,8 +133,7 @@ fn make_item_fields<A: Action + Clone>(
             None,
         )
     } else {
-        let provider_icon = llm.provider.icon().unwrap_or(Icon::Oz);
-        MenuItemFields::new(label).with_icon(provider_icon)
+        MenuItemFields::new(label).with_icon(leading_icon)
     };
 
     item = item
