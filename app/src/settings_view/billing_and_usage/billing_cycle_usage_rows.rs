@@ -463,12 +463,13 @@ fn build_row_card(
 
     // Credit + cost cluster: `[coin] X[/limit]   [card] $cost`.
     let credits_str = match row.base_limit {
-        Some(limit) => format!(
+        Some(limit) if limit > 0 => format!(
             "{}/{}",
             format_credits(row.total_credits),
             format_credits(limit)
         ),
         None => format_credits(row.total_credits),
+        Some(_) => format_credits(row.total_credits),
     };
     let credits_text = Text::new_inline(
         credits_str,

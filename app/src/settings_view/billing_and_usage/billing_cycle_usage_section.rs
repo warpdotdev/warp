@@ -715,7 +715,8 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
 fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "Aggregates usage from base, add-on, pay-as-you-go, and cloud-only credits.".to_string(),
+        "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits."
+            .to_string(),
         appearance.ui_font_family(),
         12.,
     )
