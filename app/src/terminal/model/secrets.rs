@@ -18,6 +18,15 @@ use super::grid::{Dimensions as _, RespectDisplayedOutput};
 use super::terminal_model::RangeInModel;
 use crate::terminal::model::find::RegexDFAs;
 
+/// A regex pattern that can be used to detect secrets in text.
+pub struct SecretsRegex {
+    /// The regex pattern to match secrets.  This is a meta::Regex which supports multiple patterns.
+    pub regex: regex_automata::meta::Regex,
+
+    /// Metadata about the regex pattern, including which secret levels it corresponds to.
+    pub level_metadata: RegexLevelMetadata,
+}
+
 /// Tracks counts to infer which regex patterns correspond to which secret levels
 #[derive(Debug, Clone)]
 pub struct RegexLevelMetadata {
@@ -36,15 +45,14 @@ lazy_static! {
     );
     /// Used for secret redaction in simple text strings (e.g.: rich content blocks).
     /// Initially empty - will be populated with user-defined regexes when safe mode is enabled.
-    pub static ref SECRETS_REGEX: RwLock<regex_automata::meta::Regex> = RwLock::new(
-        regex_automata::meta::Regex::new_many(&[] as &[&str])
-            .expect("should be able to construct empty regex")
-    );
-    /// Tracks counts to infer which regex patterns correspond to which secret levels
-    pub static ref REGEX_LEVEL_METADATA: RwLock<RegexLevelMetadata> = RwLock::new(
-        RegexLevelMetadata {
-            enterprise_count: 0,
-            user_count: 0,
+    pub static ref SECRETS_REGEX: RwLock<SecretsRegex> = RwLock::new(
+        SecretsRegex {
+            regex: regex_automata::meta::Regex::new_many(&[] as &[&str])
+                .expect("should be able to construct empty regex"),
+            level_metadata: RegexLevelMetadata {
+                enterprise_count: 0,
+                user_count: 0,
+            },
         }
     );
 }
@@ -356,15 +364,16 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
         .chain(filtered_user_secrets_vec.iter().map(|regex| regex.as_str()))
         .collect_vec();
 
-    // Update the metadata counts first to ensure it's ready when the new regexes are set
-    let mut metadata = REGEX_LEVEL_METADATA.write();
-    metadata.enterprise_count = enterprise_secrets_vec.len();
-    metadata.user_count = filtered_user_secrets_vec.len();
-
     let mut secrets_regex = SECRETS_REGEX.write();
     match regex_automata::meta::Regex::new_many(&all_secrets) {
         Ok(regex) => {
-            *secrets_regex = regex;
+            *secrets_regex = SecretsRegex {
+                regex,
+                level_metadata: RegexLevelMetadata {
+                    enterprise_count: enterprise_secrets_vec.len(),
+                    user_count: filtered_user_secrets_vec.len(),
+                },
+            };
         }
         Err(err) => {
             log::error!("Failed to construct new Regex with combined secrets: {err:?}");

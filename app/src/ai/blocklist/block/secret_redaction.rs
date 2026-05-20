@@ -6,7 +6,7 @@ use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
 use warpui::platform::Cursor;
 
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
-use crate::terminal::model::secrets::{SecretLevel, REGEX_LEVEL_METADATA, SECRETS_REGEX};
+use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
 
 use super::{AIBlockAction, TextLocation};
 
@@ -22,11 +22,11 @@ pub(crate) fn find_secrets_in_text(text: &str) -> Vec<SecretRange> {
 
 /// Returns the ranges of detected secrets in the given text along with their SecretLevel.
 pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, SecretLevel)> {
-    // Combine all regex patterns into a single regex pattern with non-capturing groups, for efficiency.
-    // Note that we purposely use regex::Regex instead of RegexDFAs since we are working a Text (containing
-    // a normal String) rather than the Grid (where text is in Cells with 1 character each).
-    let regex = SECRETS_REGEX.read();
-    let metadata = REGEX_LEVEL_METADATA.read();
+    let _guard = SECRETS_REGEX.read();
+    let SecretsRegex {
+        regex,
+        level_metadata: metadata,
+    } = &*_guard;
 
     let mut secret_ranges = vec![];
     let mut byte_to_char_index = vec![0; text.len() + 1]; // Map byte index to char index
