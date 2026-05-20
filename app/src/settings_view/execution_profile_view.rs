@@ -766,6 +766,7 @@ fn render_run_agents_permission_line_with_icon(
     };
     render_permission_line_with_icon(icon, label, permission_text, appearance, is_ai_enabled)
 }
+
 fn render_bool_permission_line_with_icon(
     icon: Icon,
     label: impl Into<String>,

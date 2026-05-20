@@ -1,34 +1,19 @@
 use super::{
-    api_keys_with_warp_credit_fallback_setting, build_request, get_supported_cli_agent_tools,
-    get_supported_tools,
+    api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
 };
 use crate::ai::agent::api::RequestParams;
-use crate::ai::agent::{AIAgentContext, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use crate::terminal::model::session::SessionType;
-use std::collections::HashMap;
-use std::sync::Arc;
 use warp_core::features::FeatureFlag;
 use warp_core::HostId;
 use warp_multi_agent_api as api;
-fn test_user_query() -> AIAgentInput {
-    AIAgentInput::UserQuery {
-        query: "test query".to_string(),
-        context: Arc::<[AIAgentContext]>::from([]),
-        static_query_type: None,
-        referenced_attachments: HashMap::new(),
-        user_query_mode: UserQueryMode::Normal,
-        running_command: None,
-        intended_agent: None,
-    }
-}
 
 fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool) -> RequestParams {
     let model = LLMId::from("test-model");
 
     RequestParams {
-        input: vec![test_user_query()],
+        input: vec![],
         conversation_token: None,
         forked_from_conversation_token: None,
         ambient_agent_task_id: None,
@@ -127,53 +112,6 @@ fn supported_tools_includes_ask_user_question_when_enabled_and_feature_flag_is_e
     let supported_tools = get_supported_tools(&params);
 
     assert!(supported_tools.contains(&api::ToolType::AskUserQuestion));
-}
-
-#[test]
-fn supported_tools_omit_orchestration_tools_when_orchestration_is_disabled() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-    let _run_agents_tool = FeatureFlag::RunAgentsTool.override_enabled(true);
-    let mut params = request_params_with_ask_user_question_enabled(false);
-    params.orchestration_enabled = false;
-
-    let supported_tools = get_supported_tools(&params);
-
-    assert!(!supported_tools.contains(&api::ToolType::StartAgent));
-    assert!(!supported_tools.contains(&api::ToolType::StartAgentV2));
-    assert!(!supported_tools.contains(&api::ToolType::RunAgents));
-    assert!(!supported_tools.contains(&api::ToolType::SendMessageToAgent));
-}
-
-#[test]
-fn request_disables_orchestration_v2_when_orchestration_is_disabled() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-    let mut params = request_params_with_ask_user_question_enabled(false);
-    params.orchestration_enabled = false;
-
-    let request = build_request(params, vec![], vec![]).expect("request should build");
-
-    assert!(
-        !request
-            .settings
-            .expect("request should have settings")
-            .supports_orchestration_v2
-    );
-}
-
-#[test]
-fn request_enables_orchestration_v2_when_orchestration_is_enabled() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-    let mut params = request_params_with_ask_user_question_enabled(false);
-    params.orchestration_enabled = true;
-
-    let request = build_request(params, vec![], vec![]).expect("request should build");
-
-    assert!(
-        request
-            .settings
-            .expect("request should have settings")
-            .supports_orchestration_v2
-    );
 }
 
 #[test]

@@ -218,6 +218,7 @@ impl RunAgentsPermission {
         matches!(self, Self::NeverAllow | Self::Unknown)
     }
 }
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AskUserQuestionPermission {
     /// Never pause; skip questions and continue with best judgment.

@@ -300,8 +300,12 @@ impl RunAgentsExecutor {
         // 1. Deny if the orchestration config is explicitly disapproved.
         // 2. Override model/harness/execution_mode from the approved config.
         if AppExecutionMode::as_ref(ctx).is_autonomous() {
-            if resolve_autonomous_request_from_config(&mut request, parent_conversation_id, ctx)
-                .is_some_and(|status| status.is_disapproved())
+            if apply_autonomous_config_and_check_disapproval(
+                &mut request,
+                parent_conversation_id,
+                ctx,
+            )
+            .is_disapproved()
             {
                 return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
                     RunAgentsResult::Denied {
@@ -332,25 +336,25 @@ impl RunAgentsExecutor {
             return false;
         };
         let mut request = request.clone();
-        if AppExecutionMode::as_ref(ctx).is_autonomous() {
-            if resolve_autonomous_request_from_config(&mut request, input.conversation_id, ctx)
-                .is_some_and(|status| status.is_disapproved())
-            {
-                return false;
-            }
-        }
-        if requires_default_auth_secret_for_autoexecute(&request)
-            && request
-                .harness_auth_secret_name
-                .as_deref()
-                .is_none_or(|name| name.trim().is_empty())
-            && default_auth_secret_name_for_harness(&request.harness_type, ctx).is_none()
+        let is_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
+        if is_autonomous
+            // Approved orchestration configs override run-wide request fields.
+            // Resolve them before auth gating so we inspect the effective harness/mode.
+            && apply_autonomous_config_and_check_disapproval(
+                &mut request,
+                input.conversation_id,
+                ctx,
+            )
+                .is_disapproved()
         {
+            return false;
+        }
+        if !can_autoexecute_with_auth_secret(&request, ctx) {
             return false;
         }
         // Non-interactive (CLI driver) agents cannot present a
         // confirmation card, so they must auto-execute.
-        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+        if is_autonomous {
             return true;
         }
 
@@ -393,6 +397,34 @@ fn resolve_autonomous_request_from_config(
     Some(status)
 }
 
+enum AutonomousRequestPreparation {
+    Ready,
+    Disapproved,
+}
+
+impl AutonomousRequestPreparation {
+    fn is_disapproved(&self) -> bool {
+        matches!(self, Self::Disapproved)
+    }
+}
+
+/// Applies any approved orchestration config directly to the request so
+/// downstream autoexecute checks and dispatch use the same resolved fields.
+/// Returns `Disapproved` when the stored config explicitly blocks launch.
+fn apply_autonomous_config_and_check_disapproval(
+    request: &mut RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> AutonomousRequestPreparation {
+    if resolve_autonomous_request_from_config(request, parent_conversation_id, ctx)
+        .is_some_and(|status| status.is_disapproved())
+    {
+        AutonomousRequestPreparation::Disapproved
+    } else {
+        AutonomousRequestPreparation::Ready
+    }
+}
+
 fn requires_default_auth_secret_for_autoexecute(request: &RunAgentsRequest) -> bool {
     if !request.execution_mode.is_remote() {
         return false;
@@ -401,6 +433,23 @@ fn requires_default_auth_secret_for_autoexecute(request: &RunAgentsRequest) -> b
         return false;
     };
     harness != Harness::Oz && !auth_secret_types_for_harness(harness).is_empty()
+}
+
+fn can_autoexecute_with_auth_secret(
+    request: &RunAgentsRequest,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> bool {
+    if !requires_default_auth_secret_for_autoexecute(request) {
+        return true;
+    }
+    if request
+        .harness_auth_secret_name
+        .as_deref()
+        .is_some_and(|name| !name.trim().is_empty())
+    {
+        return true;
+    }
+    default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
 }
 
 fn default_auth_secret_name_for_harness(
@@ -439,6 +488,8 @@ fn populate_default_auth_secret_for_autoexecute(
 /// from the approved orchestration config, delegating to
 /// `OrchestrationEditState::override_from_approved_config`.
 fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
+    // The approved plan config is the source of truth for these run-wide fields,
+    // so callers pass a mutable request and continue with the normalized value.
     let mut edit_state = OrchestrationEditState::from_run_agents_fields(
         &request.model_id,
         &request.harness_type,
