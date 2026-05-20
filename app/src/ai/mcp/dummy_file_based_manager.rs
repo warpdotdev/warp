@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use super::MCPProvider;
+use super::{ConfigParseError, MCPProvider};
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 
 pub struct FileBasedMCPManager {}
@@ -19,6 +19,10 @@ impl FileBasedMCPManager {
         _app: &AppContext,
     ) -> Vec<&TemplatableMCPServerInstallation> {
         vec![]
+    }
+
+    pub fn config_parse_errors(&self) -> std::iter::Empty<&ConfigParseError> {
+        std::iter::empty()
     }
 
     pub fn file_based_servers(&self) -> Vec<&TemplatableMCPServerInstallation> {

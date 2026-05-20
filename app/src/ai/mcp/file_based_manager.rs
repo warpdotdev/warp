@@ -9,7 +9,7 @@ use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use super::{FileMCPWatcher, FileMCPWatcherEvent, MCPProvider};
+use super::{ConfigParseError, FileMCPWatcher, FileMCPWatcherEvent, MCPProvider};
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 use crate::ai::mcp::ParsedTemplatableMCPServerResult;
 use crate::settings::ai::AISettings;
@@ -28,6 +28,11 @@ pub struct FileBasedMCPManager {
     /// They are temporarily stored here and removed to emit FileBasedMCPManagerEvent::CloudEnvMcpScanComplete
     pending_scan_auto_started_servers_by_root:
         HashMap<PathBuf, HashMap<MCPProvider, HashSet<Uuid>>>,
+    /// Last unmarshal failure observed for each `(root_path, provider)` config
+    /// slot. Surfaced by the settings UI so the user sees why a config that
+    /// exists on disk produced no servers, instead of debugging via logs (see
+    /// issue #9807).
+    config_parse_errors: HashMap<(PathBuf, MCPProvider), ConfigParseError>,
 }
 
 impl FileBasedMCPManager {
@@ -48,6 +53,7 @@ impl FileBasedMCPManager {
             file_based_servers: Default::default(),
             file_based_servers_by_root: Default::default(),
             pending_scan_auto_started_servers_by_root: Default::default(),
+            config_parse_errors: Default::default(),
         }
     }
 
@@ -58,14 +64,26 @@ impl FileBasedMCPManager {
                 root_path,
                 provider,
                 servers,
+                error,
             } => {
                 self.apply_parsed_servers(root_path.clone(), *provider, servers.clone(), ctx);
+                let key = (root_path.clone(), *provider);
+                match error {
+                    Some(err) => {
+                        self.config_parse_errors.insert(key, err.clone());
+                    }
+                    None => {
+                        self.config_parse_errors.remove(&key);
+                    }
+                }
             }
             FileMCPWatcherEvent::ConfigRemoved {
                 root_path,
                 provider,
             } => {
                 self.remove_servers_for_root_provider(root_path, *provider, ctx);
+                self.config_parse_errors
+                    .remove(&(root_path.clone(), *provider));
             }
             FileMCPWatcherEvent::CloudEnvMcpScanComplete { repo_path } => {
                 self.handle_cloud_environment_scan_complete(repo_path, ctx);
@@ -98,6 +116,14 @@ impl FileBasedMCPManager {
             }
         }
         servers
+    }
+
+    /// Returns the most recent config-parse failures across all detected
+    /// `(root_path, provider)` slots. Surfaced by Settings → MCP Servers so the
+    /// user sees a structured reason when a config that exists on disk produced
+    /// no servers.
+    pub fn config_parse_errors(&self) -> impl Iterator<Item = &ConfigParseError> {
+        self.config_parse_errors.values()
     }
 
     /// Removes all tracked servers for the given `(root_path, provider)` pair,

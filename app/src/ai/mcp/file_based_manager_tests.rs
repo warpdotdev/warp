@@ -11,7 +11,10 @@ use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
 
 use super::{CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
-use crate::ai::mcp::{FileMCPWatcher, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::{
+    ConfigParseError, ConfigParseStage, FileMCPWatcher, FileMCPWatcherEvent,
+    ParsedTemplatableMCPServerResult,
+};
 use crate::auth::AuthStateProvider;
 use crate::settings::{AISettings, FocusedTerminalInfo};
 use crate::warp_managed_paths_watcher::{warp_managed_mcp_config_path, WarpManagedPathsWatcher};
@@ -606,6 +609,198 @@ fn test_update_file_based_servers_removes_server_only_when_no_refs() {
                 !manager.file_based_servers.contains_key(&server_hash),
                 "Server should be completely removed"
             );
+        });
+    });
+}
+
+// ---------- Issue #9807: config-parse error surfacing ----------
+
+fn make_parse_error(
+    path: &str,
+    provider: MCPProvider,
+    stage: ConfigParseStage,
+) -> ConfigParseError {
+    ConfigParseError {
+        path: PathBuf::from(path),
+        provider,
+        stage,
+        message: "test message".to_string(),
+    }
+}
+
+#[test]
+fn config_parse_error_is_recorded_on_failed_parse() {
+    let root = PathBuf::from("/tmp/test-repo-error");
+    let err = make_parse_error(
+        "/tmp/test-repo-error/.mcp.json",
+        MCPProvider::Claude,
+        ConfigParseStage::JsonParse,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root.clone(),
+                    provider: MCPProvider::Claude,
+                    servers: vec![],
+                    error: Some(err.clone()),
+                },
+                ctx,
+            );
+
+            let recorded: Vec<_> = manager.config_parse_errors().collect();
+            assert_eq!(
+                recorded.len(),
+                1,
+                "manager should record exactly one config parse error"
+            );
+            assert_eq!(recorded[0].stage, ConfigParseStage::JsonParse);
+            assert_eq!(recorded[0].provider, MCPProvider::Claude);
+        });
+    });
+}
+
+#[test]
+fn successful_parse_clears_prior_config_parse_error() {
+    let root = PathBuf::from("/tmp/test-repo-clear");
+    let err = make_parse_error(
+        "/tmp/test-repo-clear/.mcp.json",
+        MCPProvider::Claude,
+        ConfigParseStage::JsonParse,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            // First parse fails.
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root.clone(),
+                    provider: MCPProvider::Claude,
+                    servers: vec![],
+                    error: Some(err.clone()),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_parse_errors().count(), 1);
+
+            // Next parse for the same slot succeeds — error should be cleared.
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root.clone(),
+                    provider: MCPProvider::Claude,
+                    servers: vec![],
+                    error: None,
+                },
+                ctx,
+            );
+            assert_eq!(
+                manager.config_parse_errors().count(),
+                0,
+                "subsequent successful parse should clear the recorded error"
+            );
+        });
+    });
+}
+
+#[test]
+fn config_removed_clears_config_parse_error() {
+    let root = PathBuf::from("/tmp/test-repo-removed");
+    let err = make_parse_error(
+        "/tmp/test-repo-removed/.mcp.json",
+        MCPProvider::Claude,
+        ConfigParseStage::JsonParse,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root.clone(),
+                    provider: MCPProvider::Claude,
+                    servers: vec![],
+                    error: Some(err.clone()),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_parse_errors().count(), 1);
+
+            // Removing the config file should also drop the error.
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigRemoved {
+                    root_path: root.clone(),
+                    provider: MCPProvider::Claude,
+                },
+                ctx,
+            );
+            assert_eq!(
+                manager.config_parse_errors().count(),
+                0,
+                "ConfigRemoved should clear the recorded error for the same slot"
+            );
+        });
+    });
+}
+
+#[test]
+fn config_parse_errors_are_keyed_per_root_and_provider() {
+    // Two different `(root, provider)` slots can hold independent errors at the
+    // same time, and clearing one must not affect the other.
+    let root_a = PathBuf::from("/tmp/test-repo-a");
+    let root_b = PathBuf::from("/tmp/test-repo-b");
+    let err_a = make_parse_error(
+        "/tmp/test-repo-a/.mcp.json",
+        MCPProvider::Claude,
+        ConfigParseStage::JsonParse,
+    );
+    let err_b = make_parse_error(
+        "/tmp/test-repo-b/.codex/config.toml",
+        MCPProvider::Codex,
+        ConfigParseStage::TomlNormalize,
+    );
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root_a.clone(),
+                    provider: MCPProvider::Claude,
+                    servers: vec![],
+                    error: Some(err_a.clone()),
+                },
+                ctx,
+            );
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    root_path: root_b.clone(),
+                    provider: MCPProvider::Codex,
+                    servers: vec![],
+                    error: Some(err_b.clone()),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_parse_errors().count(), 2);
+
+            // Clearing the Claude slot should leave the Codex slot intact.
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigRemoved {
+                    root_path: root_a.clone(),
+                    provider: MCPProvider::Claude,
+                },
+                ctx,
+            );
+            let remaining: Vec<_> = manager.config_parse_errors().collect();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].provider, MCPProvider::Codex);
+            assert_eq!(remaining[0].stage, ConfigParseStage::TomlNormalize);
         });
     });
 }
