@@ -1027,6 +1027,9 @@ pub enum Event {
     OpenAutoReloadModal {
         purchased_credits: i32,
     },
+    AuthSecretDeleteConfirmationDialogToggled {
+        is_open: bool,
+    },
     ShowToast {
         message: String,
         flavor: ToastFlavor,
@@ -2390,6 +2393,11 @@ impl Input {
                         }
                         ctx.notify();
                     }
+                    AuthSecretSelectorEvent::DeleteConfirmationDialogToggled { is_open } => {
+                        ctx.emit(Event::AuthSecretDeleteConfirmationDialogToggled {
+                            is_open: *is_open,
+                        });
+                    }
                     AuthSecretSelectorEvent::MenuVisibilityChanged { open: true } => {}
                 });
                 let initial_harness = state.view_model.as_ref(ctx).selected_harness();
@@ -3677,6 +3685,14 @@ impl Input {
         self.ambient_agent_view_state
             .as_ref()
             .and_then(|state| state.auth_secret_selector.as_ref())
+    }
+
+    pub(super) fn auth_secret_delete_confirmation_dialog_element(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        self.auth_secret_selector()
+            .map(|selector| selector.as_ref(ctx).delete_confirmation_dialog_element())
     }
 
     pub(super) fn auth_secret_ftux_view(&self) -> Option<&ViewHandle<AuthSecretFtuxView>> {

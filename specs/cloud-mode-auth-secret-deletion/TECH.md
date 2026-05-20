@@ -16,6 +16,7 @@ Relevant current code:
 - `crates/managed_secrets/src/manager.rs:87` exposes `ManagedSecretManager::delete_secret(owner, name)`.
 - `app/src/server/server_api/managed_secrets.rs:132` wires `delete_managed_secret` to the server GraphQL mutation.
 - `app/src/menu.rs:394` defines reusable `MenuItemFields`. It already has right-side label/icon rendering, but right-side icons are decorative and do not dispatch a separate action from the row.
+- Existing destructive confirmation dialogs such as `app/src/settings_view/delete_environment_confirmation_dialog.rs` and `app/src/settings_view/mcp_servers/destructive_mcp_confirmation_dialog.rs` establish the preferred `Dialog` + `DangerPrimaryTheme` pattern for the new modal.
 
 The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` results include `owner`. Deleting team-owned secrets correctly requires preserving enough owner information to call `delete_secret` with `SecretOwner::Team { team_uid }` instead of always assuming `CurrentUser`.
 
@@ -64,7 +65,7 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
    }
    ```
 
-   Track pending deletes in `AuthSecretSelector` with a small set keyed by `(harness, name, owner)` or by a stable local row id if one is introduced. This satisfies PRODUCT behavior 7 and avoids duplicate delete requests from the same menu.
+   Track pending deletes in `AuthSecretSelector` with a small set keyed by `(harness, name, owner)` or by a stable local row id if one is introduced. This satisfies PRODUCT behavior 9 and avoids duplicate delete requests from the same menu.
 
 4. Render the right-aligned `X` affordance using the menu system's existing styling.
 
@@ -78,14 +79,35 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
 
    If changing `MenuItemFields` is too broad during implementation, an acceptable alternative is a custom-label row in `auth_secret_selector.rs` that composes the existing text/icon primitives and explicitly separates row-click from `X` click. Prefer the reusable menu extension only if it stays small and does not alter existing right-side icon behavior.
 
-5. Wire deletion action handling in `AuthSecretSelector`.
+5. Add a dedicated confirmation dialog before deleting.
+
+   Add a small destructive dialog view under `app/src/terminal/view/ambient_agent/` that mirrors existing confirmation dialogs:
+
+   - Title: `Delete secret`
+   - Body: `Are you sure you want to delete {SECRET_NAME}? This action cannot be undone. Any agents or environments referencing this secret will no longer have access to it.`
+   - Buttons: `Cancel` and destructive `Delete`
+   - Dismiss-to-cancel behavior and centered overlay placement
+
+   The dialog should retain a captured deletion payload containing harness, secret name, and owner. This avoids deleting the wrong target if selector state changes while the modal is open.
+
+6. Wire deletion action handling in `AuthSecretSelector`.
 
    In the `DeleteSecret` branch:
 
    - Read the active harness from `AmbientAgentViewModel`.
+   - Close the selector menu/sidecar.
+   - Show the confirmation dialog with the captured deletion payload.
+
+   On confirmation:
+
    - Mark the row pending.
    - Call `HarnessAvailabilityModel::delete_auth_secret(harness, name, owner, ctx)`.
-   - Close the menu or refresh it into a disabled pending state.
+   - Refresh the menu into a disabled pending state.
+
+   On cancel or dismiss:
+
+   - Hide the dialog.
+   - Leave pending-delete state untouched and do not call the server-backed delete API.
 
    In the selector's `HarnessAvailabilityModel` subscription:
 
@@ -96,43 +118,49 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
 
    Use `DismissibleToast::success(...)` and `DismissibleToast::error(...)` via `ToastStack::add_ephemeral_toast`, matching nearby toast patterns.
 
-6. Keep adjacent auth-secret surfaces consistent.
+7. Keep adjacent auth-secret surfaces consistent.
 
    `AuthSecretFtuxDropdown`, orchestration pickers, and model selector subscribers must compile with the new deletion events. They can ignore failure events and refresh on success where they render auth secret lists. This ensures a secret deleted from the chip no longer appears in other already-mounted selectors after the model emits.
 
 ## Testing and Validation
 
-1. Unit-test or view-model-test the cache update path for PRODUCT behaviors 6, 8, and 9:
+Per the current implementation pass, automated test additions and test execution are deferred by request. The implementation should remain structured so the following cases are straightforward to cover later:
+
+1. Cache update behavior for PRODUCT behaviors 8, 10, and 11:
    - Successful deletion removes only the matching auth secret from the loaded list and emits `AuthSecretDeleted`.
    - Failed deletion leaves the list unchanged and emits `AuthSecretDeletionFailed`.
    - Team-owned entries call delete with `SecretOwner::Team`, user-owned entries call delete with `SecretOwner::CurrentUser`.
 
-2. Test `AuthSecretSelector` action behavior for PRODUCT behaviors 4, 5, 7, and 8:
+2. Selector and confirmation routing for PRODUCT behaviors 4, 5, 7, 9, and 10:
    - Clicking/selecting the row still selects the secret.
-   - Dispatching the delete action does not select the secret.
-   - Duplicate delete dispatches for a pending secret are ignored.
+   - Dispatching the delete affordance opens the confirmation dialog without deleting immediately.
+   - Cancelling or dismissing the confirmation dialog does not start deletion.
+   - Confirming deletion transitions into the existing pending-delete flow.
+   - Duplicate confirmed delete dispatches for a pending secret are ignored.
    - Deleting the currently selected secret clears the selected model value and persisted setting.
 
-3. Add or update menu rendering tests if the reusable `MenuItemFields` right-side action API is introduced:
+3. Menu rendering coverage if the reusable `MenuItemFields` right-side action API is introduced:
    - Existing right-side icon rendering remains decorative when no right-side action is set.
    - A right-side action dispatches independently from the row action.
 
-4. Manual validation against the screenshot state:
+4. Manual validation against the screenshot state, if revisited later:
    - Open the auth selector chip menu with multiple secrets.
    - Confirm only existing secret rows have a right-aligned `X`.
    - Confirm the "New" row and sidecar rows do not show an `X`.
-   - Delete an unselected secret and verify it disappears plus a success toast appears.
-   - Delete the selected secret and verify the chip label falls back to no-secret/inherit state.
+   - Click `X` and verify the destructive confirmation modal appears with the specified copy.
+   - Cancel/dismiss the modal and verify the row remains untouched.
+   - Confirm deletion for an unselected secret and verify it disappears plus a success toast appears.
+   - Confirm deletion for the selected secret and verify the chip label falls back to no-secret/inherit state.
    - Force a delete failure/offline state and verify the failure toast appears and the row remains.
 
 5. Run focused checks:
 
    ```sh
-   cargo check -p warp_app
-   cargo test -p warp_app auth_secret
+   cargo check -p warp
+   cargo fmt -- --check
    ```
 
-   Adjust package/test targets to the repository's current presubmit conventions if those commands are too broad or renamed.
+   Skip test execution for this implementation pass per request.
 
 ## Parallelization
 

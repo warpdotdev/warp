@@ -1282,6 +1282,11 @@ fn handle_terminal_view_event(
                 group.pane_with_open_environment_setup_mode_selector = is_open.then_some(pane_id);
                 ctx.notify();
             }
+            Event::AuthSecretDeleteConfirmationDialogToggled { is_open } => {
+                group.pane_with_open_auth_secret_delete_confirmation_dialog =
+                    is_open.then_some(pane_id);
+                ctx.notify();
+            }
             Event::AnonymousUserSignup => ctx.emit(pane_group::Event::AnonymousUserSignup),
             #[cfg(feature = "local_fs")]
             Event::OpenFileWithTarget {
