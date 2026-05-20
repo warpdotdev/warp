@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use warp_util::path::ShellFamily;
+
 use super::*;
 use crate::terminal::cli_agent::CLIAgent;
 
@@ -46,6 +48,7 @@ fn terminal_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(config.name, "New tab: project");
@@ -66,6 +69,7 @@ fn cli_agent_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(config.panes[0].commands.as_deref().unwrap(), &["claude"]);
@@ -80,6 +84,7 @@ fn terminal_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
 
     assert_eq!(config.title.as_deref(), Some("{{worktree_branch_name}}"));
@@ -107,6 +112,7 @@ fn cli_agent_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
 
     // Worktree commands come first, then agent command.
@@ -132,12 +138,14 @@ fn oz_no_worktree_same_as_terminal() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let terminal = build_tab_config(
         &SessionType::Terminal,
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(oz.panes[0].directory, terminal.panes[0].directory);
@@ -147,7 +155,13 @@ fn oz_no_worktree_same_as_terminal() {
 
 #[test]
 fn oz_with_worktree_has_worktree_commands_but_no_agent_command() {
-    let config = build_tab_config(&SessionType::Oz, Path::new("/home/user/repo"), true, false);
+    let config = build_tab_config(
+        &SessionType::Oz,
+        Path::new("/home/user/repo"),
+        true,
+        false,
+        ShellFamily::Posix,
+    );
     let expected_worktree_path =
         generated_worktree_path_string("/home/user/repo", "{{worktree_branch_name}}");
 
@@ -169,6 +183,7 @@ fn directory_path_is_absolute_in_directory() {
         Path::new("/absolute/path/here"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let directory = config.panes[0].directory.as_deref().unwrap();
@@ -187,6 +202,7 @@ fn round_trip_terminal_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
     let parsed: TabConfig = toml::from_str(&toml_str).expect("Should deserialize");
@@ -203,6 +219,7 @@ fn round_trip_cli_agent_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
     let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
     let parsed: TabConfig = toml::from_str(&toml_str).expect("Should deserialize");
@@ -226,6 +243,7 @@ fn render_terminal_produces_correct_pane_template() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (title, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -251,6 +269,7 @@ fn render_cli_agent_produces_correct_commands() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (_, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -273,6 +292,7 @@ fn render_worktree_substitutes_default_branch_name() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (title, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -299,6 +319,7 @@ fn write_tab_config_creates_file_with_correct_naming() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let path1 = write_tab_config(&config, dir.path(), "startup_config")
@@ -322,6 +343,7 @@ fn write_tab_config_content_is_valid_toml() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
 
     let path =
@@ -338,7 +360,13 @@ fn write_tab_config_content_is_valid_toml() {
 fn write_tab_config_creates_directory_if_missing() {
     let dir = tempfile::tempdir().expect("Should create temp dir");
     let nested = dir.path().join("nested").join("tab_configs");
-    let config = build_tab_config(&SessionType::Terminal, Path::new("/tmp"), false, true);
+    let config = build_tab_config(
+        &SessionType::Terminal,
+        Path::new("/tmp"),
+        false,
+        true,
+        ShellFamily::Posix,
+    );
 
     let path = write_tab_config(&config, &nested, "startup_config").expect("Write should succeed");
     assert!(path.exists());
@@ -352,6 +380,7 @@ fn write_tab_config_custom_base_name() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let path =
@@ -366,6 +395,7 @@ fn terminal_with_autogenerated_worktree() {
         Path::new("/home/user/repo"),
         true,
         true,
+        ShellFamily::Posix,
     );
 
     assert!(config.title.is_none());
@@ -941,6 +971,7 @@ fn root_directory_does_not_loop() {
 /// be resolved by the tab-config render pass.
 mod worktree_path_quoting {
     use std::path::Path;
+    use warp_util::path::ShellFamily;
 
     use super::super::build_tab_config;
     use crate::tab_configs::session_config::SessionType;
@@ -954,6 +985,7 @@ mod worktree_path_quoting {
             Path::new("/Users/luizv/Developer/2026-05 Site da Jô"),
             true,
             true,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         for command in commands {
@@ -977,6 +1009,7 @@ mod worktree_path_quoting {
             Path::new("/Users/me/dollar$repo"),
             true,
             true,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         for command in commands {
@@ -1000,6 +1033,7 @@ mod worktree_path_quoting {
             Path::new("/Users/me/back`tick"),
             true,
             true,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         for command in commands {
@@ -1028,6 +1062,7 @@ mod worktree_path_quoting {
             Path::new("/home/user/repo with spaces"),
             true,
             true,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         for command in commands {
@@ -1055,6 +1090,7 @@ mod worktree_path_quoting {
             Path::new("/home/user/repo"),
             true,
             true,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         assert_eq!(commands.len(), 2);
@@ -1078,6 +1114,7 @@ mod worktree_path_quoting {
             Path::new("/Users/me/My Project"),
             true,
             false,
+            ShellFamily::Posix,
         );
         let commands = config.panes[0].commands.as_deref().unwrap();
         for command in commands {
