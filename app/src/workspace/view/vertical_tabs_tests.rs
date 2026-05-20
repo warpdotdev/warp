@@ -1,5 +1,6 @@
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::github_pr_info::GithubPrInfo;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
@@ -20,13 +21,19 @@ use super::{
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    terminal_pull_request_search_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
     TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
     VerticalTabsSummaryPrimaryLabel,
 };
+
+fn sample_pr_info(number: &str) -> GithubPrInfo {
+    GithubPrInfo::from_url_with_defaults(format!(
+        "https://github.com/warpdotdev/warp-internal/pull/{number}"
+    ))
+}
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -760,9 +767,7 @@ fn terminal_search_fragments_include_rendered_terminal_badges() {
         "~/warp".to_string(),
         Some("main".to_string()),
         terminal_kind_badge_label(false, Some(CLIAgent::Claude)),
-        Some(terminal_pull_request_badge_label(
-            "https://github.com/warpdotdev/warp-internal/pull/12345",
-        )),
+        Some(terminal_pull_request_search_label(&sample_pr_info("12345"))),
         Some(GitLineChanges {
             files_changed: 1,
             lines_added: 2,
@@ -914,7 +919,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
             repo_path: repo_a.clone(),
             branch_name: "main".to_string(),
             diff_stats: None,
-            pull_request_label: None,
+            pull_request_info: None,
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_a.clone(),
@@ -924,7 +929,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_added: 2,
                 lines_removed: 3,
             }),
-            pull_request_label: Some("#123".to_string()),
+            pull_request_info: Some(sample_pr_info("123")),
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_b.clone(),
@@ -934,7 +939,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_added: 5,
                 lines_removed: 6,
             }),
-            pull_request_label: Some("#456".to_string()),
+            pull_request_info: Some(sample_pr_info("456")),
         },
     ];
 
@@ -949,7 +954,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_added: 2,
                     lines_removed: 3,
                 }),
-                pull_request_label: Some("#123".to_string()),
+                pull_request_info: Some(sample_pr_info("123")),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: repo_b,
@@ -959,7 +964,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_added: 5,
                     lines_removed: 6,
                 }),
-                pull_request_label: Some("#456".to_string()),
+                pull_request_info: Some(sample_pr_info("456")),
             },
         ]
     );
@@ -1107,25 +1112,25 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                     lines_added: 2,
                     lines_removed: 3,
                 }),
-                pull_request_label: Some("#123".to_string()),
+                pull_request_info: Some(sample_pr_info("123")),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-b"),
                 branch_name: "feature/hidden".to_string(),
                 diff_stats: None,
-                pull_request_label: None,
+                pull_request_info: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-c"),
                 branch_name: "cleanup".to_string(),
                 diff_stats: None,
-                pull_request_label: None,
+                pull_request_info: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-d"),
                 branch_name: "hidden-branch".to_string(),
                 diff_stats: None,
-                pull_request_label: Some("#789".to_string()),
+                pull_request_info: Some(sample_pr_info("789")),
             },
         ],
     };

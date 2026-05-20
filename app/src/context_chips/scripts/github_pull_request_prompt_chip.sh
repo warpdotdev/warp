@@ -10,7 +10,8 @@ case "$remote_url" in
         ;;
 esac
 
-output=$(gh pr view --json url --jq .url 2>&1)
+output=$(gh pr view --state all --json url,state,isDraft,mergeable,mergeStateStatus \
+    --jq '{url,state,isDraft,mergeable,mergeStateStatus}' 2>&1)
 exit_code=$?
 
 if [ $exit_code -eq 0 ]; then

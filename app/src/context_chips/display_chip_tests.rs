@@ -4,7 +4,8 @@ use super::{
 };
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::{
-    git_branch_on_click::GitBranchOnClickValue, github_pr_display_text_from_url, ContextChipKind,
+    git_branch_on_click::GitBranchOnClickValue, github_pr_display_text_from_url,
+    github_pr_info::GithubPrInfo, ContextChipKind,
 };
 use crate::ui_components::icons::Icon;
 
@@ -30,11 +31,25 @@ fn test_github_pr_display_text_from_url_rejects_non_pr_urls() {
 
 #[test]
 fn test_github_pr_chip_display_value_formats_url() {
-    let value =
-        crate::context_chips::ChipValue::Text("https://github.com/warp/warp/pull/456".to_string());
+    let value = crate::context_chips::ChipValue::GithubPullRequest(GithubPrInfo::from_url_with_defaults(
+        "https://github.com/warp/warp/pull/456".to_string(),
+    ));
     assert_eq!(
         ContextChipKind::GithubPullRequest.display_value(&value),
         "PR #456"
+    );
+}
+
+#[test]
+fn test_github_pr_chip_display_value_includes_merged_suffix() {
+    let mut info = GithubPrInfo::from_url_with_defaults(
+        "https://github.com/warp/warp/pull/456".to_string(),
+    );
+    info.state = crate::context_chips::github_pr_info::GithubPrState::Merged;
+    let value = crate::context_chips::ChipValue::GithubPullRequest(info);
+    assert_eq!(
+        ContextChipKind::GithubPullRequest.display_value(&value),
+        "PR #456 · merged"
     );
 }
 

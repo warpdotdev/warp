@@ -1,6 +1,7 @@
 use crate::context_chips::{
     display_chip::{DisplayChip, GitLineChanges, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
+    github_pr_info::GithubPrInfo,
+    github_pr_info_from_chips, git_line_changes_from_chips,
     prompt_type::PromptType,
     ChipResult,
 };
@@ -38,6 +39,7 @@ impl AgentInputFooter {
         &self,
         new_chips: &[ChipResult],
         git_line_changes_info: Option<GitLineChanges>,
+        github_pr_info: Option<GithubPrInfo>,
         ctx: &mut ViewContext<Self>,
     ) -> Vec<ViewHandle<DisplayChip>> {
         let mut display_chips = Vec::with_capacity(new_chips.len());
@@ -56,6 +58,7 @@ impl AgentInputFooter {
                     ctx,
                 );
                 chip.maybe_set_git_line_changes_info(git_line_changes_info.clone());
+                chip.maybe_set_github_pr_info(github_pr_info.clone());
                 chip.update_session_context(self.display_chip_config.session_context.clone(), ctx);
                 chip
             });
@@ -96,11 +99,13 @@ impl AgentInputFooter {
     fn update_existing_display_chips(
         display_chips: &[ViewHandle<DisplayChip>],
         git_line_changes_info: Option<GitLineChanges>,
+        github_pr_info: Option<GithubPrInfo>,
         ctx: &mut ViewContext<Self>,
     ) {
         for chip_view in display_chips {
             chip_view.update(ctx, |chip, ctx| {
                 chip.maybe_set_git_line_changes_info(git_line_changes_info.clone());
+                chip.maybe_set_github_pr_info(github_pr_info.clone());
                 ctx.notify();
             });
         }
@@ -140,6 +145,7 @@ impl AgentInputFooter {
             .filter(|chip| chip.value().is_some())
             .collect::<Vec<ChipResult>>();
         let git_line_changes_info = git_line_changes_from_chips(&new_chips);
+        let github_pr_info = github_pr_info_from_chips(&new_chips);
 
         let should_update_left =
             Self::check_if_chip_values_have_changed(&self.left_display_chips, &new_left_chips, ctx);
@@ -150,23 +156,33 @@ impl AgentInputFooter {
         );
 
         if should_update_left {
-            self.left_display_chips =
-                self.create_display_chips(&new_left_chips, git_line_changes_info.clone(), ctx);
+            self.left_display_chips = self.create_display_chips(
+                &new_left_chips,
+                git_line_changes_info.clone(),
+                github_pr_info.clone(),
+                ctx,
+            );
         } else {
             Self::update_existing_display_chips(
                 &self.left_display_chips,
                 git_line_changes_info.clone(),
+                github_pr_info.clone(),
                 ctx,
             );
         }
 
         if should_update_right {
-            self.right_display_chips =
-                self.create_display_chips(&new_right_chips, git_line_changes_info.clone(), ctx);
+            self.right_display_chips = self.create_display_chips(
+                &new_right_chips,
+                git_line_changes_info.clone(),
+                github_pr_info.clone(),
+                ctx,
+            );
         } else {
             Self::update_existing_display_chips(
                 &self.right_display_chips,
                 git_line_changes_info.clone(),
+                github_pr_info.clone(),
                 ctx,
             );
         }
@@ -182,12 +198,17 @@ impl AgentInputFooter {
         let should_update_cli =
             Self::check_if_chip_values_have_changed(&self.cli_display_chips, &new_cli_chips, ctx);
         if should_update_cli {
-            self.cli_display_chips =
-                self.create_display_chips(&new_cli_chips, git_line_changes_info.clone(), ctx);
+            self.cli_display_chips = self.create_display_chips(
+                &new_cli_chips,
+                git_line_changes_info.clone(),
+                github_pr_info.clone(),
+                ctx,
+            );
         } else {
             Self::update_existing_display_chips(
                 &self.cli_display_chips,
                 git_line_changes_info,
+                github_pr_info,
                 ctx,
             );
         }

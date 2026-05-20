@@ -25,7 +25,7 @@ use warpui::{
 
 use super::{
     display_chip::{DisplayChip, DisplayChipConfig, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
+    github_pr_info_from_chips, git_line_changes_from_chips,
     prompt_type::PromptType,
     ChipResult, ContextChipKind,
 };
@@ -210,6 +210,7 @@ impl PromptDisplay {
 
     fn reset_chips(&mut self, new_chips: &[ChipResult], ctx: &mut ViewContext<Self>) {
         let git_line_changes_info = git_line_changes_from_chips(new_chips);
+        let github_pr_info = github_pr_info_from_chips(new_chips);
 
         self.display_chips.clear();
         let mut display_chips = new_chips.iter().peekable();
@@ -239,6 +240,7 @@ impl PromptDisplay {
                     },
                 );
                 chip.maybe_set_git_line_changes_info(git_line_changes_info.clone());
+                chip.maybe_set_github_pr_info(github_pr_info.clone());
                 chip
             });
 

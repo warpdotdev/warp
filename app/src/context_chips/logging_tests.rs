@@ -49,7 +49,7 @@ fn test_format_log_entry_preserves_stdout_and_stderr_sections() {
         phase: PromptChipExecutionPhase::OnClick,
         shell_type: ShellType::Zsh,
         working_directory: Some("/tmp/project"),
-        command: "gh pr view --json url --jq .url",
+        command: "gh pr view --state all --json url,state,isDraft,mergeable,mergeStateStatus",
         output: Some(&output),
         timed_out: false,
     });
@@ -57,7 +57,9 @@ fn test_format_log_entry_preserves_stdout_and_stderr_sections() {
     assert!(entry.contains("phase: on_click"));
     assert!(entry.contains("status: success"));
     assert!(entry.contains("working_directory: /tmp/project"));
-    assert!(entry.contains("command:\n<<<COMMAND\ngh pr view --json url --jq .url\n>>>COMMAND"));
+    assert!(entry.contains(
+        "command:\n<<<COMMAND\ngh pr view --state all --json url,state,isDraft,mergeable,mergeStateStatus\n>>>COMMAND"
+    ));
     assert!(entry.contains(
         "stdout:\n<<<STDOUT\nhttps://github.com/warpdotdev/warp-internal/pull/123\n>>>STDOUT"
     ));

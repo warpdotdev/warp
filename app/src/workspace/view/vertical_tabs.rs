@@ -25,7 +25,11 @@ use std::sync::{Arc, Mutex};
 
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::github_pr_display_text_from_url;
+use crate::context_chips::github_pr_info::GithubPrInfo;
+use crate::context_chips::github_pr_status::{
+    github_pr_chip_label, github_pr_status_search_suffix, github_pr_status_tooltip,
+    render_github_pr_badge_content,
+};
 use crate::drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType};
 use crate::editor::EditorView;
 use crate::pane_group::pane::IPaneType;
@@ -768,7 +772,7 @@ struct VerticalTabsSummaryBranchEntry {
     repo_path: PathBuf,
     branch_name: String,
     diff_stats: Option<GitLineChanges>,
-    pull_request_label: Option<String>,
+    pull_request_info: Option<GithubPrInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -924,8 +928,8 @@ fn coalesce_summary_branch_entries(
             if existing.diff_stats.is_none() {
                 existing.diff_stats = entry.diff_stats;
             }
-            if existing.pull_request_label.is_none() {
-                existing.pull_request_label = entry.pull_request_label;
+            if existing.pull_request_info.is_none() {
+                existing.pull_request_info = entry.pull_request_info;
             }
         } else {
             indices.insert(key, coalesced.len());
@@ -956,8 +960,8 @@ fn summary_search_text_fragments(
     fragments.extend(summary.working_directories.iter().cloned());
     for entry in &summary.branch_entries {
         fragments.push(entry.branch_name.clone());
-        if let Some(pull_request_label) = &entry.pull_request_label {
-            fragments.push(pull_request_label.clone());
+        if let Some(pr_info) = &entry.pull_request_info {
+            fragments.push(terminal_pull_request_search_label(pr_info));
         }
         if let Some(diff_stats) = &entry.diff_stats {
             fragments.push(vtab_diff_stats_text(diff_stats));
@@ -2780,11 +2784,7 @@ fn build_vertical_tabs_summary_data(
                         repo_path,
                         branch_name,
                         diff_stats: terminal_view.current_diff_line_changes(app),
-                        pull_request_label: terminal_view
-                            .current_pull_request_url(app)
-                            .as_deref()
-                            .map(terminal_pull_request_badge_label)
-                            .and_then(|label| normalize_summary_text(&label)),
+                        pull_request_info: terminal_view.current_github_pr_info(app),
                     });
                 }
             }
@@ -3016,9 +3016,9 @@ fn terminal_pane_search_text_fragments(
             .to_string()
         });
     let pull_request_label = terminal_view
-        .current_pull_request_url(app)
-        .as_deref()
-        .map(terminal_pull_request_badge_label);
+        .current_github_pr_info(app)
+        .as_ref()
+        .map(terminal_pull_request_search_label);
 
     terminal_search_text_fragments(
         primary_text,
@@ -3188,10 +3188,18 @@ fn terminal_agent_text(terminal_view: &TerminalView, app: &AppContext) -> Termin
     agent_text
 }
 
-fn terminal_pull_request_badge_label(pull_request_url: &str) -> String {
-    github_pr_display_text_from_url(pull_request_url)
-        .map(|label| label.strip_prefix("PR ").unwrap_or(&label).to_string())
-        .unwrap_or_else(|| pull_request_url.to_string())
+pub(crate) fn terminal_pull_request_display_label(info: &GithubPrInfo) -> String {
+    github_pr_chip_label(info)
+}
+
+pub(crate) fn terminal_pull_request_search_label(info: &GithubPrInfo) -> String {
+    let label = terminal_pull_request_display_label(info);
+    let suffix = github_pr_status_search_suffix(info);
+    if suffix.is_empty() {
+        label
+    } else {
+        format!("{label} {suffix}")
+    }
 }
 
 fn vtab_diff_stats_tokens(line_changes: &GitLineChanges) -> Vec<String> {
@@ -4083,9 +4091,9 @@ fn render_summary_branch_line(
         ));
         has_right_badges = true;
     }
-    if let Some(pull_request_label) = &entry.pull_request_label {
+    if let Some(pr_info) = &entry.pull_request_info {
         right_badges.add_child(render_passive_terminal_pull_request_badge(
-            pull_request_label,
+            pr_info,
             appearance,
         ));
         has_right_badges = true;
@@ -4285,11 +4293,9 @@ fn render_terminal_right_badges(
     }
 
     if show_pr_link {
-        if let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
-            let label = terminal_pull_request_badge_label(&pull_request_url);
+        if let Some(pr_info) = terminal_view.current_github_pr_info(app) {
             right_badges.add_child(render_terminal_pull_request_badge(
-                label,
-                pull_request_url,
+                pr_info,
                 entrypoint,
                 badge_mouse_states.pull_request.clone(),
                 appearance,
@@ -4339,13 +4345,15 @@ fn render_terminal_diff_stats_badge(
 }
 
 fn render_terminal_pull_request_badge(
-    label: String,
-    url: String,
+    pr_info: GithubPrInfo,
     entrypoint: VerticalTabsChipEntrypoint,
     mouse_state: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
+    let label = terminal_pull_request_display_label(&pr_info);
+    let url = pr_info.url.clone();
+    let tooltip_text = github_pr_status_tooltip(&pr_info);
 
     Hoverable::new(mouse_state, move |state| {
         let bg = if state.is_hovered() {
@@ -4353,7 +4361,27 @@ fn render_terminal_pull_request_badge(
         } else {
             internal_colors::fg_overlay_1(theme)
         };
-        render_badge_container(render_pull_request_badge_content(&label, appearance), bg)
+        let mut stack = Stack::new().with_child(render_badge_container(
+            render_pull_request_badge_content(&label, Some(&pr_info), appearance),
+            bg,
+        ));
+        if state.is_hovered() {
+            let tool_tip = appearance
+                .ui_builder()
+                .tool_tip(tooltip_text.clone())
+                .build()
+                .finish();
+            stack.add_positioned_overlay_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -4.),
+                    ParentOffsetBounds::Unbounded,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+        stack.finish()
     })
     .on_click(move |ctx, app, _| {
         send_telemetry_from_app_ctx!(
@@ -4367,11 +4395,12 @@ fn render_terminal_pull_request_badge(
 }
 
 fn render_passive_terminal_pull_request_badge(
-    label: &str,
+    pr_info: &GithubPrInfo,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let label = terminal_pull_request_display_label(pr_info);
     render_badge_container(
-        render_pull_request_badge_content(label, appearance),
+        render_pull_request_badge_content(&label, Some(pr_info), appearance),
         internal_colors::fg_overlay_1(appearance.theme()),
     )
 }
@@ -4433,25 +4462,26 @@ fn render_badge_container(content: Box<dyn Element>, background: ThemeFill) -> B
         .finish()
 }
 
-fn render_pull_request_badge_content(label: &str, appearance: &Appearance) -> Box<dyn Element> {
+fn render_pull_request_badge_content(
+    label: &str,
+    pr_info: Option<&GithubPrInfo>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(4.)
-        .with_child(
-            ConstrainedBox::new(UiIcon::Github.to_warpui_icon(main_text_color).finish())
-                .with_width(BADGE_ICON_SIZE)
-                .with_height(BADGE_ICON_SIZE)
-                .finish(),
-        )
-        .with_child(
-            Text::new_inline(label.to_string(), appearance.ui_font_family(), 10.)
-                .with_color(sub_text_color.into())
-                .finish(),
-        )
-        .finish()
+    let sub_text_color = theme.sub_text_color(theme.background()).into();
+    let github_icon = ConstrainedBox::new(UiIcon::Github.to_warpui_icon(main_text_color).finish())
+        .with_width(BADGE_ICON_SIZE)
+        .with_height(BADGE_ICON_SIZE)
+        .finish();
+    render_github_pr_badge_content(
+        label,
+        pr_info,
+        sub_text_color,
+        appearance.ui_font_family(),
+        theme,
+        github_icon,
+    )
 }
 
 fn compute_tab_group_color_mode(
@@ -5718,10 +5748,9 @@ fn render_terminal_detail_section(
         ));
         has_right_badges = true;
     }
-    if let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
+    if let Some(pr_info) = terminal_view.current_github_pr_info(app) {
         right_badges.add_child(render_terminal_pull_request_badge(
-            terminal_pull_request_badge_label(&pull_request_url),
-            pull_request_url,
+            pr_info,
             VerticalTabsChipEntrypoint::DetailsSidecar,
             props.badge_mouse_states.pull_request.clone(),
             appearance,

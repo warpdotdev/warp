@@ -59,8 +59,14 @@ use super::{
     display_menu::{
         ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
     },
-    github_pr_display_text_from_url, render_text_from_kind, ChipResult, ContextChipKind,
+    github_pr_display_text_from_url, github_pr_info::github_pr_info_from_chip_value,
+    github_pr_status::{
+        github_pr_chip_label, github_pr_status_indicator, github_pr_status_tooltip,
+        render_github_pr_status_indicator, GithubPrStatusIndicatorKind,
+    },
+    render_text_from_kind, ChipResult, ContextChipKind,
 };
+use super::github_pr_info::GithubPrInfo;
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 
 /// Helper function to render git diff stats content (file icon or +- icons, file count, bullet, +/- counts)
@@ -383,7 +389,9 @@ pub enum DisplayChipKind {
         menu_open: bool,
         menu: ViewHandle<DisplayChipMenu>,
     },
-    GithubPullRequest,
+    GithubPullRequest {
+        pr_info: Option<GithubPrInfo>,
+    },
     GitDiffStats {
         line_changes_info: Option<GitLineChanges>,
     },
@@ -395,7 +403,7 @@ impl DisplayChipKind {
             DisplayChipKind::WorkingDirectory { menu_open, .. } => *menu_open,
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
             DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
-            DisplayChipKind::GithubPullRequest
+            DisplayChipKind::GithubPullRequest { .. }
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
@@ -648,7 +656,12 @@ impl DisplayChip {
             ContextChipKind::GitDiffStats => DisplayChipKind::GitDiffStats {
                 line_changes_info: None,
             },
-            ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest,
+            ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest {
+                pr_info: chip_result
+                    .value
+                    .as_ref()
+                    .and_then(github_pr_info_from_chip_value),
+            },
             ContextChipKind::WorkingDirectory => {
                 let dir_path = chip_result
                     .value
@@ -863,7 +876,15 @@ impl DisplayChip {
         Self {
             mouse_state: Default::default(),
             diff_stats_mouse_state: Default::default(),
-            text: chip_result.value.map(|v| v.to_string()).unwrap_or_default(),
+            text: chip_result
+                .value
+                .as_ref()
+                .and_then(|v| {
+                    github_pr_info_from_chip_value(v)
+                        .map(|info| info.url.clone())
+                        .or_else(|| v.as_text().map(str::to_owned))
+                })
+                .unwrap_or_default(),
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
@@ -958,7 +979,7 @@ impl DisplayChip {
             | DisplayChipKind::CondaEnvironment
             | DisplayChipKind::NodeVersion { .. }
             | DisplayChipKind::AgentPlanAndTodoList { .. }
-            | DisplayChipKind::GithubPullRequest => {}
+            | DisplayChipKind::GithubPullRequest { .. } => {}
         }
         false
     }
@@ -972,6 +993,17 @@ impl DisplayChip {
         } = &mut self.display_chip_kind
         {
             *line_changes_info = git_line_changes_info;
+        }
+    }
+
+    pub fn maybe_set_github_pr_info(&mut self, pr_info: Option<GithubPrInfo>) {
+        if let DisplayChipKind::GithubPullRequest { pr_info: slot } =
+            &mut self.display_chip_kind
+        {
+            *slot = pr_info.clone();
+            if let Some(info) = pr_info {
+                self.text = info.url;
+            }
         }
     }
 
@@ -1138,15 +1170,29 @@ impl DisplayChip {
 
     fn github_pull_request_chip(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
         let font_color = if self.is_in_agent_view {
             agent_view_chip_color(appearance)
         } else {
-            appearance.theme().ansi_fg_green()
+            theme.ansi_fg_green()
         };
-        let chip_text =
-            github_pr_display_text_from_url(&self.text).unwrap_or_else(|| self.text.clone());
+        let pr_info = match &self.display_chip_kind {
+            DisplayChipKind::GithubPullRequest { pr_info } => pr_info.clone(),
+            _ => None,
+        };
+        let chip_text = pr_info
+            .as_ref()
+            .map(github_pr_chip_label)
+            .unwrap_or_else(|| {
+                github_pr_display_text_from_url(&self.text).unwrap_or_else(|| self.text.clone())
+            });
+        let tooltip_text = pr_info
+            .as_ref()
+            .map(github_pr_status_tooltip)
+            .unwrap_or_else(|| "View pull request".to_string());
         let url = self.text.clone();
         let is_in_agent_view = self.is_in_agent_view;
+        let status_indicator = pr_info.as_ref().map(github_pr_status_indicator);
 
         let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
             let mut config =
@@ -1155,13 +1201,19 @@ impl DisplayChip {
             if is_in_agent_view {
                 config = config.for_agent_view();
             }
-            let chip_element = render_udi_chip(config, appearance);
+            let mut chip_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            chip_row.add_child(render_udi_chip(config, appearance));
+            if let Some(indicator) = status_indicator {
+                if indicator.kind != GithubPrStatusIndicatorKind::Unknown {
+                    chip_row.add_child(render_github_pr_status_indicator(indicator, theme));
+                }
+            }
 
-            let mut stack = Stack::new().with_child(chip_element);
+            let mut stack = Stack::new().with_child(chip_row.finish());
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("View pull request".to_string())
+                    .tool_tip(tooltip_text.clone())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1565,7 +1617,9 @@ impl DisplayChip {
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
-            DisplayChipKind::GithubPullRequest => Some(self.github_pull_request_chip(app)),
+            DisplayChipKind::GithubPullRequest { .. } => {
+                Some(self.github_pull_request_chip(app))
+            }
             DisplayChipKind::GitDiffStats { line_changes_info } => {
                 self.git_diff_stats_chip(line_changes_info, app)
             }
@@ -1658,7 +1712,7 @@ impl TypedActionView for DisplayChip {
                 | DisplayChipKind::CondaEnvironment
                 | DisplayChipKind::AgentPlanAndTodoList { .. }
                 | DisplayChipKind::Text
-                | DisplayChipKind::GithubPullRequest
+                | DisplayChipKind::GithubPullRequest { .. }
                 | DisplayChipKind::GitDiffStats { .. } => {}
                 DisplayChipKind::NodeVersion { popup_open, .. } => {
                     *popup_open = false;

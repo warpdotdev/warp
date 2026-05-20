@@ -857,7 +857,17 @@ impl CurrentPrompt {
                                 }
                             }
                         }
-                        me.update_chip_value(&chip_kind, output.map(ChipValue::Text));
+                        let chip_value = if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
+                            output.and_then(|raw| {
+                                crate::context_chips::github_pr_info::parse_github_pr_command_output(
+                                    &raw,
+                                )
+                                .map(ChipValue::GithubPullRequest)
+                            })
+                        } else {
+                            output.map(ChipValue::Text)
+                        };
+                        me.update_chip_value(&chip_kind, chip_value);
                         me.set_chip_update_status(&chip_kind, status);
                     },
                 );

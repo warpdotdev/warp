@@ -1,5 +1,8 @@
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::{git_line_changes_from_chips, ContextChipKind};
+use crate::context_chips::github_pr_info::GithubPrInfo;
+use crate::context_chips::{
+    github_pr_info::github_pr_info_from_chip_value, git_line_changes_from_chips, ContextChipKind,
+};
 use crate::terminal::TerminalView;
 use warpui::AppContext;
 
@@ -76,12 +79,17 @@ impl TerminalView {
         self.terminal_title_from_shell()
     }
 
-    pub fn current_pull_request_url(&self, ctx: &AppContext) -> Option<String> {
+    pub fn current_github_pr_info(&self, ctx: &AppContext) -> Option<GithubPrInfo> {
         self.current_prompt
             .as_ref(ctx)
             .latest_chip_value(&ContextChipKind::GithubPullRequest, ctx)
-            .map(|v| v.to_string())
-            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| github_pr_info_from_chip_value(&value))
+    }
+
+    pub fn current_pull_request_url(&self, ctx: &AppContext) -> Option<String> {
+        self.current_github_pr_info(ctx)
+            .map(|info| info.url)
+            .filter(|url| !url.trim().is_empty())
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(clippy::unnecessary_lazy_evaluations))]

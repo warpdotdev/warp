@@ -6,6 +6,8 @@ pub mod directory_fetcher;
 pub mod display;
 pub mod display_chip;
 pub mod display_menu;
+pub mod github_pr_info;
+pub mod github_pr_status;
 pub(crate) mod git_branch_on_click;
 pub(crate) mod logging;
 pub mod node_version_popup;
@@ -46,6 +48,7 @@ use self::{
 pub enum ChipValue {
     Text(String),
     GitDiffStats(display_chip::GitLineChanges),
+    GithubPullRequest(github_pr_info::GithubPrInfo),
 }
 
 impl ChipValue {
@@ -54,6 +57,7 @@ impl ChipValue {
         match self {
             ChipValue::Text(s) => Some(s),
             ChipValue::GitDiffStats(_) => None,
+            ChipValue::GithubPullRequest(info) => Some(info.url.as_str()),
         }
     }
 
@@ -61,7 +65,15 @@ impl ChipValue {
     pub fn as_git_diff_stats(&self) -> Option<&display_chip::GitLineChanges> {
         match self {
             ChipValue::GitDiffStats(g) => Some(g),
-            ChipValue::Text(_) => None,
+            ChipValue::Text(_) | ChipValue::GithubPullRequest(_) => None,
+        }
+    }
+
+    /// Returns structured GitHub PR data when available.
+    pub fn as_github_pr_info(&self) -> Option<&github_pr_info::GithubPrInfo> {
+        match self {
+            ChipValue::GithubPullRequest(info) => Some(info),
+            _ => None,
         }
     }
 }
@@ -82,6 +94,9 @@ impl std::fmt::Display for ChipValue {
                     "{} • +{} -{}",
                     g.files_changed, g.lines_added, g.lines_removed
                 )
+            }
+            ChipValue::GithubPullRequest(info) => {
+                f.write_str(&github_pr_info::github_pr_info_cache_key(info))
             }
         }
     }
@@ -393,7 +408,11 @@ impl ContextChipKind {
             Self::Hostname => ChipValue::Text("ubuntu-04".to_string()),
             Self::ShellGitBranch => ChipValue::Text("git-feature-branch".to_string()),
             Self::GitDiffStats => ChipValue::Text("3 • +10 -2".to_string()),
-            Self::GithubPullRequest => ChipValue::Text("PR #123".to_string()),
+            Self::GithubPullRequest => ChipValue::GithubPullRequest(
+                github_pr_info::GithubPrInfo::from_url_with_defaults(
+                    "https://github.com/warp/warp/pull/123".to_string(),
+                ),
+            ),
             Self::VirtualEnvironment => ChipValue::Text("pyenv".to_string()),
             Self::CondaEnvironment => ChipValue::Text("condaenv".to_string()),
             Self::NodeVersion => ChipValue::Text("v18.17.0".to_string()),
@@ -467,7 +486,20 @@ impl ContextChipKind {
         let text = value.to_string();
         match self {
             Self::ShellGitBranch => format!("git:({text})"),
-            Self::GithubPullRequest => github_pr_display_text_from_url(&text).unwrap_or(text),
+            Self::GithubPullRequest => {
+                if let Some(info) = github_pr_info::github_pr_info_from_chip_value(value) {
+                    let number_label =
+                        github_pr_display_text_from_url(&info.url).unwrap_or(info.url.clone());
+                    let suffix = github_pr_status::github_pr_status_search_suffix(&info);
+                    if suffix.is_empty() {
+                        number_label
+                    } else {
+                        format!("{number_label} · {suffix}")
+                    }
+                } else {
+                    github_pr_display_text_from_url(&text).unwrap_or(text)
+                }
+            }
             Self::KubernetesContext => format!("⎈ {text}"),
             Self::SvnBranch => format!("svn:({text})"),
             Self::SvnDirtyItems => format!("±{text}"),
@@ -576,6 +608,17 @@ pub fn available_chips() -> Vec<ContextChipKind> {
 ///
 /// Used as a fallback when `GitRepoStatusModel` is unavailable (e.g. remote sessions,
 /// local subshells).
+pub fn github_pr_info_from_chips(chips: &[ChipResult]) -> Option<github_pr_info::GithubPrInfo> {
+    chips.iter().find_map(|chip| {
+        if matches!(chip.kind(), ContextChipKind::GithubPullRequest) {
+            chip.value()
+                .and_then(github_pr_info::github_pr_info_from_chip_value)
+        } else {
+            None
+        }
+    })
+}
+
 pub fn git_line_changes_from_chips(chips: &[ChipResult]) -> Option<display_chip::GitLineChanges> {
     chips.iter().find_map(|chip| {
         if matches!(chip.kind(), ContextChipKind::GitDiffStats) {
@@ -589,6 +632,11 @@ pub fn git_line_changes_from_chips(chips: &[ChipResult]) -> Option<display_chip:
                         lines_added: 0,
                         lines_removed: 0,
                     }),
+                ChipValue::GithubPullRequest(_) => display_chip::GitLineChanges {
+                    files_changed: 0,
+                    lines_added: 0,
+                    lines_removed: 0,
+                },
             })
         } else {
             None
