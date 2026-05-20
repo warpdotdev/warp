@@ -85,8 +85,10 @@ fn test_secret_redacted_after_multibyte_prefix() {
     grid_handler.input_at_cursor(&format!("💣 {secret}"));
     grid_handler.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
 
-    let secret_start = Point::new(0, 3);
-    let secret_end = Point::new(7, 2);
+    // 💣 is a single char; input_at_cursor advances the cursor by one column per
+    // char regardless of display width, so the secret starts at col 2 (bomb + space).
+    let secret_start = Point::new(0, 2);
+    let secret_end = Point::new(7, 1);
 
     assert_eq!(grid_handler.secrets.len(), 1);
     assert_eq!(secret_ranges(grid_handler), vec![secret_start..=secret_end]);
@@ -116,8 +118,9 @@ fn test_secret_with_word_boundaries_redacted_after_multibyte_prefix() {
     grid_handler.input_at_cursor("💣 TOKEN123");
     grid_handler.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
 
-    let secret_start = Point::new(0, 3);
-    let secret_end = Point::new(0, 10);
+    // Same column arithmetic as above: bomb = col 0, space = col 1, secret starts col 2.
+    let secret_start = Point::new(0, 2);
+    let secret_end = Point::new(0, 9);
 
     assert_eq!(grid_handler.secrets.len(), 1);
     assert_eq!(secret_ranges(grid_handler), vec![secret_start..=secret_end]);
