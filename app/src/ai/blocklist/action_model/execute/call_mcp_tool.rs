@@ -168,6 +168,24 @@ impl Entity for CallMCPToolExecutor {
     type Event = ();
 }
 
+/// Maximum recursion depth for [`coerce_recursive`]. Real MCP schemas top out
+/// well under this — the limit only matters for schemas that intentionally
+/// or accidentally compose into a cycle (e.g. `allOf: [{$ref: "#/Self"}]`
+/// where `Self.allOf = [{$ref: "#/Self"}]`). [`resolve_refs`] already breaks
+/// pure `$ref` chains; this guards every other recursive edge so a malicious
+/// MCP server can't hang the client by advertising a recursive composed
+/// schema (#10596 review).
+const MAX_COERCE_DEPTH: usize = 64;
+
+/// Maximum total recursive calls allowed across a single
+/// [`coerce_integer_args`] invocation. The depth cap alone doesn't bound work:
+/// a schema with branching factor B and depth D produces up to `B^D` calls,
+/// so an adversarial schema with `allOf: [s, s]` where each `s` references
+/// the same shape can still fan out exponentially before any single chain
+/// reaches [`MAX_COERCE_DEPTH`]. Real MCP schemas use a few hundred calls at
+/// most; 10_000 leaves ~20× headroom for unusual but legitimate shapes.
+const MAX_COERCE_OPS: usize = 10_000;
+
 /// Coerces whole-number floats in `args` to integers wherever the tool's JSON
 /// Schema `input_schema` declares an [integer type], at any depth.
 ///
@@ -184,15 +202,6 @@ impl Entity for CallMCPToolExecutor {
 /// behavior.
 ///
 /// [integer type]: https://json-schema.org/understanding-json-schema/reference/type
-/// Maximum recursion depth for [`coerce_recursive`]. Real MCP schemas top out
-/// well under this — the limit only matters for schemas that intentionally
-/// or accidentally compose into a cycle (e.g. `allOf: [{$ref: "#/Self"}]`
-/// where `Self.allOf = [{$ref: "#/Self"}]`). [`resolve_refs`] already breaks
-/// pure `$ref` chains; this guards every other recursive edge so a malicious
-/// MCP server can't hang the client by advertising a recursive composed
-/// schema (#10596 review).
-const MAX_COERCE_DEPTH: usize = 64;
-
 pub(crate) fn coerce_integer_args(
     args: &mut serde_json::Map<String, serde_json::Value>,
     input_schema: &serde_json::Map<String, serde_json::Value>,
@@ -201,7 +210,8 @@ pub(crate) fn coerce_integer_args(
     // `$ref` resolution against the same root). Schemas are small in practice.
     let root = serde_json::Value::Object(input_schema.clone());
     let mut value = serde_json::Value::Object(std::mem::take(args));
-    coerce_recursive(&mut value, &root, &root, 0);
+    let mut budget = MAX_COERCE_OPS;
+    coerce_recursive(&mut value, &root, &root, 0, &mut budget);
     if let serde_json::Value::Object(map) = value {
         *args = map;
     }
@@ -214,16 +224,18 @@ fn coerce_recursive(
     schema: &serde_json::Value,
     root: &serde_json::Value,
     depth: usize,
+    budget: &mut usize,
 ) {
-    if depth >= MAX_COERCE_DEPTH {
+    if depth >= MAX_COERCE_DEPTH || *budget == 0 {
         return;
     }
+    *budget -= 1;
     let schema = resolve_refs(schema, root);
 
     // `allOf` — apply every branch; can stack with sibling keywords.
     if let Some(branches) = schema.get("allOf").and_then(|v| v.as_array()) {
         for b in branches {
-            coerce_recursive(value, b, root, depth + 1);
+            coerce_recursive(value, b, root, depth + 1, budget);
         }
     }
 
@@ -235,7 +247,7 @@ fn coerce_recursive(
     for key in ["oneOf", "anyOf"] {
         if let Some(branches) = schema.get(key).and_then(|v| v.as_array()) {
             for b in branches {
-                coerce_recursive(value, b, root, depth + 1);
+                coerce_recursive(value, b, root, depth + 1, budget);
             }
         }
     }
@@ -252,7 +264,7 @@ fn coerce_recursive(
         if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
             for (k, child_schema) in props {
                 if let Some(child_value) = map.get_mut(k) {
-                    coerce_recursive(child_value, child_schema, root, depth + 1);
+                    coerce_recursive(child_value, child_schema, root, depth + 1, budget);
                 }
             }
         }
@@ -301,7 +313,7 @@ fn coerce_recursive(
                 if pattern_regexes.iter().any(|re| re.is_match(k)) {
                     continue;
                 }
-                coerce_recursive(v, additional, root, depth + 1);
+                coerce_recursive(v, additional, root, depth + 1, budget);
             }
         }
     }
@@ -312,12 +324,12 @@ fn coerce_recursive(
         match schema.get("items") {
             Some(item_schema @ serde_json::Value::Object(_)) => {
                 for v in arr.iter_mut() {
-                    coerce_recursive(v, item_schema, root, depth + 1);
+                    coerce_recursive(v, item_schema, root, depth + 1, budget);
                 }
             }
             Some(serde_json::Value::Array(item_schemas)) => {
                 for (v, s) in arr.iter_mut().zip(item_schemas.iter()) {
-                    coerce_recursive(v, s, root, depth + 1);
+                    coerce_recursive(v, s, root, depth + 1, budget);
                 }
             }
             _ => {}

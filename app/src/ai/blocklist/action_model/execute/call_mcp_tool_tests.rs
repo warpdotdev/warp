@@ -522,6 +522,36 @@ fn one_of_self_reference_terminates() {
 }
 
 #[test]
+fn fan_out_via_all_of_self_reference_terminates() {
+    // `allOf: [{$ref: "#/Self"}, {$ref: "#/Self"}]` doubles work at each
+    // level of recursion. With depth cap alone, the call still produces
+    // 2^64 (~1.8e19) calls before any single chain reaches the cap. The
+    // total op budget bounds work regardless of branching factor.
+    let mut args = obj(json!({ "x": 3.0 }));
+    let schema = obj(json!({
+        "$defs": {
+            "Loop": {
+                "allOf": [
+                    { "$ref": "#/$defs/Loop" },
+                    { "$ref": "#/$defs/Loop" }
+                ],
+                "properties": { "x": { "type": "integer" } }
+            }
+        },
+        "$ref": "#/$defs/Loop"
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // The cap bails before any meaningful coercion happens — the guarantee
+    // is termination + bounded work, not correctness on a malicious schema.
+    assert!(
+        args["x"].is_number(),
+        "coercion call must terminate without panicking"
+    );
+}
+
+#[test]
 fn deep_finite_nesting_under_limit_still_coerces() {
     // A schema with 10 levels of nested `properties` is well under the
     // depth limit and must still produce a coerced result.
