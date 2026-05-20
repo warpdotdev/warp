@@ -1,0 +1,123 @@
+Android emulator and OTA setup notes
+Created: 2026-05-20
+
+Summary
+- Created a stable Android Emulator AVD named Pixel_9_Pro_Fold_Stable.
+- Verified that Pixel_9_Pro_Fold_Stable boots successfully.
+- Extracted/repaired LineageOS and EvolutionX comet OTA payloads into partition image folders.
+- Confirmed the comet OTA images are physical-device images and are not directly importable as Android Emulator SDK system images.
+
+Important paths
+- Android SDK: C:\Users\Sarge\AppData\Local\Android\Sdk
+- Emulator executable: C:\Users\Sarge\AppData\Local\Android\Sdk\emulator\emulator.exe
+- ADB executable: C:\Users\Sarge\AppData\Local\Android\Sdk\platform-tools\adb.exe
+- Stable AVD config: C:\Users\Sarge\.android\avd\Pixel_9_Pro_Fold_Stable.avd\config.ini
+- LineageOS OTA ZIP: C:\Users\Sarge\Documents\Comet\lineage-23.2-20260403-nightly-comet-signed.zip
+- LineageOS extracted OTA payload folder: C:\Users\Sarge\Documents\Comet\lineage-23.2-20260403-nightly-comet-signed
+- LineageOS repaired partition images: C:\Users\Sarge\Documents\Comet\repaired_payloads\lineage_comet
+- EvolutionX repaired partition images: C:\Users\Sarge\Documents\Comet\repaired_payloads\evolutionx_comet
+- Local payload dumper virtual environment: C:\Users\Sarge\Documents\Comet\.tools\payload_dumper_venv
+
+AVD created
+- Name: Pixel_9_Pro_Fold_Stable
+- Device profile: pixel_9_pro_fold
+- System image: system-images;android-36.1;google_apis_playstore;x86_64
+- Android release verified: 16
+- SDK verified: 36
+- Verified model: sdk_gphone64_x86_64
+- Verified device: emu64xa
+
+Why the stable AVD was created
+- The original Pixel_9_Pro_Fold AVD used a 16 GB RAM configuration and repeatedly hung before ADB became usable.
+- Pixel_9_Pro_Fold_Stable was configured with lower RAM and cold-boot settings to avoid the earlier QEMU main-loop hang.
+- The stable AVD booted successfully and reported sys.boot_completed=1.
+
+Stable AVD config adjustments
+- hw.ramSize=4096
+- vm.heapSize=512
+- hw.gpu.mode=swiftshader_indirect
+- fastboot.forceFastBoot=no
+- fastboot.forceColdBoot=yes
+
+Launch the stable emulator
+PowerShell command:
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd Pixel_9_Pro_Fold_Stable
+
+Launch with a clean cold boot
+PowerShell command:
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd Pixel_9_Pro_Fold_Stable -no-snapshot-load -no-snapshot-save -no-boot-anim
+
+Verify boot
+PowerShell commands:
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb devices -l
+& $adb -s emulator-5554 shell getprop sys.boot_completed
+& $adb -s emulator-5554 shell getprop ro.product.model
+& $adb -s emulator-5554 shell getprop ro.product.device
+& $adb -s emulator-5554 shell getprop ro.build.version.release
+& $adb -s emulator-5554 shell getprop ro.build.version.sdk
+
+Expected successful boot values
+- sys.boot_completed=1
+- ro.product.model=sdk_gphone64_x86_64
+- ro.product.device=emu64xa
+- ro.build.version.release=16
+- ro.build.version.sdk=36
+
+Shutdown emulator
+PowerShell commands:
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb -s emulator-5554 emu kill
+
+If graceful shutdown does not fully stop it:
+Get-Process emulator, qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force
+& $adb kill-server
+& $adb start-server
+& $adb devices -l
+
+OTA repair / extraction
+The LineageOS OTA ZIP was a physical-device OTA for comet. It contained payload.bin, not an emulator SDK system-image package.
+
+Payload dumper setup used:
+- Created local venv: C:\Users\Sarge\Documents\Comet\.tools\payload_dumper_venv
+- Installed payload_dumper inside that venv.
+- Patched the local venv copy of payload_dumper to disable interactive progress bars because the progress UI crashed in this terminal environment.
+
+LineageOS payload extraction command used:
+C:\Users\Sarge\Documents\Comet\.tools\payload_dumper_venv\Scripts\payload_dumper.exe --out C:\Users\Sarge\Documents\Comet\repaired_payloads\lineage_comet --workers 4 C:\Users\Sarge\Documents\Comet\lineage-23.2-20260403-nightly-comet-signed\payload.bin
+
+EvolutionX payload extraction command used:
+C:\Users\Sarge\Documents\Comet\.tools\payload_dumper_venv\Scripts\payload_dumper.exe --out C:\Users\Sarge\Documents\Comet\repaired_payloads\evolutionx_comet --workers 4 C:\Users\Sarge\Documents\Comet\EX\EvolutionX-16.0-20251202-comet-11.4.1-Official\payload.bin
+
+Why repaired OTA images were not imported into Android SDK system-images
+The repaired folders contain physical-device partition images such as:
+- boot.img
+- init_boot.img
+- system.img
+- vendor.img
+- product.img
+- vendor_boot.img
+- vbmeta.img
+
+They are missing Android Emulator SDK system-image package files:
+- kernel-ranchu
+- ramdisk.img
+- source.properties
+- package.xml
+
+Because of that, copying these OTA images into C:\Users\Sarge\AppData\Local\Android\Sdk\system-images would create a broken or unrecognized emulator system image.
+
+To create a true LineageOS emulator in the future
+Use one of these sources:
+1. A LineageOS emulator x86_64 SDK image package containing kernel-ranchu, ramdisk.img, system.img, vendor.img, source.properties, and package.xml.
+2. A locally built LineageOS sdk_phone_x86_64 emulator image from the official LineageOS emulator build process.
+
+Useful checks
+List AVDs:
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -list-avds
+
+List connected Android devices:
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" devices -l
+
+Check emulator processes:
+Get-Process emulator, qemu-system-x86_64 -ErrorAction SilentlyContinue
