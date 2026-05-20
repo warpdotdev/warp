@@ -47,15 +47,11 @@ use super::proto::{
     OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
     ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
     RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
-<<<<<<< HEAD
-    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, WriteFile, WriteFileResponse,
-    WriteFileSuccess, client_message, delete_file_response, discard_files_response,
-    get_diff_state_response, get_fragment_metadata_from_hash_response, resolve_conflict_response,
-    run_command_response, save_buffer_response, server_message, write_file_response,
-=======
     SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
     UploadHandoffSnapshotResponse, WriteFile, WriteFileResponse, WriteFileSuccess,
->>>>>>> 0d3882ea (feat: daemon-side handler for SSH handoff snapshot upload)
+    client_message, delete_file_response, discard_files_response,
+    get_diff_state_response, get_fragment_metadata_from_hash_response, resolve_conflict_response,
+    run_command_response, save_buffer_response, server_message, write_file_response,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -74,7 +70,7 @@ const MAX_BRANCH_COUNT_CAP: usize = 500;
 pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
-use crate::ai::blocklist::{ReadFileContextResult, read_local_file_context};
+use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
@@ -751,19 +747,8 @@ impl ServerModel {
             Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
                 self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
             }
-<<<<<<< HEAD
-            Some(client_message::Message::UploadHandoffSnapshot(_)) => {
-                // TODO: server-side handler will be implemented by the daemon agent.
-                // For now, return an error so older daemons don't silently drop the request.
-                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: "UploadHandoffSnapshot is not yet implemented on this server version"
-                        .to_string(),
-                }))
-=======
             Some(client_message::Message::UploadHandoffSnapshot(msg)) => {
                 self.handle_upload_handoff_snapshot(msg, &request_id, conn_id, ctx)
->>>>>>> 0d3882ea (feat: daemon-side handler for SSH handoff snapshot upload)
             }
             None => {
                 log::warn!(
