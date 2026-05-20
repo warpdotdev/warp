@@ -50,10 +50,13 @@ use crate::ai::skills::{
 };
 use crate::ai::{
     agent::conversation::AIConversationId,
-    agent_sdk::driver::harness::{
-        harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind,
-        HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness,
-        ThirdPartyHarnessTelemetryEvent,
+    agent_sdk::{
+        driver::harness::{
+            harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind,
+            HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness,
+            ThirdPartyHarnessTelemetryEvent,
+        },
+        setup_observability::{SetupClientEventReporter, SetupStep},
     },
 };
 use crate::send_telemetry_from_app_ctx;
@@ -1617,6 +1620,15 @@ impl AgentDriver {
             safe: ("Running agent driver"),
             full: ("Running agent driver for query `{:?}`", task.prompt)
         );
+        let setup_events = foreground
+            .spawn(|me, ctx| {
+                SetupClientEventReporter::new(
+                    me.task_id,
+                    ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+                    ctx.background_executor(),
+                )
+            })
+            .await?;
 
         foreground
             .spawn(|me, _| me.check_working_dir())
@@ -1631,18 +1643,27 @@ impl AgentDriver {
         // which is populated as part of terminal bootstrap. Waiting for the session bootstrap
         // here avoids a subtle race where MCP spawn runs with an unset PATH and then the driver
         // only fails via a timeout.
-        foreground
-            .spawn(|me, ctx| {
-                me.terminal_driver
-                    .as_ref(ctx)
-                    .wait_for_session_bootstrapped()
+        setup_events
+            .record_result(SetupStep::TerminalBootstrap, async {
+                foreground
+                    .spawn(|me, ctx| {
+                        me.terminal_driver
+                            .as_ref(ctx)
+                            .wait_for_session_bootstrapped()
+                    })
+                    .await?
+                    .await
             })
-            .await?
             .await?;
 
         // Once the terminal session is bootstrapped, perform cloud provider setup before spawning MCP servers.
         // MCP servers *may* rely on cloud provider credentials.
-        Self::setup_cloud_providers(&foreground).await?;
+        setup_events
+            .record_result(
+                SetupStep::CloudProviderSetup,
+                Self::setup_cloud_providers(&foreground),
+            )
+            .await?;
 
         // For the Oz harness only: set up MCP servers, model overrides, and profile information.
         if matches!(&task.harness, HarnessKind::Oz) {
@@ -1659,26 +1680,35 @@ impl AgentDriver {
                 ephemeral_installations.len()
             );
 
-            // TODO(BenS): combine these
-            if !existing_uuids.is_empty() {
-                foreground
-                    .spawn(move |me, ctx| me.start_mcp_servers(&existing_uuids, ctx))
-                    .await?
-                    .await?;
-            }
-            // Start ephemeral MCP servers from inline JSON specs.
-            if !ephemeral_installations.is_empty() {
-                foreground
-                    .spawn(move |me, ctx| {
-                        me.start_ephemeral_mcp_servers(ephemeral_installations, ctx)
-                    })
-                    .await?
-                    .await?;
-            }
+            setup_events
+                .record_result(SetupStep::McpServerStartup, async {
+                    // TODO(BenS): combine these
+                    if !existing_uuids.is_empty() {
+                        foreground
+                            .spawn(move |me, ctx| me.start_mcp_servers(&existing_uuids, ctx))
+                            .await?
+                            .await?;
+                    }
+                    // Start ephemeral MCP servers from inline JSON specs.
+                    if !ephemeral_installations.is_empty() {
+                        foreground
+                            .spawn(move |me, ctx| {
+                                me.start_ephemeral_mcp_servers(ephemeral_installations, ctx)
+                            })
+                            .await?
+                            .await?;
+                    }
+                    Ok::<(), AgentDriverError>(())
+                })
+                .await?;
             let profile = task.profile.clone();
-            foreground
-                .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
-                .await??;
+            setup_events
+                .record_result(SetupStep::AgentProfileConfiguration, async {
+                    foreground
+                        .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
+                        .await?
+                })
+                .await?;
 
             if let Some(model_id) = task.model.clone() {
                 foreground
@@ -1686,26 +1716,44 @@ impl AgentDriver {
                     .await??;
             }
 
-            foreground
-                .spawn(|me, ctx| me.start_profile_mcp_servers(ctx))
-                .await?
+            setup_events
+                .record_result(SetupStep::ProfileMcpServerStartup, async {
+                    foreground
+                        .spawn(|me, ctx| me.start_profile_mcp_servers(ctx))
+                        .await?
+                        .await
+                })
                 .await?;
         }
 
         // For all harnesses: wait for the shared session and prepare the environment.
-        foreground
-            .spawn(|me, ctx| {
-                me.terminal_driver
-                    .update(ctx, |driver, _| driver.wait_for_session_shared())
+        setup_events
+            .record_result(SetupStep::SharedSessionEstablishment, async {
+                foreground
+                    .spawn(|me, ctx| {
+                        me.terminal_driver
+                            .update(ctx, |driver, _| driver.wait_for_session_shared())
+                    })
+                    .await?
+                    .await
             })
-            .await?
             .await?;
-        let global_skill_resolution = Self::resolve_global_skills(&foreground).await?;
+        let global_skill_resolution = setup_events
+            .record_result(
+                SetupStep::GlobalSkillResolution,
+                Self::resolve_global_skills(&foreground),
+            )
+            .await?;
         // Clone global skill repos before environment prep can change the
         // terminal's cwd into a single environment repo.
         // We do this for all harnesses, so that the skills *may* be discovered by third-party
         // harnesses if appropriate.
-        Self::clone_global_skill_repos(&foreground, &global_skill_resolution.repos).await?;
+        setup_events
+            .record_result(
+                SetupStep::GlobalSkillRepoClone,
+                Self::clone_global_skill_repos(&foreground, &global_skill_resolution.repos),
+            )
+            .await?;
         let mut environment_skill_repos = Vec::new();
 
         let environment_opt = foreground.spawn(|me, _| me.environment.clone()).await?;
@@ -1739,6 +1787,7 @@ impl AgentDriver {
             };
 
             let harness = task.harness.harness();
+            let setup_events_for_environment = setup_events.clone();
             foreground
                 .spawn(move |me, ctx| {
                     let working_dir = me.working_dir.clone();
@@ -1748,6 +1797,7 @@ impl AgentDriver {
                             working_dir,
                             false, /* is_sandbox */
                             harness,
+                            setup_events_for_environment,
                             ctx,
                         )
                     })
@@ -1759,24 +1809,28 @@ impl AgentDriver {
             if let Some(file_based_discovery_rx) = file_based_discovery_rx {
                 // Await discovery: collect UUIDs of file-based MCP servers that were auto-started
                 // while scanning cloned repos.
-                let wait_uuids = match file_based_discovery_rx
-                    .with_timeout(MCP_SERVER_STARTUP_TIMEOUT)
-                    .await
-                {
-                    Ok(Ok(uuids)) => uuids,
-                    Ok(Err(Canceled)) => {
-                        log::warn!(
-                            "File-based MCP discovery subscription dropped early; proceeding without"
-                        );
-                        vec![]
-                    }
-                    Err(TimeoutError) => {
-                        log::warn!(
-                            "Timed out waiting for file-based MCP servers to be parsed; proceeding without"
-                        );
-                        vec![]
-                    }
-                };
+                let wait_uuids = setup_events
+                    .record_value(SetupStep::FileBasedMcpDiscovery, async {
+                        match file_based_discovery_rx
+                            .with_timeout(MCP_SERVER_STARTUP_TIMEOUT)
+                            .await
+                        {
+                            Ok(Ok(uuids)) => uuids,
+                            Ok(Err(Canceled)) => {
+                                log::warn!(
+                                    "File-based MCP discovery subscription dropped early; proceeding without"
+                                );
+                                vec![]
+                            }
+                            Err(TimeoutError) => {
+                                log::warn!(
+                                    "Timed out waiting for file-based MCP servers to be parsed; proceeding without"
+                                );
+                                vec![]
+                            }
+                        }
+                    })
+                    .await;
 
                 // Wait for auto-started servers to reach Running (non-fatal: always unblocks).
                 if !wait_uuids.is_empty() {
@@ -1784,10 +1838,17 @@ impl AgentDriver {
                         "Checking readiness for {} auto-started file-based MCP server(s)",
                         wait_uuids.len()
                     );
-                    foreground
-                        .spawn(move |me, ctx| me.wait_for_file_based_mcps_running(wait_uuids, ctx))
-                        .await?
-                        .await;
+                    setup_events
+                        .record_result(SetupStep::FileBasedMcpReadiness, async {
+                            foreground
+                                .spawn(move |me, ctx| {
+                                    me.wait_for_file_based_mcps_running(wait_uuids, ctx)
+                                })
+                                .await?
+                                .await;
+                            Ok::<(), AgentDriverError>(())
+                        })
+                        .await?;
                 }
             }
         }
@@ -1800,8 +1861,18 @@ impl AgentDriver {
                 specs: global_skill_specs,
                 repos: global_skill_repos,
             } = global_skill_resolution;
-            Self::load_environment_skills(&foreground, environment_skill_repos).await;
-            Self::load_global_skills(&foreground, global_skill_specs, global_skill_repos).await;
+            setup_events
+                .record_value(
+                    SetupStep::EnvironmentSkillLoading,
+                    Self::load_environment_skills(&foreground, environment_skill_repos),
+                )
+                .await;
+            setup_events
+                .record_value(
+                    SetupStep::GlobalSkillLoading,
+                    Self::load_global_skills(&foreground, global_skill_specs, global_skill_repos),
+                )
+                .await;
         }
 
         let (task_id_for_refresh, ai_client_for_refresh) = foreground
@@ -1854,17 +1925,22 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
-                let harness_exit_rx = Self::setup_harness(harness.as_ref(), &foreground).await?;
-                let runner = Self::prepare_harness(
-                    &task.prompt,
-                    &task.mcp_specs,
-                    harness.as_ref(),
-                    &foreground,
-                )
-                .await?;
+                let (harness_exit_rx, runner) = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
+                        let harness_exit_rx =
+                            Self::setup_harness(harness.as_ref(), &foreground).await?;
+                        let runner = Self::prepare_harness(
+                            &task.prompt,
+                            &task.mcp_specs,
+                            harness.as_ref(),
+                            &foreground,
+                        )
+                        .await?;
 
-                Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
-
+                        Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
+                        Ok::<_, AgentDriverError>((harness_exit_rx, runner))
+                    })
+                    .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns();
 
                 if let Some(task_id) = task_id_for_refresh {
@@ -1873,6 +1949,7 @@ impl AgentDriver {
                         runtime_error_patterns,
                         &foreground,
                         harness_exit_rx,
+                        &setup_events,
                     )
                     .fuse();
                     let refresh =
@@ -1883,8 +1960,14 @@ impl AgentDriver {
                         _ = refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
                     }
                 } else {
-                    Self::run_harness(runner, runtime_error_patterns, &foreground, harness_exit_rx)
-                        .await
+                    Self::run_harness(
+                        runner,
+                        runtime_error_patterns,
+                        &foreground,
+                        harness_exit_rx,
+                        &setup_events,
+                    )
+                    .await
                 }
             }
             HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
@@ -2160,11 +2243,12 @@ impl AgentDriver {
         runtime_error_patterns: &'static [&'static str],
         foreground: &ModelSpawner<Self>,
         harness_exit_rx: oneshot::Receiver<()>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = runner.harness_name().to_owned();
 
         // Start the third-party harness.
-        let command_handle = runner.start(foreground).await?;
+        let command_handle = runner.start(foreground, setup_events).await?;
         let block_id = command_handle.block_id().clone();
         let mut command_handle = command_handle.fuse();
         let mut harness_exit_rx = harness_exit_rx.fuse();
