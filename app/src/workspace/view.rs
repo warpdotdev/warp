@@ -13519,13 +13519,95 @@ impl Workspace {
     /// touched workspace from `paths`, uploads repo patches + orphan files, sets
     /// environment overlap, and settles the snapshot status on the model. Shared
     /// by both the conversation-fork and fresh-launch handoff paths.
+    ///
+    /// For remote SSH sessions, delegates the gather+upload work to the remote
+    /// server daemon via `UploadHandoffSnapshot` instead of doing it locally.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn spawn_handoff_snapshot_upload(
         paths: Vec<PathBuf>,
         pane_view: ViewHandle<TerminalView>,
         model_handle: ModelHandle<AmbientAgentViewModel>,
+        remote_session_id: Option<SessionId>,
+        remote_working_directory: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let Some(session_id) = remote_session_id {
+            // Remote SSH path: delegate to the remote server daemon.
+            let client = RemoteServerManager::as_ref(ctx)
+                .client_for_session(session_id)
+                .cloned();
+            let Some(client) = client else {
+                log::warn!(
+                    "Handoff snapshot: no connected remote server client for session {session_id:?}, skipping snapshot"
+                );
+                model_handle.update(ctx, |model, model_ctx| {
+                    model.set_pending_handoff_snapshot_upload(
+                        SnapshotUploadStatus::SkippedEmptyWorkspace,
+                        model_ctx,
+                    );
+                });
+                Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
+                return;
+            };
+            let path_strings: Vec<String> = paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            ctx.spawn(
+                async move {
+                    client
+                        .upload_handoff_snapshot(path_strings, remote_working_directory)
+                        .await
+                },
+                move |_workspace, result, ctx| {
+                    model_handle.update(ctx, |model, model_ctx| {
+                        if !model.is_local_to_cloud_handoff() {
+                            return;
+                        }
+                        match result {
+                            Ok(resp) if resp.success => {
+                                if let Some(token) = resp.initial_snapshot_token {
+                                    use crate::server::server_api::ai::InitialSnapshotToken;
+                                    // Construct the token from the raw string.
+                                    // The type is a newtype wrapper with serde support.
+                                    let token: InitialSnapshotToken =
+                                        serde_json::from_value(serde_json::Value::String(token))
+                                            .expect("InitialSnapshotToken is a String newtype");
+                                    model.set_pending_handoff_snapshot_upload(
+                                        SnapshotUploadStatus::Uploaded(token),
+                                        model_ctx,
+                                    );
+                                } else {
+                                    model.set_pending_handoff_snapshot_upload(
+                                        SnapshotUploadStatus::SkippedEmptyWorkspace,
+                                        model_ctx,
+                                    );
+                                }
+                            }
+                            Ok(resp) => {
+                                let error_msg = resp.error.unwrap_or_default();
+                                log::warn!("Remote handoff snapshot upload failed: {error_msg}");
+                                model.set_pending_handoff_snapshot_upload(
+                                    SnapshotUploadStatus::SkippedEmptyWorkspace,
+                                    model_ctx,
+                                );
+                            }
+                            Err(err) => {
+                                log::warn!("Remote handoff snapshot RPC failed: {err:#}");
+                                model.set_pending_handoff_snapshot_upload(
+                                    SnapshotUploadStatus::SkippedEmptyWorkspace,
+                                    model_ctx,
+                                );
+                            }
+                        }
+                    });
+                    Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
+                },
+            );
+            return;
+        }
+
+        // Local path: existing flow unchanged.
         let server_api_provider = ServerApiProvider::as_ref(ctx);
         let ai_client = server_api_provider.get_ai_client();
         let http = server_api_provider.get_http_client();
@@ -13695,9 +13777,29 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-        let paths: Vec<PathBuf> = source_pwd.into_iter().collect();
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, ctx);
+        let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
+        let (paths, remote_session_id, remote_wd) = if is_remote {
+            let remote_pwd = source_view.as_ref(ctx).pwd();
+            let session_id = source_view.as_ref(ctx).active_block_session_id();
+            let paths: Vec<PathBuf> = remote_pwd
+                .as_deref()
+                .map(PathBuf::from)
+                .into_iter()
+                .collect();
+            (paths, session_id, remote_pwd)
+        } else {
+            let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
+            let paths: Vec<PathBuf> = source_pwd.into_iter().collect();
+            (paths, None, None)
+        };
+        Self::spawn_handoff_snapshot_upload(
+            paths,
+            new_pane_view,
+            model_handle,
+            remote_session_id,
+            remote_wd,
+            ctx,
+        );
     }
 
     /// Opens a local-to-cloud handoff pane in place over the active local pane.
@@ -14108,18 +14210,35 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-        // Derive touched repos and upload the initial snapshot off the UI thread.
-        // The paths list is built from the conversation's write actions plus the
-        // source pane's pwd (so the current repo is always captured).
-        let paths = {
+        let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
+        let (paths, remote_session_id, remote_wd) = if is_remote {
+            let remote_pwd = source_view.as_ref(ctx).pwd();
+            let session_id = source_view.as_ref(ctx).active_block_session_id();
+            // For remote sessions, conversation paths are remote; combine with pwd.
+            let mut p = extract_paths_from_conversation(&source_conversation);
+            if let Some(ref pwd) = remote_pwd {
+                p.push(PathBuf::from(pwd));
+            }
+            (p, session_id, remote_pwd)
+        } else {
+            let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
+            // Derive touched repos and upload the initial snapshot off the UI thread.
+            // The paths list is built from the conversation's write actions plus the
+            // source pane's pwd (so the current repo is always captured).
             let mut p = extract_paths_from_conversation(&source_conversation);
             if let Some(pwd) = source_pwd {
                 p.push(pwd);
             }
-            p
+            (p, None, None)
         };
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, ctx);
+        Self::spawn_handoff_snapshot_upload(
+            paths,
+            new_pane_view,
+            model_handle,
+            remote_session_id,
+            remote_wd,
+            ctx,
+        );
     }
 
     pub(crate) fn handle_file_tree_event(

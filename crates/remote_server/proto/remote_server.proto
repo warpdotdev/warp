@@ -39,6 +39,7 @@ message ClientMessage {
     GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
     GetBranches get_branches = 24;
     ResyncCodebase resync_codebase = 25;
+    UploadHandoffSnapshot upload_handoff_snapshot = 26;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -71,6 +72,7 @@ message ServerMessage {
     BufferConflictDetected buffer_conflict_detected = 23;
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
     GetBranchesResponse get_branches_response = 25;
+    UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
   }
 }
 
@@ -510,6 +512,19 @@ message BufferUpdatedPush {
   uint64 new_server_version = 2;
   uint64 expected_client_version = 3;
   repeated TextEdit edits = 4;
+}
+
+// Client → server: request the daemon gather a handoff snapshot and upload it.
+message UploadHandoffSnapshot {
+  repeated string paths = 1;
+  optional string working_directory = 2;
+}
+
+// Daemon → client: result of the handoff snapshot upload.
+message UploadHandoffSnapshotResponse {
+  optional string initial_snapshot_token = 1;
+  bool success = 2;
+  optional string error = 3;
 }
 
 // Client → server: close a buffer (stop watching).
