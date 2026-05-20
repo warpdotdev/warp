@@ -82,6 +82,23 @@ This is a Rust-based terminal emulator with a custom UI framework called **WarpU
 - `crates/ipc/` - Inter-process communication
 - `crates/graphql/` - GraphQL client and schema
 
+### Crate Overview
+
+The repository is a Cargo workspace with 60+ member crates. Key crates:
+
+- `crates/ai/` — AI integration, agent mode, and context management
+- `crates/channel_versions/` — Channel and version management for updates
+- `crates/command/` — Command execution and shell integration
+- `crates/editor/` — Text editing and buffer management
+- `crates/graphql/` — GraphQL client, schema definitions, and query execution
+- `crates/http_client/` — HTTP client utilities
+- `crates/http_server/` — HTTP server for local Warp server features
+- `crates/ipc/` — Inter-process communication between app and server
+- `crates/warpui/` and `crates/warpui_core/` — Custom UI framework (Entity-Component-Handle pattern)
+- `crates/warp_core/` — Core utilities, platform abstractions, and shared types
+- `app/` — Main application binary: terminal emulation, shell management, AI integration, authentication, settings, workspace management
+- `crates/integration/` — Integration test framework
+
 ### Key Architectural Patterns
 
 1. **Entity-Handle System**: Views reference other views via handles, not direct ownership
