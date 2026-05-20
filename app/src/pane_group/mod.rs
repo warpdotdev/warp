@@ -5517,6 +5517,31 @@ impl PaneGroup {
         );
     }
 
+    /// Inserts an already-constructed pane into this group as a visible split next to
+    /// `anchor`, in the requested direction. Used when transplanting a live pane between
+    /// PaneGroups (e.g. dropping a tab onto another tab's pane area). The caller is
+    /// responsible for first detaching the pane from its source via
+    /// `remove_pane_for_move`, which preserves the underlying session.
+    pub(crate) fn add_existing_pane_visible(
+        &mut self,
+        pane: Box<dyn AnyPaneContent>,
+        anchor: PaneId,
+        direction: Direction,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneId> {
+        self.add_pane_with_options(
+            pane,
+            AddPaneOptions {
+                direction,
+                base_pane_id: Some(anchor),
+                focus_new_pane: true,
+                visibility: NewPaneVisibility::Visible,
+                emit_app_state_changed: true,
+            },
+            ctx,
+        )
+    }
+
     /// We return a pane_id if the pane successfully attached
     /// Otherwise, we return None
     pub fn add_pane_for_replacement<C: PaneContent>(

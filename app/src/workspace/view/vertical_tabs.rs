@@ -2141,10 +2141,13 @@ fn render_tab_group_internal(
         .on_drop(|ctx, _, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::DropTab);
         });
-    // Only lock the drag to the vertical axis when cross-window tab drag is
-    // disabled. When it is enabled, the user needs to be able to drag
-    // horizontally out of the panel to detach the tab into a new window.
-    let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
+    // Only lock the drag to the vertical axis when neither cross-window tab
+    // drag nor tab-to-pane split is enabled. Both features need the user to
+    // drag horizontally out of the panel — cross-window to detach into a new
+    // window, tab-to-pane to drop on another tab's pane area as a split.
+    let allow_horizontal =
+        FeatureFlag::DragTabsToWindows.is_enabled() || FeatureFlag::DragTabToPaneSplit.is_enabled();
+    let draggable = if allow_horizontal {
         draggable
     } else {
         draggable.with_drag_axis(DragAxis::VerticalOnly)

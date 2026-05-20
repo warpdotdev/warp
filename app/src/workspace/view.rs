@@ -1135,6 +1135,22 @@ pub struct Workspace {
     /// orchestration cards' "New API key…" flow. Cloud mode renders the
     /// FTUX view inline and does not use this.
     create_auth_secret_modal: Option<ViewHandle<Modal<AuthSecretFtuxView>>>,
+    /// (source tab index, last drag-position rect) captured during `on_tab_drag`
+    /// while `DragTabToPaneSplit` is enabled, so the `DropTab` handler can resolve
+    /// drops landing on another tab's pane area into a horizontal split.
+    last_tab_drag: Option<(usize, RectF)>,
+    /// Pane the user is currently hovering over with a tab-drag, plus the
+    /// chosen split direction (closest-edge of the destination pane). Used to
+    /// render a translucent half-pane overlay during drag so the user sees
+    /// where the new pane will land. Cleared on `DropTab` (whether or not the
+    /// drop succeeds) and updated on every `DragTab` tick.
+    current_drag_target_pane: Option<(PaneId, Direction)>,
+    /// When the user starts dragging the currently-active tab from the
+    /// vertical panel, we auto-switch the active tab to the previous one in
+    /// MRU order so they have a visible destination pane to drop on (iTerm-
+    /// style). This holds the original active tab index so we can restore it
+    /// if the drag is cancelled (drop didn't consume).
+    pre_drag_active_tab: Option<usize>,
 }
 
 impl Workspace {
@@ -3253,6 +3269,9 @@ impl Workspace {
                 Self::build_remove_tab_config_confirmation_dialog(ctx),
             handoff_environment_creation_modal: None,
             create_auth_secret_modal: None,
+            last_tab_drag: None,
+            current_drag_target_pane: None,
+            pre_drag_active_tab: None,
         };
 
         ws.configure_new_workspace(workspace_setting, ctx);
@@ -22123,6 +22142,32 @@ impl TypedActionView for Workspace {
                     tab.detached = false;
                 }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
+                let last_tab_drag = self.last_tab_drag.take();
+                self.current_drag_target_pane = None;
+                let pre_drag_active = self.pre_drag_active_tab.take();
+                let mut consumed = false;
+                if !is_cross_window {
+                    if let Some((src_idx, drop_pos)) = last_tab_drag {
+                        if self.try_drop_tab_on_pane(src_idx, drop_pos, ctx) {
+                            consumed = true;
+                        }
+                    }
+                }
+                // If we auto-switched away from the dragged tab to give the
+                // user a visible destination, restore the original active tab
+                // when the drop was a no-op so they end up back where they
+                // started. When the drop consumed, the destination tab is
+                // already focused inside `try_drop_tab_on_pane`.
+                if !consumed {
+                    if let Some(original) = pre_drag_active {
+                        if original < self.tabs.len() {
+                            self.set_active_tab_index(original, ctx);
+                        }
+                    }
+                }
+                if consumed {
+                    return;
+                }
                 if is_cross_window {
                     let drop_result =
                         CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
@@ -24374,6 +24419,56 @@ impl View for Workspace {
             );
         }
 
+        // Tab-to-pane split drop zone: render a half-pane overlay on the
+        // edge the user is closest to, so they can see exactly where the new
+        // pane will land. The overlay covers only the half corresponding to
+        // the chosen split direction (right half for Right, top half for Up,
+        // etc.).
+        if let Some((target_pane_id, direction)) = self.current_drag_target_pane {
+            if let Some(rect) = app
+                .element_position_by_id_at_last_frame(self.window_id, target_pane_id.position_id())
+            {
+                let theme = appearance.theme();
+                // Half-rect dimensions and offset relative to the pane's
+                // top-left corner.
+                let (offset, overlay_w, overlay_h) = match direction {
+                    Direction::Right => (
+                        vec2f(rect.width() / 2.0, 0.0),
+                        rect.width() / 2.0,
+                        rect.height(),
+                    ),
+                    Direction::Left => (vec2f(0.0, 0.0), rect.width() / 2.0, rect.height()),
+                    Direction::Down => (
+                        vec2f(0.0, rect.height() / 2.0),
+                        rect.width(),
+                        rect.height() / 2.0,
+                    ),
+                    Direction::Up => (vec2f(0.0, 0.0), rect.width(), rect.height() / 2.0),
+                };
+                let inner = Container::new(Rect::new().finish())
+                    .with_background(theme.surface_overlay_2())
+                    .with_border(
+                        Border::all(1.).with_border_color(theme.split_pane_border_color().into()),
+                    )
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                    .finish();
+                let overlay = ConstrainedBox::new(inner)
+                    .with_width(overlay_w)
+                    .with_height(overlay_h)
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    overlay,
+                    OffsetPositioning::offset_from_save_position_element(
+                        target_pane_id.position_id(),
+                        offset,
+                        PositionedElementOffsetBounds::Unbounded,
+                        PositionedElementAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+        }
+
         // Cross-window ghost drag: floating chip that follows the cursor in the target window.
         // Added last so it renders on top of all other content.
         if FeatureFlag::DragTabsToWindows.is_enabled() {
@@ -24987,6 +25082,145 @@ impl Workspace {
         });
     }
 
+    /// Returns the tab index of the previous most-recently-used tab (i.e. the
+    /// one the user was on before the current active tab), if any. Used when
+    /// auto-switching during a tab-to-pane-split drag so the user has a
+    /// visible destination tab to drop into.
+    fn previous_mru_tab_index(&self) -> Option<usize> {
+        let prev_id = self.tab_mru_order.get(1)?;
+        self.tabs.iter().position(|t| t.pane_group.id() == *prev_id)
+    }
+
+    /// Closest-edge logic: returns the split direction implied by the cursor's
+    /// position within a pane rect. The cursor's distance to each of the four
+    /// edges is computed in normalized [0, 1] units; the smallest distance
+    /// wins. Ties break toward Right.
+    fn pick_direction(pane_rect: RectF, cursor: Vector2F) -> Direction {
+        // Avoid divide-by-zero on degenerate rects; default to Right.
+        if pane_rect.width() <= 0.0 || pane_rect.height() <= 0.0 {
+            return Direction::Right;
+        }
+        let rel_x = ((cursor.x() - pane_rect.min_x()) / pane_rect.width()).clamp(0.0, 1.0);
+        let rel_y = ((cursor.y() - pane_rect.min_y()) / pane_rect.height()).clamp(0.0, 1.0);
+        let dist_left = rel_x;
+        let dist_right = 1.0 - rel_x;
+        let dist_top = rel_y;
+        let dist_bottom = 1.0 - rel_y;
+        let min = dist_left.min(dist_right).min(dist_top).min(dist_bottom);
+        if dist_right == min {
+            Direction::Right
+        } else if dist_left == min {
+            Direction::Left
+        } else if dist_top == min {
+            Direction::Up
+        } else {
+            Direction::Down
+        }
+    }
+
+    /// Looks for a tab in this workspace (other than `src_idx`) whose pane area
+    /// currently contains the drag position. Returns the target tab's index,
+    /// its pane group handle, the specific pane the drop landed on (used as
+    /// the split anchor), and the split direction implied by which edge of
+    /// the pane the cursor is closest to. Skips the source tab.
+    fn find_drop_target_pane(
+        &self,
+        src_idx: usize,
+        drop_pos: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(usize, ViewHandle<PaneGroup>, PaneId, Direction)> {
+        let center = drop_pos.center();
+        // Snapshot the candidate (dst_idx, pane_group, visible pane ids) up
+        // front so we don't hold a borrow on `ctx` through
+        // `element_position_by_id`.
+        let candidates: Vec<(usize, ViewHandle<PaneGroup>, Vec<PaneId>)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(dst_idx, tab)| {
+                if dst_idx == src_idx {
+                    return None;
+                }
+                let pg = tab.pane_group.clone();
+                let pane_ids = pg.as_ref(ctx).visible_pane_ids();
+                Some((dst_idx, pg, pane_ids))
+            })
+            .collect();
+
+        for (dst_idx, dst_pg, pane_ids) in candidates {
+            for pane_id in pane_ids {
+                if let Some(rect) = ctx.element_position_by_id(pane_id.position_id()) {
+                    if rect.contains_point(center) {
+                        let direction = Self::pick_direction(rect, center);
+                        return Some((dst_idx, dst_pg, pane_id, direction));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Smallest-slice implementation of "drag a tab onto another tab's pane area
+    /// to create a horizontal split". Returns `true` if the drop was consumed.
+    /// Edge cases (source has a split, source pane isn't a terminal, drop hit
+    /// nothing, feature flag off, etc.) all return `false` so the caller falls
+    /// back to the existing detach/reorder paths.
+    fn try_drop_tab_on_pane(
+        &mut self,
+        src_idx: usize,
+        drop_pos: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !FeatureFlag::DragTabToPaneSplit.is_enabled() {
+            return false;
+        }
+        let Some(src_tab) = self.tabs.get(src_idx) else {
+            return false;
+        };
+        let src_pg = src_tab.pane_group.clone();
+
+        // Smallest slice: only single-pane source tabs are supported.
+        let src_pane_ids = src_pg.as_ref(ctx).visible_pane_ids();
+        if src_pane_ids.len() != 1 {
+            return false;
+        }
+        let src_pane_id = src_pane_ids[0];
+        if !src_pane_id.is_terminal_pane() {
+            return false;
+        }
+
+        let Some((dst_idx, dst_pg, anchor_pane_id, direction)) =
+            self.find_drop_target_pane(src_idx, drop_pos, ctx)
+        else {
+            return false;
+        };
+
+        let removed = src_pg.update(ctx, |pg, ctx| pg.remove_pane_for_move(&src_pane_id, ctx));
+        let Some(pane) = removed else {
+            return false;
+        };
+        dst_pg.update(ctx, |pg, ctx| {
+            pg.add_existing_pane_visible(pane, anchor_pane_id, direction, ctx);
+        });
+
+        // Remove the now-empty source tab. `remove_pane_for_move` already ran
+        // `detach(DetachType::Moved)` on the pane, so passing
+        // `detach_panes_for_close=false` (the default of
+        // `remove_tab_without_undo`) is correct and keeps the live terminal
+        // session attached to its new home.
+        self.remove_tab_without_undo(src_idx, ctx);
+
+        // Focus the destination tab in the (potentially shifted) tabs vec.
+        let active = if src_idx < dst_idx {
+            dst_idx - 1
+        } else {
+            dst_idx
+        };
+        self.set_active_tab_index(active, ctx);
+        ctx.notify();
+        true
+    }
+
     /// Handles a tab drag event from the `Draggable` element. Dispatches to
     /// one of three modes: forward to an in-progress cross-window drag,
     /// initiate a new cross-window drag when the drag leaves the tab bar
@@ -24997,6 +25231,29 @@ impl Workspace {
         position: RectF,
         ctx: &mut ViewContext<Self>,
     ) {
+        // On the first drag tick: if the user is dragging the currently-active
+        // tab, auto-switch the view to the previous MRU tab so they have a
+        // visible destination pane to drop on. Mirrors iTerm's drag UX.
+        // Restored on `DropTab` if the drop didn't consume.
+        if FeatureFlag::DragTabToPaneSplit.is_enabled()
+            && self.last_tab_drag.is_none()
+            && current_index == self.active_tab_index
+            && self.pre_drag_active_tab.is_none()
+        {
+            if let Some(prev_idx) = self.previous_mru_tab_index() {
+                if prev_idx != current_index {
+                    self.pre_drag_active_tab = Some(current_index);
+                    self.set_active_tab_index(prev_idx, ctx);
+                }
+            }
+        }
+
+        // Remember the most recent tab-drag position so `DropTab` can resolve
+        // a drop onto a pane in another tab into a horizontal split.
+        if FeatureFlag::DragTabToPaneSplit.is_enabled() {
+            self.last_tab_drag = Some((current_index, position));
+        }
+
         const DETACH_SENSITIVITY: f32 = 10.0;
         // Only detach when the drag leaves every tab-bar presentation on its
         // perpendicular axis. Windows with vertical tabs still render the
@@ -25047,8 +25304,25 @@ impl Workspace {
         }
 
         let source_is_single_tab = self.tabs.len() == 1;
+        // Resolve the drop target pane once: drives both the visual overlay
+        // during drag and the cross-window-detach suppression below. When the
+        // drag is hovering over a pane in another tab and `DragTabToPaneSplit`
+        // is on, suppress the cross-window detach so the drop becomes a split
+        // instead of spawning a preview window.
+        let drop_target_pane = if FeatureFlag::DragTabToPaneSplit.is_enabled() {
+            self.find_drop_target_pane(current_index, position, ctx)
+                .map(|(_, _, pane_id, direction)| (pane_id, direction))
+        } else {
+            None
+        };
+        if self.current_drag_target_pane != drop_target_pane {
+            self.current_drag_target_pane = drop_target_pane;
+            ctx.notify();
+        }
+        let would_drop_on_pane = drop_target_pane.is_some();
         if (is_drag_outside_tab_bar || source_is_single_tab)
             && FeatureFlag::DragTabsToWindows.is_enabled()
+            && !would_drop_on_pane
         {
             let source_was_single_tab = source_is_single_tab;
             if !source_was_single_tab {
