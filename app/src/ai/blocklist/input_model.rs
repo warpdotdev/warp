@@ -18,7 +18,10 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::{InputType, NldDecisionSource};
+pub use input_classifier::{
+    AppLevelOverride, InputType, InputTypeAutoDetectionSource, NldClassifierSource,
+    NldShortCircuit,
+};
 
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::BlocklistAIContextModel;
@@ -140,8 +143,11 @@ pub struct BlocklistAIInputModel {
     /// The timestamp of the last time the input mode was switched, if the switch was to AI mode and
     /// it was autodetected. Else, `None`.
     last_ai_autodetection_ts: Option<Instant>,
-    /// The source of the final input decision upon submission
-    nld_decision_source: Option<NldDecisionSource>,
+    /// The source of the final input decision upon submission. Populated only
+    /// when the source is an app-level override or originated from the NLD
+    /// pipeline; left `None` for paths that bypass NLD without being one of
+    /// the tracked overrides.
+    input_type_decision_source: Option<InputTypeAutoDetectionSource>,
 
     /// Timestamp of the last time the input type was explicitly set.
     last_explicit_input_type_set_at: Option<Instant>,
@@ -217,7 +223,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_enabled,
                                 input_type: InputType::AI,
                             },
-                            (!is_nld_enabled).then_some(NldDecisionSource::SettingDisabled),
+                            (!is_nld_enabled).then_some(AppLevelOverride::SettingDisabled.into()),
                             ctx,
                         );
                     }
@@ -233,7 +239,8 @@ impl BlocklistAIInputModel {
                             is_locked: !is_autodetection_enabled,
                             ..me.input_config()
                         },
-                        (!is_autodetection_enabled).then_some(NldDecisionSource::SettingDisabled),
+                        (!is_autodetection_enabled)
+                            .then_some(AppLevelOverride::SettingDisabled.into()),
                         ctx,
                     );
                 }
@@ -247,7 +254,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_nld_enabled,
                             input_type: InputType::Shell,
                         },
-                        (!is_nld_enabled).then_some(NldDecisionSource::SettingDisabled),
+                        (!is_nld_enabled).then_some(AppLevelOverride::SettingDisabled.into()),
                         ctx,
                     );
                 }
@@ -263,12 +270,15 @@ impl BlocklistAIInputModel {
                     ..
                 } => {
                     if display_mode.is_inline() {
+                        // Entering inline agent view isn't a manual NLD mode toggle
+                        // (the user opened the agent view, not the type-switch UI),
+                        // so leave the decision source unset.
                         me.set_input_config_internal(
                             InputConfig {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
-                            Some(NldDecisionSource::ManualToggle),
+                            None,
                             ctx,
                         );
                     } else if matches!(origin, AgentViewEntryOrigin::ClearBuffer) {
@@ -280,7 +290,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_autodetection_enabled,
                             },
                             (!is_autodetection_enabled)
-                                .then_some(NldDecisionSource::SettingDisabled),
+                                .then_some(AppLevelOverride::SettingDisabled.into()),
                             ctx,
                         );
                     } else if me.has_locking_attachment(ctx) {
@@ -293,7 +303,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
-                            Some(NldDecisionSource::AttachmentForcedAi),
+                            Some(AppLevelOverride::AttachmentForcedAi.into()),
                             ctx,
                         );
                     } else {
@@ -313,7 +323,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_autodetection_enabled,
                             },
                             (!is_autodetection_enabled)
-                                .then_some(NldDecisionSource::SettingDisabled),
+                                .then_some(AppLevelOverride::SettingDisabled.into()),
                             ctx,
                         );
                     }
@@ -333,7 +343,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_in_terminal_enabled,
                             },
                             (!is_nld_in_terminal_enabled)
-                                .then_some(NldDecisionSource::SettingDisabled),
+                                .then_some(AppLevelOverride::SettingDisabled.into()),
                             ctx,
                         );
                     }
@@ -347,8 +357,8 @@ impl BlocklistAIInputModel {
         } else {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         };
-        let initial_nld_decision_source =
-            (!is_autodetection_enabled).then_some(NldDecisionSource::SettingDisabled);
+        let initial_decision_source =
+            (!is_autodetection_enabled).then_some(AppLevelOverride::SettingDisabled.into());
         Self {
             input_config: InputConfig {
                 input_type: InputType::Shell,
@@ -358,7 +368,7 @@ impl BlocklistAIInputModel {
             ai_context_model,
             terminal_view_id,
             last_ai_autodetection_ts: None,
-            nld_decision_source: initial_nld_decision_source,
+            input_type_decision_source: initial_decision_source,
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
             autodetect_abort_handle: None,
@@ -389,8 +399,8 @@ impl BlocklistAIInputModel {
     pub fn input_config(&self) -> InputConfig {
         self.input_config
     }
-    pub fn nld_decision_source(&self) -> Option<NldDecisionSource> {
-        self.nld_decision_source
+    pub fn input_type_decision_source(&self) -> Option<InputTypeAutoDetectionSource> {
+        self.input_type_decision_source
     }
 
     pub fn last_ai_autodetection_ts(&self) -> Option<Instant> {
@@ -422,18 +432,14 @@ impl BlocklistAIInputModel {
     pub fn set_input_type(&mut self, input_type: InputType, ctx: &mut ModelContext<Self>) {
         self.temporarily_disable_autodetection();
         let current_config = self.input_config();
-        self.set_input_config_internal(
-            current_config.with_input_type(input_type),
-            Some(NldDecisionSource::ManualToggle),
-            ctx,
-        );
+        self.set_input_config_internal(current_config.with_input_type(input_type), None, ctx);
     }
 
     /// Does not disable autodetection.
     fn set_input_config_internal(
         &mut self,
         new_config: InputConfig,
-        decision_source: Option<NldDecisionSource>,
+        decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         // When `AgentView` is enabled, AI input mode can only be set in the top-level terminal
@@ -452,7 +458,7 @@ impl BlocklistAIInputModel {
         }
 
         if self.input_config == new_config {
-            self.nld_decision_source = decision_source;
+            self.input_type_decision_source = decision_source;
             return false;
         }
 
@@ -474,7 +480,7 @@ impl BlocklistAIInputModel {
         }
 
         self.input_config = new_config;
-        self.nld_decision_source = decision_source;
+        self.input_type_decision_source = decision_source;
 
         // Emit specific events for what actually changed
         if old_config.input_type != new_config.input_type {
@@ -493,7 +499,7 @@ impl BlocklistAIInputModel {
         &mut self,
         new_config: InputConfig,
         is_input_buffer_empty: bool,
-        decision_source: Option<NldDecisionSource>,
+        decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.temporarily_disable_autodetection();
@@ -681,7 +687,7 @@ impl BlocklistAIInputModel {
                     input_type: InputType::Shell,
                     ..self.input_config()
                 },
-                Some(NldDecisionSource::Denylist),
+                Some(NldShortCircuit::Denylist.into()),
                 ctx,
             );
             return;
@@ -732,7 +738,7 @@ impl BlocklistAIInputModel {
                     {
                         return InputClassificationDecision::new(
                             InputType::AI,
-                            NldDecisionSource::OneOffWhitelist,
+                            NldShortCircuit::OneOffWhitelist.into(),
                         );
                     }
 
@@ -742,7 +748,7 @@ impl BlocklistAIInputModel {
                     {
                         return InputClassificationDecision::new(
                             InputType::AI,
-                            NldDecisionSource::AgentFollowUp,
+                            NldShortCircuit::AgentFollowUp.into(),
                         );
                     }
 
@@ -758,7 +764,7 @@ impl BlocklistAIInputModel {
                         {
                             return InputClassificationDecision::new(
                                 InputType::Shell,
-                                NldDecisionSource::HistoryMatch,
+                                NldShortCircuit::HistoryMatch.into(),
                             );
                         }
                     }

@@ -224,14 +224,13 @@ use crate::ai::{
         telemetry_banner::{should_collect_ai_ugc_telemetry, TelemetryBanner},
         AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel,
         BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-        BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-        BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
+        AppLevelOverride, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+        BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
         InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
-        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, NldDecisionSource,
-        PassiveSuggestionsModels, PendingQueryState, RequestFileEditsFormatKind,
-        ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-        StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-        PRE_REWIND_PREFIX,
+        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
+        PendingQueryState, RequestFileEditsFormatKind, ShellCommandExecutor,
+        ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+        ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
     get_relevant_files::controller::GetRelevantFilesController,
@@ -3458,7 +3457,7 @@ impl TerminalView {
                     model.set_input_config(
                         input_config,
                         is_input_buffer_empty,
-                        Some(NldDecisionSource::SettingDisabled),
+                        Some(AppLevelOverride::SettingDisabled.into()),
                         ctx,
                     );
                 }
@@ -18739,13 +18738,16 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.ai_input_model.update(ctx, |ai_input, ctx| {
+            // "Ask AI" and other affordances route here; they are NLD-bypass
+            // paths rather than user-driven mode toggles, so leave the
+            // decision source unset.
             ai_input.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
                 },
                 query.is_none(),
-                Some(NldDecisionSource::ManualToggle),
+                None,
                 ctx,
             );
         });
@@ -21942,6 +21944,9 @@ impl TerminalView {
             // In general, user has expressed intent to "enter agent mode" by sending the inline review.
             // When NLD is on, this means unlocking any status locks similar to other agent mode queries.
             // When NLD is off, we override the input mode to AI.
+            //
+            // This is invoked from "send inline review" — it's not the NLD
+            // mode-switch toggle, so leave the decision source unset.
             self.ai_input_model.update(ctx, |input_model, ctx| {
                 input_model.set_input_config(
                     input_model
@@ -21949,7 +21954,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
-                    Some(NldDecisionSource::ManualToggle),
+                    None,
                     ctx,
                 );
             });

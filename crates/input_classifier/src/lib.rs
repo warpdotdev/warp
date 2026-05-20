@@ -15,43 +15,86 @@ pub use input_type::InputType;
 pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
 /// The source of the final input type decision applied to the user input.
+///
+/// Variants are grouped by where in the input-type-decision pipeline they
+/// originate so analytics can distinguish between app-level overrides that
+/// bypass NLD entirely and decisions produced by the NLD pipeline itself.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NldDecisionSource {
-    /// The user explicitly selected Agent/Shell mode via UI or keybinding.
+pub enum InputTypeAutoDetectionSource {
+    /// App level settings from user actions
+    AppLevelOverride(AppLevelOverride),
+    /// Decision Source NLD classifier (heuristic or ML model).
+    NldClassifier(NldClassifierSource),
+    /// NLD whitelists/blocklists
+    NldShortCircuit(NldShortCircuit),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppLevelOverride {
     ManualToggle,
-    /// The user used a prefix override.
+
     ShellPrefix,
-    /// Attachments forced the input into AI mode.
+
     AttachmentForcedAi,
-    /// Autodetection was disabled by settings.
+
     SettingDisabled,
+}
+
+/// Sources produced by the NLD classifier pipeline (heuristic or ML model).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NldClassifierSource {
+    ShellHeuristic,
+
+    NldClassifier,
+    /// The NLD model was unavailable or unusable, so the heuristic fallback
+    /// made the decision.
+    NldClassifierFallbackHeuristic,
+    /// The NLD model returned an error, so the current input type was kept.
+    NldClassifierFallbackCurrentInput,
+    /// The input was a one-off natural-language word. Reserved for symmetry;
+    /// production emit paths use [`NldShortCircuit::OneOffWhitelist`].
+    OneOffWhitelist,
+}
+
+/// Short-circuits inside the NLD pipeline that produce a decision without
+/// running the full classifier model.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NldShortCircuit {
     /// The first token matched the user-configurable autodetection denylist.
     Denylist,
     /// The input closely matched a previous shell command.
     HistoryMatch,
-    /// The input matched a one-off natural language allowlist.
     OneOffWhitelist,
-    /// The input was treated as a follow-up to the previous agent response.
     AgentFollowUp,
-    /// The input was classified as shell by shell-command heuristics.
-    ShellHeuristic,
-    /// The input was classified by the NLD model.
-    NldClassifier,
-    /// The NLD model was unavailable or unusable, so the heuristic fallback made the decision.
-    NldClassifierFallbackHeuristic,
-    /// The NLD model returned an error, so the current input type was kept.
-    NldClassifierFallbackCurrentInput,
+}
+
+impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
+    fn from(value: AppLevelOverride) -> Self {
+        Self::AppLevelOverride(value)
+    }
+}
+
+impl From<NldClassifierSource> for InputTypeAutoDetectionSource {
+    fn from(value: NldClassifierSource) -> Self {
+        Self::NldClassifier(value)
+    }
+}
+
+impl From<NldShortCircuit> for InputTypeAutoDetectionSource {
+    fn from(value: NldShortCircuit) -> Self {
+        Self::NldShortCircuit(value)
+    }
 }
 
 /// The result of input type detection, including the source that determined the final decision.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct InputClassificationDecision {
     pub input_type: InputType,
-    pub source: NldDecisionSource,
+    pub source: InputTypeAutoDetectionSource,
 }
 
 impl InputClassificationDecision {
-    pub fn new(input_type: InputType, source: NldDecisionSource) -> Self {
+    pub fn new(input_type: InputType, source: InputTypeAutoDetectionSource) -> Self {
         Self { input_type, source }
     }
 }
@@ -81,11 +124,11 @@ pub struct ClassificationResult {
     /// The probability that the input is a natural language query to AI.
     p_ai: f32,
     /// The source that produced this classification.
-    pub source: NldDecisionSource,
+    pub source: InputTypeAutoDetectionSource,
 }
 
 impl ClassificationResult {
-    fn pure_ai(source: NldDecisionSource) -> Self {
+    fn pure_ai(source: InputTypeAutoDetectionSource) -> Self {
         Self {
             p_shell: 0.0,
             p_ai: 1.0,
@@ -93,7 +136,7 @@ impl ClassificationResult {
         }
     }
 
-    fn pure_shell(source: NldDecisionSource) -> Self {
+    fn pure_shell(source: InputTypeAutoDetectionSource) -> Self {
         Self {
             p_shell: 1.0,
             p_ai: 0.0,

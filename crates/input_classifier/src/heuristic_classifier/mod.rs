@@ -7,7 +7,7 @@ use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
     ClassificationResult, Context, InputClassificationDecision, InputClassifier, InputType,
-    NldDecisionSource,
+    NldClassifierSource, NldShortCircuit,
     parser::parse_query_into_tokens,
     util::{
         is_installed_binary, is_likely_shell_command, is_one_off_natural_language_word_or_prefix,
@@ -53,14 +53,14 @@ impl InputClassifier for HeuristicClassifier {
         {
             return InputClassificationDecision::new(
                 InputType::AI,
-                NldDecisionSource::OneOffWhitelist,
+                NldShortCircuit::OneOffWhitelist.into(),
             );
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
             return InputClassificationDecision::new(
                 InputType::Shell,
-                NldDecisionSource::ShellHeuristic,
+                NldClassifierSource::ShellHeuristic.into(),
             );
         }
 
@@ -70,7 +70,7 @@ impl InputClassifier for HeuristicClassifier {
             .unwrap_or_else(|_| {
                 InputClassificationDecision::new(
                     context.current_input_type,
-                    NldDecisionSource::NldClassifierFallbackHeuristic,
+                    NldClassifierSource::NldClassifierFallbackHeuristic.into(),
                 )
             })
     }
@@ -115,7 +115,7 @@ async fn natural_language_detection_heuristic(
     current_input_type: InputType,
     include_last_token: bool,
 ) -> ClassificationResult {
-    let source = NldDecisionSource::NldClassifierFallbackHeuristic;
+    let source = NldClassifierSource::NldClassifierFallbackHeuristic.into();
     let word_tokens_count = word_tokens.len();
 
     let min_token_length = if matches!(current_input_type, InputType::AI) {

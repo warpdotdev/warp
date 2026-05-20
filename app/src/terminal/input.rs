@@ -145,10 +145,10 @@ use crate::{
             render_ai_agent_mode_icon, render_ai_follow_up_icon,
             telemetry_banner::should_collect_ai_ugc_telemetry,
             BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-            BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-            BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-            NldDecisionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
-            DRIVE_OBJECT_ATTACHMENT_REGEX,
+            AppLevelOverride, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+            BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
+            InputType, InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
+            DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
         },
         llms::{LLMPreferences, LLMPreferencesEvent},
         predict::{
@@ -3801,13 +3801,16 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).is_empty(ctx);
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            // Cloud-handoff prefix activation is an NLD-bypass path that is
+            // neither a manual toggle nor one of the tracked overrides, so we
+            // leave the decision source unset.
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(NldDecisionSource::ManualToggle),
+                None,
                 ctx,
             );
         });
@@ -3886,6 +3889,9 @@ impl Input {
         self.handoff_compose_state
             .update(ctx, |state, ctx| state.exit(ctx));
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            // Exiting cloud-handoff compose is an NLD-bypass path; leave the
+            // decision source unset rather than masquerading as a manual
+            // toggle.
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
@@ -3893,7 +3899,7 @@ impl Input {
                 }
                 .unlocked_if_autodetection_enabled(true, ctx),
                 is_input_buffer_empty,
-                Some(NldDecisionSource::ManualToggle),
+                None,
                 ctx,
             );
         });
@@ -3955,13 +3961,16 @@ impl Input {
             editor.buffer_text(ctx).is_empty()
         });
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            // Typing the `&` cloud-handoff prefix is a user-driven prefix
+            // activation, not an NLD mode toggle; leave the decision source
+            // unset (matches the activate/exit cloud-handoff paths above).
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(NldDecisionSource::ManualToggle),
+                None,
                 ctx,
             );
         });
@@ -4975,13 +4984,16 @@ impl Input {
                     self.agent_view_controller.as_ref(ctx).is_fullscreen();
                 self.ai_input_model.update(ctx, |ai_input_model, ctx| {
                     if is_agent_view_fullscreen {
+                        // Selecting a shell command from the inline history
+                        // menu is not a manual NLD-mode toggle, so leave the
+                        // decision source unset.
                         ai_input_model.set_input_config(
                             InputConfig {
                                 input_type: InputType::Shell,
                                 is_locked: true,
                             },
                             false,
-                            Some(NldDecisionSource::ManualToggle),
+                            None,
                             ctx,
                         );
                     } else {
@@ -6006,7 +6018,7 @@ impl Input {
         self.focus_input_box(ctx);
         self.ensure_agent_mode_for_ai_features_with_source(
             true,
-            NldDecisionSource::AttachmentForcedAi,
+            Some(AppLevelOverride::AttachmentForcedAi.into()),
             ctx,
         );
 
@@ -6152,6 +6164,9 @@ impl Input {
                     {
                         true
                     } else {
+                        // The UDI input-type pill click is the third true
+                        // manual mode toggle (alongside the Cmd/Ctrl-I
+                        // keybinding handlers).
                         let new_config = InputConfig {
                             input_type,
                             is_locked: true,
@@ -6159,7 +6174,7 @@ impl Input {
                         model.set_input_config(
                             new_config,
                             is_input_buffer_empty,
-                            Some(NldDecisionSource::ManualToggle),
+                            Some(AppLevelOverride::ManualToggle.into()),
                             ctx,
                         );
                         false
@@ -6211,47 +6226,49 @@ impl Input {
     }
 
     /// Switches to AI mode but preserves current lock state.
+    ///
+    /// This helper is called from many secondary paths (autosuggestion
+    /// accepted, AI context menu accepted, “start new conversation” action,
+    /// etc.) that are not themselves user-driven NLD-mode toggles, so it
+    /// defaults the decision source to `None`. Callers that *are* manual
+    /// toggles should call `enter_ai_mode_with_source` with an explicit
+    /// source instead.
     fn enter_ai_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.enter_ai_mode_with_source(NldDecisionSource::ManualToggle, ctx);
+        self.enter_ai_mode_with_source(None, ctx);
     }
 
     /// Switches to AI mode but preserves current lock state.
     fn enter_ai_mode_with_source(
         &mut self,
-        decision_source: NldDecisionSource,
+        decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ViewContext<Self>,
     ) {
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |input_model, ctx| {
             let new_config = input_model.input_config().with_input_type(InputType::AI);
-            input_model.set_input_config(
-                new_config,
-                is_input_buffer_empty,
-                Some(decision_source),
-                ctx,
-            );
+            input_model.set_input_config(new_config, is_input_buffer_empty, decision_source, ctx);
         });
     }
 
     /// Helper function to ensure agent mode when needed, using the same logic as SelectFile.
     /// This handles the transition from shell mode to agent mode while preserving lock semantics.
     /// Only forces agent mode if the user hasn't explicitly locked the mode to Shell.
+    ///
+    /// Defaults the decision source to `None` because this helper is invoked
+    /// from many programmatic AI-feature paths (attaching patterns, opening
+    /// slash commands, etc.) that are not themselves manual mode toggles.
     pub fn ensure_agent_mode_for_ai_features(
         &mut self,
         should_override_shell_lock: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.ensure_agent_mode_for_ai_features_with_source(
-            should_override_shell_lock,
-            NldDecisionSource::ManualToggle,
-            ctx,
-        );
+        self.ensure_agent_mode_for_ai_features_with_source(should_override_shell_lock, None, ctx);
     }
 
     fn ensure_agent_mode_for_ai_features_with_source(
         &mut self,
         should_override_shell_lock: bool,
-        decision_source: NldDecisionSource,
+        decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_input_model = self.ai_input_model.as_ref(ctx);
@@ -6513,7 +6530,7 @@ impl Input {
                                     is_locked: true,
                                 },
                                 is_input_buffer_empty,
-                                Some(NldDecisionSource::SettingDisabled),
+                                Some(AppLevelOverride::SettingDisabled.into()),
                                 ctx,
                             );
                         });
@@ -9689,13 +9706,17 @@ impl Input {
                                 });
 
                             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+                                // Typing the legacy `* ` AI prefix is a
+                                // user-driven prefix activation, not an NLD
+                                // mode toggle; leave the decision source
+                                // unset.
                                 ai_input_model.set_input_config(
                                     InputConfig {
                                         input_type: InputType::AI,
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(NldDecisionSource::ManualToggle),
+                                    None,
                                     ctx,
                                 );
                             });
@@ -9803,7 +9824,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(NldDecisionSource::ShellPrefix),
+                                    Some(AppLevelOverride::ShellPrefix.into()),
                                     ctx,
                                 );
                             });
@@ -12692,14 +12713,14 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let nld_decision_source = input_model.nld_decision_source();
+            let input_type_decision_source = input_model.input_type_decision_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
-                    nld_decision_source,
+                    input_type_decision_source,
                     was_lock_set_with_empty_buffer,
                     block_id,
                 },
@@ -12813,14 +12834,14 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let nld_decision_source = input_model.nld_decision_source();
+            let input_type_decision_source = input_model.input_type_decision_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
-                    nld_decision_source,
+                    input_type_decision_source,
                     was_lock_set_with_empty_buffer,
                     block_id,
                 },
@@ -13818,14 +13839,14 @@ impl Input {
                     is_locked: true,
                 };
                 let decision_source = if has_locking_attachment {
-                    NldDecisionSource::AttachmentForcedAi
+                    AppLevelOverride::AttachmentForcedAi
                 } else {
-                    NldDecisionSource::ManualToggle
+                    AppLevelOverride::ManualToggle
                 };
                 ai_input_model.set_input_config(
                     new_config,
                     is_input_buffer_empty,
-                    Some(decision_source),
+                    Some(decision_source.into()),
                     ctx,
                 );
             });
@@ -13851,7 +13872,7 @@ impl Input {
             ai_input_model.set_input_config(
                 new_config,
                 is_input_buffer_empty,
-                Some(NldDecisionSource::ManualToggle),
+                Some(AppLevelOverride::ManualToggle.into()),
                 ctx,
             );
         });
@@ -13906,7 +13927,7 @@ impl Input {
             ai_input_model.set_input_config(
                 new_config,
                 true,
-                Some(NldDecisionSource::ShellPrefix),
+                Some(AppLevelOverride::ShellPrefix.into()),
                 ctx,
             );
         });
@@ -14136,7 +14157,7 @@ impl Input {
                     false,
                     new_config
                         .is_locked
-                        .then_some(NldDecisionSource::SettingDisabled),
+                        .then_some(AppLevelOverride::SettingDisabled.into()),
                     ctx,
                 );
             });

@@ -5468,10 +5468,13 @@ fn test_input_type_button_explicit_lock() {
         );
         let after_click_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.nld_decision_source()
+                ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(after_click_source, Some(NldDecisionSource::ManualToggle));
+        assert_eq!(
+            after_click_source,
+            Some(AppLevelOverride::ManualToggle.into())
+        );
 
         // Explicitly click Terminal button - should lock to Shell mode
         input.update(&mut app, |input, ctx| {
@@ -5494,10 +5497,13 @@ fn test_input_type_button_explicit_lock() {
         );
         let final_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.nld_decision_source()
+                ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(final_source, Some(NldDecisionSource::ManualToggle));
+        assert_eq!(
+            final_source,
+            Some(AppLevelOverride::ManualToggle.into())
+        );
     });
 }
 
@@ -6171,8 +6177,8 @@ fn test_terminal_prefix_sets_shell_prefix_decision_source() {
                 assert_eq!(input_model.input_type(), InputType::Shell);
                 assert!(input_model.is_input_type_locked());
                 assert_eq!(
-                    input_model.nld_decision_source(),
-                    Some(NldDecisionSource::ShellPrefix)
+                    input_model.input_type_decision_source(),
+                    Some(AppLevelOverride::ShellPrefix.into())
                 );
             });
         });
@@ -6195,7 +6201,7 @@ fn test_source_less_locked_config_clears_decision_source() {
                 input_model.set_input_config(
                     locked_shell_config,
                     true,
-                    Some(NldDecisionSource::ShellPrefix),
+                    Some(AppLevelOverride::ShellPrefix.into()),
                     ctx,
                 );
                 input_model.set_input_config(locked_shell_config, true, None, ctx);
@@ -6204,14 +6210,14 @@ fn test_source_less_locked_config_clears_decision_source() {
 
         input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |input_model, _| {
-                assert_eq!(input_model.nld_decision_source(), None);
+                assert_eq!(input_model.input_type_decision_source(), None);
             });
         });
     });
 }
 
 #[test]
-fn test_input_buffer_submitted_telemetry_uses_raw_nld_decision_source() {
+fn test_input_buffer_submitted_telemetry_uses_raw_input_type_decision_source() {
     fn input_buffer_submitted_events() -> Vec<serde_json::Value> {
         warpui::telemetry::flush_events()
             .into_iter()
@@ -6257,7 +6263,7 @@ fn test_input_buffer_submitted_telemetry_uses_raw_nld_decision_source() {
         assert_eq!(telemetry_events[0]["input_type"], "Shell");
         assert_eq!(telemetry_events[0]["is_locked"], true);
         assert_eq!(
-            telemetry_events[0]["nld_decision_source"],
+            telemetry_events[0]["input_type_decision_source"],
             serde_json::Value::Null
         );
     });
@@ -6310,10 +6316,13 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let locked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.nld_decision_source()
+                ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(locked_source, Some(NldDecisionSource::AttachmentForcedAi));
+        assert_eq!(
+            locked_source,
+            Some(AppLevelOverride::AttachmentForcedAi.into())
+        );
 
         // Test with unlocked Shell mode
         input.update(&mut app, |input, ctx| {
@@ -6351,10 +6360,13 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let unlocked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.nld_decision_source()
+                ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(unlocked_source, Some(NldDecisionSource::AttachmentForcedAi));
+        assert_eq!(
+            unlocked_source,
+            Some(AppLevelOverride::AttachmentForcedAi.into())
+        );
     });
 }
 
@@ -6860,10 +6872,10 @@ fn test_terminal_only_escape_locks_shell_mode() {
         assert!(config.is_locked);
         let source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.nld_decision_source()
+                ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(source, Some(NldDecisionSource::ManualToggle));
+        assert_eq!(source, Some(AppLevelOverride::ManualToggle.into()));
     });
 }
 

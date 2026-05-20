@@ -162,17 +162,23 @@ fn test_input_detection_sources() {
         let token = mock_parsed_input_token_without_descriptions("echo hello");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(decision.input_type, InputType::Shell);
-        assert_eq!(decision.source, NldDecisionSource::ShellHeuristic);
+        assert_eq!(
+            decision.source,
+            NldClassifierSource::ShellHeuristic.into()
+        );
         let token = mock_parsed_input_token_without_descriptions("explain");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(decision.input_type, InputType::AI);
-        assert_eq!(decision.source, NldDecisionSource::OneOffWhitelist);
+        assert_eq!(
+            decision.source,
+            NldShortCircuit::OneOffWhitelist.into()
+        );
         let token = mock_parsed_input_token_without_descriptions("fix this");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(decision.input_type, InputType::AI);
         assert_eq!(
             decision.source,
-            NldDecisionSource::NldClassifierFallbackHeuristic
+            NldClassifierSource::NldClassifierFallbackHeuristic.into()
         );
     });
 }

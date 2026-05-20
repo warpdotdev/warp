@@ -12,7 +12,7 @@ use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
     ClassificationResult, Context, InputClassificationDecision, InputClassifier, InputType,
-    NldDecisionSource,
+    NldClassifierSource, NldShortCircuit,
     parser::parse_query_into_tokens,
     util::{
         is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
@@ -108,7 +108,7 @@ impl InputClassifier for OnnxClassifier {
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
                 return InputClassificationDecision::new(
                     InputType::AI,
-                    NldDecisionSource::OneOffWhitelist,
+                    NldShortCircuit::OneOffWhitelist.into(),
                 );
             }
 
@@ -117,7 +117,7 @@ impl InputClassifier for OnnxClassifier {
             if is_one_off_shell_command_keyword(&first_word) {
                 return InputClassificationDecision::new(
                     InputType::Shell,
-                    NldDecisionSource::ShellHeuristic,
+                    NldClassifierSource::ShellHeuristic.into(),
                 );
             }
         }
@@ -125,7 +125,7 @@ impl InputClassifier for OnnxClassifier {
         if is_likely_shell_command(&input, total_word_token_count).await {
             return InputClassificationDecision::new(
                 InputType::Shell,
-                NldDecisionSource::ShellHeuristic,
+                NldClassifierSource::ShellHeuristic.into(),
             );
         }
 
@@ -141,7 +141,7 @@ impl InputClassifier for OnnxClassifier {
             .unwrap_or_else(|_| {
                 InputClassificationDecision::new(
                     context.current_input_type,
-                    NldDecisionSource::NldClassifierFallbackCurrentInput,
+                    NldClassifierSource::NldClassifierFallbackCurrentInput.into(),
                 )
             })
     }
@@ -285,7 +285,7 @@ mod tests {
             assert_eq!(decision.input_type, InputType::AI);
             assert_eq!(
                 decision.source,
-                NldDecisionSource::NldClassifierFallbackCurrentInput
+                NldClassifierSource::NldClassifierFallbackCurrentInput.into()
             );
         });
     }
