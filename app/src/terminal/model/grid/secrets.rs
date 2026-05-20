@@ -228,9 +228,7 @@ impl GridHandler {
             end_point = end_point.max(*cleared_secrets_range.end());
         }
 
-        let secrets_regex: Arc<SecretsRegex> = {
-            SECRETS_REGEX.lock().clone()
-        };
+        let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };
         let matches = self
             .regex_iter(
                 start_point,

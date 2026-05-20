@@ -9,8 +9,8 @@ use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
 use std::collections::HashMap;
 use std::ops::{Not, RangeInclusive};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
@@ -43,9 +43,9 @@ pub struct RegexLevelMetadata {
 
 lazy_static! {
     /// The information needed to search for secrets in strings or terminal grids.
-    /// 
+    ///
     /// These are initially empty, and will be populated with regexes when safe mode is enabled.
-    /// 
+    ///
     /// This is wrapped in an Arc so that readers can clone it cheaply to keep the critical section
     /// short, allowing writers to set a new set of regexes for future readers without being blocked
     /// on any users of the old patterns.

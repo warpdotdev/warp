@@ -23,9 +23,7 @@ pub(crate) fn find_secrets_in_text(text: &str) -> Vec<SecretRange> {
 
 /// Returns the ranges of detected secrets in the given text along with their SecretLevel.
 pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, SecretLevel)> {
-    let secrets_regex: Arc<SecretsRegex> = {
-        SECRETS_REGEX.lock().clone()
-    };
+    let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };
 
     find_secrets_in_text_with_levels_using_regex(text, &secrets_regex)
 }
