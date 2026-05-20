@@ -109,9 +109,7 @@ fn has_cloud_mode_queued_prompt(view: &TerminalView, ctx: &AppContext) -> bool {
     else {
         return false;
     };
-    view.ai_context_model()
-        .as_ref(ctx)
-        .queued_query_model()
+    view.queued_query_model
         .as_ref(ctx)
         .queue_for(conversation_id)
         .iter()

@@ -90,14 +90,16 @@ pub enum AutofireAction {
     PopFromEditMode { text: String },
 }
 
-/// Per-conversation queue of follow-up prompts plus the panel's edit and collapse state.
-/// One model is owned by each `BlocklistAIContextModel`.
+/// Per-conversation queue of follow-up prompts plus queue UI and submission state.
 pub struct QueuedQueryModel {
     queues: HashMap<AIConversationId, Vec<QueuedQuery>>,
     /// At most one row across all conversations may be in edit mode.
     editing: Option<EditingRow>,
     /// Conversations whose queue panel is currently collapsed (header visible, rows hidden).
     collapsed: HashSet<AIConversationId>,
+    /// When true, submitting a prompt while the selected conversation is responding will queue it
+    /// instead of sending it immediately.
+    queue_next_prompt_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +145,7 @@ pub enum QueuedQueryEvent {
     Cleared {
         conversation_id: AIConversationId,
     },
+    QueueNextPromptToggled,
 }
 
 impl Entity for QueuedQueryModel {
@@ -155,6 +158,7 @@ impl QueuedQueryModel {
             queues: HashMap::new(),
             editing: None,
             collapsed: HashSet::new(),
+            queue_next_prompt_enabled: false,
         }
     }
 
@@ -193,6 +197,15 @@ impl QueuedQueryModel {
     /// Returns true if the queue panel for `conversation_id` is collapsed.
     pub fn is_collapsed(&self, conversation_id: AIConversationId) -> bool {
         self.collapsed.contains(&conversation_id)
+    }
+
+    pub fn is_queue_next_prompt_enabled(&self) -> bool {
+        self.queue_next_prompt_enabled
+    }
+
+    pub fn toggle_queue_next_prompt(&mut self, ctx: &mut ModelContext<Self>) {
+        self.queue_next_prompt_enabled = !self.queue_next_prompt_enabled;
+        ctx.emit(QueuedQueryEvent::QueueNextPromptToggled);
     }
 
     /// Appends `query` to the tail of the queue for `conversation_id`.

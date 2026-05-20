@@ -1,7 +1,7 @@
 //! Multi-prompt queue panel rendered between the warping indicator and the input editor in
 //! [`TerminalView`].
 //!
-//! Reads from [`QueuedQueryModel`] (owned by `BlocklistAIContextModel`) and emits high-level
+//! Reads from [`QueuedQueryModel`] and emits high-level
 //! [`QueuedPromptsPanelEvent`]s for the host view to handle (for example, focusing the input
 //! editor after canceling an edit).
 use std::collections::HashMap;
@@ -22,27 +22,26 @@ use warpui::{
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::context_model::BlocklistAIContextModel;
 use crate::ai::blocklist::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin};
 use crate::appearance::Appearance;
-use crate::editor::{
-    EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
-    PropagateHorizontalNavigationKeys, SingleLineEditorOptions, TextOptions,
-};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::ui_components::icons::Icon;
-
-/// Icon size used for the chevron in the header and for row action icons.
-const ICON_SIZE: f32 = 16.;
-/// Size of the drag-handle icon wrapper rendered on the left of each row.
-const DRAG_HANDLE_SIZE: f32 = 24.;
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
 fn queue_row_position_id(panel_view_id: EntityId, index: usize) -> String {
     format!("queued_prompts_panel:{panel_view_id:?}:row:{index}")
+}
+
+#[derive(Clone, Default)]
+struct QueuedPromptRowState {
+    mouse_state: MouseStateHandle,
+    edit_button_mouse_state: MouseStateHandle,
+    delete_button_mouse_state: MouseStateHandle,
+    draggable_state: DraggableState,
 }
 
 /// View for the multi-prompt queue panel.
@@ -57,16 +56,8 @@ pub struct QueuedPromptsPanelView {
     edit_editor: ViewHandle<EditorView>,
     /// Mouse state for the header row, used to highlight on hover.
     header_mouse_state: MouseStateHandle,
-    /// Per-row mouse states keyed by `QueuedQueryId`.
-    /// Created lazily as rows are rendered and cleaned up after the model emits `Removed`.
-    row_mouse_states: HashMap<QueuedQueryId, MouseStateHandle>,
-    /// Per-row edit-button mouse states keyed by `QueuedQueryId`.
-    edit_button_mouse_states: HashMap<QueuedQueryId, MouseStateHandle>,
-    /// Per-row delete-button mouse states keyed by `QueuedQueryId`.
-    delete_button_mouse_states: HashMap<QueuedQueryId, MouseStateHandle>,
-    /// Per-row draggable states keyed by `QueuedQueryId`.
-    /// Created lazily as user-managed rows render and cleaned up after the model emits `Removed`.
-    row_draggable_states: HashMap<QueuedQueryId, DraggableState>,
+    /// Per-row hover/button/drag state keyed by `QueuedQueryId`.
+    row_states: HashMap<QueuedQueryId, QueuedPromptRowState>,
     /// The id of the row currently being dragged, if any.
     dragging_query_id: Option<QueuedQueryId>,
     /// The index where the current drag started, used for telemetry after live swaps.
@@ -79,8 +70,6 @@ pub enum QueuedPromptsPanelAction {
     ToggleCollapsed,
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
-    CommitEdit,
-    CancelEdit,
     /// Dispatched when the user begins dragging a row.
     /// Cancels any in-progress edit on that row.
     StartDrag(QueuedQueryId),
@@ -126,9 +115,6 @@ impl Entity for QueuedPromptsPanelView {
 }
 
 impl QueuedPromptsPanelView {
-    /// Construct a new panel.
-    /// The panel subscribes to `queued_query_model` and to `ai_context_model`'s selected-conversation
-    /// changes.
     pub fn new(
         queued_query_model: ModelHandle<QueuedQueryModel>,
         ai_context_model: ModelHandle<BlocklistAIContextModel>,
@@ -141,8 +127,13 @@ impl QueuedPromptsPanelView {
         });
 
         ctx.subscribe_to_model(&queued_query_model, Self::handle_queued_query_event);
-        ctx.subscribe_to_model(&ai_context_model, |_, _, _, ctx| {
-            ctx.notify();
+        ctx.subscribe_to_model(&ai_context_model, |_, _, event, ctx| {
+            if matches!(
+                event,
+                crate::ai::blocklist::BlocklistAIContextEvent::PendingQueryStateUpdated
+            ) {
+                ctx.notify();
+            }
         });
 
         Self {
@@ -151,13 +142,15 @@ impl QueuedPromptsPanelView {
             ai_context_model,
             edit_editor,
             header_mouse_state: MouseStateHandle::default(),
-            row_mouse_states: HashMap::new(),
-            edit_button_mouse_states: HashMap::new(),
-            delete_button_mouse_states: HashMap::new(),
-            row_draggable_states: HashMap::new(),
+            row_states: HashMap::new(),
             dragging_query_id: None,
             drag_start_index: None,
         }
+    }
+
+    fn clear_drag_state(&mut self) {
+        self.dragging_query_id = None;
+        self.drag_start_index = None;
     }
 
     fn handle_queued_query_event(
@@ -168,13 +161,9 @@ impl QueuedPromptsPanelView {
     ) {
         match event {
             QueuedQueryEvent::Removed { query_id, .. } => {
-                self.row_mouse_states.remove(query_id);
-                self.edit_button_mouse_states.remove(query_id);
-                self.delete_button_mouse_states.remove(query_id);
-                self.row_draggable_states.remove(query_id);
+                self.row_states.remove(query_id);
                 if self.dragging_query_id == Some(*query_id) {
-                    self.dragging_query_id = None;
-                    self.drag_start_index = None;
+                    self.clear_drag_state();
                 }
             }
             QueuedQueryEvent::EditEntered {
@@ -200,28 +189,16 @@ impl QueuedPromptsPanelView {
                 });
             }
             QueuedQueryEvent::Cleared { .. } => {
-                self.row_mouse_states.clear();
-                self.edit_button_mouse_states.clear();
-                self.delete_button_mouse_states.clear();
-                self.row_draggable_states.clear();
-                self.dragging_query_id = None;
-                self.drag_start_index = None;
+                self.row_states.clear();
+                self.clear_drag_state();
             }
             QueuedQueryEvent::Appended { query_id, .. } => {
-                // Per WARP.md: `MouseStateHandle` and `DraggableState` must be created once and
-                // reused across renders. Inline `MouseStateHandle::default()` during render breaks
-                // hover and drag tracking. We seed the maps here so the render pass clones the
-                // same handle every frame.
-                self.row_mouse_states.entry(*query_id).or_default();
-                self.edit_button_mouse_states.entry(*query_id).or_default();
-                self.delete_button_mouse_states
-                    .entry(*query_id)
-                    .or_default();
-                self.row_draggable_states.entry(*query_id).or_default();
+                self.row_states.entry(*query_id).or_default();
             }
             QueuedQueryEvent::Replaced { .. }
             | QueuedQueryEvent::Reordered { .. }
-            | QueuedQueryEvent::CollapseToggled { .. } => {}
+            | QueuedQueryEvent::CollapseToggled { .. }
+            | QueuedQueryEvent::QueueNextPromptToggled => {}
         }
         ctx.notify();
     }
@@ -236,21 +213,22 @@ impl QueuedPromptsPanelView {
         }
     }
 
-    fn selected_conversation_id(&self, ctx: &AppContext) -> Option<AIConversationId> {
-        self.ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-    }
-
     fn editing_row_id(&self, ctx: &AppContext) -> Option<QueuedQueryId> {
-        let conversation_id = self.selected_conversation_id(ctx)?;
+        let conversation_id = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)?;
         self.queued_query_model
             .as_ref(ctx)
             .editing_row(conversation_id)
     }
 
     fn toggle_collapsed(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         let collapsed = !self
@@ -268,7 +246,11 @@ impl QueuedPromptsPanelView {
     }
 
     fn start_editing_row(&mut self, query_id: QueuedQueryId, ctx: &mut ViewContext<Self>) {
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         self.queued_query_model.update(ctx, |model, ctx| {
@@ -278,7 +260,11 @@ impl QueuedPromptsPanelView {
     }
 
     fn delete_row(&mut self, query_id: QueuedQueryId, ctx: &mut ViewContext<Self>) {
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         let removed = self.queued_query_model.update(ctx, |model, ctx| {
@@ -307,7 +293,11 @@ impl QueuedPromptsPanelView {
         let Some(query_id) = self.editing_row_id(ctx) else {
             return;
         };
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         let origin = self
@@ -353,7 +343,11 @@ impl QueuedPromptsPanelView {
 
     fn start_drag(&mut self, query_id: QueuedQueryId, ctx: &mut ViewContext<Self>) {
         // If the row is in edit mode, cancel that edit so dragging is unambiguous.
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         let editing = self
@@ -383,7 +377,11 @@ impl QueuedPromptsPanelView {
         let Some(source_id) = self.dragging_query_id else {
             return;
         };
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return;
         };
         let panel_view_id = ctx.view_id();
@@ -417,7 +415,11 @@ impl QueuedPromptsPanelView {
             return;
         };
         let from_index = self.drag_start_index.take();
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             ctx.notify();
             return;
         };
@@ -455,7 +457,11 @@ impl QueuedPromptsPanelView {
         {
             return false;
         }
-        let Some(conversation_id) = self.selected_conversation_id(ctx) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
             return false;
         };
         self.queued_query_model
@@ -472,8 +478,6 @@ impl TypedActionView for QueuedPromptsPanelView {
             QueuedPromptsPanelAction::ToggleCollapsed => self.toggle_collapsed(ctx),
             QueuedPromptsPanelAction::StartEditingRow(id) => self.start_editing_row(*id, ctx),
             QueuedPromptsPanelAction::DeleteRow(id) => self.delete_row(*id, ctx),
-            QueuedPromptsPanelAction::CommitEdit => self.commit_edit(ctx),
-            QueuedPromptsPanelAction::CancelEdit => self.cancel_edit(ctx),
             QueuedPromptsPanelAction::StartDrag(id) => self.start_drag(*id, ctx),
             QueuedPromptsPanelAction::DragMoved { rect } => self.drag_moved(*rect, ctx),
             QueuedPromptsPanelAction::DropEnd => self.drop_end(ctx),
@@ -503,7 +507,11 @@ impl View for QueuedPromptsPanelView {
         if !self.should_render(app) {
             return Empty::new().finish();
         }
-        let Some(conversation_id) = self.selected_conversation_id(app) else {
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(app)
+            .selected_conversation_id(app)
+        else {
             return Empty::new().finish();
         };
 
@@ -523,26 +531,11 @@ impl View for QueuedPromptsPanelView {
             let mut body = Flex::column();
 
             for (index, query) in queue.iter().enumerate() {
-                let row_mouse_state = self
-                    .row_mouse_states
+                let row_state = self
+                    .row_states
                     .get(&query.id())
-                    .cloned()
-                    .unwrap_or_default();
-                let edit_button_mouse_state = self
-                    .edit_button_mouse_states
-                    .get(&query.id())
-                    .cloned()
-                    .unwrap_or_default();
-                let delete_button_mouse_state = self
-                    .delete_button_mouse_states
-                    .get(&query.id())
-                    .cloned()
-                    .unwrap_or_default();
-                let draggable_state = self
-                    .row_draggable_states
-                    .get(&query.id())
-                    .cloned()
-                    .unwrap_or_default();
+                    .expect("queued row state should be seeded by model event")
+                    .clone();
                 let is_in_edit_mode = editing_row_id == Some(query.id());
                 let is_being_dragged = self.dragging_query_id == Some(query.id());
                 let row = render_row(RenderRowProps {
@@ -554,10 +547,7 @@ impl View for QueuedPromptsPanelView {
                     is_in_edit_mode,
                     is_being_dragged,
                     edit_editor: &self.edit_editor,
-                    row_mouse_state,
-                    edit_button_mouse_state,
-                    delete_button_mouse_state,
-                    draggable_state,
+                    row_state,
                     appearance,
                 });
                 body.add_child(row);
@@ -582,9 +572,6 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
     ctx.add_typed_action_view(|ctx| {
         let options = SingleLineEditorOptions {
             text: text_options,
-            propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
-            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
-            propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
             ..Default::default()
         };
         EditorView::single_line(options, ctx)
@@ -600,25 +587,32 @@ fn calculate_updated_row_index(
     drag_position: RectF,
     ctx: &ViewContext<QueuedPromptsPanelView>,
 ) -> usize {
-    let midpoint_drag_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
+    updated_index_from_vertical_drag(current_index, queue_len, drag_position, |index| {
+        ctx.element_position_by_id(queue_row_position_id(panel_view_id, index))
+    })
+}
+
+fn updated_index_from_vertical_drag(
+    current_index: usize,
+    item_count: usize,
+    drag_position: RectF,
+    mut item_rect: impl FnMut(usize) -> Option<RectF>,
+) -> usize {
+    let dragged_midpoint_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
 
     if current_index > 0 {
-        if let Some(neighbor_rect) =
-            ctx.element_position_by_id(queue_row_position_id(panel_view_id, current_index - 1))
-        {
+        if let Some(neighbor_rect) = item_rect(current_index - 1) {
             let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if midpoint_drag_y < neighbor_midpoint_y {
+            if dragged_midpoint_y < neighbor_midpoint_y {
                 return current_index - 1;
             }
         }
     }
 
-    if current_index + 1 < queue_len {
-        if let Some(neighbor_rect) =
-            ctx.element_position_by_id(queue_row_position_id(panel_view_id, current_index + 1))
-        {
+    if current_index + 1 < item_count {
+        if let Some(neighbor_rect) = item_rect(current_index + 1) {
             let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if midpoint_drag_y > neighbor_midpoint_y {
+            if dragged_midpoint_y > neighbor_midpoint_y {
                 return current_index + 1;
             }
         }
@@ -645,13 +639,11 @@ fn render_header(
     };
     let ui_font_family = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
-    let mouse_state = header_mouse_state.clone();
-
-    Hoverable::new(mouse_state, move |_state| {
+    Hoverable::new(header_mouse_state.clone(), move |_state| {
         let chevron =
             ConstrainedBox::new(chevron_icon.to_warpui_icon(sub_text_color.into()).finish())
-                .with_height(ICON_SIZE)
-                .with_width(ICON_SIZE)
+                .with_height(16.)
+                .with_width(16.)
                 .finish();
         let label = Text::new(label_text.clone(), ui_font_family, ui_font_size)
             .with_style(Properties {
@@ -690,10 +682,7 @@ struct RenderRowProps<'a> {
     is_in_edit_mode: bool,
     is_being_dragged: bool,
     edit_editor: &'a ViewHandle<EditorView>,
-    row_mouse_state: MouseStateHandle,
-    edit_button_mouse_state: MouseStateHandle,
-    delete_button_mouse_state: MouseStateHandle,
-    draggable_state: DraggableState,
+    row_state: QueuedPromptRowState,
     appearance: &'a Appearance,
 }
 
@@ -707,10 +696,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
         is_in_edit_mode,
         is_being_dragged,
         edit_editor,
-        row_mouse_state,
-        edit_button_mouse_state,
-        delete_button_mouse_state,
-        draggable_state,
+        row_state,
         appearance,
     } = props;
 
@@ -724,7 +710,14 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
     let editor_line_height = ui_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO;
     let editor_handle = edit_editor.clone();
 
-    let row_inner = Hoverable::new(row_mouse_state, move |state| {
+    let QueuedPromptRowState {
+        mouse_state,
+        edit_button_mouse_state,
+        delete_button_mouse_state,
+        draggable_state,
+    } = row_state;
+
+    let row_inner = Hoverable::new(mouse_state, move |state| {
         let prompt_text_or_editor: Box<dyn Element> = if is_in_edit_mode {
             ConstrainedBox::new(ChildView::new(&editor_handle).finish())
                 .with_height(editor_line_height)
@@ -743,13 +736,13 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
                     .to_warpui_icon(dimmed_color.into())
                     .finish(),
             )
-            .with_height(DRAG_HANDLE_SIZE)
-            .with_width(DRAG_HANDLE_SIZE)
+            .with_height(24.)
+            .with_width(24.)
             .finish()
         } else {
             ConstrainedBox::new(Empty::new().finish())
-                .with_height(DRAG_HANDLE_SIZE)
-                .with_width(DRAG_HANDLE_SIZE)
+                .with_height(24.)
+                .with_width(24.)
                 .finish()
         };
 
@@ -850,8 +843,8 @@ where
             })
             .finish(),
         )
-        .with_height(ICON_SIZE)
-        .with_width(ICON_SIZE)
+        .with_height(16.)
+        .with_width(16.)
         .finish();
         Container::new(icon_element)
             .with_padding(Padding::uniform(2.))
@@ -862,7 +855,3 @@ where
     .on_click(move |ctx, _, _| on_click(ctx))
     .finish()
 }
-
-#[cfg(test)]
-#[path = "queued_prompts_panel_tests.rs"]
-mod tests;

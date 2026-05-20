@@ -13,7 +13,7 @@ use warp_multi_agent_api::{
     client_action::{Action, StartNewConversation},
     response_event::stream_finished::TokenUsage,
 };
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use std::sync::{Arc, Mutex};
@@ -52,7 +52,7 @@ use crate::persistence::{database_file_path_for_scope, establish_ro_connection, 
 
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
-use super::RequestInput;
+use super::{queued_query::QueuedQueryModel, RequestInput};
 
 mod conversation_loader;
 pub use conversation_loader::{
@@ -208,6 +208,10 @@ pub struct BlocklistAIHistoryModel {
     /// If you want to get the conversation the next query will follow up in / what is selected in the input selector,
     /// use `context_model.selected_conversation_id` instead.
     active_conversation_for_terminal_view: HashMap<EntityId, AIConversationId>,
+
+    /// Per-terminal queued prompt models. Rows are keyed by conversation ID, but the model is
+    /// terminal-scoped because queue UI state belongs to the input panel hosting it.
+    queued_query_models_for_terminal_view: HashMap<EntityId, ModelHandle<QueuedQueryModel>>,
 
     /// The time at which each [`TerminalView`] was created. Note that this has no bearing on when
     /// any [`AIConversation`]s take place in the terminal view.
@@ -634,6 +638,54 @@ impl BlocklistAIHistoryModel {
     pub fn active_conversation(&self, terminal_view_id: EntityId) -> Option<&AIConversation> {
         self.active_conversation_id(terminal_view_id)
             .and_then(|id| self.conversation(&id))
+    }
+
+    pub fn queued_query_model_for_terminal_view(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> ModelHandle<QueuedQueryModel> {
+        if let Some(model) = self
+            .queued_query_models_for_terminal_view
+            .get(&terminal_view_id)
+        {
+            return model.clone();
+        }
+
+        let model = ctx.add_model(|_| QueuedQueryModel::new());
+        self.queued_query_models_for_terminal_view
+            .insert(terminal_view_id, model.clone());
+        model
+    }
+
+    pub fn clear_queued_queries_in_terminal_view(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(model) = self
+            .queued_query_models_for_terminal_view
+            .get(&terminal_view_id)
+        {
+            model.update(ctx, |model, ctx| model.clear_all(ctx));
+        }
+    }
+
+    fn clear_queued_queries_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        terminal_view_id: Option<EntityId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id =
+            terminal_view_id.or_else(|| self.terminal_view_id_for_conversation(&conversation_id));
+        if let Some(model) =
+            terminal_view_id.and_then(|id| self.queued_query_models_for_terminal_view.get(&id))
+        {
+            model.update(ctx, |model, ctx| {
+                model.clear_for_conversation(conversation_id, ctx);
+            });
+        }
     }
 
     /// True if this conversation was started from a passive entrypoint, AND the user has made no follow ups.
@@ -1579,6 +1631,7 @@ impl BlocklistAIHistoryModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.clear_queued_queries_in_terminal_view(terminal_view_id, ctx);
         // Cancel the active stream when we clear conversations in this terminal view.
         let active_conversation_id = self
             .active_conversation_for_terminal_view
@@ -1682,6 +1735,7 @@ impl BlocklistAIHistoryModel {
         terminal_view_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.clear_queued_queries_for_conversation(conversation_id, terminal_view_id, ctx);
         // Capture the run_id BEFORE the in-memory record is dropped so the
         // RemoveConversation event can carry it (event subscribers can no
         // longer look it up via `conversation()` after this function returns).
@@ -2214,6 +2268,7 @@ impl BlocklistAIHistoryModel {
         self.cleared_conversation_ids_for_terminal_view.clear();
         self.conversations_by_id.clear();
         self.active_conversation_for_terminal_view.clear();
+        self.queued_query_models_for_terminal_view.clear();
         self.ambient_agent_terminal_view_ids.clear();
         self.conversation_transcript_viewer_terminal_view_ids
             .clear();

@@ -121,7 +121,7 @@ use crate::ai::blocklist::codebase_index_speedbump_banner::{
     CodebaseIndexSpeedbumpBannerAction, CodebaseIndexSpeedbumpBannerState, VisibilityState,
 };
 use crate::ai::blocklist::model::AIBlockOutputStatus;
-use crate::ai::blocklist::AutofireAction;
+use crate::ai::blocklist::{AutofireAction, QueuedQueryModel};
 #[cfg(feature = "local_fs")]
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::code_review::comments::{
@@ -2699,6 +2699,7 @@ pub struct TerminalView {
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
+    queued_query_model: ModelHandle<QueuedQueryModel>,
     get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
 
     pending_env_var_collection: Option<CloudEnvVarCollection>,
@@ -3684,6 +3685,11 @@ impl TerminalView {
         );
         let terminal_content_element_position_id =
             format!("terminal_content_element_{}", ctx.view_id());
+        let queued_query_model = BlocklistAIHistoryModel::handle(ctx)
+            .update(ctx, |history, ctx| {
+                history.queued_query_model_for_terminal_view(terminal_view_id, ctx)
+            });
+        let queued_query_model_for_input = queued_query_model.clone();
 
         let input: ViewHandle<Input> = ctx.add_typed_action_view(|ctx| {
             Input::new(
@@ -3696,6 +3702,7 @@ impl TerminalView {
                 current_prompt.clone(),
                 ai_controller.clone(),
                 ai_context_model.clone(),
+                queued_query_model_for_input.clone(),
                 ai_input_model.clone(),
                 ai_action_model.clone(),
                 cli_subagent_controller.clone(),
@@ -4253,6 +4260,7 @@ impl TerminalView {
             conversation_ended_tombstone_view_id: None,
             ai_input_model,
             ai_context_model,
+            queued_query_model,
             window_id,
             content_element_position_id: terminal_content_element_position_id,
             input_position_id,
@@ -4317,11 +4325,7 @@ impl TerminalView {
 
         // Construct the queued prompts panel and wire it into the input view so it renders
         // between the warping indicator and the input editor.
-        let queued_query_model = terminal_view
-            .ai_context_model
-            .as_ref(ctx)
-            .queued_query_model()
-            .clone();
+        let queued_query_model = terminal_view.queued_query_model.clone();
         let queued_prompts_panel = ctx.add_typed_action_view(|ctx| {
             crate::ai::blocklist::QueuedPromptsPanelView::new(
                 queued_query_model,
@@ -5033,10 +5037,9 @@ impl TerminalView {
         }
     }
 
-    /// Append a prompt to the per-conversation queued-query model owned by this terminal view's
-    /// `BlocklistAIContextModel`. Used by trigger surfaces (auto-queue toggle, `/queue`,
-    /// `/compact-and`, `/fork-and-compact`, Cloud Mode initial prompt) to enqueue a follow-up
-    /// prompt that fires after the current exchange completes (`PRODUCT.md` (5)–(8)).
+    /// Append a prompt to the per-conversation queued-query model. Used by trigger surfaces
+    /// (auto-queue toggle, `/queue`, `/compact-and`, `/fork-and-compact`, Cloud Mode initial
+    /// prompt) to enqueue a follow-up prompt that fires after the current exchange completes.
     pub fn enqueue_prompt(
         &mut self,
         prompt: String,
@@ -5047,12 +5050,7 @@ impl TerminalView {
             .ai_context_model
             .as_ref(ctx)
             .selected_conversation_id(ctx)?;
-        let queued_query_model = self
-            .ai_context_model
-            .as_ref(ctx)
-            .queued_query_model()
-            .clone();
-        let id = queued_query_model.update(ctx, |model, ctx| {
+        let id = self.queued_query_model.update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
                 crate::ai::blocklist::QueuedQuery::new(prompt, origin),
@@ -5062,9 +5060,8 @@ impl TerminalView {
         Some(id)
     }
 
-    /// Handles events emitted by `QueuedPromptsPanelView`. Implements the input-placement side
-    /// effects (`PRODUCT.md` (16) for delete-with-empty-input, (21) for cancel/Escape refocus)
-    /// that the panel itself doesn't own because the input editor lives on `Input`.
+    /// Handles input-placement side effects from `QueuedPromptsPanelView`, which the panel itself
+    /// doesn't own because the input editor lives on `Input`.
     fn handle_queued_prompts_panel_event(
         &mut self,
         event: &crate::ai::blocklist::QueuedPromptsPanelEvent,
@@ -5120,12 +5117,7 @@ impl TerminalView {
         else {
             return;
         };
-        let queued_query_model = self
-            .ai_context_model
-            .as_ref(ctx)
-            .queued_query_model()
-            .clone();
-        queued_query_model.update(ctx, |model, ctx| {
+        self.queued_query_model.update(ctx, |model, ctx| {
             model.remove_by_id(conversation_id, query_id, ctx);
         });
         ambient_agent_view_model.update(ctx, |model, _| {
@@ -5135,27 +5127,15 @@ impl TerminalView {
 
     /// Drains one prompt from the per-conversation queued-query model when the active conversation
     /// finishes.
-    /// - On `Complete`: pop the first row and route via `submit_queued_prompt` (or, when the popped
-    ///   row was in edit mode, place its in-progress edit text into the input only when the input
-    ///   is empty per `PRODUCT.md` (21)).
-    /// - On `Error` / `Cancelled` / `CancelledDuringRequestedCommandExecution`: pop the first
-    ///   user-managed row and place its text in the input only if it is at the head and the input
-    ///   is empty; otherwise leave the queue intact (`PRODUCT.md` (35)).
     fn drain_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         finish_reason: FinishReason,
         ctx: &mut ViewContext<Self>,
     ) {
-        let queued_query_model = self
-            .ai_context_model
-            .as_ref(ctx)
-            .queued_query_model()
-            .clone();
-
         match finish_reason {
             FinishReason::Complete => {
-                let action = queued_query_model.update(ctx, |model, ctx| {
+                let action = self.queued_query_model.update(ctx, |model, ctx| {
                     model.pop_for_autofire(conversation_id, None, ctx)
                 });
                 match action {
@@ -5182,7 +5162,7 @@ impl TerminalView {
                 if !input_is_empty {
                     return;
                 }
-                let popped = queued_query_model.update(ctx, |model, ctx| {
+                let popped = self.queued_query_model.update(ctx, |model, ctx| {
                     model.pop_front_user_managed(conversation_id, ctx)
                 });
                 if let Some(query) = popped {
@@ -5479,9 +5459,6 @@ impl TerminalView {
                 // When the pending query state is updated (i.e. a conversation is selected or un-selected),
                 // update the title to reflect that selected conversation change.
                 self.update_pane_configuration(ctx);
-                ctx.notify();
-            }
-            BlocklistAIContextEvent::QueueNextPromptToggled => {
                 ctx.notify();
             }
         }
@@ -26056,8 +26033,8 @@ impl TypedActionView for TerminalView {
                 ctx.notify();
             }
             ToggleQueueNextPrompt => {
-                self.ai_context_model.update(ctx, |context_model, ctx| {
-                    context_model.toggle_queue_next_prompt(ctx);
+                self.queued_query_model.update(ctx, |model, ctx| {
+                    model.toggle_queue_next_prompt(ctx);
                 });
                 ctx.notify();
             }

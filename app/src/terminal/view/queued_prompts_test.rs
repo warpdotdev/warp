@@ -2,8 +2,7 @@
 //!
 //! `TerminalView` orchestrates the input editor and the queue model on `FinishedReceivingOutput`.
 //! Constructing a full `TerminalView` in a unit test would require dozens of dependencies, so the
-//! tests below exercise the underlying `QueuedQueryModel` semantics that the drain path relies on
-//! (`PRODUCT.md` (21), (31)–(37)).
+//! tests below exercise the underlying `QueuedQueryModel` semantics that the drain path relies on.
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{AutofireAction, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use warpui::App;
@@ -18,7 +17,7 @@ fn cloud_query(text: &str) -> QueuedQuery {
 
 #[test]
 fn complete_drain_pops_head_and_returns_submit_action() {
-    // Validates `PRODUCT.md` (31): on Complete, the next queued prompt fires via Submit.
+    // On Complete, the next queued prompt fires via Submit.
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let conv = AIConversationId::new();
@@ -41,8 +40,8 @@ fn complete_drain_pops_head_and_returns_submit_action() {
 
 #[test]
 fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
-    // Validates `PRODUCT.md` (21): when the first row is being edited, drain produces a
-    // PopFromEditMode action carrying the live-edit override text.
+    // When the first row is being edited, drain produces a PopFromEditMode action carrying the
+    // live-edit override text.
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let conv = AIConversationId::new();
@@ -70,7 +69,7 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
 
 #[test]
 fn complete_drain_skips_initial_cloud_mode_head() {
-    // Validates `PRODUCT.md` (37): the harness owns Cloud Mode firing; auto-fire does not pop it.
+    // The harness owns Cloud Mode firing; auto-fire does not pop it.
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let conv = AIConversationId::new();
@@ -99,8 +98,8 @@ fn complete_drain_with_empty_queue_returns_none() {
 
 #[test]
 fn error_or_cancel_drain_pops_front_when_input_is_empty() {
-    // Validates `PRODUCT.md` (35): on Error/Cancelled with an empty input, the next queued prompt's
-    // text is restored to the input by popping it (which the host then writes into the buffer).
+    // On Error/Cancelled with an empty input, the next queued prompt's text is restored to the
+    // input by popping it (which the host then writes into the buffer).
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let conv = AIConversationId::new();
@@ -144,8 +143,7 @@ fn error_or_cancel_drain_skips_initial_cloud_mode_head() {
 
 #[test]
 fn error_or_cancel_drain_leaves_queue_intact_when_input_is_non_empty() {
-    // Validates `PRODUCT.md` (35): when the input is non-empty, the drain skips popping so the
-    // queue remains intact for the user to deal with later.
+    // When the input is non-empty, the drain skips popping so the queue remains intact.
     //
     // The host (`TerminalView`) gates the pop on input-empty. We model that here by simply not
     // popping when the simulated input is non-empty, and asserting the queue remains unchanged.
@@ -171,8 +169,8 @@ fn error_or_cancel_drain_leaves_queue_intact_when_input_is_non_empty() {
 
 #[test]
 fn complete_drain_after_error_drain_continues_with_next_row() {
-    // Validates `PRODUCT.md` (36): after an Error/Cancelled drain pops one row and the user later
-    // submits successfully, the *next* Complete drain pops the following row.
+    // After an Error/Cancelled drain pops one row and the user later submits successfully, the
+    // *next* Complete drain pops the following row.
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let conv = AIConversationId::new();

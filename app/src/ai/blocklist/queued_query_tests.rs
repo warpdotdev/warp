@@ -1,8 +1,7 @@
 //! Unit tests for [`super::QueuedQueryModel`].
 //!
-//! Covers `PRODUCT.md` invariants (5)–(11) (FIFO ordering, append from each origin),
-//! (16)–(20) (edit semantics), (22)–(25) (per-conversation isolation, clear), and (26)–(30)
-//! (reorder semantics, Cloud Mode immutability).
+//! Covers FIFO ordering, append from each origin, edit semantics, per-conversation isolation,
+//! clear, reorder semantics, and Cloud Mode immutability.
 use super::{
     AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
     QueuedQueryOrigin,
@@ -74,7 +73,7 @@ fn append_preserves_fifo_order_within_a_conversation() {
 
 #[test]
 fn append_from_each_user_origin_lands_in_the_queue() {
-    // Validates `PRODUCT.md` (5)–(8): /queue, auto-queue toggle, /compact-and, /fork-and-compact.
+    // /queue, auto-queue toggle, /compact-and, and /fork-and-compact all land in the queue.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let origins = [
@@ -99,6 +98,28 @@ fn append_from_each_user_origin_lands_in_the_queue() {
     });
 }
 
+#[test]
+fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
+    with_model(|mut app, model, events| {
+        model.read(&app, |model, _| {
+            assert!(!model.is_queue_next_prompt_enabled());
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert!(model.is_queue_next_prompt_enabled());
+        });
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::QueueNextPromptToggled]
+        ));
+    });
+}
 #[test]
 fn pop_front_removes_head_and_emits_removed() {
     with_model(|mut app, model, events| {
@@ -187,7 +208,7 @@ fn pop_for_autofire_returns_submit_for_user_managed_head() {
 
 #[test]
 fn pop_for_autofire_uses_edit_text_override_when_first_row_is_in_edit_mode() {
-    // Validates `PRODUCT.md` (21).
+    // Edit-mode autofire uses the live edit text.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "first");
@@ -210,7 +231,7 @@ fn pop_for_autofire_uses_edit_text_override_when_first_row_is_in_edit_mode() {
 
 #[test]
 fn enter_edit_mode_locks_to_one_row_at_a_time() {
-    // Validates `PRODUCT.md` (18), (20).
+    // Entering edit mode on one row replaces the prior edit state.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "first");
@@ -227,7 +248,7 @@ fn enter_edit_mode_locks_to_one_row_at_a_time() {
 
 #[test]
 fn commit_edit_with_text_replaces_row_and_clears_edit_state() {
-    // Validates `PRODUCT.md` (16).
+    // Non-empty edits replace the queued row's text.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "first");
@@ -249,7 +270,7 @@ fn commit_edit_with_text_replaces_row_and_clears_edit_state() {
 
 #[test]
 fn commit_edit_with_empty_text_restores_original_text() {
-    // Validates `PRODUCT.md` (17).
+    // Empty edits restore the original text.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "first");
@@ -271,7 +292,7 @@ fn commit_edit_with_empty_text_restores_original_text() {
 
 #[test]
 fn cancel_edit_leaves_row_unchanged_and_clears_edit_state() {
-    // Validates `PRODUCT.md` (18).
+    // Canceling an edit leaves the row unchanged.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "first");
@@ -309,7 +330,7 @@ fn remove_by_id_removes_only_the_targeted_row() {
 
 #[test]
 fn reorder_moves_user_managed_rows_to_target_index() {
-    // Validates `PRODUCT.md` (26)–(28).
+    // Reordering moves user-managed rows to the requested target index.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let id_a = append_user(&model, &mut app, conv, "a");
@@ -364,7 +385,7 @@ fn reorder_clamps_target_index_to_queue_len() {
 
 #[test]
 fn cloud_mode_rows_reject_reorder_and_replace_text() {
-    // Validates `PRODUCT.md` (30): the harness owns Cloud Mode row state.
+    // The harness owns Cloud Mode row state.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
         let cloud_id = model.update(&mut app, |m, ctx| m.append(conv, cloud_query("cloud"), ctx));
@@ -417,7 +438,7 @@ fn cloud_mode_rows_reject_enter_edit_mode() {
 
 #[test]
 fn queues_are_per_conversation_isolated() {
-    // Validates `PRODUCT.md` (22)–(24).
+    // Queue state is isolated per conversation.
     with_model(|mut app, model, _events| {
         let conv_a = AIConversationId::new();
         let conv_b = AIConversationId::new();
@@ -436,7 +457,7 @@ fn queues_are_per_conversation_isolated() {
 
 #[test]
 fn clear_for_conversation_clears_queue_edit_and_collapse_state() {
-    // Validates `PRODUCT.md` (25), (39)–(40).
+    // Clearing a conversation clears its queue, edit state, and collapse state.
     with_model(|mut app, model, _events| {
         let conv_a = AIConversationId::new();
         let conv_b = AIConversationId::new();
@@ -477,7 +498,7 @@ fn removing_last_row_resets_collapse_state() {
 
 #[test]
 fn clear_all_wipes_every_conversation() {
-    // Validates `PRODUCT.md` (38) — agent-view exit clears all queues.
+    // Agent-view exit clears all queues.
     with_model(|mut app, model, _events| {
         let conv_a = AIConversationId::new();
         let conv_b = AIConversationId::new();

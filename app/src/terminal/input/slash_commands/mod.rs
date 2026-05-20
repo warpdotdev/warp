@@ -33,7 +33,9 @@ use crate::ai::blocklist::agent_view::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryOrigin, SlashCommandRequest,
+};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -1067,18 +1069,10 @@ impl Input {
                     .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
 
                 if is_in_progress {
-                    let queued_query_model = self
-                        .ai_context_model
-                        .as_ref(ctx)
-                        .queued_query_model()
-                        .clone();
-                    queued_query_model.update(ctx, |model, ctx| {
+                    self.queued_query_model.update(ctx, |model, ctx| {
                         model.append(
                             conversation_id,
-                            crate::ai::blocklist::QueuedQuery::new(
-                                prompt,
-                                crate::ai::blocklist::QueuedQueryOrigin::QueueSlashCommand,
-                            ),
+                            QueuedQuery::new(prompt, QueuedQueryOrigin::QueueSlashCommand),
                             ctx,
                         );
                     });

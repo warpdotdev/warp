@@ -39,8 +39,8 @@ use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EphemeralMessageMod
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 use crate::ai::blocklist::{
-    ai_brand_color, ai_indicator_height, BlocklistAIActionModel, QueuedQuery, QueuedQueryOrigin,
-    SlashCommandRequest,
+    ai_brand_color, ai_indicator_height, BlocklistAIActionModel, QueuedQuery, QueuedQueryModel,
+    QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -1573,6 +1573,7 @@ pub struct Input {
 
     ai_controller: ModelHandle<BlocklistAIController>,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
+    queued_query_model: ModelHandle<QueuedQueryModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     /// The input is responsible for managing the lifetime
@@ -2114,6 +2115,7 @@ impl Input {
         current_prompt: ModelHandle<PromptType>,
         ai_controller: ModelHandle<BlocklistAIController>,
         ai_context_model: ModelHandle<BlocklistAIContextModel>,
+        queued_query_model: ModelHandle<QueuedQueryModel>,
         ai_input_model: ModelHandle<BlocklistAIInputModel>,
         ai_action_model: ModelHandle<BlocklistAIActionModel>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
@@ -3211,7 +3213,6 @@ impl Input {
                         })
                         .collect_vec();
                 }
-                BlocklistAIContextEvent::QueueNextPromptToggled => {}
             }
             ctx.notify();
         });
@@ -3517,6 +3518,7 @@ impl Input {
                 cli_subagent_controller,
                 ai_action_model.clone(),
                 ai_context_model.clone(),
+                queued_query_model.clone(),
                 ai_input_model.clone(),
                 buffer_model,
                 &model_events,
@@ -3575,6 +3577,7 @@ impl Input {
             prompt_type: current_prompt,
             ai_controller,
             ai_context_model,
+            queued_query_model,
             ai_input_model,
             ai_action_model,
             ai_follow_up_icon_mouse_state: MouseStateHandle::default(),
@@ -13182,7 +13185,7 @@ impl Input {
         }
 
         if !self
-            .ai_context_model
+            .queued_query_model
             .as_ref(ctx)
             .is_queue_next_prompt_enabled()
         {
@@ -13247,14 +13250,8 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        // Append directly to the per-conversation queued-query model (`PRODUCT.md` (5)).
         // The auto-queue toggle origin powers telemetry; queue ordering is FIFO across origins.
-        let queued_query_model = self
-            .ai_context_model
-            .as_ref(ctx)
-            .queued_query_model()
-            .clone();
-        queued_query_model.update(ctx, |model, ctx| {
+        self.queued_query_model.update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
                 QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),

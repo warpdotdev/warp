@@ -41,8 +41,7 @@ use crate::{
 };
 
 use super::{
-    block::DirectoryContext, history_model::BlocklistAIHistoryModel,
-    queued_query::QueuedQueryModel, BlocklistAIHistoryEvent,
+    block::DirectoryContext, history_model::BlocklistAIHistoryModel, BlocklistAIHistoryEvent,
 };
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
@@ -145,15 +144,6 @@ pub struct BlocklistAIContextModel {
     /// When `AgentViewBlockContext` is enabled, completed user commands are tracked here
     /// and automatically included as context with the next user query.
     auto_attached_agent_view_user_block_ids: Vec<BlockId>,
-
-    /// When true, submitting a prompt while the agent is responding will queue it
-    /// instead of sending it immediately.
-    /// Persists across exchanges in the same conversation (like fast-forward).
-    queue_next_prompt_enabled: bool,
-
-    /// Per-conversation queues of follow-up prompts and the queue panel's edit / collapse state.
-    /// Drained sequentially by `TerminalView` on `FinishReason::Complete`.
-    queued_query_model: ModelHandle<QueuedQueryModel>,
 }
 
 pub fn block_context_from_terminal_model(
@@ -254,9 +244,6 @@ impl BlocklistAIContextModel {
             match event {
                 BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
                     me.set_pending_query_state(PendingQueryState::default(), ctx);
-                    me.queued_query_model.update(ctx, |model, ctx| {
-                        model.clear_all(ctx);
-                    });
                     if FeatureFlag::AgentView.is_enabled() {
                         me.agent_view_controller.update(ctx, |controller, ctx| {
                             controller.exit_agent_view(ctx);
@@ -273,17 +260,6 @@ impl BlocklistAIContextModel {
                         ctx,
                     );
                 }
-                BlocklistAIHistoryEvent::RemoveConversation {
-                    conversation_id, ..
-                }
-                | BlocklistAIHistoryEvent::DeletedConversation {
-                    conversation_id, ..
-                } => {
-                    let conversation_id = *conversation_id;
-                    me.queued_query_model.update(ctx, |model, ctx| {
-                        model.clear_for_conversation(conversation_id, ctx);
-                    });
-                }
                 _ => {}
             }
         });
@@ -299,14 +275,13 @@ impl BlocklistAIContextModel {
         });
 
         // Clear auto-attached blocks when exiting agent view or switching conversations.
-        // Exiting the agent view also drops the queued-prompt queue per `PRODUCT.md` (38).
         ctx.subscribe_to_model(&agent_view_controller, |me, event, ctx| {
             use super::agent_view::AgentViewControllerEvent;
             match event {
                 AgentViewControllerEvent::ExitedAgentView { .. } => {
                     me.auto_attached_agent_view_user_block_ids.clear();
-                    me.queued_query_model.update(ctx, |model, ctx| {
-                        model.clear_all(ctx);
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.clear_queued_queries_in_terminal_view(me.terminal_view_id, ctx);
                     });
                 }
                 AgentViewControllerEvent::EnteredAgentView { .. } => {
@@ -327,8 +302,6 @@ impl BlocklistAIContextModel {
                 Default::default()
             };
 
-        let queued_query_model = ctx.add_model(|_| QueuedQueryModel::new());
-
         Self {
             terminal_model,
             directory_context: Default::default(),
@@ -341,8 +314,6 @@ impl BlocklistAIContextModel {
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
-            queue_next_prompt_enabled: false,
-            queued_query_model,
         }
     }
 
@@ -357,9 +328,7 @@ impl BlocklistAIContextModel {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_view_id: EntityId,
         agent_view_controller: ModelHandle<AgentViewController>,
-        ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let queued_query_model = ctx.add_model(|_| QueuedQueryModel::new());
         Self {
             terminal_model,
             directory_context: Default::default(),
@@ -372,14 +341,7 @@ impl BlocklistAIContextModel {
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
-            queue_next_prompt_enabled: false,
-            queued_query_model,
         }
-    }
-
-    /// Returns a handle to the per-conversation queued-prompt model owned by this context model.
-    pub fn queued_query_model(&self) -> &ModelHandle<QueuedQueryModel> {
-        &self.queued_query_model
     }
 
     /// Resets the set of blocks to be included as context to an empty list.
@@ -890,15 +852,6 @@ impl BlocklistAIContextModel {
         }
     }
 
-    pub fn is_queue_next_prompt_enabled(&self) -> bool {
-        self.queue_next_prompt_enabled
-    }
-
-    pub fn toggle_queue_next_prompt(&mut self, ctx: &mut ModelContext<Self>) {
-        self.queue_next_prompt_enabled = !self.queue_next_prompt_enabled;
-        ctx.emit(BlocklistAIContextEvent::QueueNextPromptToggled);
-    }
-
     pub fn toggle_pending_query_autoexecute(&mut self, ctx: &mut ModelContext<Self>) {
         // When AgentView is enabled, the autoexecution toggle should apply to the active agent view
         // conversation -- even when starting a new conversation, the agent view always has a conversation
@@ -1055,7 +1008,6 @@ pub enum BlocklistAIContextEvent {
     },
     /// Emitted whenever the value changes.
     PendingQueryStateUpdated,
-    QueueNextPromptToggled,
 }
 
 impl Entity for BlocklistAIContextModel {
