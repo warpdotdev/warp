@@ -1367,6 +1367,72 @@ fn streamer_consumer_is_registered_when_constructed_under_flag() {
     });
 }
 
+#[test]
+fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
+    // Regression test for the orchestration viewer pill bar in the
+    // remote-remote case: the shared-session viewer's parent placeholder
+    // conversation is often marked active *after* `OrchestrationViewerModel`
+    // is constructed (the cold-start init path constructs the model before
+    // the placeholder gets `set_active_conversation_id`). The initial
+    // `register_viewer_mode_consumer_if_possible` call therefore short-
+    // circuits, and without a retry on `SetActiveConversation` the pane
+    // never appears on the streamer's viewer-mode entry — leaving the
+    // pill bar empty for the lifetime of the model.
+    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+    use warp_core::features::FeatureFlag;
+    use warpui::SingletonEntity;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+        let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
+
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal_view.id();
+
+        let parent = task_id(PARENT_TASK_ID);
+        // Construct the model BEFORE any active conversation exists for the
+        // view. The initial registration attempt should short-circuit because
+        // `active_conversation_id(terminal_view_id)` returns `None`.
+        let _model = app.add_model(|ctx| {
+            OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
+        });
+
+        let streamer = OrchestrationEventStreamer::handle(&app);
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.viewer_mode_consumer_count_for_test(parent),
+                0,
+                "no viewer-mode consumer should be registered before an active parent placeholder exists"
+            );
+        });
+
+        // Now create the parent placeholder conversation (shared-session
+        // viewer with task_id == parent) and mark it active for the view.
+        // This emits `SetActiveConversation`, which the viewer model handles
+        // by retrying `register_viewer_mode_consumer_if_possible`.
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.update(&mut app, |history, ctx| {
+            let id = history.start_new_conversation(terminal_view_id, false, true, false, ctx);
+            history.set_viewing_shared_session_for_conversation(id, true);
+            if let Some(conversation) = history.conversation_mut(&id) {
+                conversation.set_task_id(parent);
+            }
+            history.set_active_conversation_id(id, terminal_view_id, ctx);
+        });
+
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.viewer_mode_consumer_count_for_test(parent),
+                1,
+                "SetActiveConversation for a parent placeholder must trigger viewer-mode \
+                 consumer registration (regression: pill bar stayed empty in remote-remote case)"
+            );
+        });
+    });
+}
+
 // ---- Mock helper for `MockAIClient::expect_*` ------------------------------
 
 // (Mock-based tests are kept off the critical path because the mock infra

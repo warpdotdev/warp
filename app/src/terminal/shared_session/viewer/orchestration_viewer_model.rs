@@ -145,27 +145,11 @@ impl OrchestrationViewerModel {
             ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
                 me.handle_streamer_event(event, ctx);
             });
-
-            let parent_conversation_id =
-                BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(terminal_view_id);
-            let consumer_id = ctx.model_id();
-            streamer.update(ctx, move |streamer, ctx| {
-                if let Some(placeholder) = parent_conversation_id {
-                    streamer.register_viewer_mode_consumer(
-                        parent_task_id,
-                        placeholder,
-                        consumer_id,
-                        ctx,
-                    );
-                } else {
-                    log::warn!(
-                        "OrchestrationViewerModel: no active conversation for terminal view \
-                         {terminal_view_id:?}; viewer-mode consumer not yet registered."
-                    );
-                }
+            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
+                me.handle_history_event(event, ctx);
             });
 
-            return Self {
+            let model = Self {
                 parent_task_id,
                 terminal_view_id,
                 terminal_view,
@@ -175,6 +159,8 @@ impl OrchestrationViewerModel {
                 fetch_generation: 0,
                 idle_due_to_no_children: false,
             };
+            model.register_viewer_mode_consumer_if_possible(ctx);
+            return model;
         }
 
         // Legacy polling path. Kick to fast cadence on `AppendedExchange` so
@@ -202,6 +188,57 @@ impl OrchestrationViewerModel {
     }
 
     // ---- Streamer-driven path (FeatureFlag::OrchestrationViewerStreamer on)
+
+    fn handle_history_event(
+        &mut self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match event {
+            BlocklistAIHistoryEvent::SetActiveConversation {
+                terminal_view_id, ..
+            }
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                terminal_view_id, ..
+            } if *terminal_view_id == self.terminal_view_id => {
+                self.register_viewer_mode_consumer_if_possible(ctx);
+            }
+            _ => {}
+        }
+    }
+
+    fn register_viewer_mode_consumer_if_possible(&self, ctx: &mut ModelContext<Self>) {
+        let Some(parent_conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id)
+        else {
+            log::warn!(
+                "OrchestrationViewerModel: no active conversation for terminal view {:?}; \
+                 viewer-mode consumer not yet registered.",
+                self.terminal_view_id,
+            );
+            return;
+        };
+        let is_parent_placeholder = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&parent_conversation_id)
+            .is_some_and(|conversation| {
+                conversation.is_viewing_shared_session()
+                    && conversation.task_id() == Some(self.parent_task_id)
+            });
+        if !is_parent_placeholder {
+            return;
+        }
+
+        let parent_task_id = self.parent_task_id;
+        let consumer_id = ctx.model_id();
+        OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                parent_conversation_id,
+                consumer_id,
+                ctx,
+            );
+        });
+    }
 
     /// Routes broadcast events from [`OrchestrationEventStreamer`] into the
     /// per-pane placeholder map. Filters on `parent_task_id` so a single

@@ -615,6 +615,7 @@ impl OrchestrationEventStreamer {
             // Already seeded: open the SSE immediately if it's not running
             // (e.g. after a transient teardown).
             self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
+            self.emit_known_viewer_mode_children(parent_task_id, ctx);
         }
     }
 
@@ -679,6 +680,44 @@ impl OrchestrationEventStreamer {
             .unwrap_or_default()
     }
 
+    fn emit_known_viewer_mode_children(
+        &self,
+        parent_task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let run_ids = self
+            .viewer_mode_orchestrators
+            .get(&parent_task_id)
+            .map(|entry| entry.known_children.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        self.emit_viewer_mode_child_spawns(parent_task_id, run_ids, ctx);
+    }
+
+    fn emit_viewer_mode_child_spawns(
+        &self,
+        parent_task_id: AmbientAgentTaskId,
+        run_ids: Vec<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        for run_id in run_ids {
+            ctx.emit(OrchestrationEventStreamerEvent::ChildSpawned {
+                parent_task_id,
+                run_id,
+            });
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn viewer_mode_consumer_count_for_test(
+        &self,
+        parent_task_id: AmbientAgentTaskId,
+    ) -> usize {
+        self.viewer_mode_orchestrators
+            .get(&parent_task_id)
+            .map(|entry| entry.consumers.len())
+            .unwrap_or(0)
+    }
+
     // ---- Ancestor SSE consumer (viewer-mode driver wiring) -----------
 
     /// Issues a one-shot `GET /agent/runs?ancestor_run_id={parent}` to
@@ -723,32 +762,41 @@ impl OrchestrationEventStreamer {
         result: anyhow::Result<Vec<crate::ai::ambient_agents::task::AmbientAgentTask>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id) else {
+        if !self.viewer_mode_orchestrators.contains_key(&parent_task_id) {
             return;
         };
         match result {
             Ok(tasks) => {
-                let local_cursor = entry.event_cursor;
-                let mut seed = local_cursor;
-                for task in tasks {
-                    if task.task_id == parent_task_id {
-                        // The server endpoint may include the parent itself;
-                        // skip it — only direct children are tracked.
-                        continue;
+                let mut seeded_run_ids = Vec::new();
+                {
+                    let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id)
+                    else {
+                        return;
+                    };
+                    let local_cursor = entry.event_cursor;
+                    let mut seed = local_cursor;
+                    for task in tasks {
+                        if task.task_id == parent_task_id {
+                            // The server endpoint may include the parent itself;
+                            // skip it — only direct children are tracked.
+                            continue;
+                        }
+                        let run_id = task.task_id.to_string();
+                        entry.known_children.insert(run_id.clone());
+                        seeded_run_ids.push(run_id);
+                        if let Some(seq) = task.last_event_sequence {
+                            seed = seed.max(seq);
+                        }
                     }
-                    let run_id = task.task_id.to_string();
-                    entry.known_children.insert(run_id);
-                    if let Some(seq) = task.last_event_sequence {
-                        seed = seed.max(seq);
-                    }
+                    entry.event_cursor = seed;
+                    entry.seeded = true;
+                    log::info!(
+                        "Ancestor SSE seed applied for parent_task_id={parent_task_id}: \
+                         known_children={}, seed_cursor={seed}",
+                        entry.known_children.len()
+                    );
                 }
-                entry.event_cursor = seed;
-                entry.seeded = true;
-                log::info!(
-                    "Ancestor SSE seed applied for parent_task_id={parent_task_id}: \
-                     known_children={}, seed_cursor={seed}",
-                    entry.known_children.len()
-                );
+                self.emit_viewer_mode_child_spawns(parent_task_id, seeded_run_ids, ctx);
                 self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
             }
             Err(err) => {

@@ -207,6 +207,15 @@ fn make_ambient_task_with_event_seq(
     }
 }
 
+fn make_ambient_task_with_task_id(
+    task_id: AmbientAgentTaskId,
+    last_event_sequence: Option<i64>,
+) -> crate::ai::ambient_agents::AmbientAgentTask {
+    let mut task = make_ambient_task_with_event_seq(last_event_sequence);
+    task.task_id = task_id;
+    task
+}
+
 fn make_server_metadata_with_harness(
     harness: AIAgentHarness,
 ) -> crate::ai::agent::conversation::ServerAIConversationMetadata {
@@ -1830,5 +1839,186 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
                 "SSE must be reconnected (new generation) after children are discovered; got generation={generation:?}"
             );
         });
+    });
+}
+
+/// Captures `ChildSpawned` events emitted by the streamer so the regression
+/// tests below can assert exactly which children were broadcast.
+///
+/// Subscribes from the app context (mirrors the pattern in
+/// `notebooks/link_tests.rs`) so we don't need a real subscriber model.
+fn capture_child_spawns(
+    app: &mut App,
+    streamer: &warpui::ModelHandle<OrchestrationEventStreamer>,
+) -> std::sync::Arc<parking_lot::Mutex<Vec<(AmbientAgentTaskId, String)>>> {
+    let captured: std::sync::Arc<parking_lot::Mutex<Vec<(AmbientAgentTaskId, String)>>> =
+        std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_for_closure = captured.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(streamer, move |_, event, _| {
+            if let OrchestrationEventStreamerEvent::ChildSpawned {
+                parent_task_id,
+                run_id,
+            } = event
+            {
+                captured_for_closure
+                    .lock()
+                    .push((*parent_task_id, run_id.clone()));
+            }
+        })
+    });
+    captured
+}
+
+#[test]
+fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
+    // Regression test for the orchestration viewer pill bar in the
+    // remote-remote case: the cold-start REST seed must broadcast
+    // `ChildSpawned` for every seeded child so the viewer model materializes
+    // a pill placeholder per child. Previously the seed populated
+    // `known_children` and advanced the cursor but did not emit, so
+    // the pill bar stayed empty until a new lifecycle event arrived for
+    // a child the SSE had not yet replayed.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xd1);
+        let child_a = make_parent_task_id_for_test(0xd2);
+        let child_b = make_parent_task_id_for_test(0xd3);
+
+        // Register a viewer-mode consumer so the entry exists. The seed
+        // fetch is normally kicked off by registration; here we drive
+        // `finish_ancestor_seed_fetch` synchronously to control the input.
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id, ctx);
+        });
+
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        // Drive the seed-apply path directly with a parent-and-two-children
+        // payload (matching the REST endpoint shape that may include the
+        // parent itself in the response).
+        streamer.update(&mut app, |me, ctx| {
+            me.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![
+                    make_ambient_task_with_task_id(parent_task_id, Some(5)),
+                    make_ambient_task_with_task_id(child_a, Some(11)),
+                    make_ambient_task_with_task_id(child_b, Some(7)),
+                ]),
+                ctx,
+            );
+        });
+
+        let spawns = captured_spawns.lock().clone();
+        let mut seen: Vec<String> = spawns
+            .iter()
+            .filter(|(parent, _)| *parent == parent_task_id)
+            .map(|(_, run_id)| run_id.clone())
+            .collect();
+        seen.sort();
+        let mut expected = vec![child_a.to_string(), child_b.to_string()];
+        expected.sort();
+        assert_eq!(
+            seen, expected,
+            "ChildSpawned must be emitted exactly once per seeded child \
+             (parent excluded)"
+        );
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_task_id, &child_a.to_string()),
+                "child_a should be in known_children after seed"
+            );
+            assert!(
+                me.is_known_child(parent_task_id, &child_b.to_string()),
+                "child_b should be in known_children after seed"
+            );
+            assert!(
+                !me.is_known_child(parent_task_id, &parent_task_id.to_string()),
+                "the parent's own task_id must NOT be tracked as a child"
+            );
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("viewer-mode entry exists after seed");
+            assert!(entry.seeded, "seeded flag must flip after seed apply");
+            assert_eq!(
+                entry.event_cursor, 11,
+                "event_cursor must advance to max(child.last_event_sequence)"
+            );
+        });
+    });
+}
+
+#[test]
+fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
+    // Regression for the late-arriving-consumer arm of the same bug: the
+    // shared-session viewer model often registers its viewer-mode consumer
+    // *after* the ancestor seed has already been applied (because the
+    // active parent placeholder isn't set on the terminal view at
+    // construction time). Without a replay, the new consumer never observes
+    // `ChildSpawned` for known children and the pill bar stays empty.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xe1);
+        let child_a = make_parent_task_id_for_test(0xe2);
+        let consumer_a = warpui::EntityId::new();
+        let consumer_b = warpui::EntityId::new();
+        let placeholder_a = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        let placeholder_b = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+
+        // Pane A registers first and the seed lands.
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a, ctx);
+            me.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_a, Some(3))]),
+                ctx,
+            );
+        });
+
+        // Subscribe AFTER the seed has been applied so only the replay
+        // emissions are captured.
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        // Pane B registers later — the entry is already seeded. The streamer
+        // must replay `ChildSpawned` for the already-known children so
+        // pane B materializes pill placeholders identical to pane A.
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b, ctx);
+        });
+
+        let spawns = captured_spawns.lock().clone();
+        let replayed: Vec<&(AmbientAgentTaskId, String)> = spawns
+            .iter()
+            .filter(|(parent, run_id)| *parent == parent_task_id && run_id == &child_a.to_string())
+            .collect();
+        assert_eq!(
+            replayed.len(),
+            1,
+            "second viewer-mode registration must replay ChildSpawned exactly once \
+             per known child (captured={spawns:?})"
+        );
     });
 }
