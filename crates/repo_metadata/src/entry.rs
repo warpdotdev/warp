@@ -132,6 +132,12 @@ impl Entry {
             return Err(BuildTreeError::Symlink);
         }
 
+        // Remember the gitignore count so we can restore it when we backtrack
+        // out of this directory. Without this, sibling directories accumulate
+        // each other's gitignore objects, bloating the vec and wasting regex
+        // work on `strip_prefix` misses.
+        let gitignores_len_before = gitignores.len();
+
         let gitignore_path = curr_path.join(".gitignore");
         if gitignore_path.exists() {
             let (gitignore, _) = Gitignore::new(gitignore_path);
@@ -153,11 +159,13 @@ impl Entry {
         if path_is_ignored {
             match ignored_path_strategy {
                 IgnoredPathStrategy::Exclude => {
+                    gitignores.truncate(gitignores_len_before);
                     return Err(BuildTreeError::Ignored);
                 }
                 IgnoredPathStrategy::IncludeOnly(patterns) => {
                     if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
                         if !patterns.iter().any(|pattern| file_name == pattern) {
+                            gitignores.truncate(gitignores_len_before);
                             return Err(BuildTreeError::Ignored);
                         }
                     }
@@ -171,6 +179,7 @@ impl Entry {
 
         if is_dir {
             if lazy_load {
+                gitignores.truncate(gitignores_len_before);
                 return Ok(Self::Directory(DirectoryEntry {
                     children: vec![],
                     path: StandardizedPath::from_local_absolute_unchecked(&curr_path),
@@ -180,7 +189,13 @@ impl Entry {
             }
 
             // If the path is a directory, process all the children under it.
-            let entries = std::fs::read_dir(&curr_path)?;
+            let entries = match std::fs::read_dir(&curr_path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    gitignores.truncate(gitignores_len_before);
+                    return Err(error.into());
+                }
+            };
             let mut children = Vec::new();
 
             for entry in entries {
@@ -188,6 +203,7 @@ impl Entry {
                     .as_ref()
                     .is_some_and(|x| **x < children.len())
                 {
+                    gitignores.truncate(gitignores_len_before);
                     return Err(BuildTreeError::ExceededMaxFileLimit);
                 }
 
@@ -221,7 +237,8 @@ impl Entry {
                             ) {
                                 Ok(entry) => Some(entry),
                                 Err(BuildTreeError::ExceededMaxFileLimit) => {
-                                    return Err(BuildTreeError::ExceededMaxFileLimit)
+                                    gitignores.truncate(gitignores_len_before);
+                                    return Err(BuildTreeError::ExceededMaxFileLimit);
                                 }
                                 Err(_) => None,
                             }
@@ -235,6 +252,10 @@ impl Entry {
                 }
             }
 
+            // Restore the gitignore stack so sibling directories don't see
+            // gitignores from this subtree.
+            gitignores.truncate(gitignores_len_before);
+
             Ok(Self::Directory(DirectoryEntry {
                 children,
                 path: StandardizedPath::from_local_absolute_unchecked(&curr_path),
@@ -244,15 +265,18 @@ impl Entry {
         } else if curr_path.is_file() {
             if let Some(remaining_file_quota) = remaining_file_quota {
                 if *remaining_file_quota == 0 {
+                    gitignores.truncate(gitignores_len_before);
                     return Err(BuildTreeError::ExceededMaxFileLimit);
                 }
 
                 *remaining_file_quota -= 1
             }
+            gitignores.truncate(gitignores_len_before);
             let metadata = FileMetadata::new(curr_path, path_is_ignored);
             files.push(metadata.clone());
             Ok(Self::File(metadata))
         } else {
+            gitignores.truncate(gitignores_len_before);
             Err(BuildTreeError::Symlink)
         }
     }
