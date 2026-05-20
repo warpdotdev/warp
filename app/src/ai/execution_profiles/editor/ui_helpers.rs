@@ -554,8 +554,8 @@ pub fn render_permissions_section(
     ));
     column.add_child(render_permission_row(
         appearance,
-        Icon::Workflow,
-        "Run agents",
+        Icon::Atom,
+        "Run orchestrated agents",
         &view.run_agents_dropdown,
         profile_data.run_agents.description(),
         !ai_settings.is_run_agents_permissions_editable(app),

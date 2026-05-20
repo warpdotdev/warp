@@ -30,7 +30,6 @@ use crate::ai::agent::{
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
 use warpui::SingletonEntity;
 
@@ -86,10 +85,10 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
-    /// Fans out per-child dispatches and returns a receiver for the
-    /// aggregate `RunAgentsResult`. Validation failures short-circuit
-    /// synchronously.
-    pub fn dispatch_run_agents(
+    /// Fans out a prepared request into per-child dispatches and returns a
+    /// receiver for the aggregate `RunAgentsResult`. Validation failures
+    /// short-circuit synchronously.
+    fn dispatch_prepared_run_agents(
         &mut self,
         action_id: AIAgentActionId,
         request: RunAgentsRequest,
@@ -97,16 +96,6 @@ impl RunAgentsExecutor {
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<RunAgentsResult> {
         let (sender, receiver) = async_channel::bounded(1);
-        if BlocklistAIPermissions::as_ref(ctx)
-            .get_run_agents_setting(ctx, Some(self.terminal_view_id))
-            .is_never_allow()
-        {
-            let _ = sender.try_send(RunAgentsResult::Denied {
-                reason: "Running child agents is disabled by the active execution profile."
-                    .to_string(),
-            });
-            return receiver;
-        }
 
         if self.pending.contains_key(&action_id) {
             log::warn!("RunAgentsExecutor: dispatch reentered for {action_id:?}; rejecting");
@@ -283,40 +272,21 @@ impl RunAgentsExecutor {
         let mut request = request.clone();
         let action_id = id.clone();
         let parent_conversation_id = input.conversation_id;
-        let permission = BlocklistAIPermissions::as_ref(ctx)
-            .get_run_agents_setting(ctx, Some(self.terminal_view_id));
-
-        if permission.is_never_allow() {
+        if let Some(reason) = prepare_request_for_execution(
+            &mut request,
+            parent_conversation_id,
+            self.terminal_view_id,
+            ctx,
+        ) {
             return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
                 RunAgentsResult::Denied {
-                    reason: "Running child agents is disabled by the active execution profile."
-                        .to_string(),
+                    reason: reason.to_string(),
                 },
             ));
         }
 
-        // When auto-executing (autonomous/CLI-driver mode), the confirmation
-        // card is bypassed. Replicate its policy/normalization here:
-        // 1. Deny if the orchestration config is explicitly disapproved.
-        // 2. Override model/harness/execution_mode from the approved config.
-        if AppExecutionMode::as_ref(ctx).is_autonomous() {
-            if apply_autonomous_config_and_check_disapproval(
-                &mut request,
-                parent_conversation_id,
-                ctx,
-            )
-            .is_disapproved()
-            {
-                return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
-                    RunAgentsResult::Denied {
-                        reason: "Orchestration config was disapproved".to_string(),
-                    },
-                ));
-            }
-        }
-        populate_default_auth_secret_for_autoexecute(&mut request, ctx);
-
-        let receiver = self.dispatch_run_agents(action_id, request, parent_conversation_id, ctx);
+        let receiver =
+            self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
 
         ActionExecution::new_async(
             async move { receiver.recv().await },
@@ -335,34 +305,13 @@ impl RunAgentsExecutor {
         let AIAgentActionType::RunAgents(request) = &input.action.action else {
             return false;
         };
-        let mut request = request.clone();
-        let is_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
-        if is_autonomous
-            // Approved orchestration configs override run-wide request fields.
-            // Resolve them before auth gating so we inspect the effective harness/mode.
-            && apply_autonomous_config_and_check_disapproval(
-                &mut request,
-                input.conversation_id,
-                ctx,
-            )
-                .is_disapproved()
-        {
-            return false;
-        }
-        if !can_autoexecute_with_auth_secret(&request, ctx) {
-            return false;
-        }
-        // Non-interactive (CLI driver) agents cannot present a
-        // confirmation card, so they must auto-execute.
-        if is_autonomous {
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
             return true;
         }
-
-        matches!(
-            BlocklistAIPermissions::as_ref(ctx)
-                .get_run_agents_setting(ctx, Some(self.terminal_view_id)),
-            RunAgentsPermission::AlwaysAllow
-        )
+        has_approved_orchestration_config(request, input.conversation_id, ctx)
+            || BlocklistAIPermissions::as_ref(ctx)
+                .get_run_agents_setting(ctx, Some(self.terminal_view_id))
+                .is_always_allow()
     }
 
     pub(super) fn preprocess_action(
@@ -383,7 +332,27 @@ enum ChildSlot {
     Pending(async_channel::Receiver<StartAgentOutcome>),
 }
 
-fn resolve_autonomous_request_from_config(
+fn orchestration_config_status_for_request(
+    request: &RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> Option<ai::agent::orchestration_config::OrchestrationConfigStatus> {
+    BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&parent_conversation_id)?
+        .orchestration_config_for_plan(&request.plan_id)
+        .map(|(_, status)| status)
+}
+
+fn has_approved_orchestration_config(
+    request: &RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> bool {
+    orchestration_config_status_for_request(request, parent_conversation_id, ctx)
+        .is_some_and(|status| status.is_approved())
+}
+
+fn resolve_request_from_approved_config(
     request: &mut RunAgentsRequest,
     parent_conversation_id: AIConversationId,
     ctx: &ModelContext<RunAgentsExecutor>,
@@ -397,35 +366,45 @@ fn resolve_autonomous_request_from_config(
     Some(status)
 }
 
-enum AutonomousRequestPreparation {
-    Ready,
-    Disapproved,
-}
-
-impl AutonomousRequestPreparation {
-    fn is_disapproved(&self) -> bool {
-        matches!(self, Self::Disapproved)
-    }
-}
-
-/// Applies any approved orchestration config directly to the request so
-/// downstream autoexecute checks and dispatch use the same resolved fields.
-/// Returns `Disapproved` when the stored config explicitly blocks launch.
-fn apply_autonomous_config_and_check_disapproval(
+/// Normalizes the request and returns a denial reason when launch is blocked.
+///
+/// Autonomous agents always run: their calls may still inherit approved plan
+/// config fields and default auth secrets, but they bypass interactive policy
+/// denials because they cannot present a confirmation card.
+fn prepare_request_for_execution(
     request: &mut RunAgentsRequest,
     parent_conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
     ctx: &ModelContext<RunAgentsExecutor>,
-) -> AutonomousRequestPreparation {
-    if resolve_autonomous_request_from_config(request, parent_conversation_id, ctx)
-        .is_some_and(|status| status.is_disapproved())
-    {
-        AutonomousRequestPreparation::Disapproved
-    } else {
-        AutonomousRequestPreparation::Ready
+) -> Option<&'static str> {
+    let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
+    populate_default_auth_secret_for_execution(request, ctx);
+
+    if AppExecutionMode::as_ref(ctx).is_autonomous() {
+        return None;
     }
+
+    if status.is_some_and(|status| status.is_disapproved()) {
+        return Some("Orchestration config was disapproved");
+    }
+
+    if BlocklistAIPermissions::as_ref(ctx)
+        .get_run_agents_setting(ctx, Some(terminal_view_id))
+        .is_never_allow()
+    {
+        return Some("Running child agents is disabled by the active execution profile.");
+    }
+
+    if !can_execute_with_auth_secret(request, ctx) {
+        return Some(
+            "Cloud child agents using this harness require an API key before they can run.",
+        );
+    }
+
+    None
 }
 
-fn requires_default_auth_secret_for_autoexecute(request: &RunAgentsRequest) -> bool {
+fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> bool {
     if !request.execution_mode.is_remote() {
         return false;
     }
@@ -435,11 +414,11 @@ fn requires_default_auth_secret_for_autoexecute(request: &RunAgentsRequest) -> b
     harness != Harness::Oz && !auth_secret_types_for_harness(harness).is_empty()
 }
 
-fn can_autoexecute_with_auth_secret(
+fn can_execute_with_auth_secret(
     request: &RunAgentsRequest,
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> bool {
-    if !requires_default_auth_secret_for_autoexecute(request) {
+    if !requires_default_auth_secret_for_execution(request) {
         return true;
     }
     if request
@@ -468,11 +447,11 @@ fn default_auth_secret_name_for_harness(
         .filter(|name| !name.trim().is_empty())
 }
 
-fn populate_default_auth_secret_for_autoexecute(
+fn populate_default_auth_secret_for_execution(
     request: &mut RunAgentsRequest,
     ctx: &ModelContext<RunAgentsExecutor>,
 ) {
-    if !requires_default_auth_secret_for_autoexecute(request)
+    if !requires_default_auth_secret_for_execution(request)
         || request
             .harness_auth_secret_name
             .as_deref()

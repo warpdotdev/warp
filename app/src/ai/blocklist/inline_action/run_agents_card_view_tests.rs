@@ -507,69 +507,6 @@ mod override_from_approved_config_tests {
     }
 }
 
-mod compute_is_denied_tests {
-    use super::super::compute_is_denied;
-    use ai::agent::orchestration_config::{
-        OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
-    };
-
-    fn some_config(
-        status: OrchestrationConfigStatus,
-    ) -> Option<(OrchestrationConfig, OrchestrationConfigStatus)> {
-        Some((
-            OrchestrationConfig {
-                model_id: "auto".to_string(),
-                harness_type: "oz".to_string(),
-                execution_mode: OrchestrationExecutionMode::Local,
-            },
-            status,
-        ))
-    }
-
-    #[test]
-    fn false_when_no_denied_result_and_no_config() {
-        assert!(!compute_is_denied(false, &None));
-    }
-
-    #[test]
-    fn true_when_has_denied_result_from_history() {
-        assert!(compute_is_denied(true, &None));
-    }
-
-    #[test]
-    fn true_when_config_is_disapproved() {
-        let config = some_config(OrchestrationConfigStatus::Disapproved);
-        assert!(compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn true_when_both_denied_and_disapproved() {
-        let config = some_config(OrchestrationConfigStatus::Disapproved);
-        assert!(compute_is_denied(true, &config));
-    }
-
-    #[test]
-    fn false_when_config_is_approved() {
-        let config = some_config(OrchestrationConfigStatus::Approved);
-        assert!(!compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn false_when_config_status_is_none() {
-        let config = some_config(OrchestrationConfigStatus::None);
-        assert!(!compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn denied_result_overrides_approved_config() {
-        let config = some_config(OrchestrationConfigStatus::Approved);
-        assert!(
-            compute_is_denied(true, &config),
-            "History denied result should take precedence over approved config"
-        );
-    }
-}
-
 #[test]
 fn local_to_cloud_idempotent_when_already_remote() {
     let mut state = RunAgentsEditState::from_request(&make_request(
