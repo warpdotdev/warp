@@ -725,6 +725,10 @@ impl BillingMetadata {
         self.tier
             .enterprise_credits_auto_reload_policy
             .is_some_and(|policy| policy.enabled)
+            || self
+                .tier
+                .purchase_add_on_credits_policy
+                .is_some_and(|policy| policy.enabled)
     }
 }
 
