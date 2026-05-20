@@ -90,12 +90,6 @@ const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str = "Auto reload is 
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
-const CARD_BORDER_COLOR: ColorU = ColorU {
-    r: 43,
-    g: 43,
-    b: 43,
-    a: 255,
-};
 pub(super) const BASE_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 207,
     g: 145,
@@ -118,6 +112,12 @@ pub(super) const AMBIENT_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 99,
     g: 102,
     b: 241,
+    a: 255,
+};
+pub(super) const AGGREGATE_CREDITS_DOT_COLOR: ColorU = ColorU {
+    r: 140,
+    g: 140,
+    b: 140,
     a: 255,
 };
 const DEFAULT_MAX_MONTHLY_SPEND_CENTS: i32 = 20_000;
@@ -799,6 +799,8 @@ impl BillingAndUsagePageV2View {
             .with_spacing(8.)
             .with_main_axis_size(MainAxisSize::Max);
 
+        let outline_color = theme.outline().into_solid();
+
         if has_base_credits {
             let reset_str = ai_model
                 .next_refresh_time_local()
@@ -816,7 +818,7 @@ impl BillingAndUsagePageV2View {
                         "Base credits",
                         &reset_str,
                         base_remaining,
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -833,7 +835,7 @@ impl BillingAndUsagePageV2View {
                         "Personal credits",
                         &classified.personal.expiry_label(),
                         classified.personal.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -850,7 +852,7 @@ impl BillingAndUsagePageV2View {
                         "Team credits",
                         &classified.team.expiry_label(),
                         classified.team.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
