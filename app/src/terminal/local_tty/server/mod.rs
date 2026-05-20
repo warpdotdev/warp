@@ -70,7 +70,14 @@ pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
 fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mutex<HashSet<u32>>>) {
     std::thread::spawn(move || {
         loop {
-            match protocol::receive_message(socket_fd).expect("should not fail to receive") {
+            let message = match protocol::receive_message(socket_fd) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    log::error!("Failed to receive message from terminal server: {e:?}");
+                    break;
+                }
+            };
+            match message {
                 Some(api::Message::WriteLogRequest {
                     level,
                     target,

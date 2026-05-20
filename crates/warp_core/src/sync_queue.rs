@@ -114,8 +114,8 @@ impl RateLimitConfig {
         loop {
             {
                 let now = Instant::now();
-                let mut tokens = self.tokens.lock().unwrap();
-                let mut last_refill = self.last_refill.lock().unwrap();
+                let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+                let mut last_refill = self.last_refill.lock().unwrap_or_else(|e| e.into_inner());
 
                 // Calculate tokens to add based on time elapsed
                 let elapsed = now.duration_since(*last_refill);
@@ -257,11 +257,11 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
             result_sender: None,
         };
 
-        self.task_map.lock().unwrap().insert(task_id, queued_task);
+        self.task_map.lock().unwrap_or_else(|e| e.into_inner()).insert(task_id, queued_task);
 
         if let Err(e) = self.sender.as_ref().clone().try_send(task_id) {
             log::warn!("Failed to enqueue task because of receiver error {e}");
-            self.task_map.lock().unwrap().remove(&task_id);
+            self.task_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
         }
     }
 
@@ -289,13 +289,13 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
             result_sender: Some(tx),
         };
 
-        self.task_map.lock().unwrap().insert(task_id, queued_task);
+        self.task_map.lock().unwrap_or_else(|e| e.into_inner()).insert(task_id, queued_task);
 
         // Ignore send error if no receiver (e.g., queue processor dropped)
         if let Err(e) = self.sender.as_ref().clone().try_send(task_id) {
             log::warn!("Failed to enqueue task because of receiver error {e}");
             // Clean up the task from the map since it will never be processed.
-            self.task_map.lock().unwrap().remove(&task_id);
+            self.task_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
         }
         rx
     }
@@ -317,13 +317,13 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
     /// (if any) is aborted via its `AbortHandle`.
     pub fn cancel_all(&self) {
         // Abort the currently executing task, if any.
-        if let Some(handle) = self.active_task_handle.lock().unwrap().take() {
+        if let Some(handle) = self.active_task_handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
             handle.abort();
         }
 
         // Drain all pending tasks from the map. Dropping the QueuedTask entries
         // drops their oneshot senders, signaling cancellation to receivers.
-        self.task_map.lock().unwrap().clear();
+        self.task_map.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     async fn retry_with_backoff<Fut>(
@@ -369,7 +369,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
     ) {
         while let Some(task_id) = receiver.next().await {
             // Remove the task from the map. If it's missing, it was cancelled.
-            let Some(mut queued_task) = task_map.lock().unwrap().remove(&task_id) else {
+            let Some(mut queued_task) = task_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id) else {
                 continue;
             };
 
@@ -380,7 +380,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
             // Rate limiting is inside the abortable so cancellation also
             // interrupts a task waiting for a rate-limit token.
             let (abort_handle, abort_registration) = AbortHandle::new_pair();
-            *active_task_handle.lock().unwrap() = Some(abort_handle);
+            *active_task_handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(abort_handle);
 
             let abortable_result = Abortable::new(
                 async {
@@ -395,7 +395,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
             .await;
 
             // Clear the active handle now that the task has finished.
-            *active_task_handle.lock().unwrap() = None;
+            *active_task_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
             match abortable_result {
                 Ok(result) => {
