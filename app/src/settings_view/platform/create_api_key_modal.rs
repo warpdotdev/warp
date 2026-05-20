@@ -166,7 +166,7 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
-            dropdown.set_match_menu_width_to_top_bar(true, ctx);
+            dropdown.set_menu_width(INPUT_WIDTH, ctx);
         });
 
         let api_key_type_control = ctx.add_typed_action_view(move |ctx| {

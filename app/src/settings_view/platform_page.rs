@@ -60,6 +60,7 @@ const SETTINGS_SIDEBAR_WIDTH_WITH_FOOTER: f32 = 248.;
 const SETTINGS_SECTION_BORDER_WIDTH: f32 = 1.;
 const SETTINGS_PAGE_HORIZONTAL_PADDING: f32 = 56.;
 const SETTINGS_PAGE_MAX_CONTENT_WIDTH: f32 = 800.;
+const API_KEY_SEARCH_BAR_MAX_WIDTH: f32 = 640.;
 fn settings_sidebar_width_for_platform_page() -> f32 {
     if FeatureFlag::SettingsFile.is_enabled() {
         SETTINGS_SIDEBAR_WIDTH_WITH_FOOTER
@@ -580,9 +581,13 @@ impl PlatformPageWidget {
             }
         } else {
             col.add_child(
-                Container::new(ChildView::new(&view.api_key_search_bar).finish())
-                    .with_margin_top(16.)
-                    .finish(),
+                Container::new(
+                    ConstrainedBox::new(ChildView::new(&view.api_key_search_bar).finish())
+                        .with_max_width(API_KEY_SEARCH_BAR_MAX_WIDTH)
+                        .finish(),
+                )
+                .with_margin_top(16.)
+                .finish(),
             );
 
             let include_agent_names = FeatureFlag::NamedAgents.is_enabled();
