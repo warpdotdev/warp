@@ -78,6 +78,7 @@ pub fn subshell_bootstrap_success_block_bytes(
                     .to_owned()
                     .to_vec(),
                 vec![
+                    rc_file_path.unwrap_or("<Your RC file>").to_owned(),
                     shell_type.name().to_owned(),
                     if disable_tmux {
                         ", \"tmux\": false"
@@ -85,7 +86,6 @@ pub fn subshell_bootstrap_success_block_bytes(
                         ""
                     }
                     .to_owned(),
-                    rc_file_path.unwrap_or("<Your RC file>").to_owned(),
                 ],
             )
         })
@@ -119,3 +119,7 @@ fn replace_template_chars_with_arguments(
     }
     templated_bytes
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

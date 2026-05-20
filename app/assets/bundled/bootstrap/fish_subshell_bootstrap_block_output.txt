@@ -1,1 +1,1 @@
-echo -e '\n# Auto-Warpify\nstatus --is-interactive; and printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x9c'\'' ' >> %
+set -l rcfile %; set -l target (readlink -f "$rcfile" 2>/dev/null; or realpath "$rcfile" 2>/dev/null; or printf '%s' "$rcfile"); echo -e '\n# Auto-Warpify\nstatus --is-interactive; and printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x9c'\'' ' >> "$target"; or echo "Auto-Warpify failed to update $target" >&2
