@@ -57,6 +57,12 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
         ctx.add_singleton_model(ApiKeyManager::new);
     });
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    })
+}
+
+fn set_addon_credits_pricing_info(app: &mut App) {
     PricingInfoModel::handle(app).update(app, |model, ctx| {
         model.update_pricing_info(
             PricingInfo {
@@ -72,9 +78,6 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
             ctx,
         );
     });
-    app.add_singleton_model(|ctx| {
-        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-    })
 }
 
 #[test]
@@ -493,6 +496,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
@@ -519,6 +523,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_dis
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
@@ -548,6 +553,7 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_woul
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
