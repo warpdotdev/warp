@@ -2529,6 +2529,12 @@ pub enum TelemetryEvent {
     },
     AIExecutionProfileContextWindowSelected {
         tokens: Option<u32>,
+        model_value: String,
+        context_window_is_configurable: bool,
+        context_window_min_tokens: u32,
+        context_window_max_tokens: u32,
+        context_window_default_tokens: u32,
+        context_window_selected_tokens: u32,
     },
     /// The AI input was not sent because there was already an in-flight request.
     AIInputNotSent {
@@ -4427,8 +4433,22 @@ impl TelemetryEvent {
                 "model_type": model_type,
                 "model_value": model_value,
             })),
-            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens } => Some(json!({
+            TelemetryEvent::AIExecutionProfileContextWindowSelected {
+                tokens,
+                model_value,
+                context_window_is_configurable,
+                context_window_min_tokens,
+                context_window_max_tokens,
+                context_window_default_tokens,
+                context_window_selected_tokens,
+            } => Some(json!({
                 "tokens": tokens,
+                "model_value": model_value,
+                "context_window_is_configurable": context_window_is_configurable,
+                "context_window_min_tokens": context_window_min_tokens,
+                "context_window_max_tokens": context_window_max_tokens,
+                "context_window_default_tokens": context_window_default_tokens,
+                "context_window_selected_tokens": context_window_selected_tokens,
             })),
             TelemetryEvent::AIInputNotSent {
                 entrypoint,
@@ -6350,7 +6370,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
 
     fn description(&self) -> &'static str {
         match self {
-            Self::AIExecutionProfileContextWindowSelected => {
+            Self::AIExecutionProfileContextWindowSelected { .. } => {
                 "Selected a context window limit for an execution profile's base model"
             }
             Self::AISuggestedAgentModeWorkflowAdded => {
