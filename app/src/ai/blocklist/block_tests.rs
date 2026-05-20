@@ -22,7 +22,7 @@ fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
         initialize_settings_for_tests(&mut app);
         let mut state = CollapsibleElementState::default();
         app.update(|ctx| {
-            state.finish_reasoning(ctx);
+            state.finish_reasoning(ctx, false);
         });
 
         assert!(matches!(
@@ -101,7 +101,7 @@ fn always_show_thinking_stays_expanded_after_finish() {
 
         let mut state = CollapsibleElementState::default();
         app.update(|ctx| {
-            state.finish_reasoning(ctx);
+            state.finish_reasoning(ctx, false);
         });
 
         assert!(matches!(
@@ -122,7 +122,7 @@ fn manual_collapse_while_streaming_stays_collapsed_after_finish() {
 
         state.toggle_expansion();
         app.update(|ctx| {
-            state.finish_reasoning(ctx);
+            state.finish_reasoning(ctx, false);
         });
 
         assert!(matches!(
@@ -141,7 +141,26 @@ fn manual_reexpand_while_streaming_stays_expanded_after_finish() {
         state.toggle_expansion();
         state.toggle_expansion();
         app.update(|ctx| {
-            state.finish_reasoning(ctx);
+            state.finish_reasoning(ctx, false);
+        });
+
+        assert!(matches!(
+            state.expansion_state,
+            CollapsibleExpansionState::Expanded {
+                is_finished: true,
+                scroll_pinned_to_bottom: false
+            }
+        ));
+    });
+}
+
+#[test]
+fn transcript_viewer_reasoning_stays_expanded_after_finish() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let mut state = CollapsibleElementState::default();
+        app.update(|ctx| {
+            state.finish_reasoning(ctx, true);
         });
 
         assert!(matches!(

@@ -749,13 +749,16 @@ impl CollapsibleElementState {
         }
     }
 
-    fn finish_reasoning(&mut self, app: &AppContext) {
+    fn finish_reasoning(&mut self, app: &AppContext, keep_expanded_for_transcript_viewer: bool) {
         let should_auto_collapse = self.should_auto_collapse_reasoning_on_finish();
         let thinking_mode = AISettings::as_ref(app).thinking_display_mode;
 
         self.sync_finished_state(true);
 
-        if !thinking_mode.should_keep_expanded() && should_auto_collapse {
+        if !thinking_mode.should_keep_expanded()
+            && !keep_expanded_for_transcript_viewer
+            && should_auto_collapse
+        {
             self.expansion_state = CollapsibleExpansionState::Collapsed;
         } else if let CollapsibleExpansionState::Expanded {
             scroll_pinned_to_bottom,
@@ -2077,7 +2080,11 @@ impl AIBlock {
                     .entry(message.id.clone())
                     .or_default();
                 if finished_duration.is_some() {
-                    entry.finish_reasoning(ctx);
+                    let keep_expanded_for_transcript_viewer = self
+                        .terminal_model
+                        .lock()
+                        .is_conversation_transcript_viewer();
+                    entry.finish_reasoning(ctx, keep_expanded_for_transcript_viewer);
                 } else {
                     entry.sync_finished_state(false);
                 }
