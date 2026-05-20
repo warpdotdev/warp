@@ -74,10 +74,9 @@ use super::{
     },
     settings_page::{
         build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
-        AdditionalInfo, Category, PageType, SettingsPageMeta, SettingsPageViewHandle,
-        SettingsWidget, HEADER_PADDING,
+        AdditionalInfo, HEADER_PADDING,
     },
-    MatchData, SettingsSection,
+    SettingsSection,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -199,7 +198,6 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
-    page: PageType<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -230,6 +228,32 @@ pub struct BillingAndUsagePageView {
     addon_credit_denomination_buttons: Vec<ViewHandle<ActionButton>>,
     purchase_addon_credits_loading: bool,
     prorated_request_limits_info_mouse_states: Vec<MouseStateHandle>,
+    // ── Plan-header mouse states ─────────────────────────────────────────
+    upgrade_link: MouseStateHandle,
+    anonymous_user_sign_up_button: MouseStateHandle,
+    enterprise_contact_us_link: MouseStateHandle,
+    stripe_billing_portal_link: MouseStateHandle,
+    admin_panel_link: MouseStateHandle,
+    // ── Page-body mouse / switch states ──────────────────────────────────
+    requests_highlight_index: HighlightedHyperlink,
+    ubp_switch_state: SwitchStateHandle,
+    ubp_info_icon_mouse_state: MouseStateHandle,
+    pencil_icon_mouse_state: MouseStateHandle,
+    overage_usage_link_mouse_state: MouseStateHandle,
+    // Mouse state for the inline "Increase your limit" link inside the warning row
+    exceed_limit_link_mouse_state: MouseStateHandle,
+    refresh_icon_mouse_state: MouseStateHandle,
+    sort_icon_mouse_state: MouseStateHandle,
+    overview_tab_mouse_state: MouseStateHandle,
+    usage_history_tab_mouse_state: MouseStateHandle,
+    addon_info_icon_mouse_state: MouseStateHandle,
+    edit_monthly_limit: MouseStateHandle,
+    auto_reload_switch: SwitchStateHandle,
+    buy_button: MouseStateHandle,
+    // Ambient agent trial widget buttons.
+    ambient_trial_new_agent_button: MouseStateHandle,
+    ambient_trial_buy_more_button: MouseStateHandle,
+    ambient_trial_dismiss_button: MouseStateHandle,
 }
 
 impl BillingAndUsagePageView {
@@ -336,7 +360,6 @@ impl BillingAndUsagePageView {
         });
 
         let mut me = Self {
-            page: Self::build_page(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -357,23 +380,33 @@ impl BillingAndUsagePageView {
             addon_credit_denomination_buttons: Default::default(),
             purchase_addon_credits_loading: false,
             prorated_request_limits_info_mouse_states: Default::default(),
+            upgrade_link: MouseStateHandle::default(),
+            anonymous_user_sign_up_button: MouseStateHandle::default(),
+            enterprise_contact_us_link: MouseStateHandle::default(),
+            stripe_billing_portal_link: MouseStateHandle::default(),
+            admin_panel_link: MouseStateHandle::default(),
+            requests_highlight_index: HighlightedHyperlink::default(),
+            ubp_switch_state: SwitchStateHandle::default(),
+            ubp_info_icon_mouse_state: MouseStateHandle::default(),
+            pencil_icon_mouse_state: MouseStateHandle::default(),
+            overage_usage_link_mouse_state: MouseStateHandle::default(),
+            exceed_limit_link_mouse_state: MouseStateHandle::default(),
+            refresh_icon_mouse_state: MouseStateHandle::default(),
+            sort_icon_mouse_state: MouseStateHandle::default(),
+            overview_tab_mouse_state: MouseStateHandle::default(),
+            usage_history_tab_mouse_state: MouseStateHandle::default(),
+            addon_info_icon_mouse_state: MouseStateHandle::default(),
+            edit_monthly_limit: MouseStateHandle::default(),
+            auto_reload_switch: SwitchStateHandle::default(),
+            buy_button: MouseStateHandle::default(),
+            ambient_trial_new_agent_button: MouseStateHandle::default(),
+            ambient_trial_buy_more_button: MouseStateHandle::default(),
+            ambient_trial_dismiss_button: MouseStateHandle::default(),
         };
         me.update_addon_credits_options(ctx);
         me.refresh_addon_credits_settings(ctx);
         me.update_prorated_mouse_states(ctx);
         me
-    }
-
-    fn build_page() -> PageType<Self> {
-        let categories = vec![Category::new(
-            "Billing and usage",
-            vec![
-                Box::new(PlanWidget::default()),
-                Box::new(UsageWidget::default()),
-            ],
-        )];
-
-        PageType::new_categorized(categories, None)
     }
 
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
@@ -680,20 +713,12 @@ impl BillingAndUsagePageView {
     }
 }
 
-impl SettingsPageMeta for BillingAndUsagePageView {
-    fn section() -> SettingsSection {
-        SettingsSection::BillingAndUsage
-    }
-
-    fn should_render(&self, ctx: &AppContext) -> bool {
-        let is_anonymous = AuthStateProvider::as_ref(ctx)
-            .get()
-            .is_anonymous_or_logged_out();
-
-        !is_anonymous
-    }
-
-    fn on_page_selected(&mut self, _: bool, ctx: &mut ViewContext<Self>) {
+impl BillingAndUsagePageView {
+    pub(super) fn on_page_selected(
+        &mut self,
+        _allow_steal_focus: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.purchase_addon_credits_loading = false;
         std::mem::drop(
             TeamUpdateManager::handle(ctx)
@@ -708,18 +733,6 @@ impl SettingsPageMeta for BillingAndUsagePageView {
             .update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
 
         self.refresh_addon_credits_settings(ctx);
-    }
-
-    fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
-        self.page.update_filter(query, ctx)
-    }
-
-    fn scroll_to_widget(&mut self, widget_id: &'static str) {
-        self.page.scroll_to_widget(widget_id)
-    }
-
-    fn clear_highlighted_widget(&mut self) {
-        self.page.clear_highlighted_widget();
     }
 }
 
@@ -744,7 +757,11 @@ impl View for BillingAndUsagePageView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        self.page.render(self, app)
+        let appearance = Appearance::as_ref(app);
+        Flex::column()
+            .with_child(self.render_plan_header(appearance, app))
+            .with_child(self.render_page_body(appearance, app))
+            .finish()
     }
 }
 
@@ -1010,12 +1027,6 @@ impl TypedActionView for BillingAndUsagePageView {
     }
 }
 
-impl From<ViewHandle<BillingAndUsagePageView>> for SettingsPageViewHandle {
-    fn from(view_handle: ViewHandle<BillingAndUsagePageView>) -> Self {
-        SettingsPageViewHandle::BillingAndUsage(view_handle)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum BillingAndUsagePageAction {
     OpenUrl(HyperlinkUrl),
@@ -1083,36 +1094,13 @@ impl From<&BillingAndUsagePageAction> for LoginGatedFeature {
     }
 }
 
-#[derive(Default)]
-struct UsageWidget {
-    requests_highlight_index: HighlightedHyperlink,
-    ubp_switch_state: SwitchStateHandle,
-    ubp_info_icon_mouse_state: MouseStateHandle,
-    pencil_icon_mouse_state: MouseStateHandle,
-    overage_usage_link_mouse_state: MouseStateHandle,
-    // Mouse state for the inline "Increase your limit" link inside the warning row
-    exceed_limit_link_mouse_state: MouseStateHandle,
-    refresh_icon_mouse_state: MouseStateHandle,
-    sort_icon_mouse_state: MouseStateHandle,
-    overview_tab_mouse_state: MouseStateHandle,
-    usage_history_tab_mouse_state: MouseStateHandle,
-    addon_info_icon_mouse_state: MouseStateHandle,
-    edit_monthly_limit: MouseStateHandle,
-    auto_reload_switch: SwitchStateHandle,
-    buy_button: MouseStateHandle,
-    // Ambient agent trial widget buttons.
-    ambient_trial_new_agent_button: MouseStateHandle,
-    ambient_trial_buy_more_button: MouseStateHandle,
-    ambient_trial_dismiss_button: MouseStateHandle,
-}
-
 #[derive(Copy, Clone, Debug)]
 enum Divisor {
     Unlimited,
     Limit(usize),
 }
 
-impl UsageWidget {
+impl BillingAndUsagePageView {
     /// Renders the ambient agent trial widget showing remaining credits and action buttons.
     /// Returns None if the user has no ambient-only credits (None value from server),
     /// or if the widget has been dismissed (only dismissible when below threshold).
@@ -2456,19 +2444,8 @@ impl UsageWidget {
     }
 }
 
-impl SettingsWidget for UsageWidget {
-    type View = BillingAndUsagePageView;
-
-    fn search_terms(&self) -> &str {
-        "a.i. ai usage limit plan"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+impl BillingAndUsagePageView {
+    fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
         let formatted_next_refresh_time = ai_request_usage_model
             .next_refresh_time_local()
@@ -2494,7 +2471,7 @@ impl SettingsWidget for UsageWidget {
 
         let tab_selector = tab_selector::render_tab_selector(
             tabs,
-            view.selected_tab.label(),
+            self.selected_tab.label(),
             // On click, set clicked tab as selected
             |label, ctx| {
                 ctx.dispatch_typed_action(BillingAndUsagePageAction::SelectTab(
@@ -2506,33 +2483,32 @@ impl SettingsWidget for UsageWidget {
         usage.add_child(tab_selector);
 
         // Render correct page based on selected tab
-        if view.selected_tab == BillingUsageTab::Overview {
+        if self.selected_tab == BillingUsageTab::Overview {
+            let prorated_mouse_states = self.prorated_request_limits_info_mouse_states.clone();
             let usage_content = self.render_usage_content(
-                view,
                 appearance,
                 app,
                 ai_request_usage_model,
                 &formatted_next_refresh_time,
                 workspace_is_delinquent_due_to_payment_issue,
-                &view.prorated_request_limits_info_mouse_states,
+                &prorated_mouse_states,
             );
             usage.add_child(usage_content);
         } else {
-            usage.add_child(self.render_usage_history_content(view, appearance, app));
+            usage.add_child(self.render_usage_history_content(appearance, app));
         }
 
         usage.finish()
     }
 }
 
-impl UsageWidget {
+impl BillingAndUsagePageView {
     fn render_usage_history_content(
         &self,
-        view: &BillingAndUsagePageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let usage_history = view.usage_history_model.as_ref(app);
+        let usage_history = self.usage_history_model.as_ref(app);
         if usage_history.entries().is_empty() {
             return self.render_empty_usage_history_content(
                 usage_history.is_loading(),
@@ -2560,20 +2536,20 @@ impl UsageWidget {
         let mut usage_history_list = Flex::column().with_spacing(8.);
         let entries = usage_history.entries();
         for entry in entries.iter() {
-            let is_expanded = view
+            let is_expanded = self
                 .expanded_usage_entries
                 .get(&entry.conversation_id)
                 .copied()
                 .unwrap_or(false);
 
-            let mouse_state = view
+            let mouse_state = self
                 .usage_entries_mouse_states
                 .borrow_mut()
                 .entry(entry.conversation_id.clone())
                 .or_default()
                 .clone();
 
-            let tooltip_mouse_state = view
+            let tooltip_mouse_state = self
                 .usage_entries_tooltip_mouse_states
                 .borrow_mut()
                 .entry(entry.conversation_id.clone())
@@ -2596,7 +2572,7 @@ impl UsageWidget {
         content.add_child(usage_history_list.finish());
 
         if usage_history.has_more_entries() {
-            let load_more = view.load_more_button.as_ref(app).render(app);
+            let load_more = self.load_more_button.as_ref(app).render(app);
             content.add_child(
                 Container::new(
                     Flex::row()
@@ -2789,7 +2765,6 @@ impl UsageWidget {
     #[allow(clippy::too_many_arguments)]
     fn render_usage_content(
         &self,
-        view: &BillingAndUsagePageView,
         appearance: &Appearance,
         app: &AppContext,
         ai_request_usage_model: &AIRequestUsageModel,
@@ -2856,8 +2831,8 @@ impl UsageWidget {
                             ctx.dispatch_typed_action(BillingAndUsagePageAction::ToggleSortingMenu)
                         },
                         self.sort_icon_mouse_state.clone(),
-                        &view.sorting_menu,
-                        view.sorting_menu_open,
+                        &self.sorting_menu,
+                        self.sorting_menu_open,
                         MenuDirection::Right,
                         Some(Cursor::PointingHand),
                         None,
@@ -2909,14 +2884,14 @@ impl UsageWidget {
 
             if !is_enterprise_payg_with_zero_credits {
                 usage.add_child(self.render_addon_credits_panel(
-                    view.selected_addon_denomination,
+                    self.selected_addon_denomination,
                     workspace,
                     team.uid,
                     has_admin_permissions,
                     bonus_credit_balance,
-                    &view.addon_credits_options,
-                    &view.addon_credit_denomination_buttons,
-                    view.purchase_addon_credits_loading,
+                    &self.addon_credits_options,
+                    &self.addon_credit_denomination_buttons,
+                    self.purchase_addon_credits_loading,
                     workspace_is_delinquent_due_to_payment_issue,
                     app,
                 ));
@@ -3090,8 +3065,8 @@ impl UsageWidget {
         sort_user_items_in_place(
             &mut user_information,
             &current_user_display_name,
-            view.current_sort_key,
-            view.current_sort_order,
+            self.current_sort_key,
+            self.current_sort_order,
         );
 
         let user_information = user_information
@@ -3186,7 +3161,9 @@ impl UsageWidget {
                         " for security features like SSO and automatically applied zero data retention.",
                     ),
                 ]
-            } else if team.billing_metadata.is_on_build_business_plan() {
+            } else if team.billing_metadata.is_on_build_business_plan()
+                || team.billing_metadata.is_on_legacy_business_plan()
+            {
                 vec![
                     FormattedTextFragment::hyperlink(
                         "Upgrade to Enterprise",
@@ -3268,7 +3245,7 @@ impl UsageWidget {
             if team.billing_metadata.is_usage_based_pricing_toggleable() {
                 let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
-                let enabled = view
+                let enabled = self
                     .usage_based_pricing_toggle_override
                     .unwrap_or(usage_based_pricing_settings.enabled);
 
@@ -3279,7 +3256,7 @@ impl UsageWidget {
                         appearance,
                         app,
                         has_admin_permissions,
-                        view.usage_based_pricing_toggle_loading,
+                        self.usage_based_pricing_toggle_loading,
                     ))
                     .with_margin_bottom(16.)
                     .finish(),
@@ -3353,21 +3330,7 @@ pub(crate) fn sort_user_items_in_place<T>(
     });
 }
 
-#[derive(Default)]
-struct PlanWidgetStateHandles {
-    upgrade_link: MouseStateHandle,
-    anonymous_user_sign_up_button: MouseStateHandle,
-    enterprise_contact_us_link: MouseStateHandle,
-    stripe_billing_portal_link: MouseStateHandle,
-    admin_panel_link: MouseStateHandle,
-}
-
-#[derive(Default)]
-struct PlanWidget {
-    ui_state_handles: PlanWidgetStateHandles,
-}
-
-impl PlanWidget {
+impl BillingAndUsagePageView {
     fn render_anonymous_account_info(
         &self,
         auth_state: &AuthState,
@@ -3390,7 +3353,7 @@ impl PlanWidget {
             .ui_builder()
             .button(
                 ButtonVariant::Accent,
-                self.ui_state_handles.anonymous_user_sign_up_button.clone(),
+                self.anonymous_user_sign_up_button.clone(),
             )
             .with_style(button_styles)
             .with_text_label("Sign up".to_owned())
@@ -3410,10 +3373,7 @@ impl PlanWidget {
             Container::new(
                 appearance
                     .ui_builder()
-                    .button(
-                        ButtonVariant::Link,
-                        self.ui_state_handles.upgrade_link.clone(),
-                    )
+                    .button(ButtonVariant::Link, self.upgrade_link.clone())
                     .with_text_and_icon_label(
                         TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
@@ -3478,10 +3438,7 @@ impl PlanWidget {
         let content = Container::new(
             appearance
                 .ui_builder()
-                .button(
-                    ButtonVariant::Link,
-                    self.ui_state_handles.enterprise_contact_us_link.clone(),
-                )
+                .button(ButtonVariant::Link, self.enterprise_contact_us_link.clone())
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
@@ -3539,10 +3496,7 @@ impl PlanWidget {
         Container::new(
             appearance
                 .ui_builder()
-                .button(
-                    ButtonVariant::Link,
-                    self.ui_state_handles.stripe_billing_portal_link.clone(),
-                )
+                .button(ButtonVariant::Link, self.stripe_billing_portal_link.clone())
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
@@ -3580,10 +3534,7 @@ impl PlanWidget {
         let compare_plans_button = Container::new(
             appearance
                 .ui_builder()
-                .button(
-                    ButtonVariant::Link,
-                    self.ui_state_handles.admin_panel_link.clone(),
-                )
+                .button(ButtonVariant::Link, self.admin_panel_link.clone())
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
@@ -3660,23 +3611,12 @@ impl PlanWidget {
     }
 }
 
-impl SettingsWidget for PlanWidget {
-    type View = BillingAndUsagePageView;
-
-    fn search_terms(&self) -> &str {
-        "plan billing"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let account_info = if view.auth_state.is_anonymous_or_logged_out() {
-            self.render_anonymous_account_info(view.auth_state.as_ref(), appearance)
+impl BillingAndUsagePageView {
+    fn render_plan_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let account_info = if self.auth_state.is_anonymous_or_logged_out() {
+            self.render_anonymous_account_info(self.auth_state.as_ref(), appearance)
         } else {
-            self.render_account_info(view.auth_state.as_ref(), app, appearance)
+            self.render_account_info(self.auth_state.as_ref(), app, appearance)
         };
 
         let mut col = Flex::column();

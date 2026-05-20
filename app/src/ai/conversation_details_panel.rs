@@ -373,6 +373,8 @@ impl ConversationDetailsData {
                 environment_id,
                 conversation_id: task.conversation_id().map(str::to_string),
             },
+            // Intentionally uses task.title; revisit when product decides
+            // whether to also show the short orchestrator label here.
             title: task.title.clone(),
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
@@ -1267,7 +1269,7 @@ impl ConversationDetailsPanel {
 
         let oz_root_url = ChannelState::oz_root_url();
         let encoded_skill_name = urlencoding::encode(&skill_name);
-        let skill_url = format!("{oz_root_url}/agents/{encoded_skill_name}");
+        let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
 
         let oz_link = appearance
             .ui_builder()

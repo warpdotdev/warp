@@ -123,6 +123,7 @@ impl TombstoneDisplayData {
             self.source = Some(source.display_name().to_string());
         }
         if let Some(config) = &task.agent_config_snapshot {
+            // FIXME: this can be the orchestrator agent name, not a skill.
             self.skill_name = config.name.clone();
         }
 

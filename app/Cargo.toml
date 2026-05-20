@@ -73,7 +73,7 @@ bincode.workspace = true
 bitflags.workspace = true
 bitflags-serde-legacy.workspace = true
 blocking.workspace = true
-bounded-vec-deque = "0.1"
+bounded-vec-deque.workspace = true
 bytecount = "0.6.9"
 bytes.workspace = true
 byte-unit = "5.1.4"
@@ -634,6 +634,7 @@ default = [
     "skip_firebase_anonymous_user",
     "settings_file",
     "directory_tab_colors",
+    "git_credential_refresh",
     "configurable_context_window",
     "oz_handoff",
     "handoff_local_cloud",
@@ -645,6 +646,7 @@ default = [
     "cloud_mode_input_v2",
     "cloud_mode_setup_v2",
     "handoff_cloud_cloud",
+    "remote_codebase_indexing",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -867,6 +869,7 @@ allow_opening_file_links_using_editor_env = []
 undo_closed_panes = []
 revert_diff_hunk = []
 code_review_save_changes = []
+remote_code_review = []
 file_tree = []
 code_launch_modal = []
 api_key_authentication = []

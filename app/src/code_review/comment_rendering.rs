@@ -3,12 +3,12 @@
 //! These functions are used by both the `CommentListView` (in the code review panel)
 //! and the blocklist's imported comments rendering.
 
-use std::path::Path;
 use std::rc::Rc;
 
 use chrono::{Duration, Local};
 
 use crate::appearance::Appearance;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code_review::comments::{
@@ -229,7 +229,7 @@ fn render_comment_text_section(
 /// highlighting is set based on the file path.
 fn create_static_diff_content_editor<V: View>(
     content: &LineDiffContent,
-    file_path: &Path,
+    file_path: Option<&LocalOrRemotePath>,
     ctx: &mut ViewContext<V>,
 ) -> ViewHandle<CodeEditorView> {
     let editor = ctx.add_typed_action_view(|ctx| {
@@ -252,7 +252,10 @@ fn create_static_diff_content_editor<V: View>(
         let original_text = content.original_text();
         let state = InitialBufferState::plain_text(original_text.trim());
         view.reset(state, ctx);
-        view.set_language_with_path(file_path, ctx);
+        if let Some(file_path) = file_path {
+            let language_path = file_path.path_component();
+            view.set_language_with_path(&language_path, ctx);
+        }
     });
     editor
 }
@@ -299,7 +302,7 @@ impl CommentViewCard {
         always_use_static_diff: bool,
         disable_scrolling: bool,
         max_width: Option<Pixels>,
-        repo_path: Option<&Path>,
+        repo_path: Option<&LocalOrRemotePath>,
         ctx: &mut ViewContext<V>,
     ) -> Self {
         let comment_editor = create_readonly_comment_markdown_editor(
@@ -334,7 +337,8 @@ impl CommentViewCard {
         {
             if always_use_static_diff || comment.outdated {
                 Some(CommentDiffContent::StaticEditor(
-                    create_static_diff_content_editor(content, absolute_file_path, ctx),
+                    // Language detection only needs the path component (extension).
+                    create_static_diff_content_editor(content, Some(absolute_file_path), ctx),
                 ))
             } else {
                 Some(CommentDiffContent::EditorLens)
@@ -356,7 +360,7 @@ impl CommentViewCard {
     pub(crate) fn update_source<V: View>(
         &mut self,
         new_source: AttachedReviewComment,
-        repo_path: Option<&Path>,
+        repo_path: Option<&LocalOrRemotePath>,
         ctx: &mut ViewContext<V>,
     ) {
         self.comment_editor.update(ctx, |editor, ctx| {
@@ -454,13 +458,14 @@ impl CommentViewCard {
         self.last_updated_duration = Local::now() - self.source.last_update_time;
     }
 
-    fn compute_title(source: &AttachedReviewComment, repo_path: Option<&Path>) -> String {
+    fn compute_title(
+        source: &AttachedReviewComment,
+        repo_path: Option<&LocalOrRemotePath>,
+    ) -> String {
         let file_path = source.target.absolute_file_path().map(|p| {
             repo_path
-                .and_then(|rp| p.strip_prefix(rp).ok())
-                .unwrap_or(p)
-                .display()
-                .to_string()
+                .and_then(|rp| rp.strip_repo_prefix(p))
+                .unwrap_or_else(|| p.display_path())
         });
         let line_number = source.target.line_number().map(|lc| lc.as_u32() + 1);
 

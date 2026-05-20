@@ -8,6 +8,7 @@ use crate::codebase_index_proto::{
     proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
     RemoteCodebaseIndexStatus,
 };
+use crate::proto::CodebaseIndexLimits;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
@@ -16,8 +17,8 @@ use warpui::r#async::{executor, FutureExt as _};
 use crate::proto::{
     client_message, get_branches_response, get_fragment_metadata_from_hash_response,
     server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
+    CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate,
+    DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
     FragmentMetadataLookupErrorCode, GetBranches, GetDiffState, GetDiffStateResponse,
     GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize,
     InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
@@ -26,6 +27,11 @@ use crate::proto::{
     SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
+
+#[cfg(not(target_family = "wasm"))]
+mod remote_server_log;
+#[cfg(not(target_family = "wasm"))]
+pub use remote_server_log::RemoteServerLog;
 
 use crate::protocol::{self, ProtocolError, RequestId};
 use warp_core::{safe_error, safe_warn, SessionId};
@@ -132,6 +138,7 @@ pub struct InitializeParams {
     pub user_id: String,
     pub user_email: String,
     pub crash_reporting_enabled: bool,
+    pub codebase_index_limits: Option<CodebaseIndexLimits>,
 }
 
 /// A request-failure notification emitted by [`RemoteServerClient::send_request`].
@@ -216,9 +223,11 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        RemoteServerLog,
     ) {
-        spawn_stderr_forwarder(stderr, executor);
-        Self::new(stdout, stdin, executor)
+        let stderr_tail = spawn_stderr_forwarder(stderr, executor);
+        let (client, event_rx, failure_rx) = Self::new(stdout, stdin, executor);
+        (client, event_rx, failure_rx, stderr_tail)
     }
 }
 
@@ -287,6 +296,7 @@ impl RemoteServerClient {
                 user_id: params.user_id,
                 user_email: params.user_email,
                 crash_reporting_enabled: params.crash_reporting_enabled,
+                codebase_index_limits: params.codebase_index_limits,
             })),
         };
 
@@ -339,6 +349,26 @@ impl RemoteServerClient {
         repo_path: String,
         auth_token: String,
     ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
+        self.send_resync_codebase(repo_path, auth_token, CodebaseResyncMode::Full)
+            .await
+    }
+
+    /// Sends a `ResyncCodebase` request in incremental mode and awaits the current status update.
+    pub async fn trigger_codebase_incremental_sync(
+        &self,
+        repo_path: String,
+        auth_token: String,
+    ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
+        self.send_resync_codebase(repo_path, auth_token, CodebaseResyncMode::Incremental)
+            .await
+    }
+
+    async fn send_resync_codebase(
+        &self,
+        repo_path: String,
+        auth_token: String,
+        mode: CodebaseResyncMode,
+    ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
         let request_id = RequestId::new();
         let repo_path_for_log = repo_path.clone();
         let msg = ClientMessage {
@@ -346,11 +376,12 @@ impl RemoteServerClient {
             message: Some(client_message::Message::ResyncCodebase(ResyncCodebase {
                 repo_path,
                 auth_token,
+                mode: mode.into(),
             })),
         };
         log::info!(
             "[Remote codebase indexing] Client sending ResyncCodebase: request_id={request_id} \
-             repo_path={repo_path_for_log}"
+             repo_path={repo_path_for_log} mode={mode:?}"
         );
 
         let response = self
@@ -374,9 +405,11 @@ impl RemoteServerClient {
                         .ok_or(ClientError::UnexpectedResponse)?;
                 log::info!(
                     "[Remote codebase indexing] Client received {operation} response: \
-                     repo_path={} state={:?}",
+                     repo_path={} state={:?} root_hash_present={} failure_message={:?}",
                     status.repo_path,
-                    status.state
+                    status.state,
+                    status.root_hash.is_some(),
+                    status.failure_message,
                 );
                 Ok(status)
             }
@@ -487,12 +520,17 @@ impl RemoteServerClient {
 
     /// Sends an `UpdatePreferences` notification when the user's privacy
     /// settings change (e.g. toggling crash reporting).
-    pub fn update_preferences(&self, crash_reporting_enabled: bool) {
+    pub fn update_preferences(
+        &self,
+        crash_reporting_enabled: bool,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
+    ) {
         let msg = ClientMessage {
             request_id: String::new(),
             message: Some(client_message::Message::UpdatePreferences(
                 crate::proto::UpdatePreferences {
                     crash_reporting_enabled,
+                    codebase_index_limits,
                 },
             )),
         };
@@ -818,9 +856,11 @@ impl RemoteServerClient {
                 let status = proto_to_codebase_index_status_updated(&update)?;
                 log::info!(
                     "[Remote codebase indexing] Client received codebase index status push: \
-                     repo_path={} state={:?}",
+                     repo_path={} state={:?} root_hash_present={} failure_message={:?}",
                     status.repo_path,
-                    status.state
+                    status.state,
+                    status.root_hash.is_some(),
+                    status.failure_message,
                 );
                 Some(ClientEvent::CodebaseIndexStatusUpdated { status })
             }
@@ -1295,15 +1335,19 @@ impl RemoteServerClient {
     }
 }
 
-/// Spawns a background task that reads lines from the server's stderr and
-/// forwards them to the client's logging.
+/// Spawns a background task that reads lines from the server's stderr,
+/// forwards them to the client's logging, and retains the last few lines
+/// in a shared buffer for telemetry.
 #[cfg(not(target_family = "wasm"))]
 pub fn spawn_stderr_forwarder(
     stderr: impl AsyncRead + TransportStream,
     executor: &executor::Background,
-) {
+) -> RemoteServerLog {
     use futures::io::AsyncBufReadExt;
     use futures::StreamExt;
+
+    let tail = RemoteServerLog::new();
+    let tail_writer = tail.clone();
 
     executor
         .spawn(async move {
@@ -1311,9 +1355,12 @@ pub fn spawn_stderr_forwarder(
             let mut lines = reader.lines();
             while let Some(Ok(line)) = lines.next().await {
                 log::info!("[remote_server] {line}");
+                tail_writer.push(line);
             }
         })
         .detach();
+
+    tail
 }
 
 #[cfg(test)]

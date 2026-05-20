@@ -297,11 +297,11 @@ impl OrchestrationViewerModel {
                 continue;
             };
 
-            let name = if task.title.is_empty() {
-                "Agent".to_string()
-            } else {
-                task.title.clone()
-            };
+            let name = task.display_name().to_string();
+            // Trim to stay in sync with `display_name()`, which also trims;
+            // the descriptive title flows through `set_fallback_display_title`
+            // so `AIConversation::title()` keeps surfacing it.
+            let fallback_title = task.title.trim().to_string();
             let harness = task
                 .agent_config_snapshot
                 .as_ref()
@@ -323,6 +323,9 @@ impl OrchestrationViewerModel {
                 history.set_viewing_shared_session_for_conversation(conversation_id, true);
                 if let Some(conversation) = history.conversation_mut(&conversation_id) {
                     conversation.set_task_id(task_id);
+                    if !fallback_title.is_empty() {
+                        conversation.set_fallback_display_title(fallback_title);
+                    }
                 }
                 history.update_conversation_status(
                     terminal_view_id,

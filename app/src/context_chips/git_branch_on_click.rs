@@ -179,6 +179,32 @@ fn parse_git_worktree_paths(lines: &[String]) -> HashMap<String, String> {
     branch_to_worktree_path
 }
 
+/// Returns `true` when `name` looks like a plausible git branch name that can
+/// be created via `git checkout -b`.
+///
+/// We err on the side of letting git itself reject borderline cases: this
+/// helper only filters out the most obviously broken inputs so that the
+/// "Create new branch …" affordance does not appear for clearly invalid
+/// queries (e.g. an empty string after the user backspaces, or whitespace).
+/// Anything we accept here may still be rejected by `git check-ref-format`,
+/// in which case the user sees the failure in the terminal.
+pub(crate) fn is_plausible_new_branch_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // git rejects names beginning with `-` outright, and they would also be
+    // ambiguous with `git checkout -b` flags, so don't offer the affordance.
+    if trimmed.starts_with('-') {
+        return false;
+    }
+    // git refuses whitespace (other than as a separator) inside refs.
+    if trimmed.chars().any(char::is_whitespace) {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +281,43 @@ mod tests {
         assert_eq!(value.branch_name, "feature");
         assert_eq!(value.worktree_path, None);
         assert!(value.is_linked_worktree);
+    }
+
+    #[test]
+    fn test_is_plausible_new_branch_name_accepts_typical_names() {
+        for name in [
+            "feature/xyz",
+            "fix-123",
+            "release/v1.2.3",
+            "user/alice/work",
+            "main",
+        ] {
+            assert!(
+                is_plausible_new_branch_name(name),
+                "expected {name:?} to be accepted",
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_plausible_new_branch_name_rejects_empty_or_whitespace() {
+        for name in ["", "   ", "\t\n"] {
+            assert!(
+                !is_plausible_new_branch_name(name),
+                "expected {name:?} to be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_plausible_new_branch_name_rejects_leading_dash() {
+        assert!(!is_plausible_new_branch_name("-foo"));
+        assert!(!is_plausible_new_branch_name("--all"));
+    }
+
+    #[test]
+    fn test_is_plausible_new_branch_name_rejects_internal_whitespace() {
+        assert!(!is_plausible_new_branch_name("my branch"));
+        assert!(!is_plausible_new_branch_name("foo\tbar"));
     }
 }

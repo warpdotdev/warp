@@ -33,10 +33,11 @@ use ai::diff_validation::DiffDelta;
 use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
+use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::rc::Rc;
 use std::{collections::HashMap, ops::Range};
-use std::{collections::HashSet, path::Path};
 use string_offset::CharOffset;
 use vec1::{vec1, Vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
@@ -65,6 +66,7 @@ use warp_editor::{
     search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL},
 };
 use warp_util::content_version::ContentVersion;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{
     elements::{
         new_scrollable::{
@@ -1415,9 +1417,15 @@ impl CodeEditorView {
         });
     }
 
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+    pub fn set_language_with_path(&mut self, path: &StandardizedPath, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
             model.set_language_with_path(path, ctx);
+        });
+    }
+
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.set_language_with_local_path(path, ctx);
         });
     }
 

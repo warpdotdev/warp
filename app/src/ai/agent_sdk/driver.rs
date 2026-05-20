@@ -53,8 +53,10 @@ use crate::ai::{
     agent_sdk::driver::harness::{
         harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind,
         HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness,
+        ThirdPartyHarnessTelemetryEvent,
     },
 };
+use crate::send_telemetry_from_app_ctx;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     plugin_manager_for, CliAgentPluginManager,
 };
@@ -2206,6 +2208,19 @@ impl AgentDriver {
                             error.pattern,
                             error.excerpt,
                         );
+                        let telemetry_harness = harness_name.clone();
+                        let telemetry_pattern = error.pattern.clone();
+                        let _ = foreground
+                            .spawn(move |_, ctx| {
+                                use warp_core::telemetry::TelemetryEvent as _;
+                                let event =
+                                    ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected {
+                                        harness: telemetry_harness,
+                                        pattern: telemetry_pattern,
+                                    };
+                                send_telemetry_from_app_ctx!(event, ctx);
+                            })
+                            .await;
                         let session_status = foreground
                             .spawn(|me, ctx| {
                                 let view_id =

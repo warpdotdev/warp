@@ -199,6 +199,7 @@ use workflows::manager::WorkflowManager;
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -235,7 +236,7 @@ use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{AccessibilitySettings, ScrollSettings, SelectionSettings};
+use crate::settings::{AISettings, AccessibilitySettings, ScrollSettings, SelectionSettings};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -301,7 +302,7 @@ use crate::terminal::CustomSecretRegexUpdater;
 use crate::util::bindings::is_binding_cross_platform;
 use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use warp_logging::LogDestination;
 
 // Re-export the send_telemetry_from_ctx macro at the crate root level
@@ -1285,7 +1286,7 @@ pub(crate) fn initialize_app(
 
     if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
         let codebase_index_count = persisted_workspaces.len();
-        log::info!(
+        log::debug!(
             "[Remote codebase indexing] Restored daemon codebase index metadata: metadata_count={codebase_index_count}"
         );
         cloud_objects = Default::default();
@@ -1641,6 +1642,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| GitHubAuthNotifier::new());
     ctx.add_singleton_model(|_| NetworkStatus::new());
     ctx.add_singleton_model(|_| SystemStats::new());
+    workspace::auto_handoff::init(ctx);
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
@@ -1894,10 +1896,40 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(LLMPreferences::new);
     ctx.add_singleton_model(HarnessAvailabilityModel::new);
+    ctx.add_singleton_model(ConnectedSelfHostedWorkersModel::new);
 
-    ctx.add_singleton_model(|ctx| {
+    let tip_model_handle = ctx.add_singleton_model(|ctx| {
         ai::agent_tips::AITipModel::<ai::AgentTip>::new_for_agent_tips(ctx)
     });
+    {
+        // Rebuild the tip pool when AI settings change so tips whose applicability
+        // depends on AI settings appear/disappear without waiting for the next cooldown cycle.
+        let tip_model_handle_for_ai = tip_model_handle.clone();
+        ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, ctx| {
+            tip_model_handle_for_ai.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
+        });
+        // Also revalidate when workspace/team data changes (e.g. voice toggled at
+        // the org level). Billing metadata — including `warp_ai_policy.is_voice_enabled`
+        // — lives inside the team data, so `TeamsChanged` covers all policy updates.
+        let tip_model_handle_for_teams = tip_model_handle.clone();
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, ctx| {
+            if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                tip_model_handle_for_teams.update(ctx, |model, ctx| {
+                    model.revalidate_tips(ctx);
+                });
+            }
+        });
+        // Revalidate when any keybinding changes so tips with `<keybinding>`
+        // placeholders are hidden/shown when the referenced binding is cleared
+        // or reassigned.
+        ctx.subscribe_to_model(&KeybindingChangedNotifier::handle(ctx), move |_, _, ctx| {
+            tip_model_handle.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
+        });
+    }
 
     timer.mark_interval_end("SINGLETON_MODELS_REGISTERED");
 
@@ -3012,6 +3044,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HandoffCloudCloud,
         #[cfg(feature = "git_credential_refresh")]
         FeatureFlag::GitCredentialRefresh,
+        #[cfg(feature = "remote_code_review")]
+        FeatureFlag::RemoteCodeReview,
     ]);
 
     flags

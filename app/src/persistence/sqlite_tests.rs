@@ -2,6 +2,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
+use diesel::connection::SimpleConnection;
+use pathfinder_geometry::{rect::RectF, vector::Vector2F};
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
@@ -553,5 +555,90 @@ fn test_deserialize_corrupted_guests() {
             anyone_with_link: None,
             guests: vec![],
         })
+    );
+}
+
+// Regression: GH#10083. The macOS green-tile button could leave a 1px-wide
+// window bound in `AppContext::window_bounds`, which previously round-tripped
+// through SQLite and restored as an unusable 1px sliver. Bounds below the
+// platform minimum window size must be dropped on save.
+#[test]
+fn test_sqlite_drops_too_small_bounds_on_save() {
+    use diesel::prelude::*;
+
+    use crate::persistence::schema::windows;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let mut snapshot = test_terminal_window_snapshot(false);
+    snapshot.bounds = Some(RectF::new(
+        Vector2F::new(0.0, -1410.0),
+        Vector2F::new(1.0, 1410.0),
+    ));
+
+    let app_state = AppState {
+        windows: vec![snapshot],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    // Query the row directly so the assertion isolates the save guard and is
+    // not masked by the read-side guard in `read_sqlite_data`.
+    let row: (Option<f32>, Option<f32>, Option<f32>, Option<f32>) = windows::dsl::windows
+        .select((
+            windows::columns::window_width,
+            windows::columns::window_height,
+            windows::columns::origin_x,
+            windows::columns::origin_y,
+        ))
+        .first(&mut conn)
+        .expect("a windows row should have been inserted");
+
+    assert_eq!(
+        row,
+        (None, None, None, None),
+        "save-path guard must persist NULL bound columns for sub-minimum geometry"
+    );
+}
+
+// Regression: GH#10083. Users whose warp.sqlite already contains a 1px row
+// (because they hit the bug on an earlier build) must still recover to default
+// geometry on next launch rather than restoring the sliver.
+#[test]
+fn test_sqlite_drops_too_small_bounds_on_read() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    // Save with no bounds so a row exists, then corrupt it directly to bypass
+    // the save-path guard and simulate a pre-existing bad row.
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    conn.batch_execute(
+        "UPDATE windows \
+         SET window_width = 1.0, window_height = 1410.0, \
+             origin_x = 0.0, origin_y = -1410.0",
+    )
+    .expect("corrupting update should succeed");
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert_eq!(restored.windows.len(), 1);
+    assert!(
+        restored.windows[0].bounds.is_none(),
+        "tiny persisted bounds must be discarded on read so users recover from a corrupt DB"
     );
 }

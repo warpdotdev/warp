@@ -26,6 +26,7 @@ use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
 use warp_cli::{
     agent::{AgentCommand, AgentProfileCommand, OutputFormat},
+    api_key::ApiKeyCommand,
     artifact::ArtifactCommand,
     environment::{EnvironmentCommand, ImageCommand},
     federate::FederateCommand,
@@ -76,6 +77,7 @@ use warp_cli::OZ_HARNESS_ENV;
 mod admin;
 mod agent_config;
 mod ambient;
+mod api_key;
 mod artifact;
 pub(crate) mod artifact_upload;
 mod common;
@@ -195,6 +197,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'artifact'"));
             }
             artifact::run(ctx, global_options, artifact_cmd)
+        }
+        CliCommand::ApiKey(api_key_cmd) => {
+            if !FeatureFlag::APIKeyManagement.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'api-key'"));
+            }
+            api_key::run(ctx, global_options, api_key_cmd)
         }
     }
 }
@@ -611,6 +619,7 @@ impl AgentDriverRunner {
             // Pull relevant variables out of args before moving it into the closure.
             let share_requests = args.share.share.clone();
             let bedrock_inference_role = args.bedrock_inference_role.clone();
+            let bedrock_role_region = args.bedrock_role_region.clone();
             let has_task_id = args.task_id.is_some();
             let args_harness = args.harness;
             // `--conversation` path (user-invoked local resume): validate before any task side
@@ -652,6 +661,16 @@ impl AgentDriverRunner {
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
+                // clap's `requires` constraint enforces this at parse time, so a missing
+                // region here means a caller is constructing `RunAgentArgs` directly
+                // without the flag. Fail loudly so callers don't silently fall back to a
+                // hard-coded STS region.
+                let role_region = bedrock_role_region.ok_or_else(|| {
+                    AgentDriverError::AwsBedrockCredentialsFailed(
+                        "--bedrock-role-region is required when --bedrock-inference-role is set"
+                            .to_string(),
+                    )
+                })?;
                 // Set the OIDC strategy on the UI thread and kick off the refresh; the
                 // returned future resolves when credentials are committed to the model.
                 let refresh_future = foreground
@@ -662,6 +681,7 @@ impl AgentDriverRunner {
                                 AwsCredentialsRefreshStrategy::OidcManaged {
                                     task_id: bedrock_task_id,
                                     role_arn,
+                                    region: role_region,
                                 },
                             );
                             refresh_aws_credentials(manager, ctx)
@@ -1387,6 +1407,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Federate(_) => true,
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
+        CliCommand::ApiKey(_) => true,
     }
 }
 
@@ -1610,6 +1631,11 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             ArtifactCommand::Upload(_) => CliTelemetryEvent::ArtifactUpload,
             ArtifactCommand::Get(_) => CliTelemetryEvent::ArtifactGet,
             ArtifactCommand::Download(_) => CliTelemetryEvent::ArtifactDownload,
+        },
+        CliCommand::ApiKey(api_key_cmd) => match api_key_cmd {
+            ApiKeyCommand::List(_) => CliTelemetryEvent::ApiKeyList,
+            ApiKeyCommand::Create(_) => CliTelemetryEvent::ApiKeyCreate,
+            ApiKeyCommand::Expire(_) => CliTelemetryEvent::ApiKeyExpire,
         },
     }
 }

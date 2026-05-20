@@ -1,6 +1,6 @@
 use super::{
-    EnvironmentFormInitArgs, EnvironmentFormValues, SuggestImageState, UpdateEnvironmentForm,
-    UpdateEnvironmentFormAction,
+    EnvironmentFormCopy, EnvironmentFormInitArgs, EnvironmentFormValues, SuggestImageState,
+    UpdateEnvironmentForm, UpdateEnvironmentFormAction,
 };
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
@@ -525,6 +525,42 @@ fn test_render_repos_field_error_state() {
 }
 
 #[test]
+fn test_repos_field_error_state_allows_manual_repo_entry() {
+    App::test((), |mut app| async move {
+        init_update_environment_form_test_models(&mut app);
+        let window_id = create_test_window(&mut app);
+
+        let mut view_handle = None;
+        app.update(|ctx| {
+            view_handle = Some(ctx.add_typed_action_view(window_id, |ctx| {
+                UpdateEnvironmentForm::new_for_test(EnvironmentFormInitArgs::Create, ctx)
+            }));
+        });
+        let view_handle = view_handle.expect("UpdateEnvironmentForm handle should be created");
+
+        app.update(|ctx| {
+            view_handle.update(ctx, |form, ctx| {
+                set_github_auth_call_state(
+                    form,
+                    GithubAuthCallState::error("Failed to load GitHub repositories"),
+                );
+                form.repos_input = "warpdotdev/warp-internal".to_string();
+                form.handle_action(&UpdateEnvironmentFormAction::AddRepo, ctx);
+            });
+
+            let form = view_handle.as_ref(ctx);
+            assert_eq!(form.form_state.selected_repos.len(), 1);
+            assert_eq!(form.form_state.selected_repos[0].owner, "warpdotdev");
+            assert_eq!(form.form_state.selected_repos[0].repo, "warp-internal");
+            assert!(
+                form.github_dropdown_state.load_error_message.is_some(),
+                "Expected GitHub load error to remain visible after manually adding a repo"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_render_repos_field_with_selected_repos() {
     App::test((), |mut app| async move {
         init_update_environment_form_test_models(&mut app);
@@ -979,6 +1015,112 @@ fn test_create_environment_form_without_team_does_not_render_checkbox_and_defaul
             assert!(
                 !text_content.contains("Share with team"),
                 "Did not expect 'Share with team' checkbox label in rendered content: {text_content}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_environment_form_copy_orchestration_modal_overrides_settings_defaults() {
+    let default_copy = EnvironmentFormCopy::default();
+    let orchestration_copy = EnvironmentFormCopy::orchestration_modal();
+
+    assert_eq!(default_copy.name_placeholder, "Environment name");
+    assert_eq!(default_copy.docker_image_label, "Docker image reference");
+    assert!(default_copy.show_description_character_count);
+
+    assert_eq!(orchestration_copy.name_placeholder, "e.g., dev-env");
+    assert_eq!(
+        orchestration_copy.repos_placeholder_authed,
+        "Browse GitHub repos..."
+    );
+    assert_eq!(orchestration_copy.docker_image_label, "Docker image");
+    assert_eq!(
+        orchestration_copy.docker_image_placeholder,
+        "e.g., node:20-alpine"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_placeholder,
+        "e.g., node start"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_helper,
+        "Press Enter or click the submit button to add each command."
+    );
+    assert!(!orchestration_copy.show_description_character_count);
+}
+
+#[test]
+fn test_orchestration_modal_form_configuration_renders_footer_actions_without_team_controls() {
+    App::test((), |mut app| async move {
+        init_update_environment_form_test_models(&mut app);
+        let window_id = create_test_window(&mut app);
+
+        app.update(|ctx| {
+            let team = team_for_test();
+            let workspace = workspace_for_test(&team);
+            let workspace_uid = workspace.uid;
+
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.update_workspaces(vec![workspace], ctx);
+                user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+            });
+
+            let view_handle = ctx.add_typed_action_view(window_id, |ctx| {
+                let mut form =
+                    UpdateEnvironmentForm::new_for_test(EnvironmentFormInitArgs::Create, ctx);
+                form.set_show_header(false, ctx);
+                form.configure_for_orchestration_modal(ctx);
+                form
+            });
+
+            let form = view_handle.as_ref(ctx);
+            assert!(!form.show_header);
+            assert!(form.show_footer_cancel_button);
+            assert!(!form.show_share_with_team_controls);
+            assert_eq!(form.field_spacing, 10.);
+            assert_eq!(form.description_height, 52.);
+            assert!(!form.show_repo_helper_text);
+            assert!(!form.copy.show_description_character_count);
+
+            let submit_button = form.submit_button.clone();
+            let cancel_button = form.cancel_button.clone();
+
+            let submit_text = submit_button
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            let cancel_text = cancel_button
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                submit_text.contains("Create environment"),
+                "Expected footer submit label in rendered content: {submit_text}"
+            );
+            assert!(
+                cancel_text.contains("Cancel"),
+                "Expected footer cancel action in rendered content: {cancel_text}"
+            );
+
+            let text_content = view_handle
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                !text_content.contains("Share with team"),
+                "Did not expect team-sharing controls in orchestration modal form: {text_content}"
+            );
+            assert!(
+                !text_content.contains("0 / 240 characters"),
+                "Did not expect settings character count in orchestration modal form: {text_content}"
+            );
+            assert!(
+                !text_content.contains("Type owner/repo and press Enter"),
+                "Did not expect settings repo helper text in orchestration modal form: {text_content}"
             );
         });
     })

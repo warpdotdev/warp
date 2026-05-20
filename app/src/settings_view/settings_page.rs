@@ -9,8 +9,7 @@ use super::{
     about_page::AboutPageView,
     ai_page::{AISettingsPageAction, AISettingsPageView},
     appearance_page::AppearanceSettingsPageView,
-    billing_and_usage_page::BillingAndUsagePageView,
-    billing_and_usage_page_v2::BillingAndUsagePageV2View,
+    billing_and_usage_dispatch::BillingAndUsageDispatchView,
     code_page::CodeSettingsPageView,
     environments_page::EnvironmentsPageView,
     features_page::FeaturesPageView,
@@ -121,8 +120,7 @@ pub enum SettingsPageViewHandle {
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
-    BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
-    BillingAndUsageV2(ViewHandle<BillingAndUsagePageV2View>),
+    BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
 }
@@ -146,7 +144,6 @@ impl SettingsPageViewHandle {
             AI(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
-            BillingAndUsageV2(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
         }

@@ -2,6 +2,8 @@
 use crate::search::ai_context_menu::view::AIContextMenu;
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::model::session::SessionType;
 use crate::{
     ai::{blocklist::block::cli_controller::CLISubagentController, llms::LLMPreferences},
     cloud_object::model::generic_string_model::StringModel,
@@ -50,8 +52,6 @@ use warp_core::ui::theme::color::internal_colors;
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::model::session::SessionType;
 use crate::{
     ai::{
         blocklist::{
@@ -88,7 +88,7 @@ pub enum AtContextMenuDisabledReason {
     #[cfg(not(target_family = "wasm"))]
     NoObjectsAvailable,
     #[cfg(not(target_family = "wasm"))]
-    SshSession,
+    SshWithoutRemoteServer,
     #[cfg(not(target_family = "wasm"))]
     Subshell,
     #[cfg(not(target_family = "wasm"))]
@@ -103,7 +103,9 @@ impl AtContextMenuDisabledReason {
                 "No available objects in the current context.".to_string()
             }
             #[cfg(not(target_family = "wasm"))]
-            AtContextMenuDisabledReason::SshSession => "Not supported in SSH sessions".to_string(),
+            AtContextMenuDisabledReason::SshWithoutRemoteServer => {
+                "Not supported in SSH sessions without remote server".to_string()
+            }
             #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::Subshell => "Not supported in subshells".to_string(),
             #[cfg(target_family = "wasm")]
@@ -133,14 +135,32 @@ impl AtContextMenuDisabledReason {
         ctx: &AppContext,
     ) -> Option<AtContextMenuDisabledReason> {
         // Derive session information from block metadata and sessions
-        let (is_ssh_session, is_subshell) = active_block_metadata
+        let (is_ssh_without_remote_server, is_subshell) = active_block_metadata
             .and_then(|metadata| metadata.session_id())
             .and_then(|session_id| sessions.get(session_id))
             .map(|session| {
-                let is_ssh_session = session.is_legacy_ssh_session()
-                    || matches!(session.session_type(), SessionType::WarpifiedRemote { .. });
+                let session_type = session.session_type();
+                let has_connected_remote_server = matches!(
+                    session_type,
+                    SessionType::WarpifiedRemote { host_id: Some(_) }
+                );
+                // The @ menu requires repo metadata which is only available for:
+                // - Local sessions
+                // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
+                //
+                // Block when:
+                // - Legacy SSH without a remote server upgrade
+                // - WarpifiedRemote still connecting (host_id is None)
+                //
+                // Note: is_legacy_ssh_session() is set at bootstrap time and stays true
+                // even after the session transitions to WarpifiedRemote with a host_id.
+                // So we must check has_connected_remote_server first to avoid
+                // incorrectly blocking upgraded sessions.
+                let is_ssh_without_remote_server = !has_connected_remote_server
+                    && (session.is_legacy_ssh_session()
+                        || matches!(session_type, SessionType::WarpifiedRemote { host_id: None }));
                 let is_subshell = session.subshell_info().is_some();
-                (is_ssh_session, is_subshell)
+                (is_ssh_without_remote_server, is_subshell)
             })
             .unwrap_or((false, false));
 
@@ -153,8 +173,8 @@ impl AtContextMenuDisabledReason {
             return Some(AtContextMenuDisabledReason::DisabledInTerminalMode);
         }
 
-        if is_ssh_session {
-            return Some(AtContextMenuDisabledReason::SshSession);
+        if is_ssh_without_remote_server {
+            return Some(AtContextMenuDisabledReason::SshWithoutRemoteServer);
         }
         if is_subshell {
             return Some(AtContextMenuDisabledReason::Subshell);

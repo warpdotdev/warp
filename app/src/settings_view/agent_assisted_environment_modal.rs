@@ -150,8 +150,8 @@ impl AgentAssistedEnvironmentModal {
                 }
 
                 match event {
-                    CodebaseIndexManagerEvent::SyncStateUpdated
-                    | CodebaseIndexManagerEvent::NewIndexCreated
+                    CodebaseIndexManagerEvent::SyncStateUpdated { .. }
+                    | CodebaseIndexManagerEvent::NewIndexCreated { .. }
                     | CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { .. }
                     | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {
                         me.refresh_available_repos(ctx);

@@ -1857,9 +1857,12 @@ impl TeamsWidget {
                 }
             }
             GrowTeamWarning::SeatCapReached | GrowTeamWarning::SeatCapExceeded => {
-                // Build Business is the top of the self-serve ladder; the only
-                // path to more seats is an enterprise / sales conversation.
-                if billing_metadata.is_on_build_business_plan() {
+                // Build Business / legacy Business are the top of the self-serve
+                // ladder; the only path to more seats is an enterprise / sales
+                // conversation.
+                if billing_metadata.is_on_build_business_plan()
+                    || billing_metadata.is_on_legacy_business_plan()
+                {
                     return GrowTeamWarningCta::ContactSales;
                 }
                 if billing_metadata.is_enterprise_plan() {

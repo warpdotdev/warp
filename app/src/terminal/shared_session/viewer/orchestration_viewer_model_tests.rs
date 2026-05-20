@@ -16,7 +16,7 @@ use super::*;
 use chrono::Utc;
 use warpui::{App, EntityId, SingletonEntity};
 
-use crate::ai::ambient_agents::task::AmbientAgentTask;
+use crate::ai::ambient_agents::task::{AgentConfigSnapshot, AmbientAgentTask};
 use crate::test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view};
 
 // ---- Pure-function tests ----------------------------------------------------
@@ -102,7 +102,23 @@ fn make_task(
     title: &str,
     session_id: Option<&str>,
 ) -> AmbientAgentTask {
+    make_task_with_name(id, state, None, title, session_id)
+}
+
+/// Builds an [`AmbientAgentTask`] whose `agent_config_snapshot.name` is
+/// populated when `snapshot_name` is `Some`.
+fn make_task_with_name(
+    id: &str,
+    state: AmbientAgentTaskState,
+    snapshot_name: Option<&str>,
+    title: &str,
+    session_id: Option<&str>,
+) -> AmbientAgentTask {
     let now = Utc::now();
+    let agent_config_snapshot = snapshot_name.map(|name| AgentConfigSnapshot {
+        name: Some(name.to_string()),
+        ..Default::default()
+    });
     AmbientAgentTask {
         task_id: task_id(id),
         parent_run_id: Some(PARENT_TASK_ID.to_string()),
@@ -121,7 +137,7 @@ fn make_task(
         conversation_id: None,
         request_usage: None,
         is_sandbox_running: false,
-        agent_config_snapshot: None,
+        agent_config_snapshot,
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
@@ -436,6 +452,193 @@ fn materialization_gate_flips_on_session_id_transition() {
             let entry = model.children.get(&task_id(CHILD_A_TASK_ID)).unwrap();
             assert_eq!(entry.session_id, Some(SESSION_A.parse().unwrap()));
             assert!(entry.pane_materialization_requested);
+        });
+    });
+}
+
+// ---- display_name precedence -----------------------------------------------
+
+#[test]
+fn registers_child_agent_name_from_snapshot_name() {
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task_with_name(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    Some("frontend-tests"),
+                    "Long descriptive task title",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            assert_eq!(child_ids.len(), 1, "expected one child conversation");
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            // Pill label prefers the orchestrator-supplied short name.
+            assert_eq!(child.agent_name(), Some("frontend-tests"));
+            // The descriptive title flows through the fallback path.
+            assert_eq!(
+                child.title().as_deref(),
+                Some("Long descriptive task title")
+            );
+        });
+    });
+}
+
+#[test]
+fn registers_child_agent_name_falls_back_to_title_when_snapshot_name_is_missing() {
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Use a long descriptive title (distinct from any short name) so a
+        // regression that wires `fallback_display_title = display_name()` —
+        // or that fails to set the fallback at all — is observable: in that
+        // case both channels would collapse to `agent_name()` or the title
+        // surface would be `None`.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task_with_name(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    None,
+                    "Long descriptive task title",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            assert_eq!(child.agent_name(), Some("Long descriptive task title"));
+            assert_eq!(
+                child.title().as_deref(),
+                Some("Long descriptive task title")
+            );
+        });
+    });
+}
+
+#[test]
+fn registers_child_agent_name_does_not_set_fallback_for_whitespace_only_title() {
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Whitespace-only title: `display_name()` trims to `"Agent"`, so the
+        // fallback gate must trim too — otherwise `title()` would return the
+        // raw whitespace while `agent_name()` returns `"Agent"`.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task_with_name(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    None,
+                    "   ",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            assert_eq!(child.agent_name(), Some("Agent"));
+            assert_eq!(
+                child.title(),
+                None,
+                "whitespace-only title must not become a fallback display title"
+            );
+        });
+    });
+}
+
+#[test]
+fn registers_child_agent_name_uses_literal_agent_when_both_are_empty() {
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task_with_name(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    None,
+                    "",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            assert_eq!(child.agent_name(), Some("Agent"));
+            // Empty title: no fallback was set, so title() resolves to None.
+            assert_eq!(child.title(), None);
+        });
+    });
+}
+
+#[test]
+fn registers_child_agent_name_trims_whitespace() {
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task_with_name(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    Some("  frontend-tests  "),
+                    "Long descriptive task title",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            assert_eq!(child.agent_name(), Some("frontend-tests"));
+            assert_eq!(
+                child.title().as_deref(),
+                Some("Long descriptive task title")
+            );
         });
     });
 }

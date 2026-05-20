@@ -27,8 +27,8 @@ use crate::{
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
-use billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
-use billing_and_usage_page_v2::BillingAndUsagePageV2View;
+use billing_and_usage_dispatch::BillingAndUsageDispatchView;
+use billing_and_usage_page::BillingAndUsagePageEvent;
 use code_page::CodeSubpage;
 use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
 use environments_page::EnvironmentsPageView;
@@ -80,6 +80,7 @@ mod agent_assisted_environment_modal;
 mod ai_page;
 mod appearance_page;
 mod billing_and_usage;
+mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 mod code_page;
@@ -1009,7 +1010,6 @@ macro_rules! update_page {
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::BillingAndUsageV2(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
         }
@@ -1105,20 +1105,12 @@ impl SettingsView {
             me.handle_environments_page_event(event, ctx);
         });
 
-        let should_use_billing_and_usage_v2 = FeatureFlag::BillingAndUsagePageV2.is_enabled();
-        let billing_and_usage_page: SettingsPage = if should_use_billing_and_usage_v2 {
-            let handle = ctx.add_typed_action_view(BillingAndUsagePageV2View::new);
-            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                me.handle_billing_and_usage_page_event(event, ctx);
-            });
-            SettingsPage::new(handle)
-        } else {
-            let handle = ctx.add_typed_action_view(BillingAndUsagePageView::new);
-            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                me.handle_billing_and_usage_page_event(event, ctx);
-            });
-            SettingsPage::new(handle)
-        };
+        // Billing & Usage page (internally, this routes to the v1 or v2 version. Depending on FFs and current plan).
+        let billing_and_usage_handle = ctx.add_view(BillingAndUsageDispatchView::new);
+        ctx.subscribe_to_view(&billing_and_usage_handle, |me, _, event, ctx| {
+            me.handle_billing_and_usage_page_event(event, ctx);
+        });
+        let billing_and_usage_page = SettingsPage::new(billing_and_usage_handle);
 
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
@@ -2007,7 +1999,6 @@ impl SettingsView {
             SettingsPageViewHandle::Features(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::BillingAndUsageV2(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
@@ -2226,10 +2217,7 @@ impl SettingsView {
     ) -> Option<Box<dyn Element>> {
         match page_handle {
             SettingsPageViewHandle::BillingAndUsage(view) => {
-                view.read(app, |view, _| view.get_modal_content())
-            }
-            SettingsPageViewHandle::BillingAndUsageV2(view) => {
-                view.read(app, |view, _| view.get_modal_content())
+                view.read(app, |view, _| view.get_modal_content(app))
             }
             SettingsPageViewHandle::Privacy(view) => {
                 view.read(app, |view, _| view.get_modal_content())

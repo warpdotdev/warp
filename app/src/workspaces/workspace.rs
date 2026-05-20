@@ -640,10 +640,22 @@ impl BillingMetadata {
 
     pub fn is_on_build_business_plan(&self) -> bool {
         self.customer_type == CustomerType::Business
+            && matches!(
+                self.service_agreements.first().map(|sa| &sa.type_),
+                Some(ServiceAgreementType::SelfServe)
+            )
+    }
+
+    pub fn is_on_legacy_business_plan(&self) -> bool {
+        self.customer_type == CustomerType::Business && !self.is_on_build_business_plan()
     }
 
     pub fn is_enterprise_plan(&self) -> bool {
         self.customer_type == CustomerType::Enterprise
+    }
+
+    pub fn is_free_plan(&self) -> bool {
+        self.customer_type == CustomerType::Free
     }
 
     pub fn is_on_legacy_paid_plan(&self) -> bool {
@@ -652,14 +664,7 @@ impl BillingMetadata {
             | CustomerType::Turbo
             | CustomerType::Lightspeed
             | CustomerType::SelfServe => true,
-            CustomerType::Business => {
-                // Legacy Business has a non-SelfServe service agreement type;
-                // Build Business uses SelfServe. See gql_convert.rs for context.
-                !matches!(
-                    self.service_agreements.first().map(|sa| &sa.type_),
-                    Some(ServiceAgreementType::SelfServe)
-                )
-            }
+            CustomerType::Business => self.is_on_legacy_business_plan(),
             CustomerType::Free
             | CustomerType::Legacy
             | CustomerType::Enterprise

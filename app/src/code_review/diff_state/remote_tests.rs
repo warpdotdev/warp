@@ -1,9 +1,7 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
 
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
@@ -33,10 +31,6 @@ impl RemoteDiffStateModel {
             metadata,
         }
     }
-}
-
-fn test_path(path: &str) -> StandardizedPath {
-    StandardizedPath::try_new(path).expect("test path should be valid and absolute")
 }
 
 fn empty_metadata(branch: &str) -> DiffMetadata {
@@ -83,7 +77,7 @@ fn simple_file(path: &str) -> FileDiffAndContent {
 fn simple_file_with_content(path: &str, content_at_base: Option<&str>) -> FileDiffAndContent {
     FileDiffAndContent {
         file_diff: FileDiff {
-            file_path: PathBuf::from(path),
+            file_path: path.to_string(),
             status: GitFileStatus::Modified,
             hunks: Arc::new(vec![DiffHunk {
                 old_start_line: 1,
@@ -152,7 +146,7 @@ fn apply_snapshot_loaded_with_diffs() {
             metadata,
             state,
             diffs,
-        } = loaded_snapshot_with_files(vec![simple_file("/test/repo/src/main.rs")]);
+        } = loaded_snapshot_with_files(vec![simple_file("src/main.rs")]);
         handle.update(&mut app, |m, ctx| {
             m.apply_snapshot(metadata, state, diffs, ctx)
         });
@@ -198,7 +192,7 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
             state,
             diffs,
         } = loaded_snapshot_with_files(vec![simple_file_with_content(
-            "/test/repo/src/main.rs",
+            "src/main.rs",
             Some("base content"),
         )]);
         handle.update(&mut app, |m, ctx| {
@@ -373,8 +367,8 @@ fn apply_file_delta_ignored_when_not_loaded() {
                 None,
             )
         });
-        let file_path = test_path("/test/repo/src/main.rs");
-        let diff = Some(simple_file("/test/repo/src/main.rs"));
+        let file_path = "src/main.rs".to_string();
+        let diff = Some(simple_file("src/main.rs"));
         handle.update(&mut app, |m, ctx| {
             m.apply_file_delta(file_path, diff, None, ctx)
         });
@@ -400,8 +394,8 @@ fn apply_file_delta_adds_file() {
                 None,
             )
         });
-        let file_path = test_path("/test/repo/src/new.rs");
-        let diff = Some(simple_file("/test/repo/src/new.rs"));
+        let file_path = "src/new.rs".to_string();
+        let diff = Some(simple_file("src/new.rs"));
         handle.update(&mut app, |m, ctx| {
             m.apply_file_delta(file_path, diff, None, ctx)
         });
@@ -409,6 +403,163 @@ fn apply_file_delta_adds_file() {
             handle.read(&app, |m, _| m.get()),
             DiffState::Loaded
         ));
+    });
+}
+
+#[test]
+fn apply_snapshot_preserves_repo_relative_file_paths() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let SnapshotInputs {
+            metadata,
+            state,
+            diffs,
+        } = loaded_snapshot_with_files(vec![simple_file("src/main.rs")]);
+        handle.update(&mut app, |m, ctx| {
+            m.apply_snapshot(metadata, state, diffs, ctx)
+        });
+        handle.read(&app, |m, _| {
+            let InternalRemoteDiffState::Loaded(diffs) = &m.state else {
+                panic!("state should be Loaded");
+            };
+            assert_eq!(diffs.files.len(), 1);
+            assert_eq!(diffs.files[0].file_path, "src/main.rs");
+        });
+    });
+}
+
+#[test]
+fn apply_snapshot_emits_event_with_repo_relative_paths() {
+    // Subscribers to NewDiffsComputed should see repo-relative paths so they
+    // can index into the loaded state by the same key.
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let emitted_paths = Arc::new(Mutex::new(Vec::new()));
+        {
+            let emitted_paths = emitted_paths.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                        emitted_paths
+                            .lock()
+                            .expect("emitted paths mutex should not be poisoned")
+                            .extend(
+                                diffs
+                                    .files
+                                    .iter()
+                                    .map(|file| file.file_diff.file_path.clone()),
+                            );
+                    }
+                });
+            });
+        }
+
+        let SnapshotInputs {
+            metadata,
+            state,
+            diffs,
+        } = loaded_snapshot_with_files(vec![simple_file("src/main.rs")]);
+        handle.update(&mut app, |m, ctx| {
+            m.apply_snapshot(metadata, state, diffs, ctx)
+        });
+
+        assert_eq!(
+            emitted_paths
+                .lock()
+                .expect("emitted paths mutex should not be poisoned")
+                .as_slice(),
+            &[String::from("src/main.rs")]
+        );
+    });
+}
+
+#[test]
+fn apply_file_delta_preserves_repo_relative_file_path() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loaded(GitDiffData {
+                    files: vec![],
+                    total_additions: 0,
+                    total_deletions: 0,
+                    files_changed: 0,
+                }),
+                None,
+            )
+        });
+        let file_path = "src/new.rs".to_string();
+        let diff = Some(simple_file("src/new.rs"));
+        handle.update(&mut app, |m, ctx| {
+            m.apply_file_delta(file_path, diff, None, ctx)
+        });
+        handle.read(&app, |m, _| {
+            let InternalRemoteDiffState::Loaded(diffs) = &m.state else {
+                panic!("state should be Loaded");
+            };
+            assert_eq!(diffs.files.len(), 1);
+            assert_eq!(diffs.files[0].file_path, "src/new.rs");
+        });
+    });
+}
+
+#[test]
+fn apply_file_delta_emits_event_with_repo_relative_path() {
+    // The SingleFileUpdated event payload should also use the repo-relative
+    // path so subscribers can match against the stored state by key.
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loaded(GitDiffData {
+                    files: vec![],
+                    total_additions: 0,
+                    total_deletions: 0,
+                    files_changed: 0,
+                }),
+                None,
+            )
+        });
+        let emitted_paths = Arc::new(Mutex::new(Vec::new()));
+        {
+            let emitted_paths = emitted_paths.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if let DiffStateModelEvent::SingleFileUpdated { path, .. } = event {
+                        emitted_paths
+                            .lock()
+                            .expect("emitted paths mutex should not be poisoned")
+                            .push(path.clone());
+                    }
+                });
+            });
+        }
+
+        let file_path = "src/new.rs".to_string();
+        let diff = Some(simple_file("src/new.rs"));
+        handle.update(&mut app, |m, ctx| {
+            m.apply_file_delta(file_path, diff, None, ctx)
+        });
+
+        assert_eq!(
+            emitted_paths
+                .lock()
+                .expect("emitted paths mutex should not be poisoned")
+                .as_slice(),
+            &[String::from("src/new.rs")]
+        );
     });
 }
 
@@ -445,9 +596,9 @@ fn apply_file_delta_preserves_content_at_base_in_event() {
             });
         }
 
-        let file_path = test_path("/test/repo/src/new.rs");
+        let file_path = "src/new.rs".to_string();
         let diff = Some(simple_file_with_content(
-            "/test/repo/src/new.rs",
+            "src/new.rs",
             Some("old file content"),
         ));
         handle.update(&mut app, |m, ctx| {
@@ -469,7 +620,7 @@ fn apply_file_delta_none_removes_file() {
     warpui::App::test((), |mut app| async move {
         let existing = GitDiffData {
             files: vec![FileDiff {
-                file_path: PathBuf::from("/test/repo/src/old.rs"),
+                file_path: "src/old.rs".to_string(),
                 status: GitFileStatus::Modified,
                 hunks: Arc::new(vec![]),
                 is_binary: false,
@@ -489,7 +640,7 @@ fn apply_file_delta_none_removes_file() {
                 None,
             )
         });
-        let file_path = test_path("/test/repo/src/old.rs");
+        let file_path = "src/old.rs".to_string();
         handle.update(&mut app, |m, ctx| {
             m.apply_file_delta(file_path, None, None, ctx)
         });

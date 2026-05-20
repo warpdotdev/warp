@@ -57,6 +57,8 @@ fn agent_run_accepts_hidden_bedrock_inference_role_flag() {
         "hello",
         "--bedrock-inference-role",
         "arn:aws:iam::123456789012:role/test",
+        "--bedrock-role-region",
+        "us-east-1",
     ])
     .unwrap();
 
@@ -70,6 +72,43 @@ fn agent_run_accepts_hidden_bedrock_inference_role_flag() {
     assert_eq!(
         run_args.bedrock_inference_role.as_deref(),
         Some("arn:aws:iam::123456789012:role/test")
+    );
+    assert_eq!(run_args.bedrock_role_region.as_deref(), Some("us-east-1"));
+}
+
+#[test]
+fn agent_run_rejects_bedrock_inference_role_without_region() {
+    let err = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--bedrock-inference-role",
+        "arn:aws:iam::123456789012:role/test",
+    ])
+    .expect_err("--bedrock-inference-role must require --bedrock-role-region");
+    assert!(
+        err.to_string().contains("--bedrock-role-region"),
+        "expected error to reference --bedrock-role-region, got: {err}"
+    );
+}
+
+#[test]
+fn agent_run_rejects_bedrock_role_region_without_role() {
+    let err = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--bedrock-role-region",
+        "us-east-1",
+    ])
+    .expect_err("--bedrock-role-region must require --bedrock-inference-role");
+    assert!(
+        err.to_string().contains("--bedrock-inference-role"),
+        "expected error to reference --bedrock-inference-role, got: {err}"
     );
 }
 

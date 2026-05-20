@@ -7,7 +7,6 @@
 //! handle proto conversion and wire delivery.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -86,7 +85,8 @@ pub(super) enum DiffStateUpdate {
     FileDelta {
         repo_path: StandardizedPath,
         mode: DiffMode,
-        path: PathBuf,
+        /// Repo-relative path for the changed file.
+        path: String,
         diff: Option<Arc<FileDiffAndContent>>,
         metadata: Option<DiffMetadata>,
         subscribers: Vec<ConnectionId>,
@@ -374,6 +374,10 @@ impl RemoteDiffStateManager {
                 // Client-only event — should not occur on the server side.
                 log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
             }
+            DiffStateModelEvent::BranchesReceived(_) => {
+                // Client-only event — the server model fetches branches
+                // directly via handle_get_branches, not through this tracker.
+            }
         }
     }
 
@@ -414,9 +418,10 @@ impl RemoteDiffStateManager {
         ctx: &mut ModelContext<Self>,
     ) {
         let diff_mode = key.mode.clone();
-        let repo_path = PathBuf::from(key.repo_path.as_str());
+        let repo_path = std::path::PathBuf::from(key.repo_path.as_str());
         let resolve_id = request_id.clone();
         let abort_id = request_id.clone();
+        let abort_key = key.clone();
         let handle = ctx.spawn_abortable(
             async move {
                 LocalDiffStateModel::load_diffs_with_content_for_mode(diff_mode, repo_path).await
@@ -425,9 +430,11 @@ impl RemoteDiffStateManager {
                 me.in_progress.remove(&resolve_id);
                 me.resolve_pending_responses(&key, diffs, ctx);
             },
-            move |me, _ctx| {
+            move |me, ctx| {
                 log::info!("Request cancelled (request_id={abort_id})");
                 me.in_progress.remove(&abort_id);
+                // Drain pending responses with current state instead of orphaning them.
+                me.resolve_pending_responses(&abort_key, None, ctx);
             },
         );
         self.in_progress.insert(request_id.clone(), handle);
@@ -442,6 +449,19 @@ impl RemoteDiffStateManager {
         } else {
             false
         }
+    }
+
+    /// Removes a specific pending response by request_id across all keys.
+    /// Called by `handle_abort` when the client times out a request.
+    /// Returns `true` if a pending response was found and removed.
+    pub fn abort_pending_response(&mut self, request_id: &RequestId) -> bool {
+        for pending in self.pending_responses.values_mut() {
+            if let Some(pos) = pending.iter().position(|p| &p.request_id == request_id) {
+                pending.remove(pos);
+                return true;
+            }
+        }
+        false
     }
 }
 

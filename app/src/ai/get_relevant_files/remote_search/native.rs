@@ -73,6 +73,18 @@ pub(super) fn send_request(
                     message: "Remote codebase search is unavailable because the remote server is not connected.".to_string(),
                 });
             };
+            if search_context.is_stale {
+                let remote_path = search_context.remote_path.clone();
+                let sync_requested = remote_server::manager::RemoteServerManager::handle(ctx)
+                    .update(ctx, |manager, ctx| {
+                        manager.trigger_codebase_incremental_sync(remote_path, ctx)
+                    });
+                if !sync_requested {
+                    log::warn!(
+                        "Remote codebase search is using a stale index because incremental sync could not be requested"
+                    );
+                }
+            }
             let store_client = ServerApiProvider::as_ref(ctx).get();
             let abort_handle = ctx
                 .spawn(
@@ -125,9 +137,16 @@ async fn execute_remote_codebase_search(
     let root_hash = search_context.root_hash;
     let root_hash_string = root_hash.to_string();
     let repo_path = search_context.remote_path.path.as_str().to_string();
+    let embedding_config = store_client
+        .codebase_context_config()
+        .await?
+        .embedding_config;
+    log::debug!(
+        "[Remote codebase indexing] Remote codebase search using embedding config: repo_path={repo_path} embedding_config={embedding_config:?}"
+    );
     let candidate_hashes = store_client
         .get_relevant_fragments(
-            search_context.embedding_config,
+            embedding_config,
             query.clone(),
             root_hash,
             RepoMetadata {

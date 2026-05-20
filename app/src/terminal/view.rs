@@ -1773,7 +1773,7 @@ pub enum Event {
     OpenCodeReviewPane(CodeReviewPanelArg),
     ToggleCodeReviewPane(CodeReviewPanelArg),
     InsertCodeReviewComments {
-        repo_path: PathBuf,
+        repo_path: LocalOrRemotePath,
         comments: Vec<PendingImportedReviewComment>,
         diff_mode: DiffMode,
         open_code_review: Option<CodeReviewPanelArg>,
@@ -3870,7 +3870,7 @@ impl TerminalView {
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text("Seems like your completions are not working ("),
                 FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
-                FormattedTextFragment::plain_text("). Enabling tmux warpification in "),
+                FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
                 FormattedTextFragment::hyperlink_action(
                     "settings",
                     TerminalAction::ShowWarpifySettings,
@@ -4390,6 +4390,7 @@ impl TerminalView {
                                 remote_arch,
                                 exit_code: None,
                                 signal_killed: None,
+                                proxy_stderr: None,
                             },
                             ctx
                         );
@@ -4399,6 +4400,7 @@ impl TerminalView {
                         phase,
                         error,
                         exit_status,
+                        proxy_stderr,
                         is_cancelled,
                     } => {
                         me.model.lock().event_proxy.send_terminal_event(
@@ -4427,6 +4429,7 @@ impl TerminalView {
                                     remote_arch,
                                     exit_code: exit_status.as_ref().and_then(|s| s.code),
                                     signal_killed: exit_status.as_ref().map(|s| s.signal_killed),
+                                    proxy_stderr: proxy_stderr.clone(),
                                 },
                                 ctx
                             );
@@ -4659,6 +4662,7 @@ impl TerminalView {
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+                    | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
                     | RemoteServerManagerEvent::BufferUpdated { .. }
                     | RemoteServerManagerEvent::BufferConflictDetected { .. }
                     | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
@@ -6301,7 +6305,7 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let arg = CodeReviewPanelArg {
-            repo_path: self.current_local_repo_path().map(Path::to_path_buf),
+            repo_path: self.current_repo_path.clone(),
             terminal_view: self.view_handle.clone(),
             entrypoint,
             focus_new_pane,
@@ -6313,23 +6317,35 @@ impl TerminalView {
                 ctx.emit(event_constructor(arg));
             }
             GitDeltaPreference::OnlyDirty => {
-                // Check if repo has uncommitted changes via the per-repo sub-model.
-                #[cfg(feature = "local_fs")]
+                // For remote repos, skip the dirty check — there's no local
+                // GitRepoStatusModel, so the deferred open would never resolve.
+                // The diff chip only appears when the remote shell reports changes,
+                // so the user intent is clear.
+                if self
+                    .current_repo_path
+                    .as_ref()
+                    .is_some_and(|p| p.is_remote())
                 {
-                    let is_dirty = self
-                        .git_status_metadata(ctx)
-                        .map(|m| !m.stats_against_head.has_no_changes());
-                    match is_dirty {
-                        Some(true) => ctx.emit(event_constructor(arg)),
-                        // Metadata not loaded yet — defer until the next
-                        // git repo status update delivers it.
-                        None => {
-                            self.deferred_code_review_open = Some(DeferredCodeReviewOpen {
-                                git_delta_preference: delta_pref,
-                                focus_new_pane,
-                            });
+                    ctx.emit(event_constructor(arg));
+                } else {
+                    // Check if repo has uncommitted changes via the per-repo sub-model.
+                    #[cfg(feature = "local_fs")]
+                    {
+                        let is_dirty = self
+                            .git_status_metadata(ctx)
+                            .map(|m| !m.stats_against_head.has_no_changes());
+                        match is_dirty {
+                            Some(true) => ctx.emit(event_constructor(arg)),
+                            // Metadata not loaded yet — defer until the next
+                            // git repo status update delivers it.
+                            None => {
+                                self.deferred_code_review_open = Some(DeferredCodeReviewOpen {
+                                    git_delta_preference: delta_pref,
+                                    focus_new_pane,
+                                });
+                            }
+                            Some(false) => {}
                         }
-                        Some(false) => {}
                     }
                 }
             }
@@ -6397,7 +6413,6 @@ impl TerminalView {
             &DiffSetScope::All,
             &diff_mode,
             main_branch_name.as_deref(),
-            &repo_path,
         );
 
         // Insert the reference into the terminal input immediately
@@ -6652,7 +6667,7 @@ impl TerminalView {
             None
         } else {
             Some(CodeReviewPanelArg {
-                repo_path: Some(repo_path.to_path_buf()),
+                repo_path: Some(LocalOrRemotePath::Local(repo_path.to_path_buf())),
                 terminal_view: self.view_handle.clone(),
                 entrypoint: CodeReviewPaneEntrypoint::InvokedByAgent,
                 focus_new_pane: false,
@@ -6661,7 +6676,7 @@ impl TerminalView {
         };
 
         ctx.emit(Event::InsertCodeReviewComments {
-            repo_path: repo_path.to_path_buf(),
+            repo_path: LocalOrRemotePath::Local(repo_path.to_path_buf()),
             comments: pending_comments,
             diff_mode,
             open_code_review,
@@ -8664,13 +8679,6 @@ impl TerminalView {
         // probably won't happen often, but it's something that we might want to clean
         // up eventually.
         if self.control_master_error_banner_state.associated_session_id != active_session_id {
-            self.control_master_error_banner_state = ControlMasterErrorBannerState {
-                is_open: true,
-                associated_session_id: active_session_id,
-            };
-
-            ctx.notify();
-
             let has_remote_server = active_session_id.is_some_and(|session_id| {
                 self.sessions
                     .as_ref(ctx)
@@ -8685,6 +8693,16 @@ impl TerminalView {
                         )
                     })
             });
+
+            // Don't show the banner when the session already has a remote server
+            // active — the CTA to enable the SSH extension is irrelevant.
+            self.control_master_error_banner_state = ControlMasterErrorBannerState {
+                is_open: !has_remote_server,
+                associated_session_id: active_session_id,
+            };
+
+            ctx.notify();
+
             send_telemetry_from_ctx!(
                 TelemetryEvent::SSHControlMasterError { has_remote_server },
                 ctx
@@ -11751,6 +11769,31 @@ impl TerminalView {
                                                 );
                                             },
                                         );
+
+                                        // Force the workspace to re-evaluate
+                                        // ActiveSession::working_directory. The
+                                        // AppStateChanged at line 11671 already ran
+                                        // update_active_session once, but for remote
+                                        // sessions pwd_as_local_or_remote() may have
+                                        // returned None at that point because host_id
+                                        // wasn't set yet. Now that remote repo
+                                        // detection succeeded we know host_id is
+                                        // available, so a second pass populates
+                                        // working_directory correctly.
+                                        // Local sessions don't need this because
+                                        // pwd_as_local_or_remote always succeeds for
+                                        // local paths (no host_id dependency).
+                                        ctx.emit(Event::AppStateChanged);
+
+                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                            me.input.update(ctx, |input, ctx| {
+                                                input
+                                                    .check_and_update_ai_context_menu_disabled_state(
+                                                        ctx,
+                                                    );
+                                            });
+                                        }
+
                                         ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                             remote_path: remote_path.clone(),
                                         }));
@@ -19676,7 +19719,7 @@ impl TerminalView {
 
     fn imported_comments_panel_arg(&self) -> CodeReviewPanelArg {
         CodeReviewPanelArg {
-            repo_path: self.current_local_repo_path().map(Path::to_path_buf),
+            repo_path: self.current_repo_path.clone(),
             terminal_view: self.view_handle.clone(),
             entrypoint: CodeReviewPaneEntrypoint::AgentModeRunning,
             focus_new_pane: true,
@@ -20307,6 +20350,14 @@ impl TerminalView {
         active_block.index() == block_index && active_block.is_active_and_long_running()
     }
 
+    pub fn has_active_long_running_command(&self) -> bool {
+        let model = self.model.lock();
+        model
+            .block_list()
+            .active_block()
+            .is_active_and_long_running()
+    }
+
     /// If password notification settings enabled, send a notification.
     /// Otherwise, set the banner trigger so that we show the banner the next
     /// time a block completes.
@@ -20814,7 +20865,7 @@ impl TerminalView {
             }
             InputEvent::OpenCodeReviewPane => {
                 ctx.emit(Event::OpenCodeReviewPane(CodeReviewPanelArg {
-                    repo_path: self.current_local_repo_path().map(Path::to_path_buf),
+                    repo_path: self.current_repo_path.clone(),
                     terminal_view: self.view_handle.clone(),
                     entrypoint: CodeReviewPaneEntrypoint::GitDiffChip,
                     focus_new_pane: true,
@@ -21976,7 +22027,7 @@ impl TerminalView {
     /// rich input when open or the PTY when closed.
     pub fn send_diff_hunk_to_cli_agent_or_rich_input(
         &mut self,
-        file_path: &Path,
+        file_path: &str,
         start_line: usize,
         end_line: usize,
         lines_added: u32,
@@ -22161,6 +22212,42 @@ impl TerminalView {
     pub fn pwd_if_local(&self, ctx: &AppContext) -> Option<String> {
         self.active_session_path_if_local(ctx)
             .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    /// Returns the active session's CWD as a `LocalOrRemotePath`.
+    ///
+    /// For local sessions the CWD is canonicalized via `dunce::canonicalize`
+    /// and wrapped as `Local`. For remote sessions the CWD is read from
+    /// `active_block_metadata` and paired with the session's `host_id` to
+    /// form a `Remote` path. Returns `None` when no CWD is available or
+    /// (for remote sessions) the `host_id` has not been established yet.
+    pub fn pwd_as_local_or_remote(&self, ctx: &AppContext) -> Option<LocalOrRemotePath> {
+        let session_id = self.active_block_session_id()?;
+        let session = self.sessions.as_ref(ctx).get(session_id)?;
+        let cwd_str = self
+            .active_block_metadata
+            .as_ref()
+            .and_then(BlockMetadata::current_working_directory)?;
+
+        if self.session_is_local(session_id, ctx) {
+            // Local session: canonicalize to resolve symlinks / normalize.
+            let path = session
+                .launch_data()
+                .and_then(|data| data.maybe_convert_absolute_path(cwd_str))
+                .unwrap_or_else(|| PathBuf::from(cwd_str));
+            let canonical = dunce::canonicalize(&path).ok()?;
+            Some(LocalOrRemotePath::Local(canonical))
+        } else {
+            // Remote session: pair CWD with the session's host_id.
+            let host_id = match session.session_type() {
+                SessionType::WarpifiedRemote { host_id } => host_id,
+                SessionType::Local => return None,
+            }?;
+            let std_path = warp_util::standardized_path::StandardizedPath::try_new(cwd_str).ok()?;
+            Some(LocalOrRemotePath::Remote(
+                warp_util::remote_path::RemotePath::new(host_id, std_path),
+            ))
+        }
     }
 
     pub fn shell_launch_data_if_local(&self, ctx: &AppContext) -> Option<ShellLaunchData> {
@@ -26060,7 +26147,7 @@ impl TypedActionView for TerminalView {
             }
             ToggleCodeReviewPane { entrypoint } => {
                 ctx.emit(Event::ToggleCodeReviewPane(CodeReviewPanelArg {
-                    repo_path: self.current_local_repo_path().map(Path::to_path_buf),
+                    repo_path: self.current_repo_path.clone(),
                     terminal_view: self.view_handle.clone(),
                     entrypoint: *entrypoint,
                     focus_new_pane: true,
@@ -26468,7 +26555,7 @@ impl View for TerminalView {
 
                     let stack = Stack::new()
                         .with_constrain_absolute_children()
-                        .with_child(column.finish());
+                        .with_child(Clipped::new(column.finish()).finish());
                     if matches!(input_mode, InputMode::Waterfall) && !is_alt_screen_active {
                         self.render_waterfall_mode_background(&model, stack, app)
                     } else {

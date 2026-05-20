@@ -8,7 +8,7 @@ use super::{
     build_local_opencode_child_command, local_child_task_config, normalize_local_child_harness,
     prepare_local_harness_child_launch, validate_local_harness_shell,
 };
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, HarnessConfig};
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
 use warp_core::features::FeatureFlag;
@@ -150,13 +150,68 @@ fn build_local_codex_child_command_quotes_the_prompt() {
 fn local_child_task_config_records_supported_third_party_harnesses() {
     for harness in [Harness::Claude, Harness::OpenCode, Harness::Codex] {
         assert_eq!(
-            local_child_task_config(harness),
+            local_child_task_config(harness, None),
             Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {
                 harness: Some(HarnessConfig::from_harness_type(harness)),
                 ..Default::default()
             }),
         );
     }
+}
+
+#[test]
+fn local_child_task_config_stamps_orchestrator_name() {
+    for harness in [Harness::Claude, Harness::OpenCode, Harness::Codex] {
+        assert_eq!(
+            local_child_task_config(harness, Some("frontend-tests".to_string())),
+            Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {
+                name: Some("frontend-tests".to_string()),
+                harness: Some(HarnessConfig::from_harness_type(harness)),
+                ..Default::default()
+            }),
+        );
+    }
+}
+
+#[test]
+fn local_child_task_config_trims_whitespace_only_name() {
+    assert_eq!(
+        local_child_task_config(Harness::Claude, Some("  frontend-tests  ".to_string())),
+        Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {
+            name: Some("frontend-tests".to_string()),
+            harness: Some(HarnessConfig::from_harness_type(Harness::Claude)),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        local_child_task_config(Harness::Claude, Some("   ".to_string())),
+        Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {
+            name: None,
+            harness: Some(HarnessConfig::from_harness_type(Harness::Claude)),
+            ..Default::default()
+        }),
+    );
+}
+
+#[test]
+fn local_child_task_config_returns_none_for_oz_and_unknown() {
+    assert!(local_child_task_config(Harness::Oz, Some("name".to_string())).is_none());
+    assert!(local_child_task_config(Harness::Unknown, Some("name".to_string())).is_none());
+}
+
+#[test]
+fn normalize_orchestrator_agent_name_trims_and_drops_empty() {
+    assert_eq!(
+        normalize_orchestrator_agent_name("frontend-tests"),
+        Some("frontend-tests".to_string())
+    );
+    assert_eq!(
+        normalize_orchestrator_agent_name("  frontend-tests  "),
+        Some("frontend-tests".to_string())
+    );
+    assert_eq!(normalize_orchestrator_agent_name(""), None);
+    assert_eq!(normalize_orchestrator_agent_name("   "), None);
+    assert_eq!(normalize_orchestrator_agent_name("\t\n  "), None);
 }
 
 #[tokio::test]
@@ -183,6 +238,7 @@ async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() 
         "codex".to_string(),
         None,
         Some("parent-run".to_string()),
+        None,
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
@@ -221,6 +277,7 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
         "claude".to_string(),
         Some("opus".to_string()),
         Some("parent-run".to_string()),
+        None,
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
@@ -258,6 +315,7 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
         "claude".to_string(),
         None,
         Some("parent-run".to_string()),
+        None,
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
@@ -278,6 +336,7 @@ async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell
         "claude".to_string(),
         None,
         Some("parent-run".to_string()),
+        None,
         None,
         None,
         ai_client,

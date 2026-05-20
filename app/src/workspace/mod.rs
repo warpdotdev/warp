@@ -1,5 +1,6 @@
 mod action;
 mod active_session;
+pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
 mod cli_install;
@@ -53,8 +54,8 @@ use warpui::keymap::{BindingDescription, EditableBinding};
 use warpui::AppContext;
 
 pub use action::{
-    CommandSearchOptions, InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+    AutoCloudHandoffTrigger, CommandSearchOptions, InitContent, RestoreConversationLayout,
+    TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 pub use active_session::ActiveSession;
 pub use global_actions::{

@@ -5,7 +5,7 @@
 //! operations to whichever is active.
 //! All consumers should use `DiffStateModel` rather than accessing sub-models directly.
 
-use crate::util::git::{Commit, PrInfo};
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 use warpui::{AppContext, ModelContext, ModelHandle};
@@ -108,7 +108,9 @@ pub struct DiffHunk {
 /// This matches Git Desktop's FileDiff structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileDiff {
-    pub file_path: PathBuf,
+    /// Repo-relative path for this diff file. Absolute file identities should use
+    /// `StandardizedPath` or `LocalOrRemotePath` at API boundaries.
+    pub file_path: String,
     pub status: GitFileStatus,
     pub hunks: Arc<Vec<DiffHunk>>,
     pub is_binary: bool,
@@ -253,6 +255,7 @@ impl DiffMode {
 
 /// User-visible representation of the diffs we've loaded,
 /// which only includes changes against the specific base the user has selected.
+#[derive(Debug)]
 pub enum DiffState {
     NotInRepository,
     Loading,
@@ -307,7 +310,8 @@ pub enum DiffStateModelEvent {
     NewDiffsComputed(Option<Arc<GitDiffWithBaseContent>>),
     /// Event dispatched when a single file's diff is updated incrementally.
     SingleFileUpdated {
-        path: PathBuf,
+        /// Repo-relative path for the updated file.
+        path: String,
         diff: Option<Arc<FileDiffAndContent>>,
     },
     /// Event dispatched when diff metadata (stats, branch info) is refreshed.
@@ -315,6 +319,8 @@ pub enum DiffStateModelEvent {
     /// The remote connection was lost. Stale diffs should be preserved while
     /// the model waits for a new subscription.
     ConnectionLost,
+    /// Branch list received from the backend (local git or remote server).
+    BranchesReceived(Vec<BranchEntry>),
 }
 
 // ── Unified model ────────────────────────────────────────────────────────
@@ -380,6 +386,9 @@ impl DiffStateModel {
             }
             DiffStateModelEvent::ConnectionLost => {
                 ctx.emit(DiffStateModelEvent::ConnectionLost);
+            }
+            DiffStateModelEvent::BranchesReceived(branches) => {
+                ctx.emit(DiffStateModelEvent::BranchesReceived(branches.clone()));
             }
         }
     }
@@ -518,18 +527,20 @@ impl DiffStateModel {
         }
     }
 
-    pub(crate) fn load_diffs_for_current_repo(
-        &self,
-        should_fetch_base: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub(crate) fn load_diffs_for_current_repo(&self, force: bool, ctx: &mut ModelContext<Self>) {
         match self {
             Self::Local(local) => {
                 local.update(ctx, |local, ctx| {
-                    local.load_diffs_for_current_repo(should_fetch_base, ctx);
+                    local.load_diffs_for_current_repo(force, ctx);
                 });
             }
-            Self::Remote(_) => {}
+            Self::Remote(remote) => {
+                if force {
+                    remote.update(ctx, |remote, ctx| {
+                        remote.replay_latest_diffs(ctx);
+                    });
+                }
+            }
         }
     }
 
@@ -545,6 +556,21 @@ impl DiffStateModel {
                 });
             }
             Self::Remote(_) => {}
+        }
+    }
+
+    pub(crate) fn fetch_branches(&self, ctx: &mut ModelContext<Self>) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.fetch_branches(ctx);
+                });
+            }
+            Self::Remote(model) => {
+                model.update(ctx, |model, ctx| {
+                    model.fetch_branches(ctx);
+                });
+            }
         }
     }
 

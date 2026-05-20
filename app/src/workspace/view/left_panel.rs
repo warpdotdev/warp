@@ -78,6 +78,7 @@ pub enum LeftPanelAction {
     ConversationListView,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
