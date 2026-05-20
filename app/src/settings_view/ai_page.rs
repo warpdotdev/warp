@@ -6985,17 +6985,6 @@ impl ApiKeysWidget {
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
-                        let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
-
-                        // If BYO is disabled, clear the API key from the editor and storage
-                        if !is_byo_enabled && has_key {
-                            editor_clone.update(ctx, |editor, ctx| {
-                                editor.set_buffer_text("", ctx);
-                            });
-                            ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                                model.$set_func(None, ctx);
-                            });
-                        }
 
                         AISettingsPageView::update_editor_interaction_state(
                             editor_clone.clone(),
