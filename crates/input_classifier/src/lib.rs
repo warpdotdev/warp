@@ -43,29 +43,20 @@ pub enum AppLevelOverride {
 /// Sources produced by the NLD classifier pipeline (heuristic or ML model).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NldClassifierSource {
-    ShellHeuristic,
-
     NldClassifier,
-    /// The NLD model was unavailable or unusable, so the heuristic fallback
-    /// made the decision.
     NldClassifierFallbackHeuristic,
-    /// The NLD model returned an error, so the current input type was kept.
     NldClassifierFallbackCurrentInput,
-    /// The input was a one-off natural-language word. Reserved for symmetry;
-    /// production emit paths use [`NldShortCircuit::OneOffWhitelist`].
-    OneOffWhitelist,
 }
 
 /// Short-circuits inside the NLD pipeline that produce a decision without
 /// running the full classifier model.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NldShortCircuit {
-    /// The first token matched the user-configurable autodetection denylist.
     Denylist,
-    /// The input closely matched a previous shell command.
     HistoryMatch,
     OneOffWhitelist,
     AgentFollowUp,
+    ShellHeuristic,
 }
 
 impl From<AppLevelOverride> for InputTypeAutoDetectionSource {

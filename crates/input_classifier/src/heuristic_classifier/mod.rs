@@ -60,7 +60,7 @@ impl InputClassifier for HeuristicClassifier {
         if is_likely_shell_command(&input, total_word_token_count).await {
             return InputClassificationDecision::new(
                 InputType::Shell,
-                NldClassifierSource::ShellHeuristic.into(),
+                NldShortCircuit::ShellHeuristic.into(),
             );
         }
 

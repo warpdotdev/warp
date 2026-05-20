@@ -164,7 +164,7 @@ fn test_input_detection_sources() {
         assert_eq!(decision.input_type, InputType::Shell);
         assert_eq!(
             decision.source,
-            NldClassifierSource::ShellHeuristic.into()
+            NldShortCircuit::ShellHeuristic.into()
         );
         let token = mock_parsed_input_token_without_descriptions("explain");
         let decision = classifier.detect_input_type(token, &context).await;

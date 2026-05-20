@@ -117,7 +117,7 @@ impl InputClassifier for OnnxClassifier {
             if is_one_off_shell_command_keyword(&first_word) {
                 return InputClassificationDecision::new(
                     InputType::Shell,
-                    NldClassifierSource::ShellHeuristic.into(),
+                    NldShortCircuit::ShellHeuristic.into(),
                 );
             }
         }
@@ -125,7 +125,7 @@ impl InputClassifier for OnnxClassifier {
         if is_likely_shell_command(&input, total_word_token_count).await {
             return InputClassificationDecision::new(
                 InputType::Shell,
-                NldClassifierSource::ShellHeuristic.into(),
+                NldShortCircuit::ShellHeuristic.into(),
             );
         }
 
