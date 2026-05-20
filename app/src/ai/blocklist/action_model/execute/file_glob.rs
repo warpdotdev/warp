@@ -219,11 +219,13 @@ async fn run_file_glob(
         });
 
     if is_in_git_repo {
+        let shell_type = session.shell().shell_type();
         run_git_ls_files_command(
             &patterns,
             &absolute_path,
             session.as_ref(),
             shell_launch_data,
+            shell_type,
         )
         .await
     } else if session.shell().shell_type() == ShellType::PowerShell {
@@ -233,26 +235,49 @@ async fn run_file_glob(
     }
 }
 
+/// Builds the `git ls-files` command run by [`run_git_ls_files_command`]. Each
+/// joined `<target_path>/<pattern>` arg is shell-escaped through the session's
+/// shell family so a directory name containing quotes or command-substitution
+/// metacharacters can't break out of the argument and execute in the user's
+/// shell. The shell consumes the escapes and hands `git ls-files` the literal
+/// pathspec, so glob characters in the pattern (e.g. `*.rs`) still survive for
+/// git's own pathspec matching.
+fn build_git_ls_files_command(
+    patterns: &[String],
+    target_path: &str,
+    shell_type: ShellType,
+    shell_launch_data: Option<&ShellLaunchData>,
+) -> String {
+    let family = ShellFamily::from(shell_type);
+    let pattern_args = patterns
+        .iter()
+        .flat_map(|pattern| {
+            [
+                // Matches on files in the target path.
+                join_paths(&[target_path, pattern], shell_launch_data),
+                // Matches on files in any subdirectory of the target path.
+                join_paths(&[target_path, "*", pattern], shell_launch_data),
+            ]
+        })
+        .map(|pattern| family.shell_escape(&pattern).into_owned())
+        .join(" ");
+    format!("git ls-files -c -o --exclude-standard -- {pattern_args}")
+}
+
 /// Uses git ls-files to list all files in a git repository and filters them by pattern.
 async fn run_git_ls_files_command(
     patterns: &[String],
     target_path: &str,
     session: &Session,
     shell_launch_data: Option<ShellLaunchData>,
+    shell_type: ShellType,
 ) -> anyhow::Result<FileGlobV2Result> {
-    let pattern_args = patterns
-        .iter()
-        .flat_map(|pattern| {
-            [
-                // Matches on files in the target path.
-                join_paths(&[target_path, pattern], shell_launch_data.as_ref()),
-                // Matches on files in any subdirectory of the target path.
-                join_paths(&[target_path, "*", pattern], shell_launch_data.as_ref()),
-            ]
-        })
-        .map(|pattern| format!("'{pattern}'"))
-        .join(" ");
-    let command = format!("git ls-files -c -o --exclude-standard -- {pattern_args}");
+    let command = build_git_ls_files_command(
+        patterns,
+        target_path,
+        shell_type,
+        shell_launch_data.as_ref(),
+    );
 
     let command_output = session
         .execute_command(
