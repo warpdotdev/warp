@@ -17,7 +17,7 @@ For now, use this skill only for non-logged-in reproduction attempts. If a repor
    - reported behavior
    - expected behavior
    - reproduction steps, if provided
-   - OS, app version/channel, shell, feature flags, account state, or other environment constraints
+   - OS, exact Warp version/build and channel if provided, shell, feature flags, account state, or other environment constraints
    - attached screenshots, videos, logs, or comments that narrow the repro path
 2. Decide whether this skill applies:
    - Use it for UI-visible bugs, interaction bugs, rendering/layout bugs, login-free onboarding bugs, and bugs where screenshot evidence would be useful.
@@ -33,6 +33,15 @@ For now, use this skill only for non-logged-in reproduction attempts. If a repor
    - different shells, prompts, pane layouts, or settings toggles
 5. If steps are incomplete, use codebase knowledge to propose likely app states and assign children to investigate those states. Do not invent facts about the original reporter's environment.
 6. Wait for all children to report before summarizing. Distinguish confirmed reproduction, partial reproduction, non-reproduction, blockers, and untested hypotheses.
+
+## Version-matched app setup
+
+- Prefer reproducing against the exact Warp version/build and channel reported by the user.
+- Do not build Warp from source by default. Install the matching Linux package or binary release for the reporter's version/channel instead.
+- If the bug report names a macOS or Windows build, use the corresponding Linux build from the same version/channel when a matching Linux artifact exists, and state that this is a Linux proxy for the reporter's platform.
+- Use the repository's or Warp release tooling/docs available in the environment to find and install the exact versioned Linux artifact. Do not silently substitute the latest stable build when an exact matching version can be installed.
+- If the exact version/build cannot be found or installed, report that clearly, explain what was attempted, and use the closest justified fallback only when it is useful for continuing the investigation.
+- Record the requested reporter version, the installed Linux version, the source of the installed artifact, and any fallback decision in the manifest and final report.
 
 Use a `run_agents` call shaped like this:
 
@@ -65,7 +74,8 @@ Goal:
 Inputs:
 - Bug report context: <paste or summarize the issue body, comments, screenshots/video descriptions, labels, and relevant metadata>
 - Assigned repro path or hypothesis: <specific steps, environment, logged-out app state, settings, feature flags, or code path to test>
-- Build/app target: <stable app, dev build, local checkout command, or explicit user-provided target>
+- Reporter Warp version/build/channel: <exact value from the report, or unknown>
+- Build/app target: <exact versioned Linux package/binary to install, or the justified fallback if exact artifact is unavailable>
 
 Safety and privacy:
 - Do not ask the public reporter for credentials, tokens, private repos, private workspace names, or private account identifiers.
@@ -88,12 +98,16 @@ Artifact workflow:
 
 Reproduction workflow:
 1. Confirm the environment you are testing: OS, architecture, display/session type, shell if relevant, and app/build/version if visible.
-2. Start from the cleanest state that matches the report. Do not reset user state if the bug depends on existing settings or persisted logged-out state.
-3. Follow the exact provided steps first, when available.
-4. If exact steps do not reproduce, test the assigned hypothesis and document where it diverges from the report.
-5. If the bug appears, stop changing variables and capture enough evidence to make the reproduction actionable.
-6. If the bug does not appear, make at most two targeted variations that are directly supported by the report or code-path hypothesis.
-7. If the app crashes, hangs, or blocks progress, capture a screenshot and collect non-sensitive logs or terminal output that explain the blocker.
+2. Identify the exact Warp version/build/channel from the report when available, then install the corresponding Linux package or binary release instead of building from source.
+3. If no exact reporter version is available, record that the version is unknown and choose the most defensible install target for the report; state the fallback explicitly.
+4. Start from the cleanest state that matches the report. Do not reset user state if the bug depends on existing settings or persisted logged-out state.
+5. Launch Warp and complete the login-free / continue-without-account onboarding path until a normal logged-out terminal session is usable.
+6. Capture the post-onboarding baseline screenshot before attempting the bug-specific reproduction.
+7. Follow the exact provided bug reproduction steps first, when available.
+8. If exact steps do not reproduce, test the assigned hypothesis and document where it diverges from the report.
+9. If the bug appears, stop changing variables and capture enough evidence to make the reproduction actionable.
+10. If the bug does not appear, make at most two targeted variations that are directly supported by the report or code-path hypothesis.
+11. If the app crashes, hangs, or blocks progress, capture a screenshot and collect non-sensitive logs or terminal output that explain the blocker.
 
 Code-path investigation for unclear steps:
 - Search the codebase for UI strings, labels, feature names, settings keys, telemetry names, route names, and components mentioned in the report.
@@ -106,6 +120,7 @@ Report back:
 - Reproduction status: confirmed, partially confirmed, not reproduced, or blocked.
 - The exact steps you performed.
 - Environment and app/build information.
+- Reporter-requested Warp version/build/channel, installed Linux version/build/channel, and the artifact source or fallback explanation.
 - Whether the observed behavior matched the report, and how closely.
 - Screenshot list with short descriptions and artifact paths or attachment names.
 - Any logs, crash output, or diagnostics collected, with secrets redacted.
