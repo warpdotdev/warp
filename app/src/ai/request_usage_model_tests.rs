@@ -423,6 +423,7 @@ fn test_has_any_ai_remaining_true_with_payg_enabled() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
+            // No standard requests remaining, no bonus credits.
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
             model.bonus_grants.clear();
 
@@ -437,6 +438,7 @@ fn test_has_any_ai_remaining_true_with_payg_enabled() {
 #[test]
 fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
     App::test((), |mut app| async move {
+        // Create a workspace with enterprise auto-reload enabled.
         let (_uid, mut workspace) = create_test_workspace();
         workspace.billing_metadata.customer_type = CustomerType::Enterprise;
         workspace
@@ -449,6 +451,7 @@ fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
+            // No standard requests remaining, no bonus credits.
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
             model.bonus_grants.clear();
 
