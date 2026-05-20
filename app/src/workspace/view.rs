@@ -4289,6 +4289,7 @@ impl Workspace {
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::default("Remote control link copied.".to_string())
+                .with_object_id(Self::shared_session_qr_toast_id(session_id))
                 .with_link(
                     ToastLink::new("View QR code".to_string()).with_onclick_action(
                         WorkspaceAction::OpenSharedSessionQrCode {
@@ -4298,6 +4299,9 @@ impl Workspace {
                 );
             toast_stack.add_ephemeral_toast(toast, ctx);
         });
+    }
+    fn shared_session_qr_toast_id(session_id: &SharedSessionId) -> String {
+        format!("shared_session_qr_code:{session_id}")
     }
 
     fn open_shared_session_qr_code(
@@ -4310,6 +4314,10 @@ impl Workspace {
         else {
             return;
         };
+        let toast_id = Self::shared_session_qr_toast_id(session_id);
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.dismiss_older_toasts(&toast_id, ctx);
+        });
 
         terminal_view.update(ctx, |terminal_view, ctx| {
             terminal_view.open_shared_session_qr_code(ctx);

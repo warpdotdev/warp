@@ -17,7 +17,7 @@ The live-session sharing dialog already exposes invite controls, access controls
 - Adding analytics, expiration, or tracking parameters to the QR URL beyond what the canonical session URL already contains.
 ## Behavior
 1. When Warp starts a shared terminal session and copies the remote-control link automatically, the toast reads `Remote control link copied.` and includes a `View QR code` link.
-2. Activating `View QR code` opens the QR-code view for that newly-started shared session directly in the pane-header sharing overlay. Warp does not require the user to open the access-management panel first.
+2. Activating `View QR code` opens the QR-code view for that newly-started shared session directly in the pane-header sharing overlay. Warp does not require the user to open the access-management panel first. Once that overlay opens, the toast may expire or be dismissed independently, but that must not dismiss, navigate away from, or otherwise change the QR-code view.
 3. The QR-code view replaces the sharing dialog's contents inside the same compact overlay. It must not open a separate full-height panel or stretch the overlay to fill the workspace height.
 4. If the live-session sharing overlay is already open when the toast action is activated, Warp transitions that overlay into the QR-code view instead of creating a second overlay.
 5. Pressing Back from a toast-opened QR-code view returns to the live-session sharing dialog for the same session.
@@ -25,7 +25,7 @@ The live-session sharing dialog already exposes invite controls, access controls
    - A read-only, truncated text field containing the canonical session URL.
    - An icon-only QR-code button.
    - The existing `Copy link` button.
-7. The QR-code button is visually adjacent to the link field and `Copy link` button, matching the Figma layout. It does not replace or change `Copy link`.
+7. The QR-code button is visually distinct and immediately adjacent to the link field and `Copy link` button, matching the Figma layout. It must read as its own bordered button rather than visually merging into the URL field or disappearing into the footer row, and it does not replace or change `Copy link`.
 8. The QR-code button has an accessible name and tooltip equivalent to `Show QR code`.
 9. Activating the QR-code button opens a QR-code view in the same sharing overlay. The underlying shared session continues uninterrupted.
 10. The QR-code view header contains:

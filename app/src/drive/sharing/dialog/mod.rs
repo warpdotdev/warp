@@ -2561,7 +2561,7 @@ impl SharingDialog {
             font_color: Some(button_foreground.into()),
             background: Some(button_background.into()),
             border_color: Some(style::form_border_color(appearance).into()),
-            border_radius: Some(CornerRadius::with_all(Radius::Pixels(0.))),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
             ..Default::default()
         })
         .with_clicked_styles(UiComponentStyles {
@@ -2779,12 +2779,8 @@ impl SharingDialog {
             .finish();
 
         let link = Container::new(Align::new(link_text).left().finish())
-            .with_border(
-                Border::new(1.)
-                    .with_sides(true, true, true, false)
-                    .with_border_color(style::form_border_color(appearance)),
-            )
-            .with_corner_radius(CornerRadius::with_left(Radius::Pixels(4.)))
+            .with_border(Border::all(1.).with_border_color(style::form_border_color(appearance)))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .with_uniform_padding(8.)
             .finish();
 
@@ -2811,7 +2807,7 @@ impl SharingDialog {
                 font_color: Some(copy_button_foreground.into()),
                 background: Some(copy_button_background.into()),
                 border_color: Some(style::form_border_color(appearance).into()),
-                border_radius: Some(CornerRadius::with_right(Radius::Pixels(4.))),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
                 ..Default::default()
             })
             .with_clicked_styles(UiComponentStyles {
@@ -2841,9 +2837,9 @@ impl SharingDialog {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(Shrinkable::new(1., link).finish());
         if let Some(qr_button) = qr_button {
-            link_row.add_child(qr_button);
+            link_row.add_child(Container::new(qr_button).with_margin_left(8.).finish());
         }
-        link_row.add_child(copy_button);
+        link_row.add_child(Container::new(copy_button).with_margin_left(8.).finish());
 
         let link_form = ConstrainedBox::new(link_row.finish())
             .with_min_height(style::ACL_ITEM_HEIGHT)
