@@ -14,80 +14,17 @@ pub use input_type::InputType;
 #[cfg(feature = "onnx")]
 pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
-/// The source of the final input type decision applied to the user input.
-///
-/// Variants are grouped by where in the input-type-decision pipeline they
-/// originate so analytics can distinguish between app-level overrides that
-/// bypass NLD entirely and decisions produced by the NLD pipeline itself.
+/// Sources produced by the NLD pipeline.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InputTypeAutoDetectionSource {
-    /// App level settings from user actions
-    AppLevelOverride(AppLevelOverride),
-    /// Decision Source NLD classifier (heuristic or ML model).
-    NldClassifier(NldClassifierSource),
-    /// NLD whitelists/blocklists
-    NldShortCircuit(NldShortCircuit),
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AppLevelOverride {
-    ManualToggle,
-
-    ShellPrefix,
-
-    AttachmentForcedAi,
-
-    SettingDisabled,
-}
-
-/// Sources produced by the NLD classifier pipeline (heuristic or ML model).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NldClassifierSource {
+pub enum NldDecision {
     NldClassifier,
     NldClassifierFallbackHeuristic,
     NldClassifierFallbackCurrentInput,
-}
-
-/// Short-circuits inside the NLD pipeline that produce a decision without
-/// running the full classifier model.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NldShortCircuit {
     Denylist,
     HistoryMatch,
     OneOffWhitelist,
     AgentFollowUp,
     ShellHeuristic,
-}
-
-impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
-    fn from(value: AppLevelOverride) -> Self {
-        Self::AppLevelOverride(value)
-    }
-}
-
-impl From<NldClassifierSource> for InputTypeAutoDetectionSource {
-    fn from(value: NldClassifierSource) -> Self {
-        Self::NldClassifier(value)
-    }
-}
-
-impl From<NldShortCircuit> for InputTypeAutoDetectionSource {
-    fn from(value: NldShortCircuit) -> Self {
-        Self::NldShortCircuit(value)
-    }
-}
-
-/// The result of input type detection, including the source that determined the final decision.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct InputClassificationDecision {
-    pub input_type: InputType,
-    pub source: InputTypeAutoDetectionSource,
-}
-
-impl InputClassificationDecision {
-    pub fn new(input_type: InputType, source: InputTypeAutoDetectionSource) -> Self {
-        Self { input_type, source }
-    }
 }
 
 /// An input classifier, which can take some parsed user input and determine
@@ -99,7 +36,7 @@ pub trait InputClassifier: 'static + Send + Sync {
         &self,
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
-    ) -> InputClassificationDecision;
+    ) -> (InputType, NldDecision);
 
     async fn classify_input(
         &self,
@@ -114,12 +51,12 @@ pub struct ClassificationResult {
     p_shell: f32,
     /// The probability that the input is a natural language query to AI.
     p_ai: f32,
-    /// The source that produced this classification.
-    pub source: InputTypeAutoDetectionSource,
+    /// The classifier source that produced this classification.
+    pub source: NldDecision,
 }
 
 impl ClassificationResult {
-    fn pure_ai(source: InputTypeAutoDetectionSource) -> Self {
+    fn pure_ai(source: NldDecision) -> Self {
         Self {
             p_shell: 0.0,
             p_ai: 1.0,
@@ -127,7 +64,7 @@ impl ClassificationResult {
         }
     }
 
-    fn pure_shell(source: InputTypeAutoDetectionSource) -> Self {
+    fn pure_shell(source: NldDecision) -> Self {
         Self {
             p_shell: 1.0,
             p_ai: 0.0,

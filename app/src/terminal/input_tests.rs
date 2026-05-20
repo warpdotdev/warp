@@ -5500,10 +5500,7 @@ fn test_input_type_button_explicit_lock() {
                 ai_input.input_type_decision_source()
             })
         });
-        assert_eq!(
-            final_source,
-            Some(AppLevelOverride::ManualToggle.into())
-        );
+        assert_eq!(final_source, Some(AppLevelOverride::ManualToggle.into()));
     });
 }
 

@@ -11,8 +11,7 @@ use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
-    ClassificationResult, Context, InputClassificationDecision, InputClassifier, InputType,
-    NldClassifierSource, NldShortCircuit,
+    ClassificationResult, Context, InputClassifier, InputType, NldDecision,
     parser::parse_query_into_tokens,
     util::{
         is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
@@ -95,7 +94,7 @@ impl InputClassifier for OnnxClassifier {
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
-    ) -> InputClassificationDecision {
+    ) -> (InputType, NldDecision) {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
 
         let total_word_token_count = word_tokens.len();
@@ -106,44 +105,28 @@ impl InputClassifier for OnnxClassifier {
 
             // If the input is a single word and the word is one of a specific set of words, classify it as AI
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
-                return InputClassificationDecision::new(
-                    InputType::AI,
-                    NldShortCircuit::OneOffWhitelist.into(),
-                );
+                return (InputType::AI, NldDecision::OneOffWhitelist);
             }
 
             // If the first token is one of a specific set of shell command keywords (e.g.: echo or sudo),
             // we should classify it as shell.
             if is_one_off_shell_command_keyword(&first_word) {
-                return InputClassificationDecision::new(
-                    InputType::Shell,
-                    NldShortCircuit::ShellHeuristic.into(),
-                );
+                return (InputType::Shell, NldDecision::ShellHeuristic);
             }
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
-            return InputClassificationDecision::new(
-                InputType::Shell,
-                NldShortCircuit::ShellHeuristic.into(),
-            );
+            return (InputType::Shell, NldDecision::ShellHeuristic);
         }
 
         // Otherwise, defer all decision-making to the model.
         self.classify_input(input, context)
             .await
-            .map(|classification| {
-                InputClassificationDecision::new(
-                    classification.to_input_type(),
-                    classification.source,
-                )
-            })
-            .unwrap_or_else(|_| {
-                InputClassificationDecision::new(
-                    context.current_input_type,
-                    NldClassifierSource::NldClassifierFallbackCurrentInput.into(),
-                )
-            })
+            .map(|classification| (classification.to_input_type(), classification.source))
+            .unwrap_or((
+                context.current_input_type,
+                NldDecision::NldClassifierFallbackCurrentInput,
+            ))
     }
 
     async fn classify_input(
@@ -282,10 +265,12 @@ mod tests {
 
             let decision = classifier.detect_input_type(input, &context).await;
 
-            assert_eq!(decision.input_type, InputType::AI);
             assert_eq!(
-                decision.source,
-                NldClassifierSource::NldClassifierFallbackCurrentInput.into()
+                decision,
+                (
+                    InputType::AI,
+                    NldDecision::NldClassifierFallbackCurrentInput
+                )
             );
         });
     }

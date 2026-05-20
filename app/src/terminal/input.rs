@@ -144,8 +144,8 @@ use crate::{
             prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             render_ai_agent_mode_icon, render_ai_follow_up_icon,
             telemetry_banner::should_collect_ai_ugc_telemetry,
-            BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-            AppLevelOverride, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+            AppLevelOverride, BlocklistAIContextEvent, BlocklistAIContextModel,
+            BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
             BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
             InputType, InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
             DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
@@ -3801,9 +3801,6 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).is_empty(ctx);
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            // Cloud-handoff prefix activation is an NLD-bypass path that is
-            // neither a manual toggle nor one of the tracked overrides, so we
-            // leave the decision source unset.
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
@@ -3889,9 +3886,6 @@ impl Input {
         self.handoff_compose_state
             .update(ctx, |state, ctx| state.exit(ctx));
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            // Exiting cloud-handoff compose is an NLD-bypass path; leave the
-            // decision source unset rather than masquerading as a manual
-            // toggle.
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
@@ -3961,9 +3955,6 @@ impl Input {
             editor.buffer_text(ctx).is_empty()
         });
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            // Typing the `&` cloud-handoff prefix is a user-driven prefix
-            // activation, not an NLD mode toggle; leave the decision source
-            // unset (matches the activate/exit cloud-handoff paths above).
             ai_input_model.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
@@ -4984,9 +4975,6 @@ impl Input {
                     self.agent_view_controller.as_ref(ctx).is_fullscreen();
                 self.ai_input_model.update(ctx, |ai_input_model, ctx| {
                     if is_agent_view_fullscreen {
-                        // Selecting a shell command from the inline history
-                        // menu is not a manual NLD-mode toggle, so leave the
-                        // decision source unset.
                         ai_input_model.set_input_config(
                             InputConfig {
                                 input_type: InputType::Shell,
@@ -6164,9 +6152,6 @@ impl Input {
                     {
                         true
                     } else {
-                        // The UDI input-type pill click is the third true
-                        // manual mode toggle (alongside the Cmd/Ctrl-I
-                        // keybinding handlers).
                         let new_config = InputConfig {
                             input_type,
                             is_locked: true,
@@ -6226,18 +6211,10 @@ impl Input {
     }
 
     /// Switches to AI mode but preserves current lock state.
-    ///
-    /// This helper is called from many secondary paths (autosuggestion
-    /// accepted, AI context menu accepted, “start new conversation” action,
-    /// etc.) that are not themselves user-driven NLD-mode toggles, so it
-    /// defaults the decision source to `None`. Callers that *are* manual
-    /// toggles should call `enter_ai_mode_with_source` with an explicit
-    /// source instead.
     fn enter_ai_mode(&mut self, ctx: &mut ViewContext<Self>) {
         self.enter_ai_mode_with_source(None, ctx);
     }
 
-    /// Switches to AI mode but preserves current lock state.
     fn enter_ai_mode_with_source(
         &mut self,
         decision_source: Option<InputTypeAutoDetectionSource>,
@@ -6253,10 +6230,6 @@ impl Input {
     /// Helper function to ensure agent mode when needed, using the same logic as SelectFile.
     /// This handles the transition from shell mode to agent mode while preserving lock semantics.
     /// Only forces agent mode if the user hasn't explicitly locked the mode to Shell.
-    ///
-    /// Defaults the decision source to `None` because this helper is invoked
-    /// from many programmatic AI-feature paths (attaching patterns, opening
-    /// slash commands, etc.) that are not themselves manual mode toggles.
     pub fn ensure_agent_mode_for_ai_features(
         &mut self,
         should_override_shell_lock: bool,
@@ -9706,10 +9679,6 @@ impl Input {
                                 });
 
                             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                                // Typing the legacy `* ` AI prefix is a
-                                // user-driven prefix activation, not an NLD
-                                // mode toggle; leave the decision source
-                                // unset.
                                 ai_input_model.set_input_config(
                                     InputConfig {
                                         input_type: InputType::AI,

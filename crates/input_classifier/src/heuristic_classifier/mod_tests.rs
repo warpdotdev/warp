@@ -37,6 +37,14 @@ fn mock_parsed_input_token_without_descriptions(buffer_text: &str) -> ParsedToke
         parsed_tokens,
     }
 }
+async fn detected_input_type(
+    classifier: &HeuristicClassifier,
+    input: ParsedTokensSnapshot,
+    context: &Context,
+) -> InputType {
+    let (input_type, _) = classifier.detect_input_type(input, context).await;
+    input_type
+}
 
 #[test]
 fn test_input_detection() {
@@ -50,10 +58,7 @@ fn test_input_detection() {
 
         let token = mock_parsed_input_token("cargo --version".to_string()).await;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::Shell
         );
 
@@ -64,20 +69,14 @@ fn test_input_detection() {
         let mut token = mock_parsed_input_token("cargo --version".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::Shell
         );
 
         let mut token = mock_parsed_input_token("rvm install 3.3".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::Shell
         );
 
@@ -85,10 +84,7 @@ fn test_input_detection() {
         let mut token = mock_parsed_input_token("Explain this".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token.clone(), &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token.clone(), &context).await,
             InputType::AI
         );
 
@@ -98,30 +94,21 @@ fn test_input_detection() {
         let mut token = mock_parsed_input_token("fix this".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::AI,
         );
 
         // Short queries with punctuation should be parsed as AI input.
         let token = mock_parsed_input_token("What went wrong?".to_string()).await;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::AI
         );
         // Short queries with contractions should be parsed as AI input.
         let mut token = mock_parsed_input_token("What's the reason".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::AI
         );
 
@@ -130,10 +117,7 @@ fn test_input_detection() {
             mock_parsed_input_token("The message is \"utils::future ... ok\"".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::AI
         );
 
@@ -141,10 +125,7 @@ fn test_input_detection() {
         let mut token = mock_parsed_input_token("The type is \"<>\"".to_string()).await;
         token.parsed_tokens[0].token_description = None;
         assert_eq!(
-            classifier
-                .detect_input_type(token, &context)
-                .await
-                .input_type,
+            detected_input_type(&classifier, token, &context).await,
             InputType::AI
         );
     });
@@ -161,24 +142,15 @@ fn test_input_detection_sources() {
 
         let token = mock_parsed_input_token_without_descriptions("echo hello");
         let decision = classifier.detect_input_type(token, &context).await;
-        assert_eq!(decision.input_type, InputType::Shell);
-        assert_eq!(
-            decision.source,
-            NldShortCircuit::ShellHeuristic.into()
-        );
+        assert_eq!(decision, (InputType::Shell, NldDecision::ShellHeuristic));
         let token = mock_parsed_input_token_without_descriptions("explain");
         let decision = classifier.detect_input_type(token, &context).await;
-        assert_eq!(decision.input_type, InputType::AI);
-        assert_eq!(
-            decision.source,
-            NldShortCircuit::OneOffWhitelist.into()
-        );
+        assert_eq!(decision, (InputType::AI, NldDecision::OneOffWhitelist));
         let token = mock_parsed_input_token_without_descriptions("fix this");
         let decision = classifier.detect_input_type(token, &context).await;
-        assert_eq!(decision.input_type, InputType::AI);
         assert_eq!(
-            decision.source,
-            NldClassifierSource::NldClassifierFallbackHeuristic.into()
+            decision,
+            (InputType::AI, NldDecision::NldClassifierFallbackHeuristic)
         );
     });
 }

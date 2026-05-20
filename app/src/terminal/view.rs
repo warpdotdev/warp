@@ -222,10 +222,10 @@ use crate::ai::{
         inline_action::code_diff_view::{CodeDiffView, FileDiff},
         summarization_cancel_dialog::SummarizationCancelDialog,
         telemetry_banner::{should_collect_ai_ugc_telemetry, TelemetryBanner},
-        AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel,
+        AIBlock, AIBlockEvent, AppLevelOverride, BlocklistAIActionEvent, BlocklistAIActionModel,
         BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-        AppLevelOverride, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-        BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
+        BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+        BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
         InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
         MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
         PendingQueryState, RequestFileEditsFormatKind, ShellCommandExecutor,
@@ -18738,9 +18738,6 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.ai_input_model.update(ctx, |ai_input, ctx| {
-            // "Ask AI" and other affordances route here; they are NLD-bypass
-            // paths rather than user-driven mode toggles, so leave the
-            // decision source unset.
             ai_input.set_input_config(
                 InputConfig {
                     input_type: InputType::AI,
@@ -21944,9 +21941,6 @@ impl TerminalView {
             // In general, user has expressed intent to "enter agent mode" by sending the inline review.
             // When NLD is on, this means unlocking any status locks similar to other agent mode queries.
             // When NLD is off, we override the input mode to AI.
-            //
-            // This is invoked from "send inline review" — it's not the NLD
-            // mode-switch toggle, so leave the decision source unset.
             self.ai_input_model.update(ctx, |input_model, ctx| {
                 input_model.set_input_config(
                     input_model

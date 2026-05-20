@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use futures::stream::AbortHandle;
 use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_language_word};
-use input_classifier::InputClassificationDecision;
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
@@ -18,10 +17,37 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::{
-    AppLevelOverride, InputType, InputTypeAutoDetectionSource, NldClassifierSource,
-    NldShortCircuit,
-};
+pub use input_classifier::{InputType, NldDecision};
+
+/// App-level overrides that bypass the NLD pipeline entirely.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppLevelOverride {
+    ManualToggle,
+    ShellPrefix,
+    AttachmentForcedAi,
+    SettingDisabled,
+}
+
+/// The source of the final input type decision applied to the user input.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputTypeAutoDetectionSource {
+    /// App level settings from user actions.
+    AppLevelOverride(AppLevelOverride),
+    /// Decision produced by the NLD pipeline.
+    NldDecision(NldDecision),
+}
+
+impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
+    fn from(value: AppLevelOverride) -> Self {
+        Self::AppLevelOverride(value)
+    }
+}
+
+impl From<NldDecision> for InputTypeAutoDetectionSource {
+    fn from(value: NldDecision) -> Self {
+        Self::NldDecision(value)
+    }
+}
 
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::BlocklistAIContextModel;
@@ -687,7 +713,7 @@ impl BlocklistAIInputModel {
                     input_type: InputType::Shell,
                     ..self.input_config()
                 },
-                Some(NldShortCircuit::Denylist.into()),
+                Some(NldDecision::Denylist.into()),
                 ctx,
             );
             return;
@@ -736,20 +762,14 @@ impl BlocklistAIInputModel {
                     if matches!(current_input_type, InputType::AI)
                         && is_one_off_natural_language_word(first_token_str.to_lowercase().as_str())
                     {
-                        return InputClassificationDecision::new(
-                            InputType::AI,
-                            NldShortCircuit::OneOffWhitelist.into(),
-                        );
+                        return (InputType::AI, NldDecision::OneOffWhitelist.into());
                     }
 
                     // If this is clearly intended to be a follow-up to an AI block, classify it as AI.
                     if is_agent_follow_up
                         && is_agent_follow_up_input(&buffer_cloned.trim().to_lowercase())
                     {
-                        return InputClassificationDecision::new(
-                            InputType::AI,
-                            NldShortCircuit::AgentFollowUp.into(),
-                        );
+                        return (InputType::AI, NldDecision::AgentFollowUp.into());
                     }
 
                     // If we have history entries (i.e., a live session), check for
@@ -762,10 +782,7 @@ impl BlocklistAIInputModel {
                         )
                         .await
                         {
-                            return InputClassificationDecision::new(
-                                InputType::Shell,
-                                NldShortCircuit::HistoryMatch.into(),
-                            );
+                            return (InputType::Shell, NldDecision::HistoryMatch.into());
                         }
                     }
 
@@ -782,14 +799,14 @@ impl BlocklistAIInputModel {
                         current_input_type,
                         is_agent_follow_up,
                     };
-                    let input_decision =
+                    let (input_type, nld_decision) =
                         classifier.detect_input_type(input.clone(), &context).await;
 
                     futures_lite::future::yield_now().await;
 
-                    input_decision
+                    (input_type, nld_decision.into())
                 },
-                move |me, input_decision, ctx| {
+                move |me, (new_input_type, decision_source), ctx| {
                     // In theory, we shouldn't need to check this, as we only run autodetection if the input
                     // is not locked, and we should abort the autodetect future if the input is locked, but
                     // we do it anyway out of an abundance of caution.
@@ -802,13 +819,12 @@ impl BlocklistAIInputModel {
                     if me.autodetect_abort_handle.is_none() {
                         return;
                     }
-                    let new_input_type = input_decision.input_type;
                     me.set_input_config_internal(
                         InputConfig {
                             input_type: new_input_type,
                             ..me.input_config()
                         },
-                        Some(input_decision.source),
+                        Some(decision_source),
                         ctx,
                     );
                     if current_input_type != new_input_type {

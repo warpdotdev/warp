@@ -56,7 +56,7 @@ pub(crate) use history_model::{
 };
 pub(crate) use input_model::{
     AppLevelOverride, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource, NldClassifierSource, NldShortCircuit,
+    InputTypeAutoDetectionSource,
 };
 pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
