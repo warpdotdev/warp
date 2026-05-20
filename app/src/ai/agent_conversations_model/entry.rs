@@ -342,14 +342,9 @@ fn task_session_status(task: &AmbientAgentTask) -> SessionStatus {
 }
 
 fn task_run_time(task: &AmbientAgentTask) -> Option<String> {
-    let Some(duration) = task.run_time() else {
-        return Some("Not started".to_string());
-    };
-    if duration.num_minutes() < 1 {
-        Some(format!("{} seconds", duration.num_seconds()))
-    } else {
-        Some(format!("{} minutes", duration.num_minutes()))
-    }
+    task.run_time
+        .clone()
+        .or_else(|| Some("Not started".to_string()))
 }
 
 fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {

@@ -280,6 +280,8 @@ pub struct AmbientAgentTask {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub run_time: Option<String>,
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
@@ -456,13 +458,6 @@ impl AmbientAgentTask {
                 + u.compute_cost.unwrap_or(0.0)
                 + u.platform_cost.unwrap_or(0.0)) as f32
         })
-    }
-
-    /// Duration from started_at to updated_at.
-    pub fn run_time(&self) -> Option<chrono::Duration> {
-        let started = self.started_at?;
-        let duration = self.updated_at.signed_duration_since(started);
-        (duration.num_seconds() >= 0).then_some(duration)
     }
 
     /// Creator's display name, if available.
