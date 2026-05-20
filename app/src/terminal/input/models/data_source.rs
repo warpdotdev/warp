@@ -40,9 +40,16 @@ use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 
 use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
+    ModelSpecScoresLayout, MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION,
+    REASONING_LEVEL_TITLE,
 };
+
+const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the resolved model supports it; otherwise it may use Warp-hosted inference. Warp runtime usage may still consume credits.";
+const BEDROCK_RUNTIME_CHARGES_TOOLTIP: &str =
+    "Model inference uses Bedrock. Warp runtime usage may still consume credits.";
+const API_KEY_RUNTIME_CHARGES_TOOLTIP: &str =
+    "Model inference uses your API key. Warp runtime usage may still consume credits.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -243,10 +250,12 @@ struct ModelSearchItem {
     is_custom_endpoint: bool,
     disable_reason: Option<DisableReason>,
     credential_icon: Option<Icon>,
+    is_auto: bool,
     is_using_bedrock: bool,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
+    cost_row_tooltip_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
 }
@@ -265,7 +274,8 @@ impl ModelSearchItem {
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();
-        let is_using_bedrock = !is_auto(llm) && should_show_bedrock_icon_for_model(llm, app);
+        let is_auto = is_auto(llm);
+        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
@@ -282,10 +292,12 @@ impl ModelSearchItem {
             } else {
                 None
             },
+            is_auto,
             is_using_bedrock,
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
             manage_api_key_mouse_state: Default::default(),
+            cost_row_tooltip_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
@@ -502,10 +514,28 @@ impl SearchItem for ModelSearchItem {
                 })
                 .finish();
             CostRow::BilledToProvider {
-                label: if self.is_using_bedrock {
-                    "Billed to Bedrock"
+                label: if self.is_using_bedrock && self.is_auto {
+                    "Inference may use Bedrock"
+                } else if self.is_using_bedrock {
+                    "Inference via Bedrock"
                 } else {
-                    "Billed to API"
+                    "Inference via API key"
+                },
+                tooltip: if self.is_using_bedrock && self.is_auto {
+                    Some(CostRowTooltip {
+                        text: AUTO_BEDROCK_TOOLTIP,
+                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
+                    })
+                } else if self.is_using_bedrock {
+                    Some(CostRowTooltip {
+                        text: BEDROCK_RUNTIME_CHARGES_TOOLTIP,
+                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
+                    })
+                } else {
+                    Some(CostRowTooltip {
+                        text: API_KEY_RUNTIME_CHARGES_TOOLTIP,
+                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
+                    })
                 },
                 manage_button: Container::new(manage_button).finish(),
             }
