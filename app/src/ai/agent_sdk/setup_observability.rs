@@ -55,6 +55,28 @@ impl SetupClientEventReporter {
         self.post_setup_metric_event_best_effort(step, start_timestamp, finish_timestamp, false);
         value
     }
+    pub(crate) fn record_value_detached<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T> + Send + 'static,
+    ) where
+        T: Send + 'static,
+    {
+        let reporter = self.clone();
+        self.background
+            .spawn(async move {
+                let start_timestamp = Utc::now();
+                future.await;
+                let finish_timestamp = Utc::now();
+                reporter.post_setup_metric_event_best_effort(
+                    step,
+                    start_timestamp,
+                    finish_timestamp,
+                    false,
+                );
+            })
+            .detach();
+    }
 
     pub(crate) async fn post_timeline_event(&self, event: SetupTimelineEvent) {
         let Some(run_id) = self.run_id else {
@@ -126,18 +148,24 @@ pub(crate) enum SetupStep {
     WarpDriveSync,
     TaskMetadataSecretsAttachmentsGitCredentialsFetch,
     EnvironmentResolution,
+    SkillRepoClone,
     TerminalBootstrap,
+    CloudProviderSetup,
     McpServerStartup,
     AgentProfileConfiguration,
     ProfileMcpServerStartup,
     SharedSessionEstablishment,
     GlobalSkillResolution,
     GlobalSkillRepoClone,
-    EnvironmentPreparation,
+    EnvironmentRepoClone,
+    EnvironmentSetupCommands,
+    EnvironmentCodebaseIndexing,
     FileBasedMcpDiscovery,
     FileBasedMcpReadiness,
     EnvironmentSkillLoading,
     GlobalSkillLoading,
+    ConversationResumeLoading,
+    ThirdPartyHarnessPreparation,
     ThirdPartyHarnessExternalConversation,
 }
 
@@ -150,18 +178,24 @@ impl SetupStep {
                 "setup_task_metadata_secrets_attachments_git_credentials_fetch"
             }
             Self::EnvironmentResolution => "setup_environment_resolution",
+            Self::SkillRepoClone => "setup_skill_repo_clone",
             Self::TerminalBootstrap => "setup_terminal_bootstrap",
+            Self::CloudProviderSetup => "setup_cloud_provider_setup",
             Self::McpServerStartup => "setup_mcp_server_startup",
             Self::AgentProfileConfiguration => "setup_agent_profile_configuration",
             Self::ProfileMcpServerStartup => "setup_profile_mcp_server_startup",
             Self::SharedSessionEstablishment => "setup_shared_session_establishment",
             Self::GlobalSkillResolution => "setup_global_skill_resolution",
             Self::GlobalSkillRepoClone => "setup_global_skill_repo_clone",
-            Self::EnvironmentPreparation => "setup_environment_preparation",
+            Self::EnvironmentRepoClone => "setup_environment_repo_clone",
+            Self::EnvironmentSetupCommands => "setup_environment_setup_commands",
+            Self::EnvironmentCodebaseIndexing => "setup_environment_codebase_indexing",
             Self::FileBasedMcpDiscovery => "setup_file_based_mcp_discovery",
             Self::FileBasedMcpReadiness => "setup_file_based_mcp_readiness",
             Self::EnvironmentSkillLoading => "setup_environment_skill_loading",
             Self::GlobalSkillLoading => "setup_global_skill_loading",
+            Self::ConversationResumeLoading => "setup_conversation_resume_loading",
+            Self::ThirdPartyHarnessPreparation => "setup_third_party_harness_preparation",
             Self::ThirdPartyHarnessExternalConversation => {
                 "setup_third_party_harness_external_conversation"
             }

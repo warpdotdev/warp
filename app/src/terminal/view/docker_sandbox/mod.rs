@@ -13,7 +13,7 @@ use warpui::{SingletonEntity, View, ViewHandle};
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
 use crate::persistence::ModelEvent;
-#[cfg(feature = "local_tty")]
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
@@ -24,6 +24,8 @@ use crate::terminal::TerminalManager;
 use crate::ai::agent_sdk::driver::{
     environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 #[cfg(not(target_family = "wasm"))]
@@ -205,6 +207,11 @@ impl TerminalView {
         ctx: &mut ViewContext<V>,
     ) {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
+        let setup_events = SetupClientEventReporter::new(
+            None,
+            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+            ctx.background_executor().clone(),
+        );
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -251,6 +258,7 @@ impl TerminalView {
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            setup_events,
                             ctx,
                         )
                     })

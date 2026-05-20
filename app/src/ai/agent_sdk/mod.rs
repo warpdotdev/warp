@@ -736,12 +736,16 @@ impl AgentDriverRunner {
 
             // Pull conversation information, if we have it
             if let Some(conversation_id) = resume_conversation_id {
-                driver_options.resume = Self::load_conversation_information(
-                    &foreground,
-                    conversation_id,
-                    &task.harness,
-                )
-                .await?;
+                driver_options.resume = setup_events
+                    .record_result(
+                        SetupStep::ConversationResumeLoading,
+                        Self::load_conversation_information(
+                            &foreground,
+                            conversation_id,
+                            &task.harness,
+                        ),
+                    )
+                    .await?;
             }
 
             // Run the driver
@@ -792,6 +796,7 @@ impl AgentDriverRunner {
         foreground: &ModelSpawner<Self>,
         args: &RunAgentArgs,
         working_dir: &Path,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<Option<ResolvedSkill>, AgentDriverError> {
         if !FeatureFlag::OzPlatformSkills.is_enabled() {
             return Ok(None);
@@ -806,11 +811,17 @@ impl AgentDriverRunner {
             let org = skill_spec.org.as_ref().expect("org checked above");
             let repo_name = skill_spec.repo.as_ref().expect("repo checked above");
             log::info!("Cloning {org}/{repo_name} for skill resolution in sandboxed mode");
-            clone_repo_for_skill(org, repo_name, working_dir)
-                .await
-                .map_err(|err| {
-                    AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(err))
-                })?;
+            setup_events
+                .record_result(SetupStep::SkillRepoClone, async {
+                    clone_repo_for_skill(org, repo_name, working_dir)
+                        .await
+                        .map_err(|err| {
+                            AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(
+                                err,
+                            ))
+                        })
+                })
+                .await?;
         }
 
         let working_dir_buf = working_dir.to_path_buf();
@@ -849,7 +860,8 @@ impl AgentDriverRunner {
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         // Resolve the skill, if we have one
-        let resolved_skill = Self::resolve_skill(foreground, &args, &working_dir).await?;
+        let resolved_skill =
+            Self::resolve_skill(foreground, &args, &working_dir, setup_events).await?;
 
         // Extract variables we want to use later before moving args into the closure
         let task_id_str = args.task_id.clone();

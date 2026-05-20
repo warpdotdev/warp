@@ -1658,7 +1658,12 @@ impl AgentDriver {
 
         // Once the terminal session is bootstrapped, perform cloud provider setup before spawning MCP servers.
         // MCP servers *may* rely on cloud provider credentials.
-        Self::setup_cloud_providers(&foreground).await?;
+        setup_events
+            .record_result(
+                SetupStep::CloudProviderSetup,
+                Self::setup_cloud_providers(&foreground),
+            )
+            .await?;
 
         // For the Oz harness only: set up MCP servers, model overrides, and profile information.
         if matches!(&task.harness, HarnessKind::Oz) {
@@ -1782,26 +1787,24 @@ impl AgentDriver {
             };
 
             let harness = task.harness.harness();
-            setup_events
-                .record_result(SetupStep::EnvironmentPreparation, async {
-                    foreground
-                        .spawn(move |me, ctx| {
-                            let working_dir = me.working_dir.clone();
-                            me.terminal_driver.update(ctx, |_, ctx| {
-                                environment::prepare_environment(
-                                    environment,
-                                    working_dir,
-                                    false, /* is_sandbox */
-                                    harness,
-                                    ctx,
-                                )
-                            })
-                        })
-                        .await?
-                        .await
-                        .map_err(AgentDriverError::from)
+            let setup_events_for_environment = setup_events.clone();
+            foreground
+                .spawn(move |me, ctx| {
+                    let working_dir = me.working_dir.clone();
+                    me.terminal_driver.update(ctx, |_, ctx| {
+                        environment::prepare_environment(
+                            environment,
+                            working_dir,
+                            false, /* is_sandbox */
+                            harness,
+                            setup_events_for_environment,
+                            ctx,
+                        )
+                    })
                 })
-                .await?;
+                .await?
+                .await
+                .map_err(AgentDriverError::from)?;
 
             if let Some(file_based_discovery_rx) = file_based_discovery_rx {
                 // Await discovery: collect UUIDs of file-based MCP servers that were auto-started
@@ -1922,17 +1925,22 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
-                let harness_exit_rx = Self::setup_harness(harness.as_ref(), &foreground).await?;
-                let runner = Self::prepare_harness(
-                    &task.prompt,
-                    &task.mcp_specs,
-                    harness.as_ref(),
-                    &foreground,
-                )
-                .await?;
+                let (harness_exit_rx, runner) = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
+                        let harness_exit_rx =
+                            Self::setup_harness(harness.as_ref(), &foreground).await?;
+                        let runner = Self::prepare_harness(
+                            &task.prompt,
+                            &task.mcp_specs,
+                            harness.as_ref(),
+                            &foreground,
+                        )
+                        .await?;
 
-                Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
-
+                        Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
+                        Ok::<_, AgentDriverError>((harness_exit_rx, runner))
+                    })
+                    .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns();
 
                 if let Some(task_id) = task_id_for_refresh {
