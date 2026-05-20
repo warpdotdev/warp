@@ -133,6 +133,7 @@ fn test_from_task_includes_linked_directory_when_run_id_matches() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.to_string()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -278,6 +279,7 @@ fn test_from_conversation_populates_local_conversation_fields() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 pinned: false,
             },
         );
@@ -345,6 +347,7 @@ fn test_from_task_includes_linked_directory_when_server_token_matches() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,

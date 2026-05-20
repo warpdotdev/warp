@@ -153,6 +153,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
         last_event_sequence: Some(42),
@@ -1286,14 +1287,14 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
             );
             // The old generation-0 connection must have been replaced by a
             // new one with a higher generation, proving SSE was reconnected.
-            let gen = me
+            let generation = me
                 .streams
                 .get(&conversation_id)
                 .and_then(|s| s.sse_connection.as_ref())
                 .map(|c| c.generation);
             assert!(
-                gen.is_some_and(|g| g > 0),
-                "SSE must be reconnected (new generation) after children are discovered; got gen={gen:?}"
+                generation.is_some_and(|g| g > 0),
+                "SSE must be reconnected (new generation) after children are discovered; got generation={generation:?}"
             );
         });
     });

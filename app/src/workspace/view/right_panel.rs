@@ -18,6 +18,7 @@ use crate::ui_components::{buttons::icon_button_with_color, icons};
 use crate::util::bindings::{keybinding_name_to_display_string, CustomAction};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
@@ -285,9 +286,13 @@ impl CodeReviewState {
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    fn get_repo_display_name(&self, repo_path: &LocalOrRemotePath) -> Option<String> {
-        let name = repo_path.display_name();
-        (!name.is_empty()).then(|| name.to_string())
+    fn get_repo_display_name(
+        &self,
+        repo_path: &LocalOrRemotePath,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let name = display_name_with_host(repo_path, ctx);
+        (!name.is_empty()).then_some(name)
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -299,7 +304,7 @@ impl CodeReviewState {
                 .iter()
                 .map(|repo_path| {
                     let display_name = self
-                        .get_repo_display_name(repo_path)
+                        .get_repo_display_name(repo_path, ctx)
                         .unwrap_or_else(|| "Unknown".to_string());
                     DropdownItem::new(
                         display_name,
@@ -314,7 +319,7 @@ impl CodeReviewState {
             let selected_display_name = self
                 .selected_repo_path
                 .as_ref()
-                .and_then(|selected| self.get_repo_display_name(selected));
+                .and_then(|selected| self.get_repo_display_name(selected, ctx));
 
             (items, selected_display_name)
         };
@@ -921,13 +926,7 @@ impl RightPanelView {
         let diff_stats = crv.loaded_diff_stats();
 
         let repo_path_element = repo_path.map(|repo_path| {
-            let display_path = match repo_path.to_local_path() {
-                Some(path) => dirs::home_dir()
-                    .and_then(|home| path.strip_prefix(&home).ok())
-                    .map(|relative| format!("~/{}", relative.display()))
-                    .unwrap_or_else(|| path.display().to_string()),
-                None => repo_path.display_path(),
-            };
+            let display_path = display_path_with_host(repo_path, true, app);
             Container::new(
                 Text::new_inline(
                     format!("{display_path}:"),

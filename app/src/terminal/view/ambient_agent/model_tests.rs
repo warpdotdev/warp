@@ -103,6 +103,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
 
         model.read(&app, |model, _| {
             let auth_url = model.github_auth_url().expect("auth url should be present");
+            assert_eq!(model.github_auth_error_message(), Some("auth required"));
             let parsed = Url::parse(auth_url).expect("auth url should parse");
             let next = parsed
                 .query_pairs()
