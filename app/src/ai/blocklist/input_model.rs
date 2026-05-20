@@ -140,7 +140,7 @@ pub struct BlocklistAIInputModel {
     /// The timestamp of the last time the input mode was switched, if the switch was to AI mode and
     /// it was autodetected. Else, `None`.
     last_ai_autodetection_ts: Option<Instant>,
-    /// The source of the final input decision that is currently reflected in `input_config`.
+    /// The source of the final input decision upon submission
     nld_decision_source: Option<NldDecisionSource>,
 
     /// Timestamp of the last time the input type was explicitly set.
