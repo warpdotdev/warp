@@ -483,10 +483,8 @@ fn test_has_any_ai_remaining_false_with_enterprise_auto_reload_policy_on_non_ent
 }
 
 #[test]
-fn test_has_any_ai_remaining_true_with_add_on_credits_policy_and_billing_v2() {
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
     App::test((), |mut app| async move {
-        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(true);
-
         let (_uid, mut workspace) = create_test_workspace();
         workspace
             .billing_metadata
@@ -502,14 +500,14 @@ fn test_has_any_ai_remaining_true_with_add_on_credits_policy_and_billing_v2() {
 
             assert!(
                 model.has_any_ai_remaining(ctx),
-                "expected has_any_ai_remaining to be true when add-on credit purchase is enabled with Billing and Usage V2",
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled",
             );
         });
     });
 }
 
 #[test]
-fn test_has_any_ai_remaining_false_with_add_on_credits_policy_and_billing_v2_disabled() {
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_disabled() {
     App::test((), |mut app| async move {
         let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(false);
 
@@ -527,8 +525,8 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_and_billing_v2_dis
             model.bonus_grants.clear();
 
             assert!(
-                !model.has_any_ai_remaining(ctx),
-                "expected has_any_ai_remaining to be false when add-on credit purchase is enabled without Billing and Usage V2",
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled without Billing and Usage V2",
             );
         });
     });
@@ -537,8 +535,6 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_and_billing_v2_dis
 #[test]
 fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_would_exceed_limit() {
     App::test((), |mut app| async move {
-        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(true);
-
         let (_uid, mut workspace) = create_test_workspace();
         workspace
             .billing_metadata
