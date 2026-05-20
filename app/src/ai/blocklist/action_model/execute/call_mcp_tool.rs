@@ -243,39 +243,52 @@ fn coerce_recursive(
                 }
             }
         }
-        if let Some(additional) = schema.get("additionalProperties") {
-            if additional.is_object() {
-                let known: HashSet<&str> = schema
-                    .get("properties")
-                    .and_then(|v| v.as_object())
-                    .map(|p| p.keys().map(String::as_str).collect())
-                    .unwrap_or_default();
-                // Keys covered by `patternProperties` are governed by their
-                // pattern's schema, not by `additionalProperties` — so they
-                // must be excluded here even though we don't (yet) coerce
-                // through `patternProperties` itself. Without this carve-out
-                // a pattern-governed value could be coerced by the wrong
-                // schema. Patterns that fail to compile are ignored, which
-                // matches the existing "unsupported shapes are skipped"
-                // policy elsewhere in this walker.
-                let pattern_regexes: Vec<regex::Regex> = schema
-                    .get("patternProperties")
-                    .and_then(|v| v.as_object())
-                    .map(|p| {
-                        p.keys()
-                            .filter_map(|pat| regex::Regex::new(pat).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for (k, v) in map.iter_mut() {
-                    if known.contains(k.as_str()) {
-                        continue;
-                    }
-                    if pattern_regexes.iter().any(|re| re.is_match(k)) {
-                        continue;
-                    }
-                    coerce_recursive(v, additional, root);
+        'additional: {
+            let Some(additional) = schema.get("additionalProperties") else {
+                break 'additional;
+            };
+            if !additional.is_object() {
+                break 'additional;
+            }
+            let known: HashSet<&str> = schema
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .map(|p| p.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            // Keys covered by `patternProperties` are governed by their
+            // pattern's schema, not by `additionalProperties` — so they
+            // must be excluded here even though we don't (yet) coerce
+            // through `patternProperties` itself.
+            //
+            // JSON Schema's pattern grammar is ECMA-262; Rust's `regex`
+            // crate is a strict subset and rejects valid patterns such as
+            // those with lookaheads or certain Unicode constructs. We
+            // can't safely tell those apart from "this key doesn't match
+            // the pattern", so if any pattern fails to compile we fall
+            // back to skipping `additionalProperties` for this schema —
+            // a key that should have been governed by the pattern won't
+            // get coerced with the wrong schema.
+            let pattern_compile = schema
+                .get("patternProperties")
+                .and_then(|v| v.as_object())
+                .map(|p| {
+                    p.keys()
+                        .map(|pat| regex::Regex::new(pat))
+                        .collect::<Result<Vec<_>, _>>()
+                });
+            let pattern_regexes = match pattern_compile {
+                Some(Ok(res)) => res,
+                Some(Err(_)) => break 'additional,
+                None => Vec::new(),
+            };
+            for (k, v) in map.iter_mut() {
+                if known.contains(k.as_str()) {
+                    continue;
                 }
+                if pattern_regexes.iter().any(|re| re.is_match(k)) {
+                    continue;
+                }
+                coerce_recursive(v, additional, root);
             }
         }
     }

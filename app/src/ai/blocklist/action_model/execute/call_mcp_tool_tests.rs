@@ -379,11 +379,13 @@ fn pattern_properties_keys_are_excluded_from_additional_properties() {
 }
 
 #[test]
-fn invalid_pattern_property_regex_is_ignored() {
-    // If a `patternProperties` key fails to compile as a regex (e.g. an
-    // unclosed group), we treat it as absent rather than panicking — matching
-    // the "unsupported shapes are skipped" policy used elsewhere in the
-    // walker. The unrelated `additionalProperties` recursion still runs.
+fn uncompilable_pattern_skips_additional_properties_conservatively() {
+    // JSON Schema's pattern grammar is ECMA-262; Rust's `regex` crate is a
+    // strict subset and rejects valid patterns like lookaheads. We can't tell
+    // "this key doesn't match the pattern" apart from "I couldn't compile the
+    // pattern at all" — so if any pattern fails to compile we skip
+    // `additionalProperties` entirely for this schema. A key that should have
+    // been governed by the pattern won't be coerced with the wrong schema.
     let mut args = obj(json!({ "x": 3.0 }));
     let schema = obj(json!({
         "type": "object",
@@ -395,7 +397,35 @@ fn invalid_pattern_property_regex_is_ignored() {
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_serialized_as(&args, "x", "3");
+    // `x` would normally be coerced via additionalProperties, but the
+    // unparseable pattern forces us into the conservative skip.
+    assert_serialized_as(&args, "x", "3.0");
+}
+
+#[test]
+fn uncompilable_pattern_still_allows_properties_recursion() {
+    // The conservative fallback only skips `additionalProperties` — it must
+    // not poison `properties` recursion at the same level, since each
+    // property's schema is fully specified and unaffected by the pattern.
+    let mut args = obj(json!({ "known": 4.0, "extra": 5.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "properties": {
+            "known": { "type": "integer" }
+        },
+        "patternProperties": {
+            "(": { "type": "number" }
+        },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // `known` is governed by `properties` → coerced normally.
+    assert_serialized_as(&args, "known", "4");
+    // `extra` would normally fall under `additionalProperties`, but the
+    // unparseable pattern forces the conservative skip.
+    assert_serialized_as(&args, "extra", "5.0");
 }
 
 // ---------- Conservative cases ----------
