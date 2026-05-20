@@ -25,7 +25,7 @@ pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, 
     let _guard = SECRETS_REGEX.read();
     let SecretsRegex {
         regex,
-        level_metadata: metadata,
+        level_metadata,
     } = &*_guard;
 
     let mut secret_ranges = vec![];
@@ -49,12 +49,12 @@ pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, 
 
         // Determine which pattern matched by getting the pattern ID and map via counts
         let pattern_id = mat.pattern().as_usize();
-        let total_patterns = metadata.enterprise_count + metadata.user_count;
+        let total_patterns = level_metadata.enterprise_count + level_metadata.user_count;
         if pattern_id >= total_patterns {
             log::error!("Secret level not found for pattern ID {pattern_id}");
             continue;
         }
-        let secret_level = if pattern_id < metadata.enterprise_count {
+        let secret_level = if pattern_id < level_metadata.enterprise_count {
             SecretLevel::Enterprise
         } else {
             SecretLevel::User
