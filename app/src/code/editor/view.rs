@@ -2361,8 +2361,14 @@ impl View for CodeEditorView {
         }
         if let Some(vim_mode) = self.vim_mode(app) {
             context.set.insert("Vim");
-            if vim_mode == VimMode::Normal {
-                context.set.insert("VimNormalMode");
+            match vim_mode {
+                VimMode::Normal => {
+                    context.set.insert("VimNormalMode");
+                }
+                VimMode::Visual(_) => {
+                    context.set.insert("VimVisualMode");
+                }
+                _ => {}
             }
         }
         if self.find_bar.is_some() {

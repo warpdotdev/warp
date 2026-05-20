@@ -5,17 +5,11 @@ pub mod block;
 pub mod code_block;
 mod context_model;
 mod controller;
-#[cfg(feature = "local_fs")]
 pub(crate) mod handoff;
 
-pub(crate) fn is_local_to_cloud_handoff_available() -> bool {
-    use crate::features::FeatureFlag;
-    FeatureFlag::OzHandoff.is_enabled()
-        && FeatureFlag::HandoffLocalCloud.is_enabled()
-        && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
-}
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
+pub(crate) mod orchestration_topology;
 mod passive_suggestions;
 pub(crate) mod task_status_sync_model;
 pub(super) use controller::RequestInput;

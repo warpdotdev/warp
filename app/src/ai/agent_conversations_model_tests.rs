@@ -262,6 +262,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -317,6 +318,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -379,6 +381,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -457,6 +460,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -511,6 +515,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -801,6 +806,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -854,6 +860,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -987,7 +994,7 @@ fn test_resolve_open_action_opens_active_ambient_session() {
 
             assert!(matches!(
                 action,
-                Some(WorkspaceAction::OpenAmbientAgentSession {
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
                     session_id: resolved_session_id,
                     task_id: resolved_task_id,
                 }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
@@ -997,7 +1004,46 @@ fn test_resolve_open_action_opens_active_ambient_session() {
 }
 
 #[test]
-fn test_resolve_open_action_falls_back_to_local_conversation_for_invalid_session() {
+fn test_resolve_open_action_opens_active_ambient_session_from_link() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let now = Utc::now();
+        let session_id = make_uuid(8205);
+        let mut task = create_test_task(&make_uuid(8206), "user-a", now);
+        task.state = AmbientAgentTaskState::InProgress;
+        task.session_link = Some(format!("https://example.com/session/{session_id}"));
+        task.is_sandbox_running = true;
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let action = AgentConversationsModel::resolve_open_action(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                None,
+                ctx,
+            );
+
+            assert!(matches!(
+                action,
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                    session_id: resolved_session_id,
+                    task_id: resolved_task_id,
+                }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
+            ));
+        });
+    });
+}
+
+#[test]
+fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
     App::test((), |mut app| async move {
         let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
@@ -1022,6 +1068,7 @@ fn test_resolve_open_action_falls_back_to_local_conversation_for_invalid_session
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -1055,13 +1102,7 @@ fn test_resolve_open_action_falls_back_to_local_conversation_for_invalid_session
                 ctx,
             );
 
-            assert!(matches!(
-                action,
-                Some(WorkspaceAction::RestoreOrNavigateToConversation {
-                    conversation_id: resolved_conversation_id,
-                    ..
-                }) if resolved_conversation_id == conversation_id
-            ));
+            assert!(action.is_none());
         });
     });
 }
@@ -1312,6 +1353,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -1416,8 +1458,10 @@ fn test_resolve_open_action_reopens_ambient_session_after_terminal_unregister() 
 
             assert!(matches!(
                 action,
-                Some(WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id: id })
-                    if id == terminal_view_id
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                    session_id: resolved_session_id,
+                    task_id: resolved_task_id,
+                }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
             ));
         });
 
@@ -1436,7 +1480,7 @@ fn test_resolve_open_action_reopens_ambient_session_after_terminal_unregister() 
 
             assert!(matches!(
                 action,
-                Some(WorkspaceAction::OpenAmbientAgentSession {
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
                     session_id: resolved_session_id,
                     task_id: resolved_task_id,
                 }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
@@ -1471,6 +1515,7 @@ fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_tok
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -1754,6 +1799,7 @@ fn test_task_status_maps_blocked_state_to_blocked() {
         task.state = AmbientAgentTaskState::Blocked;
         task.status_message = Some(TaskStatusMessage {
             message: "Needs clarification".to_string(),
+            error_code: None,
         });
 
         app.update(|ctx| {
@@ -1796,6 +1842,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -1855,6 +1902,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -2033,9 +2081,13 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
             let mut model = create_test_model();
             model.tasks.insert(task_id, task.clone());
             // Sentinel: even if a permanent-failure entry is present, the cached task wins.
-            model
-                .task_fetch_state
-                .insert(task_id, TaskFetchState::PermanentlyFailedAt(Instant::now()));
+            model.task_fetch_state.insert(
+                task_id,
+                TaskFetchState::PermanentlyFailed {
+                    at: Instant::now(),
+                    message: "test".to_string(),
+                },
+            );
             model
         });
 
@@ -2049,7 +2101,7 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
             // entry is left as-is and (importantly) no `InFlight` entry was added.
             assert!(matches!(
                 model.task_fetch_state.get(&task_id),
-                Some(TaskFetchState::PermanentlyFailedAt(_))
+                Some(TaskFetchState::PermanentlyFailed { .. })
             ));
         });
     });
@@ -2057,16 +2109,20 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
 
 #[test]
 fn test_get_or_async_fetch_task_data_skips_when_permanently_failed() {
-    // A task id marked as `PermanentlyFailedAt` within its cooldown (e.g. very recent 403) must
+    // A task id marked as `PermanentlyFailed` within its cooldown (e.g. very recent 403) must
     // not spawn a new fetch.
     App::test((), |mut app| async move {
         let task_id: AmbientAgentTaskId = make_uuid(7001).parse().unwrap();
 
         let model_handle = app.add_singleton_model(|_| {
             let mut model = create_test_model();
-            model
-                .task_fetch_state
-                .insert(task_id, TaskFetchState::PermanentlyFailedAt(Instant::now()));
+            model.task_fetch_state.insert(
+                task_id,
+                TaskFetchState::PermanentlyFailed {
+                    at: Instant::now(),
+                    message: "403 Forbidden".to_string(),
+                },
+            );
             model
         });
 
@@ -2076,10 +2132,10 @@ fn test_get_or_async_fetch_task_data_skips_when_permanently_failed() {
 
         assert!(result.is_none());
         model_handle.update(&mut app, |model, _| {
-            // The state is unchanged — still permanently failed, no in-flight upgrade.
+            // The state is unchanged -- still permanently failed, no in-flight upgrade.
             assert!(matches!(
                 model.task_fetch_state.get(&task_id),
-                Some(TaskFetchState::PermanentlyFailedAt(_))
+                Some(TaskFetchState::PermanentlyFailed { .. })
             ));
         });
     });
@@ -2123,9 +2179,13 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
 
         let model_handle = app.add_singleton_model(|_| {
             let mut model = create_test_model();
-            model
-                .task_fetch_state
-                .insert(task_id, TaskFetchState::TransientlyFailedAt(Instant::now()));
+            model.task_fetch_state.insert(
+                task_id,
+                TaskFetchState::TransientlyFailed {
+                    at: Instant::now(),
+                    message: "500 Internal Server Error".to_string(),
+                },
+            );
             model
         });
 
@@ -2138,7 +2198,7 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
             // The transient entry is preserved (no upgrade to in-flight).
             assert!(matches!(
                 model.task_fetch_state.get(&task_id),
-                Some(TaskFetchState::TransientlyFailedAt(_))
+                Some(TaskFetchState::TransientlyFailed { .. })
             ));
         });
     });

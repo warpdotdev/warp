@@ -21,6 +21,8 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
+static const NSSize MIN_WINDOW_SIZE = {480.0, 192.0};
+static const NSSize TEST_MIN_WINDOW_SIZE = {124.0, 34.0};
 
 // A back-to-front ordered array of windows, identified by their `windowNumber`
 // property.
@@ -285,6 +287,7 @@ static NSLayoutConstraint *configure_titlebar_height(NSWindow *window, CGFloat h
 void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, bool hideTitleBar) {
     window.testMode = testMode;
     window.hideTitleBar = hideTitleBar;
+    NSSize minWindowSize = testMode ? TEST_MIN_WINDOW_SIZE : MIN_WINDOW_SIZE;
 
     // Set the background color to clear to support window background transparency. When this is set
     // to NSColor.clearColor with alpha = 0 and window drop shadows are enabled, MacOS renders a
@@ -298,6 +301,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     window.acceptsMouseMovedEvents = YES;
     window.titlebarAppearsTransparent = hideTitleBar;
     window.titleVisibility = hideTitleBar ? NSWindowTitleHidden : NSWindowTitleVisible;
+    window.minSize = minWindowSize;
+    window.contentMinSize = minWindowSize;
+    if ([window respondsToSelector:@selector(setMinFullScreenContentSize:)]) {
+        window.minFullScreenContentSize = minWindowSize;
+    }
 }
 
 @implementation WarpWindow {

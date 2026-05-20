@@ -5,7 +5,6 @@ use crate::ai::mcp::templatable_manager::oauth::{
 };
 use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;
-use itertools::Itertools;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::{collections::HashMap, future::Future};
@@ -160,6 +159,10 @@ fn error_to_user_message(error: &rmcp::RmcpError) -> String {
             }
             _ => format!("Service error: {}", err),
         },
+        // The enum is marked as non-exhaustive, so we need a catch-all.
+        _ => {
+            format!("Error: {error}")
+        }
     }
 }
 
@@ -1675,15 +1678,25 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         // First, check if the servers are already spawned.
-        let new_installations = installations
-            .iter()
-            .filter(|installation| {
-                let uuid = installation.uuid();
-                !self.active_servers.contains_key(&uuid)
-                    && !self.spawned_servers.contains_key(&uuid)
-            })
-            .cloned()
-            .collect_vec();
+        let mut new_installations = Vec::new();
+        for installation in installations {
+            let uuid = installation.uuid();
+            let server_name = &installation.templatable_mcp_server().name;
+            if self.active_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already running"
+                );
+                continue;
+            }
+            if self.spawned_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already starting"
+                );
+                continue;
+            }
+            log::info!("Spawning file-based MCP server '{server_name}' ({uuid})");
+            new_installations.push(installation.clone());
+        }
 
         // If not, spawn them.
         for installation in new_installations {
@@ -1723,7 +1736,7 @@ impl TemplatableMCPServerManager {
 }
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
-type ReqwestSseTransport = rmcp::transport::SseClientTransport<reqwest::Client>;
+type ReqwestSseTransport = mcp::sse_transport::SseClientTransport<reqwest::Client>;
 
 /// Spawns a new MCP server from a given [`TransportType`].
 async fn spawn_server(
@@ -1891,9 +1904,9 @@ async fn spawn_server(
                     is_authenticated_transport = true;
 
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
-                    let transport = rmcp::transport::SseClientTransport::start_with_client(
+                    let transport = mcp::sse_transport::SseClientTransport::start_with_client(
                         client,
-                        rmcp::transport::sse_client::SseClientConfig {
+                        mcp::sse_transport::SseClientConfig {
                             sse_endpoint: sse_server.url.into(),
                             ..Default::default()
                         },
@@ -1909,16 +1922,16 @@ async fn spawn_server(
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
                     let transport = if headers.is_empty() {
-                        rmcp::transport::SseClientTransport::start(sse_server.url.clone())
+                        mcp::sse_transport::SseClientTransport::start(sse_server.url.clone())
                             .await
                             .map_err(|e| {
                                 rmcp::RmcpError::transport_creation::<ReqwestSseTransport>(e)
                             })?
                     } else {
                         let client = build_client_with_headers(&headers)?;
-                        rmcp::transport::SseClientTransport::start_with_client(
+                        mcp::sse_transport::SseClientTransport::start_with_client(
                             client,
-                            rmcp::transport::sse_client::SseClientConfig {
+                            mcp::sse_transport::SseClientConfig {
                                 sse_endpoint: sse_server.url.clone().into(),
                                 ..Default::default()
                             },
@@ -2078,19 +2091,15 @@ async fn send_initialize_request(
 ///
 /// This tells the MCP server who we are and what capabilities we have.
 fn make_client_info() -> rmcp::model::ClientInfo {
-    rmcp::model::ClientInfo {
-        protocol_version: Default::default(),
-        capabilities: Default::default(),
-        client_info: rmcp::model::Implementation {
-            name: warp_core::channel::ChannelState::app_id().to_string(),
-            version: warp_core::channel::ChannelState::app_version()
+    rmcp::model::ClientInfo::new(
+        Default::default(),
+        rmcp::model::Implementation::new(
+            warp_core::channel::ChannelState::app_id().to_string(),
+            warp_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
-            title: None,
-            icons: None,
-            website_url: None,
-        },
-    }
+        ),
+    )
 }
 
 /// A wrapper around a [`rmcp::transport::Transport`] that logs all requests and responses.

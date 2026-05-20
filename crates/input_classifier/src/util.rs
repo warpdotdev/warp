@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use lazy_static::lazy_static;
-use natural_language_detection::check_if_token_has_shell_syntax;
 use warp_completer::ParsedTokensSnapshot;
 
 /// The percentage of input tokens that can be described by our completion engine before
@@ -56,15 +55,21 @@ pub fn is_prefix_of_natural_language_word(input: &str) -> bool {
         .any(|word| word.starts_with(input))
 }
 
+/// nld_heuristic_v1: current prod, use check_if_token_has_shell_syntax and conditional threshold on input length
+/// nld_heuristic_v2: rm check_if_token_has_shell_syntax and pin threshold to be 1 for all input
 pub async fn is_likely_shell_command(
     input: &ParsedTokensSnapshot,
     word_tokens_count: usize,
 ) -> bool {
     const YIELD_BATCH_SIZE: usize = 5;
+    let use_nld_heuristic_v2 = cfg!(feature = "nld_heuristic_v2");
 
     let mut likely_command_token_count = 0;
     let total_token_count = input.parsed_tokens.len();
     let mut is_first_token_command = false;
+    log::debug!(
+        "is_likely_shell_command start: use_nld_heuristic_v2={use_nld_heuristic_v2}, total_token_count={total_token_count}, word_tokens_count={word_tokens_count}"
+    );
     for (idx, token) in input.parsed_tokens.iter().enumerate() {
         // Periodically, yield to the executor so this task can be aborted if
         // requested.
@@ -74,12 +79,19 @@ pub async fn is_likely_shell_command(
         // Early return if we encounter a one-off command / keyword at the beginning of the line.
         if token.token_index == 0 && ONE_OFF_SHELL_COMMAND_KEYWORDS.contains(&token.token.as_str())
         {
+            log::debug!(
+                "is_likely_shell_command result=true: first token is one-off shell keyword, use_nld_heuristic_v2={use_nld_heuristic_v2}"
+            );
             return true;
         }
-
-        if token.token_description.is_some()
-            || check_if_token_has_shell_syntax(token.token.as_str())
-        {
+        let check_if_token_has_shell_syntax = !use_nld_heuristic_v2
+            && natural_language_detection::check_if_token_has_shell_syntax(token.token.as_str());
+        log::debug!(
+            "is_likely_shell_command token: token_index={}, token_description_is_some={}, check_if_token_has_shell_syntax={check_if_token_has_shell_syntax}, use_nld_heuristic_v2={use_nld_heuristic_v2}",
+            token.token_index,
+            token.token_description.is_some()
+        );
+        if token.token_description.is_some() || check_if_token_has_shell_syntax {
             likely_command_token_count += 1;
         }
 
@@ -90,7 +102,7 @@ pub async fn is_likely_shell_command(
 
     // When token count is lower than 2, we should make sure all tokens
     // are matching the target classification category.
-    let command_threshold = if total_token_count <= 2 {
+    let command_threshold = if use_nld_heuristic_v2 || total_token_count <= 2 {
         1.0
     } else if total_token_count <= 4 {
         DETECT_AS_COMMAND_LOW_TOKEN_THRESHOLD
@@ -101,13 +113,14 @@ pub async fn is_likely_shell_command(
     // Classify as shell if:
     // 1) We hit significant threshold of likely shell command tokens.
     // 2) When there are fewer than 3 tokens, the first token is a valid top-level command.
-    if likely_command_token_count >= (total_token_count as f32 * command_threshold) as usize
-        || (word_tokens_count < 3 && is_first_token_command)
-    {
-        return true;
-    }
+    let is_likely_shell_command = likely_command_token_count
+        >= (total_token_count as f32 * command_threshold) as usize
+        || (word_tokens_count < 3 && is_first_token_command);
+    log::debug!(
+        "is_likely_shell_command result={is_likely_shell_command}: use_nld_heuristic_v2={use_nld_heuristic_v2}, likely_command_token_count={likely_command_token_count}, total_token_count={total_token_count}, word_tokens_count={word_tokens_count}, command_threshold={command_threshold}, is_first_token_command={is_first_token_command}"
+    );
 
-    false
+    is_likely_shell_command
 }
 
 /// Returns true if the first token is a command that is installed on the system.
@@ -118,3 +131,7 @@ pub fn is_installed_binary(input: &ParsedTokensSnapshot) -> bool {
         .map(|token| token.token_description.is_some())
         .unwrap_or(false)
 }
+
+#[cfg(all(test, any(feature = "nld_heuristic_v1", feature = "nld_heuristic_v2")))]
+#[path = "util_tests.rs"]
+mod tests;

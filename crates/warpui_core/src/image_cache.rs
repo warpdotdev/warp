@@ -32,8 +32,16 @@ const MIN_REFRESH_DELAY_MS: u32 = 50;
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
     fontdb.load_system_fonts();
+    load_svg_fallback_fonts(&mut fontdb);
     Arc::new(fontdb)
 });
+
+fn load_svg_fallback_fonts(fontdb: &mut usvg::fontdb::Database) {
+    fontdb.load_font_data(
+        include_bytes!("../../../app/assets/bundled/fonts/roboto/Roboto-Regular.ttf").to_vec(),
+    );
+    fontdb.set_sans_serif_family("Roboto");
+}
 
 pub fn prewarm_svg_font_db() {
     LazyLock::force(&SVG_FONT_DB);

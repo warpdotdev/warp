@@ -153,7 +153,8 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::BufferConflictDetected { .. }
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
-            | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. } => {}
+            | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+            | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
         });
 
         Self {
@@ -247,26 +248,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         else {
             unreachable!("just matched AwaitingCheck above");
         };
-
-        // Preinstall gate. Runs **before** any user-visible install
-        // affordance: if the script positively classified the host as
-        // unsupported, skip the install/prompt entirely and fall back to
-        // the legacy ControlMaster-backed SSH flow.
-        let unsupported = preinstall_check
-            .as_ref()
-            .and_then(|check| match &check.status {
-                PreinstallStatus::Unsupported { reason } => Some((check, reason.clone())),
-                PreinstallStatus::Supported | PreinstallStatus::Unknown => None,
-            });
-        if let Some((check, reason)) = unsupported {
-            log::info!(
-                "Remote server preinstall check classified as unsupported, falling back to legacy SSH: session={session_id:?} status={:?}",
-                check.status
-            );
-            send_unsupported_telemetry(self.remote_platform.as_ref(), check, ctx);
-            RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                mgr.mark_setup_unsupported(session_id, reason, ctx);
-            });
+        if let Some(PreinstallCheckResult {
+            status: PreinstallStatus::Unsupported { reason },
+            libc,
+            ..
+        }) = preinstall_check.as_ref()
+        {
+            send_unsupported_telemetry(self.remote_platform.as_ref(), reason, Some(libc), ctx);
             self.flush_stashed_bootstrap(session_info, ctx);
             return;
         }
@@ -274,12 +262,18 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
+                let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(
+                    session_id,
+                    socket_path,
+                    connection_label,
+                    ctx,
+                );
             }
             Ok(false) if has_old_binary => {
                 // Auto-update: a prior install exists, so skip the modal
@@ -501,12 +495,18 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
+                let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(
+                    session_id,
+                    socket_path,
+                    connection_label,
+                    ctx,
+                );
             }
             Err(err) => {
                 log::warn!(
@@ -538,16 +538,52 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         &mut self,
         session_id: SessionId,
         socket_path: PathBuf,
+        connection_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
         let transport = SshTransport::new(socket_path, auth_context.clone());
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.connect_session(session_id, transport, auth_context, ctx);
+            mgr.connect_session(
+                session_id,
+                transport,
+                auth_context,
+                Some(connection_label),
+                ctx,
+            );
         });
     }
 }
 
+fn connection_label_for_session_info(session_info: &SessionInfo) -> String {
+    let host = if session_info.hostname.is_empty() {
+        session_info
+            .subshell_info
+            .as_ref()
+            .and_then(|info| info.ssh_connection_info.as_ref())
+            .and_then(|ssh| ssh.host.as_deref())
+            .map(connection_label_from_ssh_host)
+    } else {
+        Some(session_info.hostname.clone())
+    };
+
+    connection_label_from_user_and_host(&session_info.user, host.as_deref())
+}
+
+fn connection_label_from_user_and_host(user: &str, host: Option<&str>) -> String {
+    match (user.is_empty(), host.filter(|host| !host.is_empty())) {
+        (false, Some(host)) => format!("{user}@{host}"),
+        (false, None) => user.to_string(),
+        (true, Some(host)) => host.to_string(),
+        (true, None) => "Remote host".to_string(),
+    }
+}
+
+fn connection_label_from_ssh_host(host: &str) -> String {
+    host.rsplit_once('@')
+        .map_or(host, |(_user, host)| host)
+        .to_string()
+}
 /// Describes a [`RemoteLibc`] as a short string for telemetry.
 fn describe_libc(libc: &RemoteLibc) -> String {
     match libc {
@@ -559,7 +595,8 @@ fn describe_libc(libc: &RemoteLibc) -> String {
 
 fn send_unsupported_telemetry<T: EventLoopSender>(
     remote_platform: Option<&RemotePlatform>,
-    check: &PreinstallCheckResult,
+    unsupported_reason: &UnsupportedReason,
+    detected_libc: Option<&RemoteLibc>,
     ctx: &mut ModelContext<RemoteServerController<T>>,
 ) {
     let (remote_os, remote_arch) = remote_platform
@@ -570,19 +607,50 @@ fn send_unsupported_telemetry<T: EventLoopSender>(
             )
         })
         .unwrap_or((None, None));
-    let required_glibc = match &check.status {
-        remote_server::setup::PreinstallStatus::Unsupported {
-            reason: UnsupportedReason::GlibcTooOld { required, .. },
-        } => required.to_string(),
-        _ => String::new(),
-    };
+    let detected_libc = detected_libc
+        .map(describe_libc)
+        .unwrap_or_else(|| "unknown".to_string());
     send_telemetry_from_ctx!(
         TelemetryEvent::RemoteServerHostUnsupported {
             remote_os,
             remote_arch,
-            detected_libc: describe_libc(&check.libc),
-            required_glibc,
+            unsupported_reason: unsupported_reason.clone(),
+            detected_libc,
         },
         ctx
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{connection_label_from_ssh_host, connection_label_from_user_and_host};
+
+    #[test]
+    fn connection_label_from_ssh_host_strips_user_prefix() {
+        assert_eq!(
+            connection_label_from_ssh_host("moira@moira.devbox.namespace"),
+            "moira.devbox.namespace"
+        );
+        assert_eq!(
+            connection_label_from_ssh_host("moira.devbox.namespace"),
+            "moira.devbox.namespace"
+        );
+    }
+
+    #[test]
+    fn connection_label_from_user_and_host_matches_udi_format() {
+        assert_eq!(
+            connection_label_from_user_and_host("kevinyang", Some("ssh-testing")),
+            "kevinyang@ssh-testing"
+        );
+        assert_eq!(
+            connection_label_from_user_and_host("kevinyang", None),
+            "kevinyang"
+        );
+        assert_eq!(
+            connection_label_from_user_and_host("", Some("ssh-testing")),
+            "ssh-testing"
+        );
+        assert_eq!(connection_label_from_user_and_host("", None), "Remote host");
+    }
 }

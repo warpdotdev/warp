@@ -30,7 +30,7 @@ use crate::{
     terminal::resizable_data::{ModalType, ResizableData},
 };
 use crate::{
-    code::buffer_location::FileLocation, code_review::diff_state::DiffStateModel,
+    code::buffer_location::LocalOrRemotePath, code_review::diff_state::DiffStateModel,
     terminal::view::TerminalView,
 };
 use dunce::canonicalize;
@@ -1322,7 +1322,7 @@ impl RightPanelView {
     ) -> ReviewTerminalStatus {
         tv.read(ctx, |t, ctx| {
             let active_session_path = t.active_session_path_if_local(ctx);
-            let current_repo_path = t.current_repo_path().cloned();
+            let current_repo_path = t.current_local_repo_path().map(Path::to_path_buf);
             let active_cli_agent = t.active_cli_agent(ctx).map(|agent| format!("{agent:?}"));
             let model = t.model.lock();
             let is_executing = model.block_list().active_block().is_executing();
@@ -1635,7 +1635,7 @@ impl RightPanelView {
         } else {
             let diff_state_model = self.working_directories_model.update(ctx, |model, ctx| {
                 model.get_or_create_diff_state_model(
-                    FileLocation::Local(repo_path.to_path_buf()),
+                    LocalOrRemotePath::Local(repo_path.to_path_buf()),
                     ctx,
                 )
             });

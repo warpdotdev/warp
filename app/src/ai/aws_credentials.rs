@@ -347,6 +347,7 @@ fn refresh_aws_credentials_oidc(
                 .send()
                 .await
                 .map_err(|err| {
+                    log::error!("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error: {err:#?}");
                     // Surface the AWS service error message for a user-friendly error.
                     let detail = err
                         .as_service_error()

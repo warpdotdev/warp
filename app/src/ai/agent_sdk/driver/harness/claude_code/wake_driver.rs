@@ -4,30 +4,28 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::harness_support::ResolvePromptRequest;
+use crate::server::server_api::ServerApi;
+use crate::terminal::CLIAgent;
 use anyhow::{Context, Result};
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_graphql::ai::AgentTaskState;
 
-use crate::ai::agent_events::MessageHydrator;
-use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::harness_support::ResolvePromptRequest;
-use crate::server::server_api::ServerApi;
-use crate::terminal::CLIAgent;
-
 use super::super::claude_transcript::{
     claude_config_dir, write_envelope, write_session_index_entry, ClaudeTranscriptEnvelope,
 };
 use super::super::task_env_vars;
 use super::parent_bridge::{
-    acknowledge_parent_bridge_hook_output, ensure_parent_bridge_state_dir, parent_bridge_root,
+    ensure_parent_bridge_state_dir, parent_bridge_root, prime_parent_bridge_for_wake,
 };
 use super::{claude_command, prepare_claude_environment_config, ClaudeHarness};
 
-const CLAUDE_WAKE_PROMPT: &str =
-    "New lead-agent messages are available. Read the latest lead-agent updates and continue the task accordingly.";
+const CLAUDE_WAKE_PROMPT: &str = "New lead-agent messages are available. Read the latest lead-agent updates and continue the task accordingly.";
 pub(super) const CLAUDE_WAKE_PROMPT_FILE_NAME: &str = "wake-turn-prompt.txt";
 const CLAUDE_WAKE_EXTERNALLY_MANAGED_LISTENER_ENV_VARS: &[&str] = &[
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY",
@@ -53,6 +51,7 @@ impl ClaudeHarness {
         conversation: AIConversation,
         parent_conversation: Option<AIConversation>,
         working_dir: Option<PathBuf>,
+        wake_message: Option<AgentMessageEventMetadata>,
     ) -> Result<Option<String>> {
         let Some(candidate) =
             Self::local_wake_candidate(&conversation, parent_conversation.as_ref(), working_dir)
@@ -90,6 +89,7 @@ impl ClaudeHarness {
             parent_run_id,
             working_dir,
             remote,
+            wake_message,
         )
         .await?;
 
@@ -191,6 +191,7 @@ impl ClaudeHarness {
         parent_run_id: Option<String>,
         working_dir: Option<PathBuf>,
         mut remote: ClaudeWakeRemoteContext,
+        wake_message: Option<AgentMessageEventMetadata>,
     ) -> Result<String> {
         let working_dir = working_dir.unwrap_or_else(|| remote.envelope.cwd.clone());
         prepare_claude_environment_config(&working_dir, &HashMap::new())
@@ -208,7 +209,7 @@ impl ClaudeHarness {
         let state_dir = parent_bridge_root()?.join(remote.session_id.to_string());
         ensure_parent_bridge_state_dir(&state_dir)?;
         let hydrator = MessageHydrator::for_task(server_api, task_id);
-        acknowledge_parent_bridge_hook_output(&hydrator, &state_dir).await?;
+        prime_parent_bridge_for_wake(&hydrator, &state_dir, wake_message.as_ref()).await?;
         let prompt_path = state_dir.join(CLAUDE_WAKE_PROMPT_FILE_NAME);
         std::fs::write(&prompt_path, remote.wake_prompt.as_bytes())
             .with_context(|| format!("Failed to write {}", prompt_path.display()))?;

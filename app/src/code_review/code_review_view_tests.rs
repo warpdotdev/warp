@@ -790,9 +790,18 @@ fn test_setup_dropdown_with_branches_includes_all_items() {
         let target_count = ctx.code_review_view.update(&mut app, |view, view_ctx| {
             if let Some(repo) = view.active_repo.as_mut() {
                 repo.available_branches = vec![
-                    ("main".to_string(), true),
-                    ("feature-1".to_string(), false),
-                    ("feature-2".to_string(), false),
+                    BranchEntry {
+                        name: "main".to_string(),
+                        is_main: true,
+                    },
+                    BranchEntry {
+                        name: "feature-1".to_string(),
+                        is_main: false,
+                    },
+                    BranchEntry {
+                        name: "feature-2".to_string(),
+                        is_main: false,
+                    },
                 ];
             }
             view.build_diff_targets(view_ctx).len()
@@ -847,8 +856,16 @@ fn test_on_close_then_on_open_reinitializes_repo_state() {
         // Populate branches to simulate a working state
         let target_count_before = ctx.code_review_view.update(&mut app, |view, view_ctx| {
             if let Some(repo) = view.active_repo.as_mut() {
-                repo.available_branches =
-                    vec![("main".to_string(), true), ("feature-1".to_string(), false)];
+                repo.available_branches = vec![
+                    BranchEntry {
+                        name: "main".to_string(),
+                        is_main: true,
+                    },
+                    BranchEntry {
+                        name: "feature-1".to_string(),
+                        is_main: false,
+                    },
+                ];
             }
             view.build_diff_targets(view_ctx).len()
         });

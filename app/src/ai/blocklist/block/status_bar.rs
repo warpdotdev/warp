@@ -889,14 +889,16 @@ impl BlocklistAIStatusBar {
             .as_ref()
             .map(|ambient_agent_view_model| ambient_agent_view_model.as_ref(app))?;
 
+        // The step indicator is only meaningful while a spawn is in flight. Terminal states
+        // (`Failed`, `NeedsGithubAuth`, `Cancelled`) still carry an `AgentProgress` for
+        // telemetry purposes, so guard on `is_waiting_for_session()` rather than relying on
+        // `agent_progress()` being `None`.
+        if !ambient_agent_model.is_waiting_for_session() {
+            return None;
+        }
+
         let progress = ambient_agent_model.agent_progress()?;
-        let progress_text = if progress.harness_started_at.is_some() {
-            "Starting Environment (Step 3/3)"
-        } else if progress.claimed_at.is_some() {
-            "Creating Environment (Step 2/3)"
-        } else {
-            "Connecting to Host (Step 1/3)"
-        };
+        let progress_text = progress.setup_status_text();
         Some(render_warping_indicator_base(
             WarpingIndicatorProps {
                 icon: None,
@@ -944,19 +946,6 @@ impl BlocklistAIStatusBar {
             ]));
         }
 
-        if let Some(error_message) = ambient_agent_model.error_message() {
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::Triangle,
-                    color: Some(error_color),
-                },
-                MessageItem::Text {
-                    content: error_message.to_owned().into(),
-                    color: Some(error_color),
-                },
-            ]));
-        }
-
         if ambient_agent_model.is_cancelled() {
             let color = theme.disabled_text_color(theme.background()).into_solid();
             return Some(Message::new(vec![
@@ -967,6 +956,19 @@ impl BlocklistAIStatusBar {
                 MessageItem::Text {
                     content: "Cloud agent run cancelled".into(),
                     color: Some(color),
+                },
+            ]));
+        }
+
+        if let Some(error_message) = ambient_agent_model.error_message() {
+            return Some(Message::new(vec![
+                MessageItem::Icon {
+                    icon: CoreIcon::Triangle,
+                    color: Some(error_color),
+                },
+                MessageItem::Text {
+                    content: error_message.to_owned().into(),
+                    color: Some(error_color),
                 },
             ]));
         }

@@ -29,8 +29,8 @@ use super::ansi::{
     WarpificationUnavailableReason,
 };
 use super::block::{
-    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlocklistEnvVarMetadata,
-    SerializedBlock,
+    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlockState,
+    BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
 use super::grid::grid_handler::{
@@ -1438,6 +1438,11 @@ impl TerminalModel {
         self.is_dummy_cloud_mode_session
     }
 
+    #[cfg(test)]
+    pub fn set_is_dummy_cloud_mode_session(&mut self, value: bool) {
+        self.is_dummy_cloud_mode_session = value;
+    }
+
     pub fn is_shared_ambient_agent_session(&self) -> bool {
         matches!(
             self.shared_session_source_type,
@@ -2148,7 +2153,10 @@ impl TerminalModel {
     fn restored_block_commands(&self) -> Vec<HistoryEntry> {
         let mut commands = Vec::new();
         for block in self.block_list.blocks() {
-            if block.is_restored() && !block.is_background() {
+            if block.is_restored()
+                && !block.is_background()
+                && block.state() != BlockState::DoneWithNoExecution
+            {
                 let entry = HistoryEntry::for_restored_block(block.command_to_string(), block);
                 commands.push(entry);
             }

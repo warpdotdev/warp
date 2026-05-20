@@ -52,6 +52,27 @@ impl RestoredAgentConversations {
     pub fn take_conversation(&mut self, id: &AIConversationId) -> Option<AIConversation> {
         self.conversations.remove(id)
     }
+
+    /// Takes and returns AIConversations for the given IDs, sorted by first exchange start time.
+    pub fn take_conversations(
+        &mut self,
+        conversation_ids: &[AIConversationId],
+    ) -> Vec<AIConversation> {
+        let mut conversations = Vec::new();
+        for &conversation_id in conversation_ids {
+            if let Some(conversation) = self.take_conversation(&conversation_id) {
+                conversations.push(conversation);
+            }
+        }
+
+        // Sort by first exchange start time (oldest first)
+        conversations.sort_by_key(|conversation| {
+            conversation
+                .first_exchange()
+                .map(|exchange| exchange.start_time)
+        });
+        conversations
+    }
 }
 
 impl Entity for RestoredAgentConversations {

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_conversations_model::AgentConversationEntryId;
+use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentConversationEntryId};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_event_streamer::{
@@ -294,6 +294,12 @@ impl ActiveAgentViewsModel {
             .and_then(|state| state.active_conversation_id)
     }
 
+    pub fn get_focused_terminal_view_id(&self, window_id: WindowId) -> Option<EntityId> {
+        self.focused_terminal_states
+            .get(&window_id)
+            .map(|state| state.focused_terminal_id)
+    }
+
     /// Get the last focused terminal view id (persisted across non-terminal focus changes).
     pub fn get_last_focused_terminal_id(&self) -> Option<EntityId> {
         self.last_focused_terminal_state
@@ -489,6 +495,23 @@ impl ActiveAgentViewsModel {
         None
     }
 
+    pub fn get_terminal_view_id_for_entry(
+        &self,
+        entry: &AgentConversationEntry,
+        ctx: &AppContext,
+    ) -> Option<EntityId> {
+        if let Some(task_id) = entry.identity.ambient_agent_task_id {
+            if let Some(terminal_view_id) = self.get_terminal_view_id_for_ambient_task(task_id) {
+                return Some(terminal_view_id);
+            }
+        }
+
+        if let Some(conversation_id) = entry.identity.local_conversation_id {
+            return self.get_terminal_view_id_for_conversation(conversation_id, ctx);
+        }
+
+        None
+    }
     /// Get all currently active conversation IDs.
     /// A conversation is active if it is open and a query has been sent since it was last opened.
     /// New (empty) conversations and ambient sessions are always considered active when open.

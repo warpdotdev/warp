@@ -1,0 +1,18 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+edition = "2021"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+futures.workspace = true
+http = "1"
+pin-project-lite = "0.2"
+reqwest = { workspace = true, features = ["json", "stream"] }
+rmcp = { workspace = true, features = ["client", "client-side-sse", "auth"] }
+serde_json.workspace = true
+sse-stream = "0.2"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+tracing.workspace = true

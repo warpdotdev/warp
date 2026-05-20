@@ -19,7 +19,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 32] = [
+pub const SUPPORTED_LANGUAGES: [&str; 33] = [
     "rust",
     "golang",
     "yaml",
@@ -36,6 +36,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 32] = [
     "css",
     "c",
     "json",
+    "jq",
     "hcl",
     "lua",
     "ruby",
@@ -159,6 +160,7 @@ pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
         "css" => language_by_name("css"),
         "c" => language_by_name("c"),
         "json" => language_by_name("json"),
+        "jq" => language_by_name("jq"),
         "tf" | "hcl" | "tfvars" => language_by_name("hcl"),
         "lua" => language_by_name("lua"),
         "rb" => language_by_name("ruby"),
@@ -254,6 +256,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
         "css" => Some(arborium::lang_css::HIGHLIGHTS_QUERY),
         "c" => Some(arborium::lang_c::HIGHLIGHTS_QUERY),
         "json" => Some(arborium::lang_json::HIGHLIGHTS_QUERY),
+        "jq" => Some(arborium::lang_jq::HIGHLIGHTS_QUERY),
         "hcl" => Some(arborium::lang_hcl::HIGHLIGHTS_QUERY),
         "lua" => Some(arborium::lang_lua::HIGHLIGHTS_QUERY),
         "ruby" => Some(arborium::lang_ruby::HIGHLIGHTS_QUERY),

@@ -1501,8 +1501,8 @@ impl Block {
         self.should_hide_command_grid = should_hide;
     }
 
-    /// Returns true iff this block should be used as a scrollback block
-    /// in a shared session context. Note the active block is included in scrollback to get the active prompt.
+    /// Returns true iff this block should be used as a scrollback block in a shared session context.
+    /// The active block is included when it is eligible so viewers can restore the active prompt.
     pub fn is_scrollback_block_for_shared_session(
         &self,
         agent_view_state: &AgentViewState,
@@ -2461,7 +2461,19 @@ impl Block {
     }
 
     pub fn formatted_duration_string(&self) -> Option<String> {
-        self.duration().map(Self::format_duration)
+        self.duration()
+            .or_else(|| self.elapsed_duration_whole_secs())
+            .map(Self::format_duration)
+    }
+
+    /// Returns true if this block's formatted duration string is a live elapsed counter
+    /// (i.e. `formatted_duration_string()` will return a value derived from `elapsed_duration()`
+    /// rather than the final `duration()`).
+    ///
+    /// This is kept in lock-step with `elapsed_duration()` so the view layer can decide
+    /// whether to wrap the duration in a periodically-repainting element.
+    pub fn is_duration_live(&self) -> bool {
+        self.elapsed_duration_whole_secs().is_some()
     }
 
     pub fn format_duration(duration: Duration) -> String {
@@ -2680,6 +2692,30 @@ impl Block {
                 let duration = end.signed_duration_since(start);
                 (duration > Duration::zero()).then_some(duration)
             })
+    }
+
+    /// Returns the elapsed duration since the command started executing, rounded down
+    /// to the nearest second.
+    ///
+    /// Returns `Some` only when the block is actively executing (has `start_ts`,
+    /// no `completed_ts`, and `is_executing()`). Rounding to whole seconds keeps the
+    /// formatted duration string stable between one-second repaint ticks so that
+    /// unrelated `ctx.notify` calls (e.g. when the user interacts with the block)
+    /// don't cause the counter to flicker sub-second values.
+    pub fn elapsed_duration_whole_secs(&self) -> Option<Duration> {
+        self.elapsed_duration_whole_secs_at(Local::now())
+    }
+
+    /// Testable helper behind `elapsed_duration()` that takes an explicit `now`.
+    fn elapsed_duration_whole_secs_at(&self, now: DateTime<Local>) -> Option<Duration> {
+        if self.completed_ts.is_some() || !self.is_executing() {
+            return None;
+        }
+        self.start_ts.and_then(|start| {
+            let elapsed = now.signed_duration_since(start);
+            let whole_secs = elapsed.num_seconds();
+            (whole_secs > 0).then(|| Duration::seconds(whole_secs))
+        })
     }
 
     pub fn git_branch(&self) -> Option<&String> {

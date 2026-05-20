@@ -317,9 +317,11 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([
         // Ctrl-G: toggle CLI agent rich input.
-        // Two contexts match this binding:
+        // Three contexts match this binding:
         // 1. Terminal context when CLI agent footer is visible (opens rich input)
         // 2. EditorView context when rich input is already open (closes rich input, fix for #9286)
+        // 3. Terminal context when rich input is open (closes rich input regardless
+        //    of focus location or active-block state; fix for #9916)
         EditableBinding::new(
             OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
             "Toggle CLI Agent Rich Input",
@@ -334,7 +336,11 @@ pub fn init(app: &mut AppContext) {
                 & id!(flags::CLI_AGENT_FOOTER_ENABLED)
                 & id!(flags::CLI_AGENT_RICH_INPUT_CHIP_ENABLED))
             // Case 2: Close from focused editor when rich input is open
-            | (id!("EditorView") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
+            | (id!("EditorView") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN))
+            // Case 3: Close from terminal context when rich input is open (covers
+            // cases where the active block is no longer long-running and focus is
+            // not on the editor — see #9916).
+            | (id!("Terminal") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
         ),
         EditableBinding::new(
             "terminal:warpify_subshell",

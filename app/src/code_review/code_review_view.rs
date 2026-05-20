@@ -94,7 +94,7 @@ use crate::terminal::cli_agent::{
 };
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::git::get_all_branches;
+use crate::util::git::{get_all_branches, BranchEntry};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 #[cfg(feature = "local_fs")]
@@ -184,7 +184,7 @@ use super::{
     GlobalCodeReviewEvent, GlobalCodeReviewModel,
 };
 #[cfg(not(target_family = "wasm"))]
-use crate::code::buffer_location::FileLocation;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::ShowCommentEditorProvider;
 #[cfg(not(target_family = "wasm"))]
 use crate::code::ShowFindReferencesCard;
@@ -587,7 +587,7 @@ struct PendingPreciseScroll {
 struct RepositoryState {
     repo_path: PathBuf,
     state: CodeReviewViewState,
-    available_branches: Vec<(String, bool)>, // (branch_name, is_main_branch)
+    available_branches: Vec<BranchEntry>,
 
     /// Whether a file has been explicitly expanded (true) or collapsed (false).
     file_expanded: HashMap<PathBuf, bool>,
@@ -708,6 +708,18 @@ pub struct CodeReviewView {
 impl CodeReviewView {
     pub fn repo_path(&self) -> Option<&PathBuf> {
         self.active_repo.as_ref().map(|repo| &repo.repo_path)
+    }
+
+    fn to_standardized_path(&self, path: &PathBuf) -> Option<StandardizedPath> {
+        if path.is_absolute() {
+            Some(StandardizedPath::from_local_absolute_unchecked(path))
+        } else {
+            let repo_path = self.repo_path()?;
+            let absolute_path = repo_path.join(path);
+            Some(StandardizedPath::from_local_absolute_unchecked(
+                &absolute_path,
+            ))
+        }
     }
 
     pub fn diff_state_model(&self) -> &ModelHandle<DiffStateModel> {
@@ -879,7 +891,10 @@ impl CodeReviewView {
             .map(|p| p.to_path_buf())
             .or_else(|| {
                 repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
-                    .get_root_for_path(path)
+                    .get_root_for_path(&warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+                        path.to_path_buf(),
+                    ))
+                    .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
             })
             .or_else(|| path.parent().map(|p| p.to_path_buf()));
 
@@ -921,7 +936,10 @@ impl CodeReviewView {
             .map(|p| p.to_path_buf())
             .or_else(|| {
                 repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
-                    .get_root_for_path(path)
+                    .get_root_for_path(&warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+                        path.to_path_buf(),
+                    ))
+                    .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
             })
             .or_else(|| path.parent().map(|p| p.to_path_buf()));
 
@@ -1538,7 +1556,7 @@ impl CodeReviewView {
             let already_present = repo
                 .available_branches
                 .iter()
-                .any(|(name, _)| name == branch_name);
+                .any(|entry| entry.name == *branch_name);
             if !already_present {
                 targets.push(DiffTarget::new(
                     branch_name.clone(),
@@ -1549,10 +1567,10 @@ impl CodeReviewView {
         }
 
         // 3. Main branch, if known.
-        let main_branch = repo.available_branches.iter().find(|(_, is_main)| *is_main);
-        if let Some((main_branch_name, _)) = main_branch {
+        let main_branch = repo.available_branches.iter().find(|entry| entry.is_main);
+        if let Some(main_entry) = main_branch {
             targets.push(DiffTarget::new(
-                main_branch_name.clone(),
+                main_entry.name.clone(),
                 DiffMode::MainBranch,
                 matches!(current_mode, DiffMode::MainBranch),
             ));
@@ -1561,22 +1579,22 @@ impl CodeReviewView {
         // 4. Other branches, filtered to exclude main and the currently
         // checked-out branch (the latter is functionally the same as
         // "Uncommitted changes").
-        for (branch_name, is_main) in repo.available_branches.iter() {
-            if *is_main {
+        for entry in repo.available_branches.iter() {
+            if entry.is_main {
                 continue;
             }
             if let Some(current_name) = &current_branch_name {
-                if branch_name == current_name {
+                if entry.name == *current_name {
                     continue;
                 }
             }
             let is_selected = match &current_mode {
-                DiffMode::OtherBranch(name) => name == branch_name,
+                DiffMode::OtherBranch(name) => name == &entry.name,
                 DiffMode::Head | DiffMode::MainBranch => false,
             };
             targets.push(DiffTarget::new(
-                branch_name.clone(),
-                DiffMode::OtherBranch(branch_name.clone()),
+                entry.name.clone(),
+                DiffMode::OtherBranch(entry.name.clone()),
                 is_selected,
             ));
         }
@@ -2365,6 +2383,11 @@ impl CodeReviewView {
                 }
                 ctx.notify();
             }
+            DiffStateModelEvent::ConnectionLost => {
+                // Don't clear loaded state — keep stale diffs visible
+                // so the user can still see what they were looking at.
+                ctx.notify();
+            }
         }
     }
 
@@ -2494,6 +2517,12 @@ impl CodeReviewView {
                     repo.state = CodeReviewViewState::Error(err);
                 }
                 ctx.notify();
+                return;
+            }
+            DiffState::Disconnected => {
+                // Disconnected state is handled via the ConnectionLost event
+                // path, which preserves stale diffs. If invalidate_all is
+                // called while disconnected (e.g. from a stale push), ignore.
                 return;
             }
             DiffState::Loaded => (),
@@ -2943,7 +2972,7 @@ impl CodeReviewView {
 
             let local_code_view = ctx.add_typed_action_view(|ctx| {
                 let editor = LocalCodeEditorView::new_with_global_buffer(
-                    FileLocation::Local(full_file_path.clone()),
+                    LocalOrRemotePath::Local(full_file_path.clone()),
                     |buffer_state, ctx| {
                         ctx.add_typed_action_view(|ctx| {
                             let mut editor_view = CodeEditorView::new(
@@ -4154,8 +4183,10 @@ impl CodeReviewView {
                     .finish(),
             );
         } else if let Some(repo_path) = self.repo_path() {
-            // Check for initialized rules
-            if let Some(rules) = ProjectContextModel::as_ref(app).find_applicable_rules(repo_path) {
+            // Check for initialized project-scoped rules.
+            if let Some(rules) =
+                ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
+            {
                 if let Some(first_rule) = rules.active_rules.first() {
                     if let Some(file_name) = first_rule.path.file_name().and_then(|n| n.to_str()) {
                         zero_state_column.add_child(
@@ -5565,23 +5596,31 @@ impl CodeReviewView {
             .finish()
     }
 
-    fn create_file_status_info(&self, path: PathBuf) -> FileStatusInfo {
+    fn create_file_status_info(&self, path: StandardizedPath) -> FileStatusInfo {
+        let Some(local_path) = path.to_local_path() else {
+            return FileStatusInfo {
+                path,
+                status: GitFileStatus::Modified,
+            };
+        };
         let status = match self.state() {
             CodeReviewViewState::Loaded(loaded_state) => loaded_state
                 .file_states
-                .get(&path)
+                .get(&local_path)
                 .map(|fs| fs.file_diff.status.clone())
                 .unwrap_or(GitFileStatus::Modified),
             _ => GitFileStatus::Modified,
         };
-        FileStatusInfo {
-            path: StandardizedPath::from_local_absolute_unchecked(&path),
-            status,
-        }
+        FileStatusInfo { path, status }
     }
 
-    fn discard_file(&mut self, path: &Path, should_stash: bool, ctx: &mut ViewContext<Self>) {
-        let file_info = self.create_file_status_info(path.to_path_buf());
+    fn discard_file(
+        &mut self,
+        path: StandardizedPath,
+        should_stash: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let file_info = self.create_file_status_info(path);
 
         let branch_name = match &self.discard_dialog_state.operation_type {
             DiscardOperationType::FileChangesAgainstBranch(None) => {
@@ -5600,7 +5639,7 @@ impl CodeReviewView {
 
     fn discard_multiple_files(
         &mut self,
-        file_paths: Vec<PathBuf>,
+        file_paths: Vec<StandardizedPath>,
         should_stash: bool,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -7258,18 +7297,22 @@ impl TypedActionView for CodeReviewView {
 
                 if is_discard_all {
                     // Get list of selected files
-                    let selected_files: Vec<PathBuf> = self
+                    let selected_files: Vec<StandardizedPath> = self
                         .discard_dialog_state
                         .discard_file_paths
                         .iter()
-                        .filter(|path| {
-                            *self
+                        .filter_map(|path| {
+                            if !*self
                                 .discard_dialog_state
                                 .selected_files
-                                .get(*path)
+                                .get(path)
                                 .unwrap_or(&false)
+                            {
+                                None
+                            } else {
+                                self.to_standardized_path(path)
+                            }
                         })
-                        .cloned()
                         .collect();
 
                     if !selected_files.is_empty() {
@@ -7281,11 +7324,13 @@ impl TypedActionView for CodeReviewView {
                     }
                 } else {
                     let file_path = self.discard_dialog_state.discard_file_paths[0].clone();
-                    self.discard_file(
-                        &file_path,
-                        self.discard_dialog_state.stash_changes_enabled,
-                        ctx,
-                    );
+                    if let Some(standardized_path) = self.to_standardized_path(&file_path) {
+                        self.discard_file(
+                            standardized_path,
+                            self.discard_dialog_state.stash_changes_enabled,
+                            ctx,
+                        );
+                    }
                 }
                 self.discard_dialog_state.show_discard_confirm_dialog = false;
                 self.discard_dialog_state.discard_file_paths.clear();

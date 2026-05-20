@@ -13,6 +13,7 @@ use crate::linear::{LinearAction, LinearIssueWork};
 use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::tab_configs::TabConfig;
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
 };
@@ -24,7 +25,7 @@ use crate::{features::FeatureFlag, workspace::active_terminal_in_window};
 
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
-use crate::user_config::load_launch_configs;
+use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::{
     quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
     ChannelState, OpenPath,
@@ -81,6 +82,8 @@ pub enum UriHost {
     Codex,
     /// Actions triggered from Linear integrations (e.g. work on issue).
     Linear,
+    /// Opens a saved tab config in an existing window or a new one.
+    TabConfig,
     /// Focuses a specific terminal pane by its persistent session UUID.
     Session,
 }
@@ -104,6 +107,7 @@ impl FromStr for UriHost {
             "mcp" => Ok(Self::Mcp),
             "codex" => Ok(Self::Codex),
             "linear" => Ok(Self::Linear),
+            "tab_config" if FeatureFlag::TabConfigs.is_enabled() => Ok(Self::TabConfig),
             "session" => Ok(Self::Session),
             _ => Err(anyhow!("Received url with unexpected host: {}", s)),
         }
@@ -189,6 +193,9 @@ impl UriHost {
                 } else {
                     log::warn!("couldn't turn launch link '{}' into path", url.path());
                 }
+            }
+            UriHost::TabConfig => {
+                handle_tab_config_uri(primary_window_id, url, ctx);
             }
             UriHost::SharedSession => {
                 // We expect the uri to have the ID of the session to join as the last segment.
@@ -526,6 +533,8 @@ impl UriHost {
             Self::Codex => W::default(),
             // Linear deeplink opens a new tab with agent view
             Self::Linear => W::default(),
+            // Handler picks the window itself based on `?new_window=true`.
+            Self::TabConfig => W::Nothing,
             Self::Session => W::Nothing,
         }
     }
@@ -710,6 +719,80 @@ fn find_matching_config_name<'a>(
     configs
         .iter()
         .find(|&config| config.name.to_lowercase() == target_name_lower)
+}
+
+/// Handles `warp://tab_config/<name>` deeplinks.
+///
+/// Resolution rules:
+/// - `<name>` is matched case-insensitively against each tab config's file
+///   stem, so both `warp://tab_config/my_tab` and
+///   `warp://tab_config/my_tab.toml` work.
+/// - When `?new_window=true` (or no Warp window is open) the tab config opens
+///   in a brand-new window. Otherwise it opens as a new tab in the active
+///   window.
+fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
+    let Some(desired) = get_launch_config_path(url.path()) else {
+        log::warn!("couldn't turn tab config link '{}' into name", url.path());
+        return;
+    };
+
+    let (configs, _errors) = load_tab_configs(&tab_configs_dir());
+    let Some(config) = find_matching_tab_config(desired.as_str(), configs) else {
+        log::warn!("couldn't find a tab config matching '{}'", desired);
+        return;
+    };
+
+    let force_new_window = url
+        .query_pairs()
+        .any(|(k, v)| k == "new_window" && matches!(v.as_ref(), "1" | "true"));
+
+    let target_window_id = if force_new_window {
+        None
+    } else {
+        primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some())
+    };
+
+    let workspace = match target_window_id {
+        Some(window_id) => WorkspaceRegistry::as_ref(ctx).get(window_id, ctx),
+        None => {
+            let new_window_id = open_new_window_get_handles(None, ctx).0;
+            WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx)
+        }
+    };
+
+    let Some(workspace) = workspace else {
+        log::warn!(
+            "no workspace available to open tab config '{}'",
+            config.name
+        );
+        return;
+    };
+
+    workspace.update(ctx, |workspace, ctx| {
+        workspace.open_tab_config(config, ctx);
+    });
+}
+
+/// Case-insensitive match against each tab config's file stem. Tab config
+/// `name` fields are not unique across files, so we key off the filename.
+///
+/// Tries the target as-is first, then with the extension stripped, so both
+/// `my_tab` and `my_tab.toml` resolve to `my_tab.toml` and dotted stems like
+/// `foo.bar` (from `foo.bar.toml`) still work when written without `.toml`.
+fn find_matching_tab_config(target: &str, configs: Vec<TabConfig>) -> Option<TabConfig> {
+    let raw = target.to_lowercase();
+    let stripped = remove_extension(target).map(str::to_lowercase);
+    configs.into_iter().find(|c| {
+        c.source_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| {
+                let stem = s.to_lowercase();
+                stem == raw || Some(stem.as_str()) == stripped.as_deref()
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// Extract the `path` query parameter, expanding a leading `~` to the
@@ -909,11 +992,6 @@ impl Action {
                 }
             }
             Action::FocusCloudMode => {
-                // Notify that GitHub auth completed so views can refresh
-                GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                    notifier.notify_auth_completed(ctx);
-                });
-
                 let active_agent_views = ActiveAgentViewsModel::as_ref(ctx);
                 let focused_conversation = primary_window_id
                     .and_then(|wid| active_agent_views.get_focused_conversation(wid));
@@ -949,10 +1027,17 @@ impl Action {
                                 ctx,
                             );
                         });
+                        // Notify after focusing so Cloud Mode panes can retry in the selected pane.
+                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                            notifier.notify_auth_completed(ctx);
+                        });
                         return;
                     }
                 }
 
+                GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                    notifier.notify_auth_completed(ctx);
+                });
                 dispatch_action_in_new_or_existing_window(
                     primary_window_id,
                     "root_view:open_settings_page_in_existing_window",
@@ -1395,6 +1480,7 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
         | UriHost::Mcp
         | UriHost::Codex
         | UriHost::Linear
+        | UriHost::TabConfig
         | UriHost::Session => true,
         // Auth and Home only allow the desktop redirect path
         UriHost::Auth | UriHost::Home => false,

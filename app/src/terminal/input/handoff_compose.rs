@@ -1,6 +1,7 @@
 //! Tracks the `&` prefix mode drafting state in the local input while the user
 //! writes a cloud handoff prompt, before a cloud pane/model exists.
 
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::server::ids::SyncId;
 use warpui::{Entity, ModelContext};
 
@@ -17,6 +18,7 @@ pub struct HandoffComposeState {
     active: bool,
     selected_environment_id: Option<SyncId>,
     has_explicit_environment_selection: bool,
+    entry_point: HandoffEntryPoint,
 }
 
 impl HandoffComposeState {
@@ -24,10 +26,20 @@ impl HandoffComposeState {
         self.active
     }
 
-    pub(crate) fn activate(&mut self, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn activate(
+        &mut self,
+        entry_point: HandoffEntryPoint,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.active = true;
         self.has_explicit_environment_selection = false;
+        self.entry_point = entry_point;
         ctx.emit(HandoffComposeStateEvent::ActiveChanged);
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn entry_point(&self) -> HandoffEntryPoint {
+        self.entry_point
     }
 
     pub(crate) fn exit(&mut self, ctx: &mut ModelContext<Self>) {
@@ -44,19 +56,20 @@ impl HandoffComposeState {
         self.selected_environment_id.as_ref()
     }
 
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn explicit_environment_id(&self) -> Option<SyncId> {
-        self.has_explicit_environment_selection
-            .then_some(self.selected_environment_id)
-            .flatten()
-    }
-
     pub(crate) fn set_environment_id(
         &mut self,
         environment_id: Option<SyncId>,
         is_explicit: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Async/implicit updates (e.g. pwd-based overlap resolution) must not
+        // overwrite an environment the user already picked explicitly.
+        if !is_explicit && self.has_explicit_environment_selection {
+            return;
+        }
+
+        // No-op when the value is unchanged, unless this is the first explicit
+        // selection (which needs to promote `has_explicit_environment_selection`).
         if self.selected_environment_id == environment_id
             && (!is_explicit || self.has_explicit_environment_selection)
         {

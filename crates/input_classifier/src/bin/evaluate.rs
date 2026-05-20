@@ -70,6 +70,18 @@ use warp_completer::{ParsedTokensSnapshot, util::parse_current_commands_and_toke
 
 #[cfg(feature = "onnx")]
 use input_classifier::{OnnxClassifier, OnnxModel};
+#[cfg(feature = "onnx")]
+fn default_onnx_model() -> Option<OnnxModel> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "nld_classifier_v1")] {
+            Some(OnnxModel::BertTinyV1)
+        } else if #[cfg(feature = "nld_classifier_v2")] {
+            Some(OnnxModel::BertTinyV2)
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Parser)]
 struct InputSource {
@@ -146,7 +158,11 @@ fn create_classifiers(args: &Args) -> Vec<(&'static str, Box<dyn InputClassifier
 
     #[cfg(feature = "onnx")]
     if args.onnx || use_all {
-        match OnnxClassifier::new(OnnxModel::BertTinyV1) {
+        let Some(model) = default_onnx_model() else {
+            eprintln!("Warning: No ONNX model feature is enabled for the ONNX classifier");
+            return classifiers;
+        };
+        match OnnxClassifier::new(model) {
             Ok(classifier) => {
                 classifiers.push(("onnx", Box::new(classifier)));
             }

@@ -197,9 +197,9 @@ if [[ "$ARTIFACT" == "cli" ]]; then
 elif [[ "$ARTIFACT" == "app" ]]; then
   FEATURES="$FEATURES,gui"
   if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" ]]; then
-    FEATURES="$FEATURES,nld_classifier_v2"
+    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
   else
-    FEATURES="$FEATURES,nld_classifier_v1"
+    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
   fi
 fi
 

@@ -53,7 +53,8 @@ pub const HEADER_TEXT: &str = "Rules";
 const DESCRIPTION_TEXT: &str = "Rules enhance the agent by providing structured guidelines that help maintain consistency, enforce best practices, and adapt to specific workflows, including codebases or broader tasks.";
 
 const SEARCH_PLACEHOLDER_TEXT: &str = "Search rules";
-const ZERO_STATE_TEXT: &str = "Once you add a rule, it will be shown here.";
+const ZERO_STATE_TEXT: &str =
+    "Add a rule above, or drop one at ~/.agents/AGENTS.md to apply it across every project.";
 const ZERO_STATE_TEXT_PROJECT: &str =
     "Once you generate a WARP.md rules file for a project, it will appear here.";
 
@@ -100,8 +101,12 @@ struct CloudRuleRow {
     mouse_states: MouseStateHandles,
 }
 
+/// A rule row backed by a file on disk — used for both project-scoped rules
+/// (e.g. `<repo>/WARP.md`) and file-based global rules (e.g.
+/// `~/.agents/AGENTS.md`). The render path is identical for both: a path label
+/// plus an "Open file" button.
 #[derive(Debug, Clone)]
-struct ProjectScopedRow {
+struct FileBackedRow {
     file_path: PathBuf,
     mouse_state: MouseStateHandle,
 }
@@ -109,23 +114,23 @@ struct ProjectScopedRow {
 #[derive(Debug, Clone)]
 enum RuleRow {
     Global(Box<CloudRuleRow>),
-    ProjectScoped(ProjectScopedRow),
+    FileBacked(FileBackedRow),
 }
 
 impl RuleRow {
     fn matches_search_term(&self, search_term: &str) -> bool {
+        let search_term = search_term.to_lowercase();
+        let search_term = search_term.as_str();
         match self {
             RuleRow::Global(row) => {
                 let AIFact::Memory(AIMemory { name, content, .. }) =
                     row.fact.model().string_model.clone();
                 name.unwrap_or_default()
                     .to_lowercase()
-                    .contains(search_term.to_lowercase().as_str())
-                    || content
-                        .to_lowercase()
-                        .contains(search_term.to_lowercase().as_str())
+                    .contains(search_term)
+                    || content.to_lowercase().contains(search_term)
             }
-            RuleRow::ProjectScoped(row) => row
+            RuleRow::FileBacked(row) => row
                 .file_path
                 .to_str()
                 .map(|s| s.to_lowercase().contains(search_term))
@@ -138,7 +143,7 @@ impl RuleRow {
             (RuleRow::Global(a), RuleRow::Global(b)) => {
                 b.fact.metadata().revision.cmp(&a.fact.metadata().revision)
             }
-            (RuleRow::ProjectScoped(a), RuleRow::ProjectScoped(b)) => a.file_path.cmp(&b.file_path),
+            (RuleRow::FileBacked(a), RuleRow::FileBacked(b)) => a.file_path.cmp(&b.file_path),
             _ => std::cmp::Ordering::Equal,
         }
     }
@@ -146,8 +151,12 @@ impl RuleRow {
 
 pub struct RuleView {
     owner: Option<Owner>,
-    global_rules: Vec<CloudRuleRow>,
-    project_rules: Vec<ProjectScopedRow>,
+    cloud_global_rules: Vec<CloudRuleRow>,
+    /// File-based global rules (e.g. `~/.agents/AGENTS.md`). Surfaced in the
+    /// Global tab alongside cloud rules. Sourced from
+    /// `ProjectContextModel::global_rule_paths()`.
+    file_backed_global_rules: Vec<FileBackedRow>,
+    project_rules: Vec<FileBackedRow>,
     search_editor: ViewHandle<EditorView>,
     search_bar: ViewHandle<SearchBar>,
     add_button: ViewHandle<ActionButton>,
@@ -207,26 +216,52 @@ impl RuleView {
         let project_rules = project_context
             .as_ref(ctx)
             .indexed_rules()
-            .map(|p| ProjectScopedRow {
+            .map(|p| FileBackedRow {
+                file_path: p,
+                mouse_state: Default::default(),
+            })
+            .collect();
+        let file_backed_global_rules = project_context
+            .as_ref(ctx)
+            .global_rule_paths()
+            .map(|p| FileBackedRow {
                 file_path: p,
                 mouse_state: Default::default(),
             })
             .collect();
 
-        ctx.subscribe_to_model(&project_context, |me, context_model, event, ctx| {
-            if matches!(event, ProjectContextModelEvent::PathIndexed) {
-                me.project_rules = context_model
-                    .as_ref(ctx)
-                    .indexed_rules()
-                    .map(|p| ProjectScopedRow {
-                        file_path: p,
-                        mouse_state: Default::default(),
-                    })
-                    .collect();
-
-                ctx.notify();
-            }
-        });
+        ctx.subscribe_to_model(
+            &project_context,
+            |me, context_model, event, ctx| match event {
+                // Upon indexing a new path, update project rules.
+                ProjectContextModelEvent::PathIndexed => {
+                    me.project_rules = context_model
+                        .as_ref(ctx)
+                        .indexed_rules()
+                        .map(|p| FileBackedRow {
+                            file_path: p,
+                            mouse_state: Default::default(),
+                        })
+                        .collect();
+                    ctx.notify();
+                }
+                // On detecting a change to global rule files, update file-backed global rules.
+                ProjectContextModelEvent::GlobalRulesChanged(_) => {
+                    me.file_backed_global_rules = context_model
+                        .as_ref(ctx)
+                        .global_rule_paths()
+                        .map(|p| FileBackedRow {
+                            file_path: p,
+                            mouse_state: Default::default(),
+                        })
+                        .collect();
+                    ctx.notify();
+                }
+                // No action needed for other ProjectContextModelEvent variants.
+                // PathIndexed is emitted last and indicates it's time to refresh the UI.
+                ProjectContextModelEvent::KnownRulesChanged(_) => {}
+            },
+        );
 
         let appearance = Appearance::handle(ctx);
         ctx.subscribe_to_model(&appearance, move |me, _, event, ctx| {
@@ -273,7 +308,8 @@ impl RuleView {
 
         Self {
             owner,
-            global_rules: ai_rules,
+            cloud_global_rules: ai_rules,
+            file_backed_global_rules,
             project_rules,
             search_editor,
             search_bar,
@@ -322,7 +358,7 @@ impl RuleView {
                 .cloned()
                 .collect()
         };
-        self.global_rules = ai_rules
+        self.cloud_global_rules = ai_rules
             .into_iter()
             .map(|ai_fact| CloudRuleRow {
                 fact: ai_fact,
@@ -340,16 +376,22 @@ impl RuleView {
     fn get_filtered_rules(&self) -> Vec<RuleRow> {
         match self.current_scope {
             RuleScope::Global => self
-                .global_rules
+                .cloud_global_rules
                 .iter()
                 .cloned()
                 .map(|rule| RuleRow::Global(Box::new(rule)))
+                .chain(
+                    self.file_backed_global_rules
+                        .iter()
+                        .cloned()
+                        .map(RuleRow::FileBacked),
+                )
                 .collect(),
             RuleScope::ProjectBased => self
                 .project_rules
                 .iter()
                 .cloned()
-                .map(RuleRow::ProjectScoped)
+                .map(RuleRow::FileBacked)
                 .collect(),
         }
     }
@@ -664,9 +706,9 @@ impl RuleView {
         )
     }
 
-    fn render_project_based_row(
+    fn render_file_backed_row(
         &self,
-        project_row: ProjectScopedRow,
+        project_row: FileBackedRow,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let row_name = project_row.file_path.to_str().map(|s| s.to_string())?;
@@ -832,9 +874,7 @@ impl RuleView {
                 RuleRow::Global(global_row) => {
                     Some(self.render_global_rule_row(*global_row, appearance, app))
                 }
-                RuleRow::ProjectScoped(project_row) => {
-                    self.render_project_based_row(project_row, appearance)
-                }
+                RuleRow::FileBacked(file_row) => self.render_file_backed_row(file_row, appearance),
             };
 
             if let Some(row) = row {
@@ -850,6 +890,13 @@ impl RuleView {
             RuleScope::ProjectBased => ZERO_STATE_TEXT_PROJECT,
         };
 
+        let centered_text = appearance
+            .ui_builder()
+            .wrappable_text(text, true)
+            .with_style(style::description_text(appearance))
+            .build()
+            .finish();
+
         Container::new(
             ConstrainedBox::new(
                 Align::new(
@@ -858,11 +905,8 @@ impl RuleView {
                         .with_main_axis_alignment(MainAxisAlignment::Center)
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_child(
-                            appearance
-                                .ui_builder()
-                                .wrappable_text(text, true)
-                                .with_style(style::description_text(appearance))
-                                .build()
+                            Container::new(Align::new(centered_text).top_center().finish())
+                                .with_horizontal_padding(style::ROW_HORIZONTAL_PADDING)
                                 .finish(),
                         )
                         .with_child(self.render_add_button())
@@ -873,6 +917,7 @@ impl RuleView {
             .with_height(style::ZERO_STATE_HEIGHT)
             .finish(),
         )
+        .with_horizontal_padding(style::ROW_HORIZONTAL_PADDING)
         .with_border(
             Border::all(1.).with_border_color(internal_colors::neutral_2(appearance.theme())),
         )

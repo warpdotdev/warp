@@ -1502,13 +1502,6 @@ fn create_window(
         }
     }
 
-    #[cfg(target_os = "linux")]
-    if let Ok(window) = created_window.as_ref() {
-        // On Linux/Wayland, winit only sends `zwp_text_input_v3.enable()` when IME is allowed,
-        // so without this call IME stays inactive and non-Latin input (CJK, etc.) is unusable.
-        window.set_ime_allowed(true);
-    }
-
     created_window
 }
 

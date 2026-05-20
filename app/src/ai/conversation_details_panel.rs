@@ -124,6 +124,7 @@ struct PanelMouseStates {
     copy_run_id: MouseStateHandle,
     copy_environment_id: MouseStateHandle,
     copy_docker_image: MouseStateHandle,
+    copy_fetch_error: MouseStateHandle,
     copy_error: MouseStateHandle,
     copy_setup_commands: MouseStateHandle,
     skill_link: MouseStateHandle,
@@ -139,6 +140,7 @@ enum CopyButtonKind {
     RunId,
     EnvironmentId,
     DockerImage,
+    FetchError,
     Error,
     SetupCommands,
 }
@@ -214,6 +216,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
+    /// Error message displayed when the API call to fetch run data failed.
+    fetch_error: Option<String>,
 }
 
 impl ConversationDetailsData {
@@ -323,6 +327,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -384,6 +389,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -455,6 +461,7 @@ impl ConversationDetailsData {
                 copy_link_url,
                 skill_spec,
                 harness,
+                fetch_error: None,
             };
         }
 
@@ -481,12 +488,13 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
     /// Minimal details data for when we only know the task id (e.g. shared sessions)
     /// but have not loaded the full `AmbientAgentTask` yet.
-    pub fn from_task_id(task_id: AmbientAgentTaskId) -> Self {
+    pub fn from_task_id(task_id: AmbientAgentTaskId, fetch_error: Option<String>) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Task {
                 task_id: Some(task_id),
@@ -508,6 +516,7 @@ impl ConversationDetailsData {
             copy_link_url: None,
             skill_spec: None,
             harness: None,
+            fetch_error,
         }
     }
 
@@ -549,6 +558,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 }
@@ -569,6 +579,7 @@ pub enum ConversationDetailsPanelAction {
     CopyRunId,
     CopyEnvironmentId,
     CopyDockerImage,
+    CopyFetchError,
     CopyError,
     CopySetupCommands(String),
     Focus,
@@ -1587,6 +1598,7 @@ impl ConversationDetailsPanel {
             CopyButtonKind::RunId => self.mouse_states.copy_run_id.clone(),
             CopyButtonKind::EnvironmentId => self.mouse_states.copy_environment_id.clone(),
             CopyButtonKind::DockerImage => self.mouse_states.copy_docker_image.clone(),
+            CopyButtonKind::FetchError => self.mouse_states.copy_fetch_error.clone(),
             CopyButtonKind::Error => self.mouse_states.copy_error.clone(),
             CopyButtonKind::SetupCommands => self.mouse_states.copy_setup_commands.clone(),
         }
@@ -1749,6 +1761,47 @@ impl View for ConversationDetailsPanel {
             .with_margin_bottom(FIELD_SPACING)
             .finish(),
         );
+
+        // Fetch error banner (shown when the API call to load run data failed)
+        if let Some(fetch_error) = &self.data.fetch_error {
+            let error_icon = ConstrainedBox::new(
+                Icon::Triangle
+                    .to_warpui_icon(theme.ansi_fg_red().into())
+                    .finish(),
+            )
+            .with_width(STATUS_ICON_SIZE)
+            .with_height(STATUS_ICON_SIZE)
+            .finish();
+            let error_text = render_copyable_text_field(
+                CopyableTextFieldConfig::new(fetch_error.clone())
+                    .with_font_size(ui_font_size)
+                    .with_text_color(theme.ansi_fg_red())
+                    .with_wrap_text(true)
+                    .with_icon_size(16.)
+                    .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::FetchError))
+                    .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::FetchError))
+                    .with_cross_axis_alignment(CrossAxisAlignment::Start),
+                |ctx| {
+                    ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyFetchError);
+                },
+                app,
+            );
+            let error_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(Container::new(error_icon).with_margin_right(4.).finish())
+                .with_child(Expanded::new(1., error_text).finish())
+                .finish();
+            let error_banner = Container::new(error_row)
+                .with_uniform_padding(8.)
+                .with_background(coloru_with_opacity(theme.ansi_fg_red(), 10))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish();
+            content.add_child(
+                Container::new(error_banner)
+                    .with_margin_bottom(FIELD_SPACING)
+                    .finish(),
+            );
+        }
 
         // Status section
         if let Some(status_section) = self.render_status_section(appearance) {
@@ -2050,6 +2103,13 @@ impl TypedActionView for ConversationDetailsPanel {
                             self.record_copy(CopyButtonKind::DockerImage, ctx);
                         }
                     }
+                }
+            }
+            ConversationDetailsPanelAction::CopyFetchError => {
+                if let Some(error) = &self.data.fetch_error {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(error.clone()));
+                    self.record_copy(CopyButtonKind::FetchError, ctx);
                 }
             }
             ConversationDetailsPanelAction::CopyError => {

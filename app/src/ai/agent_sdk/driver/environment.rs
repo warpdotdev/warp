@@ -297,7 +297,7 @@ pub(super) async fn ensure_repo_cloned(
     // TODO(advait): When the remote code server lands for Docker sandboxes,
     // sandbox-only working directories will be reachable from the host and
     // we should register + index them here too (likely via a remote-aware
-    // path instead of `detect_possible_git_repo`/`index_directory`, which
+    // path instead of `detect_possible_local_git_repo`/`index_directory`, which
     // both assume a local filesystem). For now, skip so we don't try to
     // stat paths that only exist inside the sandbox.
     if is_sandbox {
@@ -313,7 +313,7 @@ pub(super) async fn ensure_repo_cloned(
         let detect_future = spawner
             .spawn(move |_, ctx| {
                 DetectedRepositories::handle(ctx).update(ctx, |repos, ctx| {
-                    repos.detect_possible_git_repo(
+                    repos.detect_possible_local_git_repo(
                         &repo_dir_str,
                         RepoDetectionSource::CloudEnvironmentPrep,
                         ctx,

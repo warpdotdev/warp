@@ -2470,9 +2470,8 @@ impl SettingsWidget for UsageWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-        let next_refresh_time = ai_request_usage_model.next_refresh_time();
-        let local_next_refresh_time = next_refresh_time.with_timezone(&Local);
-        let formatted_next_refresh_time = local_next_refresh_time
+        let formatted_next_refresh_time = ai_request_usage_model
+            .next_refresh_time_local()
             .format("%b %d at %-I:%M %p")
             .to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)

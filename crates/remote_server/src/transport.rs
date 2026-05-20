@@ -152,6 +152,10 @@ impl Error {
 pub struct Connection {
     pub client: RemoteServerClient,
     pub event_rx: Receiver<ClientEvent>,
+    /// Receiver for request-failure telemetry events. Separate from
+    /// `event_rx` so the failure sender on the client doesn't keep the
+    /// lifecycle event channel alive.
+    pub failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
     /// The subprocess whose stdio backs the client (e.g.
     /// `ssh … remote-server-proxy`). Spawned with `kill_on_drop(true)`
     /// by the transport, so dropping this `Child` sends SIGKILL to the

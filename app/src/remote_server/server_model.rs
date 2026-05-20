@@ -17,10 +17,15 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use super::codebase_index_status::{
     codebase_index_status_to_proto, disabled_codebase_index_status,
     not_enabled_codebase_index_status, queued_codebase_index_status,
+    unavailable_codebase_index_status,
 };
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
 use ::ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
+    FragmentMetadataLookupError as LocalFragmentMetadataLookupError,
+};
+use ::ai::index::full_source_code_embedding::{
+    ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
@@ -32,18 +37,23 @@ use super::diff_state_tracker::{
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
-    write_file_response, Abort, Authenticate, BufferEdit, BufferUpdatedPush, ClientMessage,
-    CloseBuffer, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
-    CodebaseIndexStatusesSnapshot, DeleteFile, DeleteFileResponse, DeleteFileSuccess,
-    DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode,
-    ErrorResponse, FailedFileRead, FileContextProto, FileOperationError, GetDiffStateResponse,
-    IndexCodebase, Initialize, InitializeResponse, NavigatedToDirectory,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, RunCommandError,
-    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer,
-    SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, WriteFile,
-    WriteFileResponse, WriteFileSuccess,
+    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
+    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
+    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexStatus,
+    CodebaseIndexStatusState, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
+    DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
+    FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
+    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
+    GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
+    MissingFragmentMetadata, NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer,
+    OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
+    ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
+    RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
+    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, WriteFile, WriteFileResponse,
+    WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 
@@ -51,6 +61,11 @@ use crate::code_review::diff_state::{DiffMode, FileStatusInfo};
 
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Server-side cap on the number of branches returned by `GetBranches`.
+/// Prevents a client from forcing the daemon to enumerate an arbitrarily
+/// large ref list.
+const MAX_BRANCH_COUNT_CAP: usize = 500;
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
@@ -84,6 +99,23 @@ enum HandlerOutcome {
     /// are tracked by `FileId` in `pending_file_ops` rather than by
     /// `RequestId` in `in_progress`).
     Async(Option<SpawnedFutureHandle>),
+}
+
+struct CodebaseIndexRequest {
+    repo_path: PathBuf,
+}
+struct CodebaseIndexRequestParams<'a> {
+    operation_name: &'a str,
+    repo_path: String,
+    auth_token: String,
+    auth_operation: &'a str,
+    path_kind: CodebaseIndexRequestPathKind,
+}
+
+#[derive(Clone, Copy)]
+enum CodebaseIndexRequestPathKind {
+    Canonicalized,
+    Requested,
 }
 
 /// Tracks an in-flight file write or delete so the async completion
@@ -697,14 +729,23 @@ impl ServerModel {
                 self.handle_unsubscribe_diff_state(msg, conn_id, ctx);
                 return; // fire-and-forget notification
             }
+            Some(client_message::Message::GetBranches(msg)) => {
+                self.handle_get_branches(msg, &request_id, conn_id, ctx)
+            }
             Some(client_message::Message::DiscardFiles(msg)) => {
                 self.handle_discard_files(msg, &request_id, ctx)
             }
             Some(client_message::Message::IndexCodebase(msg)) => {
                 self.handle_index_codebase(msg, &request_id, conn_id, ctx)
             }
+            Some(client_message::Message::ResyncCodebase(msg)) => {
+                self.handle_resync_codebase(msg, &request_id, conn_id, ctx)
+            }
             Some(client_message::Message::DropCodebaseIndex(msg)) => {
                 self.handle_drop_codebase_index(msg, &request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
+                self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
             }
             None => {
                 log::warn!(
@@ -776,8 +817,12 @@ impl ServerModel {
 
     fn push_all_codebase_index_statuses(&self, ctx: &mut ModelContext<Self>) {
         let snapshot = self.codebase_index_statuses_snapshot(ctx);
+        let status_count = snapshot.statuses.len();
+        log::info!(
+            "[Remote codebase indexing] Daemon pushing codebase index status updates: status_count={status_count}"
+        );
         for status in snapshot.statuses {
-            log::info!(
+            log::debug!(
                 "[Remote codebase indexing] Daemon pushing codebase index status update: repo_path={} state={:?}",
                 status.repo_path,
                 CodebaseIndexStatusState::try_from(status.state)
@@ -839,54 +884,33 @@ impl ServerModel {
             repo_path,
             auth_token,
         } = msg;
-        let repo_path_for_log = repo_path.clone();
-        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
-            log::info!(
-                "[Remote codebase indexing] Daemon rejecting IndexCodebase because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-            );
-            return HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-                CodebaseIndexStatusUpdated {
-                    status: Some(not_enabled_codebase_index_status(repo_path)),
-                },
-            ));
-        }
-
-        let repo_path = match canonicalize_index_repo_path(&repo_path) {
-            Ok(repo_path) => repo_path,
-            Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: error,
-                }));
-            }
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "IndexCodebase",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase indexing",
+                path_kind: CodebaseIndexRequestPathKind::Canonicalized,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
         };
-        if let Err(error) =
-            self.validate_remote_codebase_index_auth(&auth_token, "remote codebase indexing")
-        {
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::InvalidRequest.into(),
-                message: error,
-            }));
-        }
-        log::info!(
-            "[Remote codebase indexing] Daemon handling IndexCodebase: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-        );
+        let repo_path = request.repo_path;
         let status = CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
-            if let Some(indexed_repo_path) = manager.root_path_for_codebase(&repo_path) {
-                manager
-                    .get_codebase_index_status_for_path(indexed_repo_path.as_path(), ctx)
-                    .map(|status| {
-                        codebase_index_status_to_proto(indexed_repo_path.as_path(), &status)
-                    })
-                    .unwrap_or_else(|| {
-                        queued_codebase_index_status(
-                            indexed_repo_path.to_string_lossy().to_string(),
-                        )
-                    })
-            } else {
-                manager.index_directory(repo_path.clone(), ctx);
-                queued_codebase_index_status(repo_path.to_string_lossy().to_string())
-            }
+            manager.with_indexed_codebase(
+                &repo_path,
+                |manager, indexed_repo_path, ctx| {
+                    Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
+                },
+                |manager, repo_path, ctx| {
+                    manager.index_directory(repo_path.to_path_buf(), ctx);
+                    queued_codebase_index_status(repo_path.to_string_lossy().to_string())
+                },
+                ctx,
+            )
         });
 
         HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
@@ -894,6 +918,70 @@ impl ServerModel {
                 status: Some(status),
             },
         ))
+    }
+
+    fn handle_resync_codebase(
+        &mut self,
+        msg: ResyncCodebase,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let ResyncCodebase {
+            repo_path,
+            auth_token,
+        } = msg;
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "ResyncCodebase",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase resync",
+                path_kind: CodebaseIndexRequestPathKind::Canonicalized,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
+        };
+        let repo_path = request.repo_path;
+        let status = CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.with_indexed_codebase(
+                &repo_path,
+                |manager, indexed_repo_path, ctx| {
+                    manager.try_manual_resync_codebase(indexed_repo_path, ctx);
+                    Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
+                },
+                |_, repo_path, _| {
+                    unavailable_codebase_index_status(
+                        repo_path.to_string_lossy().to_string(),
+                        "Cannot resync remote codebase because it has not been indexed."
+                            .to_string(),
+                    )
+                },
+                ctx,
+            )
+        });
+
+        HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
+            CodebaseIndexStatusUpdated {
+                status: Some(status),
+            },
+        ))
+    }
+
+    fn current_codebase_index_status_or_queued(
+        manager: &CodebaseIndexManager,
+        indexed_repo_path: &Path,
+        ctx: &mut ModelContext<CodebaseIndexManager>,
+    ) -> CodebaseIndexStatus {
+        manager
+            .get_codebase_index_status_for_path(indexed_repo_path, ctx)
+            .map(|status| codebase_index_status_to_proto(indexed_repo_path, &status))
+            .unwrap_or_else(|| {
+                queued_codebase_index_status(indexed_repo_path.to_string_lossy().to_string())
+            })
     }
 
     fn handle_drop_codebase_index(
@@ -907,50 +995,160 @@ impl ServerModel {
             repo_path,
             auth_token,
         } = msg;
-        let repo_path_for_log = repo_path.clone();
-        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
-            log::info!(
-                "[Remote codebase indexing] Daemon rejecting DropCodebaseIndex because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-            );
-            return HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-                CodebaseIndexStatusUpdated {
-                    status: Some(not_enabled_codebase_index_status(repo_path)),
-                },
-            ));
-        }
-
-        let repo_path = match requested_repo_path(&repo_path) {
-            Ok(repo_path) => repo_path,
-            Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: error,
-                }));
-            }
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "DropCodebaseIndex",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase index removal",
+                path_kind: CodebaseIndexRequestPathKind::Requested,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
         };
-        if let Err(error) =
-            self.validate_remote_codebase_index_auth(&auth_token, "remote codebase index removal")
-        {
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::InvalidRequest.into(),
-                message: error,
-            }));
-        }
-        log::info!(
-            "[Remote codebase indexing] Daemon handling DropCodebaseIndex: request_id={request_id} conn_id={conn_id} repo_path={}",
-            repo_path.display()
-        );
+        let CodebaseIndexRequest { repo_path } = request;
         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.drop_index(repo_path.clone(), ctx);
         });
 
-        HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-            CodebaseIndexStatusUpdated {
-                status: Some(disabled_codebase_index_status(
-                    repo_path.to_string_lossy().to_string(),
-                )),
-            },
+        codebase_index_status_response(disabled_codebase_index_status(
+            repo_path.to_string_lossy().to_string(),
         ))
+    }
+
+    fn handle_get_fragment_metadata_from_hash(
+        &self,
+        msg: GetFragmentMetadataFromHash,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "[Remote codebase indexing] Daemon handling GetFragmentMetadataFromHash: \
+             request_id={request_id} conn_id={conn_id} repo_path={} root_hash={} hash_count={}",
+            msg.repo_path,
+            msg.root_hash,
+            msg.content_hashes.len()
+        );
+
+        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+            return fragment_metadata_lookup_error_response(
+                FragmentMetadataLookupErrorCode::RemoteCodebaseIndexingNotEnabled,
+                "Remote codebase indexing is not enabled".to_string(),
+                None,
+            );
+        }
+
+        let repo_path = match canonicalize_index_repo_path(&msg.repo_path) {
+            Ok(repo_path) => repo_path,
+            Err(error) => {
+                return fragment_metadata_lookup_error_response(
+                    FragmentMetadataLookupErrorCode::InvalidRepoPath,
+                    error,
+                    None,
+                );
+            }
+        };
+        let root_hash = match msg.root_hash.parse::<NodeHash>() {
+            Ok(root_hash) => root_hash,
+            Err(error) => {
+                return fragment_metadata_lookup_error_response(
+                    FragmentMetadataLookupErrorCode::InvalidRootHash,
+                    format!("Invalid root_hash: {error}"),
+                    None,
+                );
+            }
+        };
+        if let Err(error) = self.validate_fragment_metadata_lookup(&repo_path, &root_hash, ctx) {
+            return fragment_metadata_lookup_error_response_from_error(error);
+        }
+
+        let mut valid_hashes = Vec::new();
+        let mut missing_hashes = Vec::new();
+        for content_hash in msg.content_hashes {
+            match content_hash.parse::<ContentHash>() {
+                Ok(parsed_hash) => valid_hashes.push((content_hash, parsed_hash)),
+                Err(error) => missing_hashes.push(missing_fragment_metadata(
+                    content_hash,
+                    format!("Invalid content hash: {error}"),
+                )),
+            }
+        }
+
+        let content_hashes = valid_hashes
+            .iter()
+            .map(|(_, hash)| hash.clone())
+            .collect::<Vec<_>>();
+        let metadata_by_hash = match CodebaseIndexManager::handle(ctx)
+            .as_ref(ctx)
+            .fragment_metadatas_from_hashes(&repo_path, &root_hash, &content_hashes, ctx)
+        {
+            Ok(metadata_by_hash) => metadata_by_hash,
+            Err(error) => {
+                return fragment_metadata_lookup_error_response_from_error(error);
+            }
+        };
+
+        let mut fragments = Vec::new();
+        for (content_hash_string, content_hash) in valid_hashes {
+            match metadata_by_hash.get(&content_hash) {
+                Some(metadata) => {
+                    fragments.extend(
+                        metadata
+                            .iter()
+                            .map(|metadata| fragment_metadata_to_proto(&content_hash, metadata)),
+                    );
+                }
+                None => missing_hashes.push(missing_fragment_metadata(
+                    content_hash_string,
+                    "No fragment metadata found for content hash".to_string(),
+                )),
+            }
+        }
+
+        HandlerOutcome::Sync(
+            server_message::Message::GetFragmentMetadataFromHashResponse(
+                GetFragmentMetadataFromHashResponse {
+                    result: Some(get_fragment_metadata_from_hash_response::Result::Success(
+                        GetFragmentMetadataFromHashSuccess {
+                            fragments,
+                            missing_hashes,
+                        },
+                    )),
+                },
+            ),
+        )
+    }
+
+    fn validate_fragment_metadata_lookup(
+        &self,
+        repo_path: &Path,
+        root_hash: &NodeHash,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), LocalFragmentMetadataLookupError> {
+        let Some(status) = CodebaseIndexManager::handle(ctx)
+            .as_ref(ctx)
+            .get_codebase_index_status_for_path(repo_path, ctx)
+        else {
+            return Err(LocalFragmentMetadataLookupError::IndexNotFound);
+        };
+        if !status.has_synced_version() {
+            return Err(LocalFragmentMetadataLookupError::IndexNotSynced);
+        }
+        let Some(current_root_hash) = status.root_hash() else {
+            return Err(LocalFragmentMetadataLookupError::IndexNotSynced);
+        };
+        if current_root_hash != root_hash {
+            return Err(LocalFragmentMetadataLookupError::RootHashMismatch {
+                requested: root_hash.clone(),
+                current: current_root_hash.clone(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Routes a server message to its destination.
@@ -1128,6 +1326,45 @@ impl ServerModel {
                 "Missing cached authentication credentials for {operation}"
             )),
         }
+    }
+
+    fn prepare_codebase_index_request(
+        &self,
+        params: CodebaseIndexRequestParams<'_>,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+    ) -> Result<CodebaseIndexRequest, Box<HandlerOutcome>> {
+        let CodebaseIndexRequestParams {
+            operation_name,
+            repo_path,
+            auth_token,
+            auth_operation,
+            path_kind,
+        } = params;
+        let repo_path_for_log = repo_path.clone();
+        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+            log::info!(
+                "[Remote codebase indexing] Daemon rejecting {operation_name} because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
+            );
+            return Err(Box::new(codebase_index_status_response(
+                not_enabled_codebase_index_status(repo_path),
+            )));
+        }
+
+        let repo_path = match path_kind {
+            CodebaseIndexRequestPathKind::Canonicalized => canonicalize_index_repo_path(&repo_path),
+            CodebaseIndexRequestPathKind::Requested => requested_repo_path(&repo_path),
+        }
+        .map_err(|error| Box::new(invalid_request_response(error)))?;
+
+        if let Err(error) = self.validate_remote_codebase_index_auth(&auth_token, auth_operation) {
+            return Err(Box::new(invalid_request_response(error)));
+        }
+
+        log::info!(
+            "[Remote codebase indexing] Daemon handling {operation_name}: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
+        );
+        Ok(CodebaseIndexRequest { repo_path })
     }
 
     /// Handles `Abort` by cancelling the in-progress request it targets.
@@ -1338,7 +1575,11 @@ impl ServerModel {
         // root path (Some) or None if no git repo was found.
         let path_str = msg.path.clone();
         let git_future = DetectedRepositories::handle(ctx).update(ctx, |repos, ctx| {
-            repos.detect_possible_git_repo(&path_str, RepoDetectionSource::TerminalNavigation, ctx)
+            repos.detect_possible_local_git_repo(
+                &path_str,
+                RepoDetectionSource::TerminalNavigation,
+                ctx,
+            )
         });
 
         let request_id_for_response = request_id.clone();
@@ -2116,6 +2357,82 @@ impl ServerModel {
         }
     }
 
+    /// Handles `GetBranches` — request/response.
+    ///
+    /// Runs `get_all_branches` on the remote filesystem and responds with
+    /// the branch list.
+    fn handle_get_branches(
+        &mut self,
+        msg: super::proto::GetBranches,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path))
+        {
+            Ok(p) => p.to_local_path_lossy(),
+            Err(e) => {
+                return HandlerOutcome::Sync(server_message::Message::GetBranchesResponse(
+                    GetBranchesResponse {
+                        result: Some(super::proto::get_branches_response::Result::Error(
+                            GetBranchesError {
+                                message: format!("Invalid repo_path: {e}"),
+                            },
+                        )),
+                    },
+                ));
+            }
+        };
+
+        let max_branch_count = msg
+            .max_branch_count
+            .map(|c| (c as usize).min(MAX_BRANCH_COUNT_CAP));
+        let include_remotes = msg.include_remotes;
+
+        log::info!(
+            "Handling GetBranches repo={} (request_id={request_id})",
+            msg.repo_path,
+        );
+
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                crate::util::git::get_all_branches(&repo_path, max_branch_count, include_remotes)
+                    .await
+            },
+            move |me, branches_result, _ctx| {
+                let message = match branches_result {
+                    Ok(branches) => {
+                        server_message::Message::GetBranchesResponse(GetBranchesResponse {
+                            result: Some(super::proto::get_branches_response::Result::Success(
+                                GetBranchesSuccess {
+                                    branches: branches
+                                        .into_iter()
+                                        .map(|entry| BranchInfo {
+                                            name: entry.name,
+                                            is_main: entry.is_main,
+                                        })
+                                        .collect(),
+                                },
+                            )),
+                        })
+                    }
+                    Err(e) => server_message::Message::GetBranchesResponse(GetBranchesResponse {
+                        result: Some(super::proto::get_branches_response::Result::Error(
+                            GetBranchesError {
+                                message: format!("{e:#}"),
+                            },
+                        )),
+                    }),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
     /// Handles `DiscardFilesRequest` — request/response.
     ///
     /// Runs git restore/stash on the remote filesystem for the specified files.
@@ -2221,12 +2538,27 @@ impl ServerModel {
     }
 }
 
+fn invalid_request_response(message: String) -> HandlerOutcome {
+    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+        code: ErrorCode::InvalidRequest.into(),
+        message,
+    }))
+}
+
+fn codebase_index_status_response(status: CodebaseIndexStatus) -> HandlerOutcome {
+    HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
+        CodebaseIndexStatusUpdated {
+            status: Some(status),
+        },
+    ))
+}
 fn requested_repo_path(repo_path: &str) -> Result<PathBuf, String> {
     if repo_path.is_empty() {
         return Err("repo_path is required".to_string());
     }
-
-    Ok(PathBuf::from(repo_path))
+    StandardizedPath::from_local_canonicalized(Path::new(repo_path))
+        .map(|path| path.to_local_path_lossy())
+        .map_err(|error| format!("Invalid repo_path {repo_path}: {error}"))
 }
 
 fn canonicalize_index_repo_path(repo_path: &str) -> Result<PathBuf, String> {
@@ -2236,6 +2568,70 @@ fn canonicalize_index_repo_path(repo_path: &str) -> Result<PathBuf, String> {
     Ok(standardized_path
         .to_local_path()
         .unwrap_or_else(|| standardized_path.to_local_path_lossy()))
+}
+
+fn missing_fragment_metadata(content_hash: String, message: String) -> MissingFragmentMetadata {
+    MissingFragmentMetadata {
+        content_hash,
+        error: Some(FileOperationError { message }),
+    }
+}
+fn fragment_metadata_lookup_error_response(
+    code: FragmentMetadataLookupErrorCode,
+    message: String,
+    current_root_hash: Option<String>,
+) -> HandlerOutcome {
+    HandlerOutcome::Sync(
+        server_message::Message::GetFragmentMetadataFromHashResponse(
+            GetFragmentMetadataFromHashResponse {
+                result: Some(get_fragment_metadata_from_hash_response::Result::Error(
+                    ProtoFragmentMetadataLookupError {
+                        code: code.into(),
+                        message,
+                        current_root_hash,
+                    },
+                )),
+            },
+        ),
+    )
+}
+
+fn fragment_metadata_lookup_error_response_from_error(
+    error: LocalFragmentMetadataLookupError,
+) -> HandlerOutcome {
+    let (code, message, current_root_hash) = match error {
+        LocalFragmentMetadataLookupError::IndexNotFound => (
+            FragmentMetadataLookupErrorCode::IndexNotFound,
+            "Codebase index not found".to_string(),
+            None,
+        ),
+        LocalFragmentMetadataLookupError::IndexNotSynced => (
+            FragmentMetadataLookupErrorCode::IndexNotSynced,
+            "Codebase index has no synced root hash".to_string(),
+            None,
+        ),
+        LocalFragmentMetadataLookupError::RootHashMismatch { requested, current } => (
+            FragmentMetadataLookupErrorCode::RootHashMismatch,
+            format!("Codebase index root hash mismatch: requested {requested}, current {current}"),
+            Some(current.to_string()),
+        ),
+    };
+
+    fragment_metadata_lookup_error_response(code, message, current_root_hash)
+}
+
+fn fragment_metadata_to_proto(
+    content_hash: &ContentHash,
+    metadata: &LocalFragmentMetadata,
+) -> ProtoFragmentMetadata {
+    ProtoFragmentMetadata {
+        content_hash: content_hash.to_string(),
+        path: metadata.absolute_path.to_string_lossy().to_string(),
+        start_line: metadata.location.start_line as u32,
+        end_line: metadata.location.end_line as u32,
+        byte_start: metadata.location.byte_range.start.as_usize() as u64,
+        byte_end: metadata.location.byte_range.end.as_usize() as u64,
+    }
 }
 
 /// Converts a [`ReadFileContextResult`] into its protobuf equivalent.

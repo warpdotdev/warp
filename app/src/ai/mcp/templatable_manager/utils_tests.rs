@@ -11,10 +11,14 @@ mod tests {
     /// Each `Some(default)` mirrors how rmcp deserializes a capability the
     /// server advertised with no inner flags set.
     fn caps(tools: bool, resources: bool) -> ServerCapabilities {
-        ServerCapabilities {
-            tools: tools.then(Default::default),
-            resources: resources.then(Default::default),
-            ..Default::default()
+        match (tools, resources) {
+            (true, true) => ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+            (true, false) => ServerCapabilities::builder().enable_tools().build(),
+            (false, true) => ServerCapabilities::builder().enable_resources().build(),
+            (false, false) => ServerCapabilities::builder().build(),
         }
     }
 

@@ -1,54 +1,7 @@
-use std::path::{Path, PathBuf};
+// Re-export from warp_util so existing app-level imports continue to work.
+pub use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use serde::{Deserialize, Serialize};
 use warp_util::content_version::ContentVersion;
-use warp_util::remote_path::RemotePath;
-
-/// Uniquely identifies where a file lives — either on the local filesystem
-/// or on a remote host. Used across both the buffer model and the
-/// editor/view layers as the canonical file-identity type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum FileLocation {
-    /// File on the local filesystem.
-    Local(PathBuf),
-    /// File on a remote host, identified by host + path.
-    Remote(RemotePath),
-}
-
-impl FileLocation {
-    /// Returns the file name component for display (e.g. tab titles).
-    pub fn display_name(&self) -> &str {
-        match self {
-            FileLocation::Local(path) => path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default(),
-            FileLocation::Remote(remote) => remote.path.file_name().unwrap_or_default(),
-        }
-    }
-
-    /// Returns the local path if this is a `Local` location, `None` for `Remote`.
-    /// Callers that only work with local files (LSP, save-to-disk, reveal-in-finder)
-    /// should use this to gate their behavior.
-    pub fn to_local_path(&self) -> Option<&Path> {
-        match self {
-            FileLocation::Local(path) => Some(path.as_path()),
-            FileLocation::Remote(_) => None,
-        }
-    }
-}
-
-impl From<PathBuf> for FileLocation {
-    fn from(path: PathBuf) -> Self {
-        FileLocation::Local(path)
-    }
-}
-
-impl From<RemotePath> for FileLocation {
-    fn from(remote: RemotePath) -> Self {
-        FileLocation::Remote(remote)
-    }
-}
 
 /// Tracks sync state between client and server for a single remote buffer.
 ///

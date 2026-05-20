@@ -192,6 +192,22 @@ where
     }
 }
 
+impl AIConversationMetadata {
+    fn merge(&mut self, other: AIConversationMetadata) -> &mut Self {
+        self.has_local_data |= other.has_local_data;
+        if self.initial_query.is_empty() {
+            self.initial_query = other.initial_query;
+        }
+        if self.initial_working_directory.is_none() {
+            self.initial_working_directory = other.initial_working_directory;
+        }
+        if self.artifacts.is_empty() {
+            self.artifacts = other.artifacts;
+        }
+        self
+    }
+}
+
 impl BlocklistAIHistoryModel {
     /// Loads conversation data from the appropriate source (DB or server).
     ///
@@ -260,12 +276,17 @@ impl BlocklistAIHistoryModel {
     /// Note: This does NOT insert the conversation into memory. Callers are responsible
     /// for inserting the loaded conversation if needed.
     pub fn load_conversation_by_server_token(
-        &self,
+        &mut self,
         server_token: &ServerConversationToken,
         ctx: &AppContext,
     ) -> warpui::r#async::BoxFuture<'static, Option<CloudConversationData>> {
-        // Fast path: token is known locally.
-        if let Some(conversation_id) = self.find_conversation_id_by_server_token(server_token) {
+        let conversation_id =
+            self.get_or_set_canonical_conversation_id_for_server_token(server_token);
+        if self.conversations_by_id.contains_key(&conversation_id)
+            || self
+                .all_conversations_metadata
+                .contains_key(&conversation_id)
+        {
             return self.load_conversation_data(conversation_id, ctx);
         }
 
@@ -278,10 +299,8 @@ impl BlocklistAIHistoryModel {
             server_token.as_str()
         );
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
-        // Ephemeral ID — this conversation is not inserted into the history model.
-        let fallback_id = AIConversationId::new();
         box_future(load_conversation_from_server(
-            fallback_id,
+            conversation_id,
             server_token.clone(),
             server_api,
         ))
@@ -347,28 +366,16 @@ impl BlocklistAIHistoryModel {
         let mut new_cloud_count = 0;
         let mut restored_conversations_updated = 0;
 
-        // Build a map from server_conversation_token to conversation_id
-        let mut token_to_conv_id: HashMap<String, AIConversationId> = HashMap::new();
-        for (conv_id, meta) in self.all_conversations_metadata.iter() {
-            if let Some(token) = &meta.server_conversation_token {
-                token_to_conv_id.insert(token.as_str().to_string(), *conv_id);
-            }
-        }
-
-        // Build a map from server_conversation_token to conversation_id for restored conversations,
-        // and collect tokens belonging to child agent conversations so we can skip them.
-        let mut token_to_restored_conv_id: HashMap<String, AIConversationId> = HashMap::new();
+        // Collect tokens belonging to child agent conversations so we can skip them.
         let mut child_conversation_tokens: HashSet<String> = HashSet::new();
-        for (conv_id, conv) in self.conversations_by_id.iter() {
+        for conv in self.conversations_by_id.values() {
             if let Some(token) = conv.server_conversation_token() {
-                token_to_restored_conv_id.insert(token.as_str().to_string(), *conv_id);
                 if conv.is_child_agent_conversation() {
                     child_conversation_tokens.insert(token.as_str().to_string());
                 }
             }
         }
 
-        // Now iterate through cloud metadata once, using the map for O(1) lookups
         for server_meta in cloud_metadata_list {
             let server_token = server_meta.server_conversation_token.clone();
             let server_token_str = server_token.as_str();
@@ -378,46 +385,69 @@ impl BlocklistAIHistoryModel {
             if child_conversation_tokens.contains(server_token_str) {
                 continue;
             }
+            let had_metadata_entry = self
+                .all_conversations_metadata
+                .values()
+                .any(|metadata| metadata.server_conversation_token.as_ref() == Some(&server_token));
+            let canonical_conversation_id =
+                self.get_or_set_canonical_conversation_id_for_server_token(&server_token);
 
-            // Update any already-restored conversations that match by server token
-            if let Some(conv_id) = token_to_restored_conv_id.get(server_token_str) {
-                if let Some(conversation) = self.conversations_by_id.get_mut(conv_id) {
-                    if conversation.server_metadata().is_none() {
-                        conversation.set_server_metadata(server_meta.clone());
-                        restored_conversations_updated += 1;
-                        log::debug!(
-                            "Updated server metadata for restored conversation {conv_id} with token {server_token_str}"
-                        );
-                    }
-                }
+            if let Some(conversation) = self.conversations_by_id.get_mut(&canonical_conversation_id)
+            {
+                conversation.set_server_metadata(server_meta.clone());
+                restored_conversations_updated += 1;
+                log::debug!(
+                    "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
+                );
             }
 
-            if let Some(conv_id) = token_to_conv_id.get(server_token_str) {
-                // Found a match by token - update this entry with server metadata
-                let conversation_id = *conv_id;
-                let metadata =
-                    AIConversationMetadata::from_server_metadata(conversation_id, server_meta);
-                self.server_token_to_conversation_id
-                    .insert(server_token.clone(), conversation_id);
-                self.all_conversations_metadata
-                    .insert(conversation_id, metadata);
+            let stale_metadata: Vec<(AIConversationId, AIConversationMetadata)> = self
+                .all_conversations_metadata
+                .iter()
+                .filter_map(|(conversation_id, metadata)| {
+                    (*conversation_id != canonical_conversation_id
+                        && metadata.server_conversation_token.as_ref() == Some(&server_token))
+                    .then_some((*conversation_id, metadata.clone()))
+                })
+                .collect();
+            for (stale_metadata_id, _) in &stale_metadata {
+                self.all_conversations_metadata.remove(stale_metadata_id);
+            }
+
+            let existing_metadata = self
+                .all_conversations_metadata
+                .get(&canonical_conversation_id)
+                .cloned();
+            let local_metadata = self
+                .conversations_by_id
+                .get(&canonical_conversation_id)
+                .map(AIConversationMetadata::from);
+            let mut metadata = AIConversationMetadata::from_server_metadata(
+                canonical_conversation_id,
+                server_meta,
+            );
+            for local_metadata in existing_metadata
+                .into_iter()
+                .chain(stale_metadata.into_iter().map(|(_, metadata)| metadata))
+                .chain(local_metadata)
+            {
+                metadata.merge(local_metadata);
+            }
+
+            self.server_token_to_conversation_id
+                .insert(server_token.clone(), canonical_conversation_id);
+            self.all_conversations_metadata
+                .insert(canonical_conversation_id, metadata);
+
+            if had_metadata_entry {
                 local_matched_with_server_count += 1;
                 log::debug!(
-                    "Matched local conversation {conversation_id} with server token {server_token_str}"
+                    "Matched local conversation {canonical_conversation_id} with server token {server_token_str}"
                 );
             } else {
-                // This is a new cloud-only conversation
-                // We need to create a local AIConversationId for it
-                let conversation_id = AIConversationId::new();
-                let metadata =
-                    AIConversationMetadata::from_server_metadata(conversation_id, server_meta);
-                self.server_token_to_conversation_id
-                    .insert(server_token.clone(), conversation_id);
-                self.all_conversations_metadata
-                    .insert(conversation_id, metadata);
                 new_cloud_count += 1;
                 log::debug!(
-                    "Added new cloud-only conversation with local ID {conversation_id} and server token {server_token_str}"
+                    "Added new cloud-only conversation with local ID {canonical_conversation_id} and server token {server_token_str}"
                 );
             }
         }

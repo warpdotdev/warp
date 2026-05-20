@@ -36,6 +36,9 @@ message ClientMessage {
     DiscardFilesRequest discard_files = 20;
     IndexCodebase index_codebase = 21;
     DropCodebaseIndex drop_codebase_index = 22;
+    GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
+    GetBranches get_branches = 24;
+    ResyncCodebase resync_codebase = 25;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -66,6 +69,8 @@ message ServerMessage {
     DiffStateFileDelta diff_state_file_delta = 21;
     DiscardFilesResponse discard_files_response = 22;
     BufferConflictDetected buffer_conflict_detected = 23;
+    GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
+    GetBranchesResponse get_branches_response = 25;
   }
 }
 
@@ -335,10 +340,59 @@ message IndexCodebase {
   string repo_path = 1;
   string auth_token = 2;
 }
+message ResyncCodebase {
+  string repo_path = 1;
+  string auth_token = 2;
+}
 
 message DropCodebaseIndex {
   string repo_path = 1;
   string auth_token = 2;
+}
+message GetFragmentMetadataFromHash {
+  string repo_path = 1;
+  string root_hash = 2;
+  repeated string content_hashes = 3;
+}
+
+message FragmentMetadata {
+  string content_hash = 1;
+  string path = 2;
+  uint32 start_line = 3;
+  uint32 end_line = 4;
+  uint64 byte_start = 5;
+  uint64 byte_end = 6;
+}
+
+message MissingFragmentMetadata {
+  string content_hash = 1;
+  FileOperationError error = 2;
+}
+enum FragmentMetadataLookupErrorCode {
+  FRAGMENT_METADATA_LOOKUP_ERROR_CODE_UNSPECIFIED = 0;
+  REMOTE_CODEBASE_INDEXING_NOT_ENABLED = 1;
+  INVALID_REPO_PATH = 2;
+  INVALID_ROOT_HASH = 3;
+  INDEX_NOT_FOUND = 4;
+  INDEX_NOT_SYNCED = 5;
+  ROOT_HASH_MISMATCH = 6;
+}
+
+message FragmentMetadataLookupError {
+  FragmentMetadataLookupErrorCode code = 1;
+  string message = 2;
+  optional string current_root_hash = 3;
+}
+message GetFragmentMetadataFromHashSuccess {
+  repeated FragmentMetadata fragments = 1;
+  repeated MissingFragmentMetadata missing_hashes = 2;
+}
+
+message GetFragmentMetadataFromHashResponse {
+  oneof result {
+    GetFragmentMetadataFromHashSuccess success = 1;
+    FragmentMetadataLookupError error = 2;
+  }
 }
 
 enum CodebaseIndexStatusState {
@@ -360,6 +414,7 @@ message CodebaseIndexStatus {
   optional uint64 progress_completed = 4;
   optional uint64 progress_total = 5;
   optional string failure_message = 6;
+  optional string root_hash = 7;
 }
 
 message CodebaseIndexStatusesSnapshot {

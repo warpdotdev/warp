@@ -15,9 +15,10 @@ use warpui::{
     },
     keymap::{FixedBinding, Keystroke},
     r#async::{SpawnedFutureHandle, Timer},
+    ui_components::components::Coords,
     units::Pixels,
-    AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::{
@@ -34,7 +35,10 @@ use crate::{
                     self, NumberShortcutButtonBuilder, NumberShortcutButtons,
                     NumberShortcutButtonsConfig,
                 },
-                view_impl::{CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN},
+                view_impl::{
+                    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
+                    CONTENT_ITEM_VERTICAL_MARGIN,
+                },
             },
             inline_action::{
                 inline_action_header::{
@@ -46,12 +50,14 @@ use crate::{
             },
             BlocklistAIHistoryModel,
         },
+        execution_profiles::{profiles::AIExecutionProfilesModel, AskUserQuestionPermission},
     },
     terminal::input::message_bar::{
         common::{render_standard_message, standard_message_bar_height, styles},
         Message, MessageItem,
     },
     ui_components::{blended_colors, icons::Icon},
+    view_components::dropdown::{Dropdown, DropdownItem},
     view_components::{
         action_button::{ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme},
         compactible_action_button::CompactibleActionButton,
@@ -156,12 +162,15 @@ pub enum AskUserQuestionViewAction {
     NavigatePrev,
     ToggleExpanded,
     EnterPressed,
+    SetPermission(AskUserQuestionPermission),
 }
 
 /// Emitted when local questionnaire state changes and the parent needs to refresh.
 #[derive(Clone, Debug)]
 pub enum AskUserQuestionViewEvent {
     Updated,
+    /// Fired when the user selects a new permission from the speedbump dropdown.
+    SpeedbumpPermissionChanged(AskUserQuestionPermission),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -732,6 +741,12 @@ pub(crate) struct AskUserQuestionView {
     toggle_mouse_state: MouseStateHandle,
     skip_button: CompactibleActionButton,
     next_button: CompactibleActionButton,
+    /// Settings link handle for the Ask-User-Question autonomy speedbump footer,
+    /// set by `AIBlock` when the speedbump is seeded for this action.
+    speedbump_settings_link_handle: Option<MouseStateHandle>,
+    /// Lazily created dropdown for the speedbump footer; owned here so the
+    /// view handle (and its event subscription) survives re-renders.
+    speedbump_dropdown: Option<ViewHandle<Dropdown<AskUserQuestionViewAction>>>,
 }
 
 impl AskUserQuestionView {
@@ -791,6 +806,8 @@ impl AskUserQuestionView {
             toggle_mouse_state: MouseStateHandle::default(),
             skip_button,
             next_button,
+            speedbump_settings_link_handle: None,
+            speedbump_dropdown: None,
         };
 
         ctx.subscribe_to_model(&action_model, |me, _, event, ctx| {
@@ -816,6 +833,74 @@ impl AskUserQuestionView {
 
     pub fn is_editing(&self) -> bool {
         self.session.is_editing()
+    }
+
+    /// Sets the settings-link mouse handle used in the speedbump footer.
+    /// The footer is only actually drawn during the completed/finished render paths.
+    pub fn set_speedbump_settings_link(
+        &mut self,
+        settings_link_handle: Option<MouseStateHandle>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.speedbump_settings_link_handle = settings_link_handle;
+        ctx.notify();
+    }
+
+    /// Creates the dropdown view for the speedbump footer. No-op if already initialized.
+    pub fn init_speedbump_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.speedbump_dropdown.is_some() {
+            return;
+        }
+        let view = ctx.add_typed_action_view(|ctx| {
+            let dropdown_font_size = Appearance::as_ref(ctx).monospace_font_size() - 1.;
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_font_size(dropdown_font_size, ctx);
+            dropdown.set_padding(
+                Coords {
+                    top: 2.,
+                    bottom: 2.,
+                    left: 8.,
+                    right: 8.,
+                },
+                ctx,
+            );
+            dropdown.set_vertical_margin(0., ctx);
+            dropdown.set_top_bar_height(24., ctx);
+            let permissions = [
+                AskUserQuestionPermission::Never,
+                AskUserQuestionPermission::AskExceptInAutoApprove,
+                AskUserQuestionPermission::AlwaysAsk,
+            ];
+            dropdown.set_items(
+                permissions
+                    .into_iter()
+                    .map(|p| {
+                        DropdownItem::new(p.label(), AskUserQuestionViewAction::SetPermission(p))
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown
+        });
+        self.speedbump_dropdown = Some(view);
+    }
+
+    /// Updates the dropdown's selected item to match the active execution profile.
+    pub fn refresh_speedbump_dropdown_selection(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(dropdown) = self.speedbump_dropdown.clone() else {
+            return;
+        };
+        let permission = AIExecutionProfilesModel::as_ref(ctx)
+            .active_profile(Some(terminal_view_id), ctx)
+            .data()
+            .ask_user_question;
+        dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(permission.label(), ctx);
+        });
     }
 
     /// Recover completed/cancelled status even if the live action entry is gone, so restored
@@ -1309,25 +1394,80 @@ impl AskUserQuestionView {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let header = HeaderConfig::new(label, app)
+        let speedbump_footer = self
+            .speedbump_settings_link_handle
+            .clone()
+            .filter(|_| self.speedbump_dropdown.is_some())
+            .and_then(|handle| self.render_speedbump_footer(handle, appearance, app));
+        let has_speedbump_footer = speedbump_footer.is_some();
+
+        let mut header_config = HeaderConfig::new(label, app)
             .with_icon(status_icon)
             .with_interaction_mode(InteractionMode::ManuallyExpandable(
                 ExpandedConfig::new(self.is_expanded, self.toggle_mouse_state.clone())
                     .with_toggle_callback(|ctx| {
                         ctx.dispatch_typed_action(AskUserQuestionViewAction::ToggleExpanded);
                     }),
-            ))
-            .render(app);
+            ));
+        if has_speedbump_footer {
+            header_config = header_config
+                .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)));
+        }
+        let header = header_config.render(app);
+
+        // Collapsed state: just the header — but still draw the speedbump footer if it's
+        // present, since the autonomy nudge must stay visible even if the user collapses
+        // their answers.
         if !self.is_expanded {
+            if let Some(footer) = speedbump_footer {
+                let mut wrapper =
+                    Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+                wrapper.add_child(header);
+                wrapper.add_child(footer);
+                return wrap_with_agent_output_item_spacing(wrapper.finish(), app).finish();
+            }
             return wrap_with_agent_output_item_spacing(header, app).finish();
         }
 
         let mut wrapper = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         wrapper.add_child(header);
-        wrapper.add_child(render_answers(questions, answers, appearance));
+        wrapper.add_child(render_answers(
+            questions,
+            answers,
+            appearance,
+            has_speedbump_footer,
+        ));
+        if let Some(footer) = speedbump_footer {
+            wrapper.add_child(footer);
+            return wrap_with_agent_output_item_spacing(wrapper.finish(), app).finish();
+        }
         wrap_with_agent_output_item_spacing(wrapper.finish(), app)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
             .finish()
+    }
+
+    fn render_speedbump_footer(
+        &self,
+        settings_link_handle: MouseStateHandle,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let dropdown = self.speedbump_dropdown.as_ref()?;
+        let row = render_autonomy_dropdown_setting_speedbump_footer(
+            "Allow the agent to ask questions:",
+            dropdown,
+            settings_link_handle,
+            app,
+        );
+        Some(
+            Container::new(row)
+                .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+                .with_vertical_padding(4.)
+                .with_background(theme.surface_1())
+                .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                .finish(),
+        )
     }
 
     fn render_question_text(
@@ -1506,11 +1646,13 @@ impl TypedActionView for AskUserQuestionView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         // Editing actions only run while this inline block is still the active user blocker. The
-        // completion summary stays interactive via ToggleExpanded after completion.
-        if !matches!(action, AskUserQuestionViewAction::ToggleExpanded)
-            && (!self.session.is_editing()
-                || !self.is_waiting_on_user_answers(ctx)
-                || self.session.current().is_none())
+        // completion summary stays interactive via ToggleExpanded and SetPermission after completion.
+        if !matches!(
+            action,
+            AskUserQuestionViewAction::ToggleExpanded | AskUserQuestionViewAction::SetPermission(_)
+        ) && (!self.session.is_editing()
+            || !self.is_waiting_on_user_answers(ctx)
+            || self.session.current().is_none())
         {
             return;
         }
@@ -1560,6 +1702,11 @@ impl TypedActionView for AskUserQuestionView {
             }
             AskUserQuestionViewAction::ToggleExpanded => {
                 self.is_expanded = !self.is_expanded;
+            }
+            AskUserQuestionViewAction::SetPermission(permission) => {
+                ctx.emit(AskUserQuestionViewEvent::SpeedbumpPermissionChanged(
+                    *permission,
+                ));
             }
             AskUserQuestionViewAction::EnterPressed => {
                 self.abort_auto_advance();
@@ -1616,6 +1763,7 @@ fn render_answers(
     questions: &[AskUserQuestionItem],
     answers: Option<&[AskUserQuestionAnswerItem]>,
     appearance: &Appearance,
+    flatten_bottom: bool,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let font_size = appearance.monospace_font_size();
@@ -1651,10 +1799,11 @@ fn render_answers(
         content.add_child(item_container.finish());
     }
 
-    Container::new(content.finish())
-        .with_background(theme.surface_2())
-        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
-        .finish()
+    let mut container = Container::new(content.finish()).with_background(theme.surface_2());
+    if !flatten_bottom {
+        container = container.with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)));
+    }
+    container.finish()
 }
 
 fn wrap_with_content_item_spacing(element: Box<dyn Element>) -> Container {

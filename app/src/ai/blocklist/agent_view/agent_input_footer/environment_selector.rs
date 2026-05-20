@@ -79,13 +79,6 @@ impl EnvironmentSelectorTarget {
     ) {
         match self {
             Self::CloudPane(model) => {
-                // During local-to-cloud handoff with an explicit env, skip
-                // default selection so the user's `&` choice is preserved.
-                #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-                if model.as_ref(ctx).pending_handoff_has_explicit_environment() {
-                    return;
-                }
-
                 model.update(ctx, |model, ctx| {
                     model.set_environment_id(Some(environment_id), ctx);
                 });

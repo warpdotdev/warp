@@ -83,12 +83,14 @@ mod billing_and_usage;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 mod code_page;
+mod custom_inference_modal;
 mod delete_environment_confirmation_dialog;
 mod directory_color_add_picker;
 pub(crate) mod environments_page;
 mod execution_profile_view;
 mod features;
 mod features_page;
+pub(crate) mod handoff_environment_creation_modal;
 pub mod keybindings;
 mod main_page;
 pub mod mcp_servers;
@@ -100,6 +102,7 @@ mod platform_page;
 mod privacy;
 mod privacy_page;
 mod referrals_page;
+mod remove_custom_endpoint_confirmation_dialog;
 mod settings_file_footer;
 pub(crate) mod settings_page;
 mod show_blocks_view;
@@ -160,6 +163,38 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
         disabled_color: theme.disabled_ui_text_color(),
         hint_color: theme.disabled_ui_text_color(),
     }
+}
+
+/// Renders a horizontal row of pill-shaped chips for model labels.
+/// Used by custom inference endpoint cards and the remove confirmation dialog.
+pub(super) fn render_model_chips(
+    labels: impl IntoIterator<Item = String>,
+    appearance: &Appearance,
+    text_color: warp_core::ui::theme::Fill,
+) -> Box<dyn Element> {
+    use warpui::ui_components::{
+        chip::Chip,
+        components::{UiComponent, UiComponentStyles},
+    };
+
+    let theme = appearance.theme();
+    let chip_border = internal_colors::neutral_4(theme).into();
+    let chip_style = UiComponentStyles {
+        background: None,
+        border_color: Some(chip_border),
+        border_width: Some(1.),
+        border_radius: Some(CornerRadius::with_all(Radius::Pixels(5.))),
+        font_family_id: Some(appearance.ui_font_family()),
+        font_size: Some(appearance.ui_font_size()),
+        font_color: Some(text_color.into_solid()),
+        ..Default::default()
+    };
+
+    let mut chips = Flex::row().with_spacing(8.);
+    for label in labels {
+        chips.add_child(Chip::new(label, chip_style).build().finish());
+    }
+    chips.finish()
 }
 
 #[derive(PartialEq, Eq)]
@@ -1070,20 +1105,20 @@ impl SettingsView {
             me.handle_environments_page_event(event, ctx);
         });
 
-        let billing_and_usage_page: SettingsPage =
-            if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
-                let handle = ctx.add_view(BillingAndUsagePageV2View::new);
-                ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                    me.handle_billing_and_usage_page_event(event, ctx);
-                });
-                SettingsPage::new(handle)
-            } else {
-                let handle = ctx.add_typed_action_view(BillingAndUsagePageView::new);
-                ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                    me.handle_billing_and_usage_page_event(event, ctx);
-                });
-                SettingsPage::new(handle)
-            };
+        let should_use_billing_and_usage_v2 = FeatureFlag::BillingAndUsagePageV2.is_enabled();
+        let billing_and_usage_page: SettingsPage = if should_use_billing_and_usage_v2 {
+            let handle = ctx.add_typed_action_view(BillingAndUsagePageV2View::new);
+            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+                me.handle_billing_and_usage_page_event(event, ctx);
+            });
+            SettingsPage::new(handle)
+        } else {
+            let handle = ctx.add_typed_action_view(BillingAndUsagePageView::new);
+            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+                me.handle_billing_and_usage_page_event(event, ctx);
+            });
+            SettingsPage::new(handle)
+        };
 
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
@@ -1807,6 +1842,10 @@ impl SettingsView {
             AISettingsPageEvent::SignupAnonymousUser => {
                 ctx.emit(SettingsViewEvent::SignupAnonymousUser)
             }
+            AISettingsPageEvent::ShowModal | AISettingsPageEvent::HideModal => {
+                // Modal rendering is handled in get_modal_content_for_page
+                ctx.notify();
+            }
         }
     }
 
@@ -2189,6 +2228,9 @@ impl SettingsView {
             SettingsPageViewHandle::BillingAndUsage(view) => {
                 view.read(app, |view, _| view.get_modal_content())
             }
+            SettingsPageViewHandle::BillingAndUsageV2(view) => {
+                view.read(app, |view, _| view.get_modal_content())
+            }
             SettingsPageViewHandle::Privacy(view) => {
                 view.read(app, |view, _| view.get_modal_content())
             }
@@ -2196,6 +2238,9 @@ impl SettingsView {
                 view.read(app, |view, _| view.get_modal_content())
             }
             SettingsPageViewHandle::MCPServers(view) => {
+                view.read(app, |view, _| view.get_modal_content(app))
+            }
+            SettingsPageViewHandle::AI(view) => {
                 view.read(app, |view, _| view.get_modal_content(app))
             }
             _ => None,

@@ -116,9 +116,9 @@ if ("$CHANNEL" -eq 'local') {
 }
 
 if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
-    $FEATURES = "$FEATURES,nld_classifier_v2"
+    $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
 } else {
-    $FEATURES = "$FEATURES,nld_classifier_v1"
+    $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"

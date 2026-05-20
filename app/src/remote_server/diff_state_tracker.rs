@@ -270,7 +270,7 @@ impl RemoteDiffStateManager {
                         metadata: model_ref.metadata().cloned(),
                     }
                 }
-                DiffState::Loading => {
+                DiffState::Loading | DiffState::Disconnected => {
                     self.add_pending_response(key, request_id.clone(), conn_id);
                     SubscribeOutcome::Async
                 }
@@ -369,6 +369,10 @@ impl RemoteDiffStateManager {
                     metadata,
                     subscribers: self.subscribed_connections(key),
                 });
+            }
+            DiffStateModelEvent::ConnectionLost => {
+                // Client-only event — should not occur on the server side.
+                log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
             }
         }
     }

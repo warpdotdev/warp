@@ -11,6 +11,7 @@ use super::{
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
+use warp_core::features::FeatureFlag;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -161,6 +162,7 @@ fn local_child_task_config_records_supported_third_party_harnesses() {
 #[tokio::test]
 #[serial_test::serial]
 async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() {
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -198,6 +200,7 @@ async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() 
 #[tokio::test]
 #[serial_test::serial]
 async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -234,6 +237,7 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
 #[tokio::test]
 #[serial_test::serial]
 async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -264,4 +268,27 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
     assert!(!prepared
         .env_vars
         .contains_key(&OsString::from("ANTHROPIC_MODEL")));
+}
+
+#[tokio::test]
+async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell_validation() {
+    let ai_client = Arc::new(MockAIClient::new());
+    let result = prepare_local_harness_child_launch(
+        "hello world".to_string(),
+        "claude".to_string(),
+        None,
+        Some("parent-run".to_string()),
+        None,
+        None,
+        ai_client,
+    )
+    .await;
+
+    match result {
+        Ok(_) => panic!("disabled local claude should be rejected"),
+        Err(err) => assert_eq!(
+            err,
+            "Local Claude Code child agents are temporarily disabled."
+        ),
+    }
 }

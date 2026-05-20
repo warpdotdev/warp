@@ -3217,6 +3217,25 @@ impl UpdateManager {
     }
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+        self.create_object_online(
+            CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
+            owner,
+            client_id,
+            Default::default(),
+            false,
+            None,
+            ctx,
+        )
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn create_scheduled_ambient_agent_online(
         &mut self,
         scheduled_ambient_agent: ScheduledAmbientAgent,

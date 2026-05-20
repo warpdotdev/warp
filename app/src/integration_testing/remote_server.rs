@@ -53,13 +53,13 @@ pub fn record_remote_server_navigation_events() -> TestStep {
                 ctx.subscribe_to_model(&mgr, move |_mgr, event, _ctx| {
                     if let RemoteServerManagerEvent::NavigatedToDirectory {
                         session_id,
-                        indexed_path,
+                        remote_path,
                         ..
                     } = event
                     {
                         navigated_paths
                             .borrow_mut()
-                            .insert(*session_id, indexed_path.clone());
+                            .insert(*session_id, remote_path.path.as_str().to_string());
                     }
                 });
             });

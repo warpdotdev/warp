@@ -1619,7 +1619,7 @@ jobs:
 
   generate_changelogs:
     name: Generate Changelogs
-    if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+    if: ${{ needs.prepare_release.outputs.should_publish == 'true' && inputs.channel == 'stable' }}
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -1646,20 +1646,48 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Obtain a GitHub App Installation Access Token
-        id: github_app_auth
-        run: |
-          TOKEN="$(npx obtain-github-app-installation-access-token ci ${{ secrets.GH_APP_CREDENTIALS_TOKEN }})"
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        uses: warpdotdev/generate-changelog@70f534c1e030dafb45046ae57e4aa4d43a2f5c84 # main
-        id: generate_changelog
+      - name: Generate changelog via Oz
+        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
         with:
-          channel: ${{ inputs.channel }}
-          github_auth_token: ${{ steps.github_app_auth.outputs.token }}
-          version: ${{ needs.prepare_release.outputs.release_tag }}
+          prompt: |
+            Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
+
+            Output directory: ${{ runner.temp }}/changelog-draft
+
+            Follow the workflow in .agents/skills/changelog-draft/SKILL.md exactly.
+            Make sure to produce both output files: changelog-draft.md and changelog-draft.json.
+
+            After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
+
+            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
+          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          share: team
+
+      - name: Convert draft JSON to release format
+        shell: bash
+        run: |
+          python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
+            --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
+            --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
+
+      - name: Load release changelog into step output
+        id: generate_changelog
+        shell: bash
+        run: |
+          # Read the release-pipeline-compatible JSON produced by the conversion
+          # script and expose it as a step output so downstream steps can consume
+          # it with the same interface as the old generate-changelog action.
+          CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
+            exit 1
+          fi
+          # Validate JSON
+          jq empty "$CHANGELOG_FILE"
+          # Set multiline output
+          echo "changelog<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          cat "$CHANGELOG_FILE" >> $GITHUB_OUTPUT
+          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
 
       - name: Build Slack changelog payload
         id: build_slack_payload
@@ -1745,7 +1773,7 @@ jobs:
           NEW_FEATURES=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "New features"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           IMPROVEMENTS=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "Improvements"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           # Extract the image URL from the list, and use the latest URL even if there are multiple
-          IMAGE=$(echo $CHANGELOG | jq -r '.image | if length > 0 then .[-1] else "" end')
+          IMAGE=$(echo $CHANGELOG | jq -r '.images | if length > 0 then .[-1] else "" end')
           # Extract Oz updates as a JSON array
           OZ_UPDATES=$(echo $CHANGELOG | jq -c '.oz_updates // []')
           # Tweak the structure of the JSON, add in a top-level date field, and add in the markdown_sections field

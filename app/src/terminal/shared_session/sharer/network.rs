@@ -234,6 +234,7 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let scrollback = scrollback_type.to_scrollback(&model.lock());
         let num_bytes_scrollback = scrollback.num_bytes();
+        let max_session_size = max_session_size(ctx);
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
@@ -249,7 +250,7 @@ impl Network {
             ws_proxy_rx: ws_proxy_rx.clone(),
             selection_throttled_tx,
             num_bytes_shared: num_bytes_scrollback,
-            max_session_size: max_session_size(ctx),
+            max_session_size,
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
@@ -276,6 +277,7 @@ impl Network {
 
         // We should validate the scrollback is under the limit before creating the Network, but check here just to be safe.
         if num_bytes_scrollback > network.max_session_size {
+            log::warn!("Session sharing scrollback exceeds max session size; failing startup");
             ctx.emit(NetworkEvent::FailedToCreateSharedSession {
                 reason: FailedToInitializeSessionReason::ScrollbackTooLarge {},
                 cause: None,
@@ -605,6 +607,7 @@ impl Network {
 
         ctx.spawn(
             async move {
+                log::info!("Connecting to session sharing server");
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
                     anyhow::bail!("This channel does not support session-sharing.");
                 };
@@ -617,6 +620,7 @@ impl Network {
                         .and_then(|token| token.bearer_token()),
                 };
                 let socket = WebSocket::connect(create_endpoint, None).await?;
+                log::info!("Connected to session sharing server; preparing initialization");
                 anyhow::Ok((socket.split().await, user_id))
             },
             move |network, conn, ctx| match conn {
@@ -651,6 +655,7 @@ impl Network {
                         log::error!("Sharer failed to send initialization message: {e}");
                         return;
                     }
+                    log::info!("Sent session sharing initialization message");
 
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx);
                 }

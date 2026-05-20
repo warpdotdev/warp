@@ -1056,6 +1056,10 @@ pub struct AgentConversationData {
     /// delivery without re-delivering already-processed events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event_sequence: Option<i64>,
+    /// Whether the user has pinned this child agent in the orchestration
+    /// pill bar. Orchestrator conversations always serialize as `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1367,6 +1371,7 @@ mod tests {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: Some(42),
+            pinned: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1402,6 +1407,7 @@ mod tests {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1436,12 +1442,69 @@ mod tests {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         assert!(
             !json.contains("last_event_sequence"),
             "None should be skipped in serialized output: {json}"
         );
+    }
+
+    #[test]
+    fn agent_conversation_data_roundtrips_pinned() {
+        let data = AgentConversationData {
+            server_conversation_token: None,
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: None,
+            agent_name: None,
+            orchestration_harness_type: None,
+            parent_conversation_id: None,
+            is_remote_child: false,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+            pinned: true,
+        };
+        let json = serde_json::to_string(&data).expect("serialize");
+        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
+        assert!(roundtripped.pinned);
+    }
+
+    #[test]
+    fn agent_conversation_data_skips_serializing_unpinned() {
+        let data = AgentConversationData {
+            server_conversation_token: None,
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: None,
+            agent_name: None,
+            orchestration_harness_type: None,
+            parent_conversation_id: None,
+            is_remote_child: false,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+            pinned: false,
+        };
+        let json = serde_json::to_string(&data).expect("serialize");
+        assert!(
+            !json.contains("pinned"),
+            "Unpinned default should be skipped: {json}"
+        );
+    }
+
+    #[test]
+    fn agent_conversation_data_legacy_rows_default_to_unpinned() {
+        let legacy_json = r#"{"server_conversation_token":null}"#;
+        let data: AgentConversationData =
+            serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
+        assert!(!data.pinned);
     }
 }
 

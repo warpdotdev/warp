@@ -7,6 +7,8 @@ use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
 use crate::{
     ai::{
         agent::{
@@ -14,7 +16,7 @@ use crate::{
             DocumentContentAttachmentSource, DriveObjectPayload,
         },
         block_context::BlockContext,
-        blocklist::BlocklistAIContextModel,
+        blocklist::{BlocklistAIContextModel, SessionContext},
         document::ai_document_model::{AIDocumentId, AIDocumentModel},
         facts::CloudAIFactModel,
         skills::list_skills_if_changed,
@@ -69,23 +71,11 @@ pub(super) fn input_context_for_request(
     if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
         && FeatureFlag::CrossRepoContext.is_enabled()
     {
-        for (codebase_path, status) in
-            CodebaseIndexManager::as_ref(app).get_codebase_index_statuses(app)
-        {
-            // TODO(daniel): We should figure out a mechanism for handling stale codebases.
-            if status.has_synced_version() {
-                // For now, we pass the name of the directory as the name of the
-                // codebase.
-                let codebase_name = codebase_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy())
-                    .unwrap_or_default();
-
-                context.push(AIAgentContext::Codebase {
-                    name: codebase_name.into(),
-                    path: codebase_path.to_string_lossy().into(),
-                })
-            }
+        let session_context = SessionContext::from_session(active_session, app);
+        if session_context.is_remote() {
+            add_remote_codebase_context(&mut context, app);
+        } else {
+            add_local_codebase_context(&mut context, app);
         }
     }
 
@@ -105,6 +95,40 @@ pub(super) fn input_context_for_request(
 
     context.into()
 }
+
+fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
+    for (codebase_path, status) in
+        CodebaseIndexManager::as_ref(app).get_codebase_index_statuses(app)
+    {
+        // TODO(daniel): We should figure out a mechanism for handling stale codebases.
+        if status.has_synced_version() {
+            // For now, we pass the name of the directory as the name of the
+            // codebase.
+            let codebase_name = codebase_path
+                .file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default();
+
+            context.push(AIAgentContext::Codebase {
+                name: codebase_name.into(),
+                path: codebase_path.to_string_lossy().into(),
+            })
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
+    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context() {
+        context.push(AIAgentContext::Codebase {
+            name: codebase.name,
+            path: codebase.path,
+        });
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn add_remote_codebase_context(_context: &mut Vec<AIAgentContext>, _app: &AppContext) {}
 
 /// Parses context reference strings like <block:123> from the user query and returns
 /// a map of reference strings to AIAgentAttachment objects.

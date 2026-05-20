@@ -181,6 +181,10 @@ impl PathCompletionContext for SessionContext {
         self.session.home_dir()
     }
 
+    fn cdpath(&self) -> Option<&str> {
+        self.session.cdpath()
+    }
+
     fn pwd(&self) -> TypedPath<'_> {
         self.current_working_directory.to_path()
     }

@@ -26,6 +26,15 @@ pub(super) fn not_enabled_codebase_index_status(repo_path: String) -> CodebaseIn
 pub(super) fn disabled_codebase_index_status(repo_path: String) -> CodebaseIndexStatus {
     base_codebase_index_status(repo_path, CodebaseIndexStatusState::Disabled)
 }
+pub(super) fn unavailable_codebase_index_status(
+    repo_path: String,
+    failure_message: String,
+) -> CodebaseIndexStatus {
+    CodebaseIndexStatus {
+        failure_message: Some(failure_message),
+        ..base_codebase_index_status(repo_path, CodebaseIndexStatusState::Unavailable)
+    }
+}
 
 fn base_codebase_index_status(
     repo_path: String,
@@ -38,6 +47,7 @@ fn base_codebase_index_status(
         progress_completed: None,
         progress_total: None,
         failure_message: None,
+        root_hash: None,
     }
 }
 
@@ -55,6 +65,7 @@ pub(super) fn codebase_index_status_to_proto(
         progress_completed,
         progress_total,
         failure_message: failure_message_from_codebase_index_status(status),
+        root_hash: status.root_hash().map(|hash| hash.to_string()),
     }
 }
 

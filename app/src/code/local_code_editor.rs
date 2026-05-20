@@ -53,7 +53,7 @@ use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 
 use crate::{
     code::{
-        buffer_location::FileLocation as BufferFileLocation,
+        buffer_location::LocalOrRemotePath as BufferFileLocation,
         editor::model::HoverableLink,
         footer::{CodeFooterView, CodeFooterViewEvent},
         global_buffer_model::{BufferState, GlobalBufferModel},
@@ -73,6 +73,8 @@ use pathfinder_color::ColorU;
 use repo_metadata::repositories::DetectedRepositories;
 use vim::vim::{MotionType, VimMode};
 use warp_core::ui::icons::Icon;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
 use crate::workspace::WorkspaceAction;
@@ -1405,7 +1407,10 @@ impl LocalCodeEditorView {
         {
             Some(workspace_root.to_path_buf())
         } else {
-            match DetectedRepositories::as_ref(ctx).get_root_for_path(path) {
+            match DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok())
+            {
                 Some(root) => Some(root),
                 None => path.parent().map(|s| s.to_path_buf()), // If we can't find root, treat the parent as the root.
             }
@@ -1443,7 +1448,10 @@ impl LocalCodeEditorView {
         {
             Some(workspace_root.to_path_buf())
         } else {
-            match DetectedRepositories::as_ref(ctx).get_root_for_path(&path) {
+            match DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok())
+            {
                 Some(root) => Some(root),
                 None => path.parent().map(|s| s.to_path_buf()),
             }

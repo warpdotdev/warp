@@ -8,7 +8,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::BlocklistAIHistoryModel;
 use ai::api_keys::ApiKeyManager;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -455,6 +455,10 @@ impl AIRequestUsageModel {
         self.request_limit_info.next_refresh_time.utc()
     }
 
+    pub fn next_refresh_time_local(&self) -> DateTime<Local> {
+        self.next_refresh_time().with_timezone(&Local)
+    }
+
     pub fn is_unlimited(&self) -> bool {
         self.request_limit_info.is_unlimited
     }
@@ -508,7 +512,7 @@ impl AIRequestUsageModel {
             .unwrap_or(0)
     }
 
-    fn total_user_interactive_bonus_credits_remaining(&self) -> i32 {
+    pub fn total_user_interactive_bonus_credits_remaining(&self) -> i32 {
         let now = Utc::now();
         self.bonus_grants
             .iter()

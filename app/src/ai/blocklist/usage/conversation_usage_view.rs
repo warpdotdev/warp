@@ -1,5 +1,14 @@
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
+    render_agent_avatar_disc, render_orchestrator_avatar_disc,
+};
+use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::usage::render_context_window_usage_icon;
+use crate::ai::blocklist::usage::rollup::{
+    compute_orchestration_rollup, AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry,
+};
 use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     token_usage_category_display_name, ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY,
@@ -11,9 +20,12 @@ use std::collections::HashMap;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::ConstrainedBox;
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::{
     elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisSize,
+        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize,
         MouseStateHandle, ParentElement, Radius, Text,
     },
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
@@ -52,6 +64,20 @@ pub struct TimingInfo {
     pub wall_to_wall_response_time_ms: Option<i64>,
 }
 
+/// Typed actions dispatched by widgets inside [`ConversationUsageView`]. The
+/// view uses a single typed action surface for the "View details" /
+/// "Hide details" toggle and the "Show N more" affordance so each row's
+/// click handler can dispatch through the regular action pipeline without
+/// borrowing the view directly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConversationUsageViewAction {
+    /// Flip the "View details" / "Hide details" toggle.
+    ToggleDetailsExpanded,
+    /// Reveal the truncated rows beyond the first 5 in the per-agent
+    /// breakdown.
+    ShowAllAgentRows,
+}
+
 /// View to hold a conversation usage info block.
 /// This is used for both the usage footer and the usage history page in settings.
 pub struct ConversationUsageView {
@@ -61,6 +87,26 @@ pub struct ConversationUsageView {
     /// Optional timing information for the last set of responses (only shown in the footer version of this view).
     pub timing_info: Option<TimingInfo>,
     full_terminal_use_tooltip_mouse_state: MouseStateHandle,
+    /// Orchestration credit rollup context. When `Some`, the parent
+    /// conversation is an orchestrator with at least one locally-loaded
+    /// descendant; the rollup itself is recomputed at render time from
+    /// `parent_conversation_id` so descendant updates always read fresh
+    /// values.
+    parent_conversation_id: Option<AIConversationId>,
+    /// Local UI state: whether the "View details" toggle is currently
+    /// expanded. Resets to `false` whenever the footer is rebuilt — the
+    /// rich-content view backing this struct is dropped and recreated on
+    /// every collapse / reopen cycle, satisfying PRODUCT invariant 6.
+    details_expanded: bool,
+    /// Local UI state: whether the user clicked "Show N more" to reveal the
+    /// rows beyond the first 5. Resets on view rebuild for the same reason
+    /// as `details_expanded`.
+    show_all_clicked: bool,
+    /// Per-row mouse states for the "View details" / "Hide details" link
+    /// and the "Show N more" link. Stored on the view so hover/click state
+    /// survives across renders.
+    details_toggle_mouse_state: MouseStateHandle,
+    show_more_mouse_state: MouseStateHandle,
 }
 
 impl ConversationUsageView {
@@ -75,8 +121,100 @@ impl ConversationUsageView {
             display_mode,
             timing_info,
             full_terminal_use_tooltip_mouse_state,
+            parent_conversation_id: None,
+            details_expanded: false,
+            show_all_clicked: false,
+            details_toggle_mouse_state: MouseStateHandle::default(),
+            show_more_mouse_state: MouseStateHandle::default(),
         }
     }
+
+    /// Constructs the view in `DisplayMode::Footer` with orchestration
+    /// credit rollup wired in. The view subscribes to
+    /// [`BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`] so it
+    /// re-renders whenever any contributing conversation's usage metadata
+    /// changes (PRODUCT invariant 7).
+    pub fn new_footer_with_rollup(
+        usage_info: ConversationUsageInfo,
+        timing_info: Option<TimingInfo>,
+        full_terminal_use_tooltip_mouse_state: MouseStateHandle,
+        parent_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, move |_, history, event, ctx| {
+            // Narrow to events that can actually change *this* orchestrator's
+            // rollup. Without this filter the closure wakes on every history
+            // event in the app (one terminal view's typing storm fans out to
+            // every other rollup subscriber), and `ctx.notify()` forces a
+            // full footer re-render on each wake — orders of magnitude more
+            // expensive than the subtree walk below.
+            //
+            // `StartedNewConversation` is intentionally omitted: a freshly
+            // spawned descendant always has zero credits, so the rollup
+            // result is unchanged until its first
+            // `ConversationUsageMetadataUpdated` event (which this filter
+            // will then pick up). Invariant 8 ("new descendant’s row appears
+            // when it first spends a credit") is satisfied by the
+            // credits-update path, not by the spawn event itself.
+            let touched_id = match event {
+                BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id }
+                | BlocklistAIHistoryEvent::RemoveConversation {
+                    conversation_id, ..
+                }
+                | BlocklistAIHistoryEvent::DeletedConversation {
+                    conversation_id, ..
+                } => *conversation_id,
+                _ => return,
+            };
+            if touched_id == parent_conversation_id {
+                ctx.notify();
+                return;
+            }
+            // `RemoveConversation` / `DeletedConversation` fire *after* the
+            // conversation is dropped from `conversations_by_id`, but the
+            // `children_by_parent` index that this walker consults is not
+            // cleaned up on remove, so a just-pruned descendant is still
+            // listed here. That lets us correctly notify on prune (invariant
+            // 9) — the render-time rollup then skips the missing
+            // conversation via the loaded-descendants filter and the row
+            // disappears.
+            let history = history.as_ref(ctx);
+            if descendant_conversation_ids_in_spawn_order(history, parent_conversation_id)
+                .contains(&touched_id)
+            {
+                ctx.notify();
+            }
+        });
+
+        Self {
+            usage_info,
+            display_mode: DisplayMode::Footer,
+            timing_info,
+            full_terminal_use_tooltip_mouse_state,
+            parent_conversation_id: Some(parent_conversation_id),
+            details_expanded: false,
+            show_all_clicked: false,
+            details_toggle_mouse_state: MouseStateHandle::default(),
+            show_more_mouse_state: MouseStateHandle::default(),
+        }
+    }
+
+    /// Returns the current orchestration rollup for this view, or `None`
+    /// when the view is in settings mode, the parent conversation isn't
+    /// known, or the orchestrator has no locally-loaded descendants with
+    /// non-zero credits. The feature is self-gating: settings-mode views
+    /// and conversations without descendants short-circuit before any
+    /// rollup-specific UI is built, so no feature flag is needed.
+    fn rollup(&self, app: &AppContext) -> Option<OrchestrationCreditRollup> {
+        if self.display_mode != DisplayMode::Footer {
+            return None;
+        }
+        let parent_id = self.parent_conversation_id?;
+        let history = BlocklistAIHistoryModel::as_ref(app);
+        compute_orchestration_rollup(parent_id, history)
+    }
+
     /// Helper to collect models grouped by category.
     /// Returns a HashMap mapping category name to list of (model_id, is_byok) tuples.
     /// Handles both category-based fields and legacy warp_tokens/byok_tokens fields.
@@ -124,10 +262,13 @@ impl ConversationUsageView {
         entries_by_category
     }
 
-    fn render_unified_layout(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_unified_layout(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let text_color = blended_colors::text_main(theme, theme.surface_2());
+
+        let rollup = self.rollup(app);
 
         let mut labels: Vec<Box<dyn Element>> = vec![];
         let mut values: Vec<Box<dyn Element>> = vec![];
@@ -138,6 +279,14 @@ impl ConversationUsageView {
             appearance,
         ));
         values.push(render_section_header("".to_string(), appearance));
+
+        // "Credits spent (total)" value: use the rollup total when available,
+        // otherwise the orchestrator's own self total (today's behavior).
+        // PRODUCT invariants 2a, 11.
+        let total_credits_value = rollup
+            .as_ref()
+            .map(|r| r.total_credits)
+            .unwrap_or(self.usage_info.credits_spent);
 
         if self.display_mode == DisplayMode::Footer
             && self.usage_info.credits_spent_for_last_block.is_some()
@@ -153,17 +302,27 @@ impl ConversationUsageView {
             ));
 
             labels.push(render_label_text("Credits spent (total)", appearance));
-            values.push(render_value_text(
-                format_credits(self.usage_info.credits_spent),
+            values.push(self.render_total_credits_value_row(
+                total_credits_value,
+                rollup.as_ref(),
                 appearance,
             ));
         } else {
             labels.push(render_label_text("Credits spent", appearance));
-            values.push(render_value_text(
-                format_credits(self.usage_info.credits_spent),
+            values.push(self.render_total_credits_value_row(
+                total_credits_value,
+                rollup.as_ref(),
                 appearance,
             ));
         }
+
+        // Per-agent breakdown rows render immediately beneath the
+        // "Credits spent (total)" row so they read as a drill-down of
+        // that value, not as a separate section appended at the bottom
+        // of the card. The rows are pushed into the same two-column
+        // label/value layout as the rest of the usage summary; the
+        // existing flex spacing handles indentation.
+        self.append_per_agent_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
 
         labels.push(render_label_text("Tool calls", appearance));
         values.push(render_value_text(
@@ -426,6 +585,217 @@ impl ConversationUsageView {
         .finish()
     }
 
+    /// Pushes the per-agent breakdown rows (and the optional "Show N
+    /// more" link) into the two-column layout when the rollup is active
+    /// and the user has expanded the details. Pushed in two-column
+    /// (label, value) pairs so they slot into the existing flex layout.
+    /// The label column carries the avatar + display name; the value
+    /// column carries the credit value.
+    fn append_per_agent_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        rollup: Option<&OrchestrationCreditRollup>,
+        appearance: &Appearance,
+    ) {
+        let Some(rollup) = rollup else {
+            return;
+        };
+        if !self.details_expanded {
+            return;
+        }
+        let total_entries = rollup.per_agent.len();
+        let shown_entries: usize =
+            if total_entries > PER_AGENT_BREAKDOWN_TRUNCATION_CAP && !self.show_all_clicked {
+                PER_AGENT_BREAKDOWN_TRUNCATION_CAP
+            } else {
+                total_entries
+            };
+        for entry in rollup.per_agent.iter().take(shown_entries) {
+            let (label_el, value_el) = self.render_per_agent_row(entry, appearance);
+            labels.push(label_el);
+            values.push(value_el);
+        }
+        if total_entries > shown_entries {
+            let hidden_count = total_entries - shown_entries;
+            // "Show N more" sits on a row of its own. We push a value-
+            // side placeholder that mirrors the link's natural line
+            // height so the right column stays in lock-step with the
+            // left and the subsequent "Tool calls" / value row pair
+            // doesn't slip out of alignment.
+            labels.push(self.render_show_more_link(hidden_count, appearance));
+            values.push(render_value_text_placeholder(appearance));
+        }
+    }
+
+    /// Renders the "Credits spent (total)" value cell. When a rollup
+    /// applies, the cell is a row with the value followed by a
+    /// "View details ▾" / "Hide details ▴" toggle.
+    fn render_total_credits_value_row(
+        &self,
+        total_credits: f32,
+        rollup: Option<&OrchestrationCreditRollup>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let value_text = render_value_text(format_credits(total_credits), appearance);
+        if rollup.is_none() {
+            return value_text;
+        }
+
+        let toggle = self.render_details_toggle(appearance);
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(8.)
+            .with_child(value_text)
+            .with_child(toggle)
+            .finish()
+    }
+
+    /// Renders the "View details ▾" / "Hide details ▴" toggle link
+    /// rendered to the right of the "Credits spent (total)" value when
+    /// a rollup applies. The link is styled in the theme's hyperlink
+    /// color (`ansi_fg_blue`) — the same color the `FormattedTextElement`
+    /// uses for in-line hyperlinks throughout Agent Mode — so it reads
+    /// as a clickable affordance rather than a passive label. The
+    /// `Hoverable` carries a `PointingHand` cursor on hover; we don't
+    /// also flip the color or weight on hover because `Text` doesn't
+    /// expose an underline knob and changing color in this two-token
+    /// theme system tends to push the link into the accent space.
+    fn render_details_toggle(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let font_size = appearance.ui_font_size() + 2.;
+        let link_color = theme.ansi_fg_blue();
+        let icon_size = font_size;
+        let (label, icon) = if self.details_expanded {
+            ("Hide details", Icon::ChevronUp)
+        } else {
+            ("View details", Icon::ChevronDown)
+        };
+        Hoverable::new(
+            self.details_toggle_mouse_state.clone(),
+            move |_hover_state| {
+                let text_element =
+                    Text::new(label.to_string(), appearance.ui_font_family(), font_size)
+                        .with_color(link_color)
+                        .with_selectable(false)
+                        .finish();
+                let icon_element =
+                    ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
+                        .with_width(icon_size)
+                        .with_height(icon_size)
+                        .finish();
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_spacing(4.)
+                    .with_child(text_element)
+                    .with_child(icon_element)
+                    .finish()
+            },
+        )
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(ConversationUsageViewAction::ToggleDetailsExpanded);
+        })
+        .finish()
+    }
+
+    /// Renders the avatar + label cell for a per-agent breakdown row,
+    /// plus the credit value cell, returned as a `(label, value)` pair so
+    /// the caller can append them to the existing two-column flex layout.
+    ///
+    /// Color choices:
+    /// * Agent name uses the same color as the "USAGE SUMMARY" section
+    ///   header (the disabled-text token) so the rollup rows read as a
+    ///   sub-list of that section rather than competing with primary
+    ///   labels.
+    /// * Credit value uses the label-row color (`text_sub`) so it
+    ///   visually echoes the "Credits spent" label rather than the
+    ///   primary credit count beside it.
+    ///
+    /// Name length: agent names are clipped to the same max width and
+    /// ellipsis treatment used by the orchestration pill bar
+    /// ([`PER_AGENT_LABEL_MAX_WIDTH`]) so a long child-agent name in the
+    /// footer doesn't push the credit-value column off-screen.
+    fn render_per_agent_row(
+        &self,
+        entry: &PerAgentCreditEntry,
+        appearance: &Appearance,
+    ) -> (Box<dyn Element>, Box<dyn Element>) {
+        let theme = appearance.theme();
+        let bg = theme.surface_2();
+        let font_size = appearance.ui_font_size() + 2.;
+        const ROW_AVATAR_SIZE: f32 = 16.;
+        let avatar = match entry.avatar {
+            AgentAvatar::Orchestrator => {
+                render_orchestrator_avatar_disc(ROW_AVATAR_SIZE, theme, appearance)
+            }
+            AgentAvatar::Child => {
+                render_agent_avatar_disc(&entry.display_name, ROW_AVATAR_SIZE, theme, appearance)
+            }
+        };
+        let name_text = Text::new(
+            entry.display_name.clone(),
+            appearance.ui_font_family(),
+            font_size,
+        )
+        .with_color(blended_colors::text_disabled(theme, bg))
+        .soft_wrap(false)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+        let name_element = ConstrainedBox::new(name_text)
+            .with_max_width(PER_AGENT_LABEL_MAX_WIDTH)
+            .finish();
+        let label = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(8.)
+            .with_child(avatar)
+            .with_child(name_element)
+            .finish();
+        let value = Text::new(
+            format_credits(entry.credits_spent),
+            appearance.ui_font_family(),
+            font_size,
+        )
+        .with_color(blended_colors::text_sub(theme, bg))
+        .finish();
+        (label, value)
+    }
+
+    /// Renders the "Show N more" link row shown beneath the first 5
+    /// per-agent rows when the breakdown has more entries than the
+    /// truncation cap. Clicking the link replaces the truncated list with
+    /// the full list on the next render (PRODUCT invariant 5f). Uses the
+    /// same hyperlink-blue color as the "View details" toggle so the
+    /// affordances visually match.
+    fn render_show_more_link(
+        &self,
+        hidden_count: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let font_size = appearance.ui_font_size() + 2.;
+        let link_color = theme.ansi_fg_blue();
+        let label = format!("Show {hidden_count} more");
+        Hoverable::new(self.show_more_mouse_state.clone(), move |_hover_state| {
+            Text::new(label.clone(), appearance.ui_font_family(), font_size)
+                .with_color(link_color)
+                .with_style(Properties {
+                    weight: Weight::Normal,
+                    ..Default::default()
+                })
+                .with_selectable(false)
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(ConversationUsageViewAction::ShowAllAgentRows);
+        })
+        .finish()
+    }
+
     /// Render the card container with display mode-specific styling.
     fn render_card_container(
         &self,
@@ -471,7 +841,7 @@ impl View for ConversationUsageView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        self.render_card_container(self.render_unified_layout(appearance), appearance)
+        self.render_card_container(self.render_unified_layout(app), appearance)
     }
 }
 
@@ -480,9 +850,26 @@ impl Entity for ConversationUsageView {
 }
 
 impl TypedActionView for ConversationUsageView {
-    type Action = ();
+    type Action = ConversationUsageViewAction;
 
-    fn handle_action(&mut self, _action: &Self::Action, _ctx: &mut ViewContext<Self>) {}
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            ConversationUsageViewAction::ToggleDetailsExpanded => {
+                self.details_expanded = !self.details_expanded;
+                // Collapsing the breakdown resets the "Show N more"
+                // expansion so the user lands back on the truncated list
+                // the next time they expand.
+                if !self.details_expanded {
+                    self.show_all_clicked = false;
+                }
+                ctx.notify();
+            }
+            ConversationUsageViewAction::ShowAllAgentRows => {
+                self.show_all_clicked = true;
+                ctx.notify();
+            }
+        }
+    }
 }
 
 /// Render the main header for a usage section.
@@ -529,3 +916,35 @@ fn render_value_text(text: String, appearance: &Appearance) -> Box<dyn Element> 
         .with_color(text_color)
         .finish()
 }
+
+/// Renders a placeholder value cell that occupies one full line of the
+/// value column without painting any visible text. Used opposite the
+/// "Show N more" link so the two-column flex stays row-aligned for the
+/// subsequent rows.
+///
+/// A simple `Empty` element would also keep the slot count matched, but
+/// `Empty` has zero height, so the value column collapses by one line
+/// and "Tool calls" ends up paired with "Show N more" instead of with
+/// the next labels-column row. Pushing a `Text` element with a
+/// single-space content forces a real line-height equal to the link's
+/// own line-height.
+fn render_value_text_placeholder(appearance: &Appearance) -> Box<dyn Element> {
+    let font_size = appearance.ui_font_size() + 2.;
+    Text::new(" ".to_string(), appearance.ui_font_family(), font_size).finish()
+}
+
+/// Maximum rendered width of an agent name in a per-agent breakdown row.
+/// Mirrors `PILL_LABEL_MAX_WIDTH` in the orchestration pill bar so the
+/// footer's name treatment never exceeds what the pill bar already
+/// enforces at the top of the agent view.
+const PER_AGENT_LABEL_MAX_WIDTH: f32 = 110.;
+
+/// Maximum number of rows shown in the per-agent breakdown before the
+/// "Show N more" affordance truncates the list. Matches PRODUCT
+/// invariants 5e (≤ 5 rows render in full) and 5f (> 5 rows render the
+/// first 5 followed by a "Show N more" link).
+const PER_AGENT_BREAKDOWN_TRUNCATION_CAP: usize = 5;
+
+#[cfg(test)]
+#[path = "conversation_usage_view_tests.rs"]
+mod tests;

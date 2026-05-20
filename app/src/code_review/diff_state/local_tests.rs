@@ -1,5 +1,7 @@
 use super::*;
-use crate::util::git::{parse_range, parse_unified_diff_header, sort_branches_main_first};
+use crate::util::git::{
+    parse_range, parse_unified_diff_header, sort_branches_main_first, BranchEntry,
+};
 
 #[test]
 fn test_parse_range_with_comma() {
@@ -52,7 +54,7 @@ fn test_parse_unified_diff_header_single_line() {
 
 #[test]
 fn test_sort_branches_main_first_empty() {
-    let branches: Vec<(String, bool)> = vec![];
+    let branches: Vec<BranchEntry> = vec![];
     let result: Vec<_> = sort_branches_main_first(&branches).collect();
     assert!(result.is_empty());
 }
@@ -60,9 +62,18 @@ fn test_sort_branches_main_first_empty() {
 #[test]
 fn test_sort_branches_main_first_no_main() {
     let branches = vec![
-        ("feature-a".to_string(), false),
-        ("feature-b".to_string(), false),
-        ("feature-c".to_string(), false),
+        BranchEntry {
+            name: "feature-a".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "feature-b".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "feature-c".to_string(),
+            is_main: false,
+        },
     ];
     let result: Vec<_> = sort_branches_main_first(&branches).collect();
     // No main branches — order should be unchanged.
@@ -72,12 +83,21 @@ fn test_sort_branches_main_first_no_main() {
 #[test]
 fn test_sort_branches_main_first_promotes_main() {
     let branches = vec![
-        ("feature-a".to_string(), false),
-        ("main".to_string(), true),
-        ("feature-b".to_string(), false),
+        BranchEntry {
+            name: "feature-a".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "main".to_string(),
+            is_main: true,
+        },
+        BranchEntry {
+            name: "feature-b".to_string(),
+            is_main: false,
+        },
     ];
     let result: Vec<_> = sort_branches_main_first(&branches)
-        .map(|(name, _)| name.as_str())
+        .map(|entry| entry.name.as_str())
         .collect();
     assert_eq!(result, vec!["main", "feature-a", "feature-b"]);
 }
@@ -85,12 +105,21 @@ fn test_sort_branches_main_first_promotes_main() {
 #[test]
 fn test_sort_branches_main_first_main_already_first() {
     let branches = vec![
-        ("main".to_string(), true),
-        ("feature-a".to_string(), false),
-        ("feature-b".to_string(), false),
+        BranchEntry {
+            name: "main".to_string(),
+            is_main: true,
+        },
+        BranchEntry {
+            name: "feature-a".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "feature-b".to_string(),
+            is_main: false,
+        },
     ];
     let result: Vec<_> = sort_branches_main_first(&branches)
-        .map(|(name, _)| name.as_str())
+        .map(|entry| entry.name.as_str())
         .collect();
     assert_eq!(result, vec!["main", "feature-a", "feature-b"]);
 }
@@ -99,13 +128,25 @@ fn test_sort_branches_main_first_main_already_first() {
 fn test_sort_branches_main_first_preserves_recency_order_for_non_main() {
     // Non-main branches should remain in their original (recency) order.
     let branches = vec![
-        ("recent-feature".to_string(), false),
-        ("main".to_string(), true),
-        ("older-feature".to_string(), false),
-        ("oldest-feature".to_string(), false),
+        BranchEntry {
+            name: "recent-feature".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "main".to_string(),
+            is_main: true,
+        },
+        BranchEntry {
+            name: "older-feature".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "oldest-feature".to_string(),
+            is_main: false,
+        },
     ];
     let result: Vec<_> = sort_branches_main_first(&branches)
-        .map(|(name, _)| name.as_str())
+        .map(|entry| entry.name.as_str())
         .collect();
     assert_eq!(
         result,
@@ -118,12 +159,21 @@ fn test_sort_branches_main_first_multiple_main_flags() {
     // Defensive: both flagged as main (shouldn't happen in practice, but
     // sort_branches_main_first should handle it gracefully).
     let branches = vec![
-        ("feature".to_string(), false),
-        ("main".to_string(), true),
-        ("master".to_string(), true),
+        BranchEntry {
+            name: "feature".to_string(),
+            is_main: false,
+        },
+        BranchEntry {
+            name: "main".to_string(),
+            is_main: true,
+        },
+        BranchEntry {
+            name: "master".to_string(),
+            is_main: true,
+        },
     ];
     let result: Vec<_> = sort_branches_main_first(&branches)
-        .map(|(name, _)| name.as_str())
+        .map(|entry| entry.name.as_str())
         .collect();
     // Both main-flagged entries appear first, non-main last.
     assert_eq!(result, vec!["main", "master", "feature"]);

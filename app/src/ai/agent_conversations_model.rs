@@ -10,7 +10,9 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskState};
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskState,
+};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
@@ -77,10 +79,12 @@ enum TaskFetchState {
     /// The fetch returned a permanent (non-transient) HTTP error such as 401/403/404; remember
     /// when it failed so we can back off for [`PERMANENT_FETCH_FAILURE_COOLDOWN`] before
     /// retrying. We don't refuse forever in case permissions change mid-session.
-    PermanentlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    PermanentlyFailed { at: Instant, message: String },
     /// The retry chain just exhausted on a transient error; remember when it failed so we
     /// can back off for [`TRANSIENT_FETCH_FAILURE_COOLDOWN`] before retrying.
-    TransientlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    TransientlyFailed { at: Instant, message: String },
 }
 
 /// Protected eviction: we'll always keep at least 200 personal tasks in the model.
@@ -1161,6 +1165,29 @@ impl AgentConversationsModel {
         let active_views_model = ActiveAgentViewsModel::as_ref(app);
 
         if let Some(task_id) = entry.identity.ambient_agent_task_id {
+            match self
+                .tasks
+                .get(&task_id)
+                .map(AmbientAgentTask::active_live_session_state)
+            {
+                Some(AmbientAgentLiveSessionState::Attachable { session_id }) => {
+                    return Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                        session_id,
+                        task_id,
+                    });
+                }
+                Some(AmbientAgentLiveSessionState::ActiveUnattachable) => {
+                    return active_views_model
+                        .get_terminal_view_id_for_ambient_task(task_id)
+                        .map(
+                            |terminal_view_id| WorkspaceAction::FocusTerminalViewInWorkspace {
+                                terminal_view_id,
+                            },
+                        );
+                }
+                Some(AmbientAgentLiveSessionState::Inactive) | None => {}
+            }
+
             if let Some(terminal_view_id) =
                 active_views_model.get_terminal_view_id_for_ambient_task(task_id)
             {
@@ -1191,20 +1218,6 @@ impl AgentConversationsModel {
                         terminal_view_id,
                     });
                 }
-            }
-        }
-
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(session_id) = self
-                .tasks
-                .get(&task_id)
-                .and_then(AmbientAgentTask::active_execution_session_id)
-                .and_then(entry::parse_session_id)
-            {
-                return Some(WorkspaceAction::OpenAmbientAgentSession {
-                    session_id,
-                    task_id,
-                });
             }
         }
 
@@ -1377,7 +1390,8 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
-            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
@@ -1390,6 +1404,19 @@ impl AgentConversationsModel {
     /// Get raw task data by task ID
     pub fn get_task_data(&self, task_id: &AmbientAgentTaskId) -> Option<AmbientAgentTask> {
         self.tasks.get(task_id).cloned()
+    }
+
+    /// Returns the error message when the most recent fetch for `task_id` ended in a
+    /// permanent or transient failure and the cooldown has not yet elapsed. The caller
+    /// can use this to display an error state in the details panel.
+    pub fn task_fetch_error(&self, task_id: &AmbientAgentTaskId) -> Option<&str> {
+        match self.task_fetch_state.get(task_id) {
+            Some(
+                TaskFetchState::PermanentlyFailed { message, .. }
+                | TaskFetchState::TransientlyFailed { message, .. },
+            ) => Some(message),
+            _ => None,
+        }
     }
 
     /// Get raw task data by task ID, fetching from server if not in memory.
@@ -1420,15 +1447,15 @@ impl AgentConversationsModel {
         // one applies to a given id.
         match self.task_fetch_state.get(task_id) {
             Some(TaskFetchState::InFlight) => return None,
-            Some(TaskFetchState::PermanentlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
+            Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
+                if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
                     return None;
                 }
                 // Cooldown has elapsed; clear the entry and fall through to fetch again.
                 self.task_fetch_state.remove(task_id);
             }
-            Some(TaskFetchState::TransientlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
+            Some(TaskFetchState::TransientlyFailed { at, .. }) => {
+                if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
                     return None;
                 }
                 self.task_fetch_state.remove(task_id);
@@ -1438,11 +1465,11 @@ impl AgentConversationsModel {
 
         // Opportunistically purge other expired entries so the map doesn't grow unbounded.
         self.task_fetch_state.retain(|_, state| match state {
-            TaskFetchState::TransientlyFailedAt(failed_at) => {
-                failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::TransientlyFailed { at, .. } => {
+                at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
             }
-            TaskFetchState::PermanentlyFailedAt(failed_at) => {
-                failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::PermanentlyFailed { at, .. } => {
+                at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
             }
             TaskFetchState::InFlight => true,
         });
@@ -1472,13 +1499,17 @@ impl AgentConversationsModel {
                 }
                 RequestState::RequestFailed(e) => {
                     let now = Instant::now();
+                    let message = format!("{e}");
                     let new_state = if is_transient_http_error(&e) {
-                        TaskFetchState::TransientlyFailedAt(now)
+                        TaskFetchState::TransientlyFailed { at: now, message }
                     } else {
-                        TaskFetchState::PermanentlyFailedAt(now)
+                        TaskFetchState::PermanentlyFailed { at: now, message }
                     };
                     model.task_fetch_state.insert(task_id_clone, new_state);
                     report_error!(e);
+
+                    // On failure, this still emits an update event so that the details panel can re-render with the error message.
+                    ctx.emit(AgentConversationsModelEvent::TasksUpdated);
                 }
                 RequestState::RequestFailedRetryPending(_) => {
                     // Wait for a terminal outcome before updating dedup/backoff state.

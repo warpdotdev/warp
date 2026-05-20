@@ -59,7 +59,7 @@ impl GitBranchOnClickValue {
                     .map(str::to_string);
                 Self::linked_worktree(branch_name, worktree_path)
             }
-            _ => Self::new(value.to_string()),
+            _ => Self::new(branch_name),
         }
     }
 }
@@ -197,6 +197,17 @@ mod tests {
         for value in values {
             assert_eq!(GitBranchOnClickValue::decode(&value.encode()), value);
         }
+    }
+
+    #[test]
+    fn test_git_branch_on_click_value_decode_uses_branch_name_for_unknown_payload() {
+        let value =
+            format!("feature-a{ENCODED_VALUE_SEPARATOR}unknown{ENCODED_VALUE_SEPARATOR}metadata");
+
+        assert_eq!(
+            GitBranchOnClickValue::decode(&value),
+            GitBranchOnClickValue::new("feature-a".to_string())
+        );
     }
 
     #[test]

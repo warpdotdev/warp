@@ -155,7 +155,7 @@ type DeleteCloudObjectFn =
 pub fn initialize(
     ctx: &mut AppContext,
     scope: PersistenceScope,
-) -> (Option<PersistedData>, Option<WriterHandles>) {
+) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     unsafe {
         // Set up logging before any SQLite calls.
         init_logging();
@@ -163,18 +163,7 @@ pub fn initialize(
     let database_path = database_file_path_for_scope(&scope);
     match init_db(&scope) {
         Ok(mut conn) => {
-            let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
-            let app_state = match read_sqlite_data(&mut conn, user_uid) {
-                Ok(app_state) => Some(app_state),
-                Err(err) => {
-                    send_telemetry_from_app_ctx!(
-                        TelemetryEvent::DatabaseReadError(err.to_string()),
-                        ctx
-                    );
-                    report_error!(anyhow::Error::new(err).context("Failed to read app state"));
-                    None
-                }
-            };
+            let persisted_data = read_persisted_data(&mut conn, ctx);
 
             let writer_handles = match start_writer(conn, database_path.clone()) {
                 Ok(writer_handles) => Some(writer_handles),
@@ -187,7 +176,7 @@ pub fn initialize(
                     None
                 }
             };
-            (app_state, writer_handles)
+            (persisted_data, writer_handles)
         }
         Err(err) => {
             send_telemetry_from_app_ctx!(
@@ -196,6 +185,21 @@ pub fn initialize(
             );
             report_db_error("initialization", err, &database_path);
             (None, None)
+        }
+    }
+}
+
+fn read_persisted_data(
+    conn: &mut SqliteConnection,
+    ctx: &mut AppContext,
+) -> Option<Box<PersistedData>> {
+    let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
+    match read_sqlite_data(conn, user_uid) {
+        Ok(app_state) => Some(Box::new(app_state)),
+        Err(err) => {
+            send_telemetry_from_app_ctx!(TelemetryEvent::DatabaseReadError(err.to_string()), ctx);
+            report_error!(anyhow::Error::new(err).context("Failed to read persisted data"));
+            None
         }
     }
 }
@@ -1684,7 +1688,9 @@ fn get_all_mcp_server_installations(
 
     let improper_rows = rows_len - result.len();
     if improper_rows > 0 {
-        log::warn!("Skipping {improper_rows} rows from mcp_server_installations table due to malformation.");
+        log::warn!(
+            "Skipping {improper_rows} rows from mcp_server_installations table due to malformation."
+        );
     }
 
     Ok(result)

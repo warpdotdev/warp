@@ -23,8 +23,6 @@ directive @goField(forceResolver: Boolean, name: String, omittable: Boolean) on 
 
 directive @isDogfood on FIELD_DEFINITION
 
-directive @isWarpEng on FIELD_DEFINITION
-
 directive @key on INTERFACE | OBJECT
 
 """
@@ -85,6 +83,11 @@ enum AICreditsUsageAndCostSubjectType {
 }
 
 enum AICreditsUsageAndCostType {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple cost types. Real usage rows never carry this value.
+  """
+  AGGREGATE
   AMBIENT_BONUS_GRANT
   BASE_LIMIT
   BONUS_GRANT
@@ -92,18 +95,35 @@ enum AICreditsUsageAndCostType {
 }
 
 enum AICreditsUsageBucket {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple usage buckets. Real usage rows never carry this value.
+  """
+  AGGREGATE
   AI
   COMPUTE
+  PLATFORM
   SUGGESTED_CODE_DIFFS
   VOICE
 }
 
 enum AICreditsUsageSource {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple usage sources. Real usage rows never carry this value.
+  """
+  AGGREGATE
   CLOUD
   LOCAL
 }
 
+type APIKeyAgentInfo {
+  name: String!
+  uid: ID!
+}
+
 type APIKeyProperties {
+  agentInfo: APIKeyAgentInfo
   createdAt: Time!
   expiresAt: Time
   keySuffix: String!
@@ -220,22 +240,9 @@ enum AgentHarness {
   OZ
 }
 
-"""A single model available for a third-party harness."""
-type HarnessModel {
-  displayName: String!
-  id: ID!
-}
-
-"""A harness available to the requesting user."""
-type HarnessInfo {
-  availableModels: [HarnessModel!]!
-  displayName: String!
-  enabled: Boolean!
-  harness: AgentHarness!
-}
-
-type AvailableHarnesses {
-  harnesses: [HarnessInfo!]!
+"""Controls whether a team can configure settings for agent harnesses."""
+type AgentHarnessesPolicy {
+  toggleable: Boolean!
 }
 
 """Controls how many agent identities (service accounts) a team can have."""
@@ -336,6 +343,11 @@ input AgentTaskStatusMessageInput {
   message: String!
 }
 
+enum AgentVisibility {
+  PERSONAL
+  TEAM
+}
+
 type AiAutonomyPolicy {
   enabled: Boolean!
   toggleable: Boolean!
@@ -401,6 +413,7 @@ type AmbientAgentSettings {
   defaultHostSlug: String
   enableWarpAttribution: AdminEnablementSetting!
   instanceShape: InstanceShape
+  localAgentTracking: AgentVisibility!
   warpHostedAgentsEnabled: Boolean!
 }
 
@@ -408,10 +421,12 @@ input AmbientAgentSettingsInput {
   defaultHostSlug: String
   enableWarpAttribution: AdminEnablementSetting
   instanceShape: InstanceShapeInput
+  localAgentTracking: AgentVisibility
   warpHostedAgentsEnabled: Boolean
 }
 
 type AmbientAgentsPolicy {
+  allowedLocalAgentTrackingOptions: [AgentVisibility!]!
   enabled: Boolean!
   instanceShape: InstanceShape
   maxConcurrentAgents: Int!
@@ -462,6 +477,10 @@ type ApplyFileDiffStats {
   linesRemoved: Int!
 }
 
+type AvailableHarnesses {
+  harnesses: [HarnessInfo!]!
+}
+
 type AvailableLlms {
   choices: [LlmInfo!]!
   defaultId: String!
@@ -473,6 +492,8 @@ type AwsProviderConfig {
 }
 
 type BillingCycleUsageHistory {
+  currentPeriodEnd: Time!
+  currentPeriodStart: Time!
   summaries: [BillingCycleUsageSummary!]!
 }
 
@@ -644,6 +665,7 @@ type CloudEnvironmentConfig {
   githubRepos: [GitHubRepo!]!
   name: String!
   providers: ProvidersConfig
+  secrets: [SecretRefOutput!]
   setupCommands: [String!]
 }
 
@@ -739,6 +761,20 @@ inside a folder or at the root of a drive.
 """
 union Container = FolderContainer | Space
 
+"""
+Marker for the client to provide a CRC32C checksum of the upload content.
+
+The checksum should be serialized as a base64-encoded big-endian 4-byte value.
+"""
+type ContentCRC32CFieldValue {
+  _: Boolean
+}
+
+"""Marker for the client to provide the upload content."""
+type ContentDataFieldValue {
+  _: Boolean
+}
+
 scalar ContentHash
 
 """Represents usage data for a single multi-agent conversation."""
@@ -783,7 +819,7 @@ input CreateAgentTaskInput {
   """Optional environment UID to run the task in."""
   environmentUid: ID
 
-  """Optional parent run ID to persist on the created task."""
+  """Optional run ID of the parent that spawned this local task."""
   parentRunId: ID
 
   """The prompt for the agent task."""
@@ -894,6 +930,7 @@ type CreateNotebookOutput implements Response {
 union CreateNotebookResult = CreateNotebookOutput | UserFacingError
 
 input CreateSimpleIntegrationInput {
+  agentUid: ID
   config: SimpleIntegrationConfig!
   enabled: Boolean!
   integrationType: String!
@@ -924,6 +961,7 @@ type CreateTeamOutput implements Response {
 union CreateTeamResult = CreateTeamOutput | UserFacingError
 
 type CreateUploadTarget {
+  fields: [UploadField!]!
   headers: [CreateUploadTargetHeader!]!
   method: String!
   url: String!
@@ -1102,6 +1140,9 @@ enum EmbeddingConfig {
   """Corresponds to the Voyage voyage-3.5-lite model with 512 dimensions."""
   VOYAGE_3_5_LITE_512
 
+  """Corresponds to the Voyage voyage-4 model with 512 dimensions."""
+  VOYAGE_4_512
+
   """Corresponds to the Voyage voyage-code-3 model with 512 dimensions."""
   VOYAGE_CODE_3_512
 }
@@ -1122,19 +1163,31 @@ type EmptyTrashOutput implements Response {
 
 union EmptyTrashResult = EmptyTrashOutput | UserFacingError
 
-type EnterpriseAnalyticsPolicy {
+type EnterpriseAnalyticsDataCollectionSettings {
   enabled: Boolean!
+}
+
+input EnterpriseAnalyticsDataCollectionSettingsInput {
+  enabled: Boolean
+}
+
+type EnterpriseAnalyticsPolicy {
+  default: Boolean!
+  enabled: Boolean!
+  toggleable: Boolean!
 }
 
 type EnterpriseBillingSettings {
   maxMonthlyCloudAgentsSpendCents: Int
   maxMonthlyLocalAgentsSpendCents: Int
+  maxMonthlyPerUserTotalSpendCents: Int
   maxMonthlyTotalSpendCents: Int
 }
 
 input EnterpriseBillingSettingsInput {
   maxMonthlyCloudAgentsSpendCents: Int
   maxMonthlyLocalAgentsSpendCents: Int
+  maxMonthlyPerUserTotalSpendCents: Int
   maxMonthlyTotalSpendCents: Int
 }
 
@@ -1221,9 +1274,9 @@ enum Experiment {
   SESSION_SHARING_CONTROL
   SESSION_SHARING_EXPERIMENT
   SPLIT_CREDIT_COST_CONTROL
+  SPLIT_CREDIT_COST_EXPERIMENT
   SSH_REMOTE_SERVER_CONTROL
   SSH_REMOTE_SERVER_EXPERIMENT
-  SPLIT_CREDIT_COST_EXPERIMENT
   SUGGESTED_CODE_DIFFS_CONTROL
   SUGGESTED_CODE_DIFFS_EXPERIMENT
   TMUX_SSH_WARPIFICATION_CONTROL
@@ -1331,6 +1384,11 @@ type GcpProviderConfig {
 }
 
 input GenerateApiKeyInput {
+  """
+  Optional agent UID to use as the authenticated principal for this key.
+  The team is resolved from the agent automatically. The caller must be a member of that team.
+  The agent must be available on the team's current plan.
+  """
   agentUid: ID
   expiresAt: Time
   name: String!
@@ -1647,6 +1705,74 @@ type GithubRepositoryNotFoundError implements UserFacingErrorInterface {
 
 union GuestSubject = PendingUserGuest | TeamGuest | UserGuest
 
+input HarnessAuthSecretsInput {
+  claudeAuthSecretName: String
+  codexAuthSecretName: String
+}
+
+type HarnessAuthSecretsOutput implements Response {
+  managedSecrets: [ManagedSecret!]!
+  responseContext: ResponseContext!
+}
+
+union HarnessAuthSecretsResult = HarnessAuthSecretsOutput | UserFacingError
+
+type HarnessConfig {
+  enabled: Boolean!
+}
+
+input HarnessConfigInput {
+  enabled: Boolean
+}
+
+"""A harness available to the requesting user."""
+type HarnessInfo {
+  """
+  Models the user can pick for this harness. Empty for harnesses without a
+  configured catalog.
+  """
+  availableModels: [HarnessModel!]!
+  displayName: String!
+  enabled: Boolean!
+  harness: AgentHarness!
+}
+
+input HarnessInput {
+  type: String!
+}
+
+"""A single model available for a third-party harness."""
+type HarnessModel {
+  displayName: String!
+  id: ID!
+  reasoningLevel: String
+}
+
+"""
+Per-harness enablement settings for a team. Defaults to enabled for all harnesses.
+Only configurable on enterprise plans.
+"""
+type HarnessSettings {
+  harnessConfigs: [HarnessSettingsEntry!]!
+  optOutOfNewHarnesses: Boolean!
+}
+
+type HarnessSettingsEntry {
+  displayName: String!
+  harness: AgentHarness!
+  settings: HarnessConfig!
+}
+
+input HarnessSettingsEntryInput {
+  harness: AgentHarness!
+  settings: HarnessConfigInput!
+}
+
+input HarnessSettingsInput {
+  harnessConfigs: [HarnessSettingsEntryInput!]
+  optOutOfNewHarnesses: Boolean
+}
+
 enum HostEnablementSetting {
   ENFORCE
   RESPECT_USER_SETTING
@@ -1788,6 +1914,14 @@ type ListAIConversationsOutput implements Response {
 
 union ListAIConversationsResult = ListAIConversationsOutput | UserFacingError
 
+input ListHarnessAuthSecretsInput {
+  """
+  Harness whose auth-credential secrets should be returned. Harnesses that
+  don't use auth secrets (e.g. OZ) always return an empty result.
+  """
+  harness: AgentHarness!
+}
+
 type ListWarpDevImagesOutput implements Response {
   """List of available Warp dev base images from Docker Hub"""
   images: [ImageTag!]!
@@ -1796,12 +1930,24 @@ type ListWarpDevImagesOutput implements Response {
 
 union ListWarpDevImagesResult = ListWarpDevImagesOutput | UserFacingError
 
+type ListedHarnessAuthSecretsConfig {
+  claudeAuthSecretName: String
+  codexAuthSecretName: String
+}
+
+type ListedHarnessConfig {
+  type: String!
+}
+
 type ListedSimpleIntegrationConfig {
   basePrompt: String!
   computerUseEnabled: Boolean!
   environmentUid: String!
+  harness: ListedHarnessConfig
+  harnessAuthSecrets: ListedHarnessAuthSecretsConfig
   mcpServersJson: String!
   modelId: String!
+  secrets: [SecretRefOutput!]
   workerHost: String
 }
 
@@ -1834,6 +1980,11 @@ type LlmContextWindow {
 type LlmHostSettings {
   enabled: Boolean!
   enablementSetting: HostEnablementSetting
+
+  """
+  IAM role ARN that Oz Cloud Agents assume via the OIDC trust flow to obtain credentials for AWS Bedrock requests.
+  """
+  oidcAssumeRoleArn: String
   optOutOfNewModels: Boolean!
   region: String
 }
@@ -1847,6 +1998,7 @@ type LlmHostSettingsEntry {
 input LlmHostSettingsInput {
   enabled: Boolean
   enablementSetting: HostEnablementSetting
+  oidcAssumeRoleArn: String
   optOutOfNewModels: Boolean
   region: String
 }
@@ -1881,11 +2033,14 @@ Add self-hosted and other cloud providers here as needed.
 """
 enum LlmModelHost {
   AWS_BEDROCK
+  CUSTOM_ENDPOINT
   DIRECT_API
 }
 
 type LlmModelHostSettings {
+  defaultHostModelRef: String
   enabled: Boolean!
+  hostModelRef: String
 }
 
 type LlmModelHostSettingsEntry {
@@ -1895,6 +2050,7 @@ type LlmModelHostSettingsEntry {
 
 input LlmModelHostSettingsInput {
   enabled: Boolean
+  hostModelRef: String
 }
 
 input LlmModelHostSettingsInputEntry {
@@ -2010,13 +2166,9 @@ type ManagedSecretAnthropicApiKeyValue {
   apiKey: String!
 }
 
-"""A managed secret value representing an Anthropic Bedrock API key."""
-type ManagedSecretAnthropicBedrockApiKeyValue {
-  awsBearerTokenBedrock: String!
-  awsRegion: String!
-}
-
-"""A managed secret value representing Anthropic Bedrock access key credentials."""
+"""
+A managed secret value representing Anthropic Bedrock access key credentials.
+"""
 type ManagedSecretAnthropicBedrockAccessKeyValue {
   awsAccessKeyId: String!
   awsRegion: String!
@@ -2029,6 +2181,12 @@ type ManagedSecretAnthropicBedrockAccessKeyValue {
   awsSessionToken: String
 }
 
+"""A managed secret value representing an Anthropic Bedrock API key."""
+type ManagedSecretAnthropicBedrockApiKeyValue {
+  awsBearerTokenBedrock: String!
+  awsRegion: String!
+}
+
 """ManagedSecretConfig contains configuration for managed secrets."""
 type ManagedSecretConfig {
   """
@@ -2037,6 +2195,17 @@ type ManagedSecretConfig {
   This is the base64 representation of a keyset serialized with tink's binary format.
   """
   publicKey: String
+}
+
+"""A managed secret value representing an OpenAI API key."""
+type ManagedSecretOpenAiApiKeyValue {
+  apiKey: String!
+
+  """
+  Optional base URL for the OpenAI API. When set, the harness uses this
+  instead of the provider default (e.g. for regional endpoints).
+  """
+  baseUrl: String
 }
 
 """A raw, unencrypted managed secret value."""
@@ -2050,10 +2219,11 @@ enum ManagedSecretType {
   ANTHROPIC_BEDROCK_ACCESS_KEY
   ANTHROPIC_BEDROCK_API_KEY
   DOTENVX
+  OPENAI_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""
@@ -2067,20 +2237,11 @@ type ManagedSecretsOutput implements Response {
 
 union ManagedSecretsResult = ManagedSecretsOutput | UserFacingError
 
-input ListHarnessAuthSecretsInput {
-  """
-  Harness whose auth-credential secrets should be returned. Harnesses that
-  don't use auth secrets (e.g. OZ) always return an empty result.
-  """
-  harness: AgentHarness!
+type MemberSpendLimit {
+  maxMonthlySpendCents: Int!
+  principalType: PrincipalType!
+  principalUid: String!
 }
-
-type HarnessAuthSecretsOutput implements Response {
-  managedSecrets: [ManagedSecret!]!
-  responseContext: ResponseContext!
-}
-
-union HarnessAuthSecretsResult = HarnessAuthSecretsOutput | UserFacingError
 
 enum MembershipRole {
   ADMIN
@@ -2774,6 +2935,12 @@ type RootQuery {
   getIntegrationsUsingEnvironment(input: GetIntegrationsUsingEnvironmentInput!, requestContext: RequestContext!): GetIntegrationsUsingEnvironmentResult!
   getOAuthConnectTxStatus(input: GetOAuthConnectTxStatusInput!, requestContext: RequestContext!): GetOAuthConnectTxStatusResult!
   getRelevantFragments(input: GetRelevantFragmentsInput!, requestContext: RequestContext!): GetRelevantFragmentsResult!
+
+  """
+  Retrieve managed secrets that serve as authentication credentials for the given harness,
+  scoped to the caller's personal drive and team drives.
+  """
+  harnessAuthSecrets(input: ListHarnessAuthSecretsInput!, requestContext: RequestContext!): HarnessAuthSecretsResult!
   listAIConversations(input: ListAIConversationsInput!, requestContext: RequestContext!): ListAIConversationsResult!
 
   """
@@ -2782,12 +2949,6 @@ type RootQuery {
   """
   listWarpDevImages: ListWarpDevImagesResult!
   managedSecrets(input: ManagedSecretsInput!, requestContext: RequestContext!): ManagedSecretsResult!
-
-  """
-  Retrieve managed secrets that serve as authentication credentials for the given harness,
-  scoped to the caller's personal drive and team drives.
-  """
-  harnessAuthSecrets(input: ListHarnessAuthSecretsInput!, requestContext: RequestContext!): HarnessAuthSecretsResult!
   pricingInfo(requestContext: RequestContext!): PricingInfoResult!
   rerankFragments(input: RerankFragmentsInput!, requestContext: RequestContext!): RerankFragmentsResult!
 
@@ -2861,6 +3022,13 @@ type ScreenshotArtifact {
   mimeType: String!
 }
 
+"""
+Error type for when a plan change would put the team over the target tier's seat cap.
+"""
+type SeatCapExceededError implements UserFacingErrorInterface {
+  message: String!
+}
+
 type SecretRedactionRegex {
   name: String
   pattern: String!
@@ -2880,6 +3048,15 @@ type SecretRedactionSettings {
 input SecretRedactionSettingsInput {
   enabled: Boolean
   regexes: [SecretRedactionRegexInput!]
+}
+
+input SecretRefInput {
+  """The managed secret name to include."""
+  name: String!
+}
+
+type SecretRefOutput {
+  name: String!
 }
 
 input SendOnboardingSurveyResponsesInput {
@@ -3043,6 +3220,7 @@ type SharedWorkflowsPolicy {
 }
 
 type SimpleIntegration {
+  agentUid: ID
   connectionLink: String!
   connectionStatus: SimpleIntegrationConnectionStatus!
   createdAt: Time
@@ -3056,9 +3234,12 @@ input SimpleIntegrationConfig {
   basePrompt: String
   computerUseEnabled: Boolean
   environmentUid: String
+  harness: HarnessInput
+  harnessAuthSecrets: HarnessAuthSecretsInput
   mcpServersJson: String
   modelId: String
   removeMcpServerNames: [String!]
+  secrets: [SecretRefInput!]
   workerHost: String
 }
 
@@ -3101,6 +3282,11 @@ type Space {
 enum SpaceType {
   Team
   User
+}
+
+"""A literal string value."""
+type StaticUploadFieldValue {
+  value: String!
 }
 
 input StripeBillingPortalInput {
@@ -3206,24 +3392,6 @@ type TaskAttachment {
   mimeType: String!
 }
 
-"""Input for task-related queries."""
-input TaskInput {
-  """The ID of the task."""
-  taskId: ID!
-}
-
-type TaskOutput implements Response {
-  responseContext: ResponseContext!
-  task: Task!
-}
-
-union TaskResult = TaskOutput | UserFacingError
-
-type TaskSecretEntry {
-  name: String!
-  value: ManagedSecretValue!
-}
-
 """A set of git credentials for a single hosting provider."""
 type TaskGitCredential {
   """
@@ -3232,7 +3400,7 @@ type TaskGitCredential {
   """
   email: String
 
-  """The git hosting provider (e.g. \"github.com\")."""
+  """The git hosting provider (e.g. "github.com")."""
   host: String!
 
   """The OAuth or installation access token."""
@@ -3261,6 +3429,24 @@ type TaskGitCredentialsOutput implements Response {
 
 union TaskGitCredentialsResult = TaskGitCredentialsOutput | UserFacingError
 
+"""Input for task-related queries."""
+input TaskInput {
+  """The ID of the task."""
+  taskId: ID!
+}
+
+type TaskOutput implements Response {
+  responseContext: ResponseContext!
+  task: Task!
+}
+
+union TaskResult = TaskOutput | UserFacingError
+
+type TaskSecretEntry {
+  name: String!
+  value: ManagedSecretValue!
+}
+
 """Input for the taskSecrets query."""
 input TaskSecretsInput {
   """The ID of the task."""
@@ -3287,7 +3473,14 @@ type Team {
   creatorId in v1 Team type is deprecated and should not be used. Use adminUid instead.
   """
   adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+
+  """
+  The email domain associated with the team, if one has been set by Warp staff.
+  Required for features that key off the team's domain (e.g. domain capture, SSO).
+  """
+  domain: String
   managedSecrets: ManagedSecretConfig
+  memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
   name: String!
   uid: ID!
@@ -3337,6 +3530,7 @@ input TelemetrySettingsInput {
 }
 
 type Tier {
+  agentHarnessesPolicy: AgentHarnessesPolicy
   agentIdentitiesPolicy: AgentIdentitiesPolicy
   aiAutonomyPolicy: AiAutonomyPolicy
   aiPermissionsPolicy: AiPermissionsPolicy
@@ -3368,6 +3562,7 @@ type Tier {
   telemetryDataCollectionPolicy: TelemetryDataCollectionPolicy
   ugcDataCollectionPolicy: UgcDataCollectionPolicy
   usageBasedPricingPolicy: UsageBasedPricingPolicy
+  usageVisibilityPolicy: UsageVisibilityPolicy
   warpAiPolicy: WarpAiPolicy
   warpBasicPolicy: WarpBasicPolicy
 }
@@ -3702,7 +3897,6 @@ type UpdateOnboardingSurveyStatusOutput implements Response {
 union UpdateOnboardingSurveyStatusResult = UpdateOnboardingSurveyStatusOutput | UserFacingError
 
 input UpdateUserSettingsInput {
-  agentAttributionEnabled: Boolean
   cloudConversationStorageEnabled: Boolean
   crashReportingEnabled: Boolean
   telemetryEnabled: Boolean
@@ -3740,7 +3934,9 @@ input UpdateWorkspaceSettingsInput {
   setCloudConversationStorageSettings: CloudConversationStorageSettingsInput
   setCodebaseContextSettings: CodebaseContextSettingsInput
   setDomainCaptureSettings: DomainCaptureSettingsInput
+  setEnterpriseAnalyticsDataCollectionSettings: EnterpriseAnalyticsDataCollectionSettingsInput
   setEnterpriseBillingSettings: EnterpriseBillingSettingsInput
+  setHarnessSettings: HarnessSettingsInput
   setLinkSharingSettings: LinkSharingSettingsInput
   setLlmSettings: LlmSettingsInput
   setSandboxedAgentSettings: SandboxedAgentSettingsInput
@@ -3807,6 +4003,17 @@ input UpdatedObjectInput {
   uid: ID!
 }
 
+"""
+A single name/value pair for a multipart form field in a presigned POST upload.
+"""
+type UploadField {
+  name: String!
+  value: UploadFieldValue!
+}
+
+"""The value of a multipart form field in a presigned POST upload target."""
+union UploadFieldValue = ContentCRC32CFieldValue | ContentDataFieldValue | StaticUploadFieldValue
+
 type UsageBasedPricingPolicy {
   toggleable: Boolean!
 }
@@ -3848,11 +4055,28 @@ enum UsagePlanSurveyResponse {
 }
 
 """
+Granularity at which a user can see AI usage across their team. Non-admins
+always collapse to OWN_ONLY regardless of tier.
+"""
+enum UsageVisibilityGranularity {
+  FULL_BREAKDOWN
+  OWN_ONLY
+  PER_USER_TOTALS
+  TEAM_AGGREGATE
+}
+
+type UsageVisibilityPolicy {
+  adminGranularity: UsageVisibilityGranularity!
+  maxPriorCycles: Int!
+}
+
+"""
 The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
   anonymousUserInfo: AnonymousUserInfo
+  availableHarnesses: AvailableHarnesses!
   billingMetadata: BillingMetadata
   blocks: [Block!]!
   bonusGrants: [BonusGrant!]!
@@ -3875,11 +4099,18 @@ type User {
   - `[]` means that the user is not part of any server-side enabled experiments.
   """
   experiments: [Experiment!]
-  globalSkills: [String!]!
   githubInstallations: UserGithubInstallationsOutput!
+
+  """
+  Global skills that are always available to the calling principal.
+  The client will fetch and install these, so they're available in every conversation
+  on every device.
+  
+  This is currently only supported for agents, not individual users.
+  """
+  globalSkills: [String!]!
   isOnWorkDomain: Boolean!
   isOnboarded: Boolean!
-  availableHarnesses: AvailableHarnesses!
   llms: FeatureModelChoice!
   managedSecrets: ManagedSecretConfig
   onboardingSurveyStatus: OnboardingSurveyStatus
@@ -3987,7 +4218,6 @@ Workspace specific settings like telemetry enablement override these user settin
 UserSettings types and mutations are the v2 equivalent of the v1 user_settings.graphqls file.
 """
 type UserSettings {
-  isAgentAttributionEnabled: Boolean!
   isCloudConversationStorageEnabled: Boolean!
   isCrashReportingEnabled: Boolean!
   isTelemetryEnabled: Boolean!
@@ -4078,6 +4308,7 @@ type Workspace {
   inviteCode: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
+  memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!
   pendingEmailInvites: [EmailInvite!]!
@@ -4115,7 +4346,9 @@ type WorkspaceSettings {
   cloudConversationStorageSettings: CloudConversationStorageSettings!
   codebaseContextSettings: CodebaseContextSettings!
   domainCaptureSettings: DomainCaptureSettings!
+  enterpriseAnalyticsDataCollectionSettings: EnterpriseAnalyticsDataCollectionSettings!
   enterpriseBillingSettings: EnterpriseBillingSettings
+  harnessSettings: HarnessSettings
   isDiscoverable: Boolean!
   isInviteLinkEnabled: Boolean!
   linkSharingSettings: LinkSharingSettings!

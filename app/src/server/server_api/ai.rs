@@ -16,7 +16,7 @@ use warp_core::{features::FeatureFlag, report_error};
 use warp_multi_agent_api::ConversationData;
 
 use super::auth::AuthClient;
-use super::harness_support::UploadTarget;
+use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
 use crate::ai::agent::conversation::{
     AIAgentConversationFormat, AIAgentHarness, AIAgentSerializedBlockFormat,
@@ -245,6 +245,10 @@ pub struct SpawnAgentRequest {
     /// queued execution input and resolves the prefix in place at rehydration time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_snapshot_token: Option<InitialSnapshotToken>,
+    /// When `Some(true)`, the cloud agent skips the end-of-run snapshot upload.
+    /// Set by the client when cloud conversation storage is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_disabled: Option<bool>,
 }
 
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch
@@ -580,6 +584,8 @@ pub struct FileArtifactUploadTargetInfo {
     pub url: String,
     pub method: String,
     pub headers: Vec<FileArtifactUploadHeaderInfo>,
+    /// Ordered multipart form fields for presigned POST uploads.
+    pub fields: Vec<UploadField>,
 }
 
 #[derive(Debug, Clone)]
@@ -1189,6 +1195,34 @@ impl ServerApi {
     }
 }
 
+/// Convert a cynic `FileArtifactUploadField` into the shared [`UploadField`]
+/// domain type. Unknown variants bubble as an error rather than being silently
+/// dropped, because a server-provided field we can't represent will almost certainly
+/// cause the upload to fail.
+fn convert_upload_field(
+    field: warp_graphql::mutations::create_file_artifact_upload_target::FileArtifactUploadField,
+) -> anyhow::Result<UploadField> {
+    use warp_graphql::mutations::create_file_artifact_upload_target::FileArtifactUploadFieldValue;
+
+    let value = match field.value {
+        FileArtifactUploadFieldValue::StaticUploadFieldValue(v) => {
+            UploadFieldValue::Static { value: v.value }
+        }
+        FileArtifactUploadFieldValue::ContentCRC32CFieldValue(_) => UploadFieldValue::ContentCrc32C,
+        FileArtifactUploadFieldValue::ContentDataFieldValue(_) => UploadFieldValue::ContentData,
+        FileArtifactUploadFieldValue::Unknown => {
+            return Err(anyhow!(
+                "Unknown UploadFieldValue variant for field '{}'; update client GraphQL types",
+                field.name
+            ));
+        }
+    };
+    Ok(UploadField {
+        name: field.name,
+        value,
+    })
+}
+
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
@@ -1429,6 +1463,7 @@ impl AIClient for ServerApi {
                             .map(|m| crate::ai::harness_availability::HarnessModelInfo {
                                 id: m.id.into_inner(),
                                 display_name: m.display_name,
+                                reasoning_level: m.reasoning_level,
                             })
                             .collect(),
                     })
@@ -2044,20 +2079,28 @@ impl AIClient for ServerApi {
 
         match response.create_file_artifact_upload_target {
             CreateFileArtifactUploadTargetResult::CreateFileArtifactUploadTargetOutput(output) => {
+                let headers = output
+                    .upload_target
+                    .headers
+                    .into_iter()
+                    .map(|header| FileArtifactUploadHeaderInfo {
+                        name: header.name,
+                        value: header.value,
+                    })
+                    .collect();
+                let fields = output
+                    .upload_target
+                    .fields
+                    .into_iter()
+                    .map(convert_upload_field)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 Ok(CreateFileArtifactUploadResponse {
                     artifact: into_file_artifact_record(output.artifact),
                     upload_target: FileArtifactUploadTargetInfo {
                         url: output.upload_target.url,
                         method: output.upload_target.method,
-                        headers: output
-                            .upload_target
-                            .headers
-                            .into_iter()
-                            .map(|header| FileArtifactUploadHeaderInfo {
-                                name: header.name,
-                                value: header.value,
-                            })
-                            .collect(),
+                        headers,
+                        fields,
                     },
                 })
             }
@@ -2442,6 +2485,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::AwsBedrock => {
                 LLMModelHost::AwsBedrock
+            }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
+                LLMModelHost::CustomEndpoint
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
                 report_error!(anyhow!(

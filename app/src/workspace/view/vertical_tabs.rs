@@ -2,7 +2,9 @@ pub mod telemetry;
 
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_status_ui::render_status_element;
+use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
 use crate::safe_triangle::SafeTriangle;
@@ -1432,10 +1434,7 @@ fn render_new_tab_button(
         )
         .build()
         .on_click(|ctx, _, position| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
-                position,
-                is_vertical_tabs: true,
-            });
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu { position });
         })
         .finish();
 
@@ -2735,7 +2734,7 @@ fn build_vertical_tabs_summary_data(
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
                 let title_text = terminal_view.terminal_title_from_shell();
-                let working_directory = terminal_view.display_working_directory(app);
+                let working_directory = resolved_terminal_working_directory(terminal_view, app);
                 let working_directory_text = working_directory
                     .clone()
                     .filter(|wd| !wd.trim().is_empty())
@@ -2770,7 +2769,9 @@ fn build_vertical_tabs_summary_data(
                 }
 
                 if let (Some(repo_path), Some(branch_name)) = (
-                    terminal_view.current_repo_path().cloned(),
+                    terminal_view
+                        .current_local_repo_path()
+                        .map(Path::to_path_buf),
                     terminal_view
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
@@ -2993,9 +2994,7 @@ fn terminal_pane_search_text_fragments(
     let terminal_view = terminal_pane.terminal_view(app);
     let terminal_view = terminal_view.as_ref(app);
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -3259,6 +3258,47 @@ impl PaneGroup {
     }
 }
 
+/// Returns the best available working-directory string for a terminal pane,
+/// incorporating cloud environment name and setup status for ambient agent sessions.
+fn resolved_terminal_working_directory(
+    terminal_view: &TerminalView,
+    app: &AppContext,
+) -> Option<String> {
+    let working_directory = terminal_view
+        .display_working_directory(app)
+        .filter(|wd| !wd.trim().is_empty());
+    cloud_agent_working_directory_and_env(terminal_view, working_directory.as_deref(), app)
+        .or(working_directory)
+}
+
+/// For cloud agent panes, builds a composite string from the environment name,
+/// setup status, and/or working directory. Returns `None` for non-cloud sessions.
+fn cloud_agent_working_directory_and_env(
+    terminal_view: &TerminalView,
+    working_directory: Option<&str>,
+    app: &AppContext,
+) -> Option<String> {
+    if !terminal_view.is_ambient_agent_session(app) {
+        return None;
+    }
+    let model_ref = terminal_view.ambient_agent_view_model()?.as_ref(app);
+
+    let env_name = model_ref
+        .selected_environment_id()
+        .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, app))
+        .map(|env| env.model().string_model.display_name());
+
+    let setup_status: Option<&str> = model_ref.agent_progress().map(|p| p.setup_status_text());
+
+    match (env_name, setup_status, working_directory) {
+        (Some(env), Some(status), _) => Some(format!("{env} · {status}")),
+        (Some(env), None, Some(wd)) => Some(format!("{env} · {wd}")),
+        (Some(env), None, None) => Some(env),
+        (None, Some(status), _) => Some(status.to_string()),
+        (None, None, _) => None,
+    }
+}
+
 fn render_terminal_row_content(
     props: &PaneProps<'_>,
     terminal_view: &TerminalView,
@@ -3271,9 +3311,7 @@ fn render_terminal_row_content(
     let primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
 
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
 
     let git_branch = terminal_view.current_git_branch(app);
@@ -4072,9 +4110,7 @@ fn render_terminal_primary_line_for_view(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -5597,7 +5633,7 @@ fn render_terminal_detail_section(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_colors = detail_sidecar_text_colors(theme);
-    let working_directory = terminal_view.display_working_directory(app);
+    let working_directory = resolved_terminal_working_directory(terminal_view, app);
     let git_branch = terminal_view.current_git_branch(app);
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
     let agent_text = terminal_agent_text(terminal_view, app);
@@ -6061,9 +6097,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             let terminal_view = terminal_pane.terminal_view(app).as_ref(app);
             let terminal_title = terminal_view.terminal_title_from_shell();
             let git_branch = terminal_view.current_git_branch(app);
-            let working_directory = terminal_view
-                .display_working_directory(app)
-                .filter(|wd| !wd.trim().is_empty());
+            let working_directory = resolved_terminal_working_directory(terminal_view, app);
             let working_directory_text = working_directory
                 .clone()
                 .unwrap_or_else(|| terminal_title.clone());

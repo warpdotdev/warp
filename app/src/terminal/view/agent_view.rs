@@ -85,6 +85,41 @@ impl TerminalView {
         self.redetermine_global_focus(ctx);
     }
 
+    // Enters the agent view for a restored CLI agent transcript, setting the title using the
+    // restored CLI conversation metadata if we have it.
+    pub(crate) fn enter_agent_view_for_restored_cli_agent(
+        &mut self,
+        fallback_title: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<AIConversationId> {
+        let origin = AgentViewEntryOrigin::ThirdPartyCloudAgent;
+
+        match self.try_enter_agent_view(None, origin, None, ctx) {
+            Ok(conversation_id) => {
+                let title = fallback_title.trim();
+                if !title.is_empty() {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        if let Some(conversation) = history.conversation_mut(&conversation_id) {
+                            conversation.set_fallback_display_title(title.to_owned());
+                        }
+                    });
+                }
+                self.redetermine_global_focus(ctx);
+                Some(conversation_id)
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to enter agent view for restored CLI agent from origin {:?}: {:?}",
+                    origin,
+                    e
+                );
+                self.show_error_toast(e.to_string(), ctx);
+                self.redetermine_global_focus(ctx);
+                None
+            }
+        }
+    }
+
     pub fn enter_agent_view_for_conversation(
         &mut self,
         initial_prompt: Option<String>,
@@ -318,6 +353,19 @@ impl TerminalView {
                     *conversation_id,
                     ctx,
                 ),
+            AgentViewEntryBlockEvent::OpenConversationContextMenu {
+                conversation_id,
+                agent_view_entry_block_id,
+                position,
+            } => me.open_agent_view_entry_context_menu(
+                *conversation_id,
+                *agent_view_entry_block_id,
+                *position,
+                ctx,
+            ),
+            AgentViewEntryBlockEvent::ForkConversation { conversation_id } => {
+                me.fork_ai_conversation(*conversation_id, None, ctx);
+            }
         });
         self.insert_rich_content(
             Some(RichContentType::EnterAgentView),

@@ -5,7 +5,6 @@
 use std::cell::RefCell;
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -15,11 +14,11 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
-    AnchorPair, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds,
-    PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
+    Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
+    SavePosition, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Weight};
@@ -36,8 +35,19 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_id;
+use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
+    is_conversation_open_in_other_visible_view, pane_group_id_containing_terminal_view,
+    parent_conversation_id,
+};
+use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
+    OrchestrationPillBarEvent, OrchestrationPillBarModel,
+};
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
+use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
+    PillBarPillKind, PillSwitchOutcome,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::harness_display;
 use crate::features::FeatureFlag;
@@ -48,7 +58,8 @@ use crate::ui_components::icon_with_status::{
     self, render_icon_with_status, IconWithStatusVariant,
 };
 use crate::ui_components::icons::Icon;
-use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
+use crate::workspace::WorkspaceAction;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::EntityId;
 
@@ -76,7 +87,7 @@ fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
     ]
 }
 
-fn pill_avatar_color(name: &str, theme: &WarpTheme) -> ColorU {
+pub(crate) fn pill_avatar_color(name: &str, theme: &WarpTheme) -> ColorU {
     let palette = pill_palette(theme);
     let mut hasher = DefaultHasher::new();
     name.hash(&mut hasher);
@@ -84,7 +95,7 @@ fn pill_avatar_color(name: &str, theme: &WarpTheme) -> ColorU {
     palette[idx]
 }
 
-fn pill_initial(name: &str) -> char {
+pub(crate) fn pill_initial(name: &str) -> char {
     name.trim()
         .chars()
         .next()
@@ -93,7 +104,7 @@ fn pill_initial(name: &str) -> char {
 }
 /// Renders the orchestrator avatar disc shared by pill, breadcrumb, and transcript
 /// surfaces.
-pub(super) fn render_orchestrator_avatar_disc(
+pub(crate) fn render_orchestrator_avatar_disc(
     size: f32,
     theme: &WarpTheme,
     appearance: &Appearance,
@@ -109,7 +120,7 @@ pub(super) fn render_orchestrator_avatar_disc(
 
 /// Renders a child-agent avatar using the same deterministic-color + initial-letter
 /// treatment as the orchestration pill bar.
-pub(super) fn render_agent_avatar_disc(
+pub(crate) fn render_agent_avatar_disc(
     name: &str,
     size: f32,
     theme: &WarpTheme,
@@ -124,41 +135,27 @@ pub(super) fn render_agent_avatar_disc(
     )
 }
 
-fn descendant_conversation_ids_in_spawn_order(
-    history: &BlocklistAIHistoryModel,
-    parent_id: AIConversationId,
-) -> Vec<AIConversationId> {
-    let mut descendants = Vec::new();
-    collect_descendant_conversation_ids_in_spawn_order(history, parent_id, &mut descendants);
-    descendants
-}
-
-fn collect_descendant_conversation_ids_in_spawn_order(
-    history: &BlocklistAIHistoryModel,
-    parent_id: AIConversationId,
-    descendants: &mut Vec<AIConversationId>,
-) {
-    for child_id in history.child_conversation_ids_of(&parent_id) {
-        descendants.push(*child_id);
-        collect_descendant_conversation_ids_in_spawn_order(history, *child_id, descendants);
-    }
-}
-
 /// What kind of pill we are rendering, which determines click behavior.
-#[derive(Clone, Copy)]
-enum PillKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PillKind {
     Orchestrator,
     Child,
 }
 
-/// Whether this pill's conversation lives in another visible terminal view
-/// (a separate pane or tab). Pinned pills focus that other view instead of
-/// switching in place. Pin detection is currently disabled (see `pill_specs`).
+impl PillKind {
+    fn telemetry_kind(self) -> PillBarPillKind {
+        match self {
+            Self::Orchestrator => PillBarPillKind::Orchestrator,
+            Self::Child => PillBarPillKind::Child,
+        }
+    }
+}
+
+/// Whether the user has pinned this pill to the leading section of the bar.
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 enum PillPinState {
     Unpinned,
-    PinnedInOtherPane,
+    Pinned,
 }
 
 /// Pre-computed data for one pill in the bar.
@@ -241,10 +238,6 @@ fn pill_label_width(
 
 /// Width of the per-pill hover details card.
 const HOVER_CARD_WIDTH: f32 = 280.;
-/// Delay before the hover card appears after the cursor lands on a pill.
-const HOVER_CARD_IN_DELAY: Duration = Duration::from_millis(300);
-/// Delay before the card disappears after the cursor leaves the pill.
-const HOVER_CARD_OUT_DELAY: Duration = Duration::from_millis(80);
 
 /// Typed actions dispatched by the pill bar's widgets. Each action carries
 /// the targeted child pill's conversation id so a single shared `Menu`
@@ -268,6 +261,15 @@ pub enum OrchestrationPillBarAction {
     /// Menu item: focus the existing pane/tab that already owns the
     /// child agent's transcript instead of splitting/opening a new one.
     FocusOpenedConversation(AIConversationId),
+    /// Toggle the pin state for the given child conversation.
+    TogglePin(AIConversationId),
+    /// Pill body was clicked. Dispatched in lieu of the navigation
+    /// `TerminalAction` so telemetry can be emitted before the
+    /// downstream navigation runs.
+    PillClicked {
+        conversation_id: AIConversationId,
+        pill_kind: PillKind,
+    },
 }
 
 /// Renders the pill bar above the agent view: one pill for the orchestrator
@@ -279,6 +281,9 @@ pub struct OrchestrationPillBar {
     mouse_states: RefCell<HashMap<AIConversationId, MouseStateHandle>>,
     /// Hover state per child pill's 3-dot button (separate from the pill body).
     overflow_button_mouse_states: RefCell<HashMap<AIConversationId, MouseStateHandle>>,
+    /// Hover state per child pill's leading pin button (independent of the
+    /// pill body and the 3-dot button so each surface highlights on its own).
+    pin_button_mouse_states: RefCell<HashMap<AIConversationId, MouseStateHandle>>,
     /// Shared dropdown menu rebuilt per-open with the targeted child's id.
     menu: ViewHandle<Menu<OrchestrationPillBarAction>>,
     /// `Some(id)` when the 3-dot menu is open targeting that child.
@@ -332,6 +337,11 @@ impl OrchestrationPillBar {
                 this.overflow_button_mouse_states
                     .borrow_mut()
                     .remove(conversation_id);
+                this.pin_button_mouse_states
+                    .borrow_mut()
+                    .remove(conversation_id);
+                // Pin set + scroll handle pruning live in the pill bar
+                // model singleton.
                 // If the menu was open for a child that just disappeared,
                 // close it so we don't leave a dangling menu pointing at a
                 // dead conversation id.
@@ -350,6 +360,7 @@ impl OrchestrationPillBar {
             ) {
                 this.mouse_states.borrow_mut().clear();
                 this.overflow_button_mouse_states.borrow_mut().clear();
+                this.pin_button_mouse_states.borrow_mut().clear();
                 this.menu_open_for = None;
             }
             this.ensure_mouse_states(ctx);
@@ -371,10 +382,17 @@ impl OrchestrationPillBar {
             MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
         });
 
+        // Re-render whenever any pane toggles a pin so the bars stay in sync.
+        let pill_bar_model = OrchestrationPillBarModel::handle(ctx);
+        ctx.subscribe_to_model(&pill_bar_model, |_, _, event, ctx| match event {
+            OrchestrationPillBarEvent::PinSetChanged => ctx.notify(),
+        });
+
         Self {
             agent_view_controller,
             mouse_states: RefCell::new(HashMap::new()),
             overflow_button_mouse_states: RefCell::new(HashMap::new()),
+            pin_button_mouse_states: RefCell::new(HashMap::new()),
             menu,
             menu_open_for: None,
             hovered_pill: None,
@@ -427,9 +445,19 @@ impl OrchestrationPillBar {
                 ),
             ]
         };
-        let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+        // Stop is shown only while the agent is in progress; Kill becomes
+        // Delete once the agent's run has finished (Success / Error /
+        // Cancelled). Blocked is treated as not-yet-finished (the agent
+        // is still mid-flight, waiting on user input).
+        let conversation_status = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|conversation| conversation.status().is_in_progress());
+            .map(|conversation| conversation.status().clone());
+        let is_in_progress = conversation_status
+            .as_ref()
+            .is_some_and(|status| status.is_in_progress());
+        let is_in_finished_state = conversation_status
+            .as_ref()
+            .is_some_and(|status| status.is_done());
         items.push(MenuItem::Separator);
         if is_in_progress {
             items.push(destructive_item(
@@ -438,9 +466,14 @@ impl OrchestrationPillBar {
                 OrchestrationPillBarAction::Stop(conversation_id),
             ));
         }
+        let (kill_label, kill_icon) = if is_in_finished_state {
+            ("Delete agent", Icon::Trash)
+        } else {
+            ("Kill agent", Icon::X)
+        };
         items.push(destructive_item(
-            "Kill agent",
-            Icon::X,
+            kill_label,
+            kill_icon,
             OrchestrationPillBarAction::Kill(conversation_id),
         ));
 
@@ -500,16 +533,23 @@ impl OrchestrationPillBar {
         }
         let mut mouse_states = self.mouse_states.borrow_mut();
         let mut overflow_states = self.overflow_button_mouse_states.borrow_mut();
+        let mut pin_states = self.pin_button_mouse_states.borrow_mut();
         for id in &alive {
             mouse_states.entry(*id).or_default();
             overflow_states.entry(*id).or_default();
+            pin_states.entry(*id).or_default();
         }
         mouse_states.retain(|id, _| alive.contains(id));
         overflow_states.retain(|id, _| alive.contains(id));
+        pin_states.retain(|id, _| alive.contains(id));
+        // Pin set pruning lives in the singleton — `alive` only covers this
+        // pane's tree, so pruning here would clobber pins in other panes.
     }
 
-    /// Builds the ordered pill list, or `None` when nothing should render.
-    fn pill_specs(&self, app: &AppContext) -> Option<Vec<PillSpec>> {
+    /// Builds the ordered pill list along with the orchestrator id it was
+    /// built for (used to key the shared horizontal scroll handle), or
+    /// `None` when nothing should render.
+    fn pill_specs(&self, app: &AppContext) -> Option<(AIConversationId, Vec<PillSpec>)> {
         let active_id = self
             .agent_view_controller
             .as_ref(app)
@@ -535,7 +575,6 @@ impl OrchestrationPillBar {
         if children.is_empty() {
             return None;
         }
-
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
@@ -555,15 +594,18 @@ impl OrchestrationPillBar {
             is_remote_child: false,
         });
 
-        // Then a pill per descendant child. Pin detection is currently
-        // disabled — restoring it requires plumbing pane visibility into
-        // the active views model so we can distinguish hidden vs. visible
-        // child panes.
+        // Stamp each child's current pin state; partitioning happens at render.
+        let pill_bar_model = OrchestrationPillBarModel::as_ref(app);
         for child in children {
             let name = child
                 .agent_name()
                 .filter(|n| !n.is_empty())
                 .unwrap_or("Agent");
+            let pin_state = if pill_bar_model.is_pinned(&child.id()) {
+                PillPinState::Pinned
+            } else {
+                PillPinState::Unpinned
+            };
             specs.push(PillSpec {
                 conversation_id: child.id(),
                 label: name.to_string(),
@@ -572,12 +614,12 @@ impl OrchestrationPillBar {
                 status: Some(child.status().clone()),
                 is_selected: child.id() == active_id,
                 kind: PillKind::Child,
-                pin_state: PillPinState::Unpinned,
+                pin_state,
                 is_remote_child: child.is_remote_child(),
             });
         }
 
-        Some(specs)
+        Some((orchestrator_id, specs))
     }
 }
 
@@ -630,12 +672,176 @@ fn orchestrator_label(orchestrator: &AIConversation) -> String {
         .unwrap_or_else(|| "Orchestrator".to_string())
 }
 
+impl OrchestrationPillBar {
+    /// Resolves the source-conversation / total-pills / total-pinned
+    /// triple used to enrich every `PillBarInteraction` event. Returns
+    /// `None` when there is no active orchestration tree to attribute
+    /// the interaction to.
+    fn pill_bar_telemetry_context(
+        &self,
+        app: &AppContext,
+    ) -> Option<(AIConversationId, usize, usize)> {
+        let (orchestrator_id, specs) = self.pill_specs(app)?;
+        let total_pills = specs.len();
+        let total_pinned = specs
+            .iter()
+            .filter(|spec| matches!(spec.pin_state, PillPinState::Pinned))
+            .count();
+        Some((orchestrator_id, total_pills, total_pinned))
+    }
+
+    /// Pill kind for `target_id` in the current pill specs. Defaults
+    /// to `Child` if the id is no longer in the bar.
+    fn pill_kind_for(&self, target_id: AIConversationId, app: &AppContext) -> PillBarPillKind {
+        self.pill_specs(app)
+            .and_then(|(_, specs)| {
+                specs
+                    .into_iter()
+                    .find(|spec| spec.conversation_id == target_id)
+                    .map(|spec| spec.kind.telemetry_kind())
+            })
+            .unwrap_or(PillBarPillKind::Child)
+    }
+
+    fn emit_pill_bar_interaction(
+        &self,
+        action: PillBarActionKind,
+        pill_kind: PillBarPillKind,
+        target_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.emit_pill_bar_interaction_with_outcome(
+            action,
+            pill_kind,
+            target_conversation_id,
+            None,
+            ctx,
+        );
+    }
+
+    /// Same as [`Self::emit_pill_bar_interaction`] but stamps a
+    /// `switch_outcome` on the payload. Use for `Switch` actions where
+    /// the analyst needs to know whether the click navigated in place
+    /// or focused an existing pane.
+    fn emit_pill_switch(
+        &self,
+        pill_kind: PillBarPillKind,
+        target_conversation_id: AIConversationId,
+        outcome: PillSwitchOutcome,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.emit_pill_bar_interaction_with_outcome(
+            PillBarActionKind::Switch,
+            pill_kind,
+            target_conversation_id,
+            Some(outcome),
+            ctx,
+        );
+    }
+
+    fn emit_pill_bar_interaction_with_outcome(
+        &self,
+        action: PillBarActionKind,
+        pill_kind: PillBarPillKind,
+        target_conversation_id: AIConversationId,
+        switch_outcome: Option<PillSwitchOutcome>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((source_conversation_id, total_pills, total_pinned)) =
+            self.pill_bar_telemetry_context(ctx)
+        else {
+            return;
+        };
+        send_telemetry_from_ctx!(
+            BlocklistOrchestrationTelemetryEvent::PillBarInteraction(PillBarInteractionEvent {
+                action,
+                pill_kind,
+                total_pills,
+                total_pinned,
+                source_conversation_id,
+                target_conversation_id,
+                switch_outcome,
+            }),
+            ctx
+        );
+    }
+
+    /// Dispatches the focus-existing-pane navigation. Pulled out of
+    /// the `FocusOpenedConversation` handler so the `PillClicked`
+    /// handler can reuse the same nav logic without emitting the
+    /// menu-driven `FocusOpenedConversation` telemetry event.
+    fn navigate_to_owner_pane(&self, id: AIConversationId, ctx: &mut ViewContext<Self>) {
+        // "Focus pane" is purely a focus operation: the conversation
+        // already lives in some other visible terminal view (verified
+        // by `is_conversation_open_in_other_visible_view` at the call
+        // site) and we just want to move the user's cursor there. We
+        // deliberately do *not* go through
+        // `RestoreOrNavigateToConversation`: that path calls
+        // `set_active_conversation_id` with whichever
+        // `terminal_view_id` it receives, which would either
+        // re-transfer ownership to a stale id pulled from
+        // `AgentConversationsModel::nav_data` or, worse, blank out
+        // the real owner pane while the conversation pops back into
+        // the orchestrator.
+        //
+        // Resolve the canonical owner directly from
+        // `BlocklistAIHistoryModel` (the single source of truth) and
+        // pick the appropriate focus action based on whether the
+        // owner pane lives in the same pane group as us:
+        //   * Same pane group (sibling pane in this tab) —
+        //     dispatch `TerminalAction::RevealChildAgent`. The pane
+        //     group's handler walks visible terminal panes and calls
+        //     `group.focus_pane(.., true, ctx)` from its own
+        //     `ViewContext<PaneGroup>`, which actually shifts focus
+        //     to the sibling pane. Going through the workspace's
+        //     `focus_pane` from a different `ViewContext` doesn't
+        //     reliably move focus when the destination is in the
+        //     same pane group.
+        //   * Different pane group (other tab / window) —
+        //     dispatch `WorkspaceAction::FocusTerminalViewInWorkspace`,
+        //     which walks all tabs/windows and activates the
+        //     containing tab as needed.
+        let owner_view_id =
+            BlocklistAIHistoryModel::as_ref(ctx).terminal_view_id_for_conversation(&id);
+        let Some(owner_view_id) = owner_view_id else {
+            log::warn!(
+                "navigate_to_owner_pane: no canonical owner for {id:?}; falling back to switch-in-place"
+            );
+            ctx.dispatch_typed_action(
+                &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
+                    TerminalAction::SwitchAgentViewToConversation {
+                        conversation_id: id,
+                    },
+                ),
+            );
+            return;
+        };
+        let self_pane_group_id = self.agent_view_controller.as_ref(ctx).pane_group_id();
+        let owner_pane_group_id = pane_group_id_containing_terminal_view(owner_view_id, ctx);
+        if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
+            ctx.dispatch_typed_action(
+                &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
+                    TerminalAction::RevealChildAgent {
+                        conversation_id: id,
+                    },
+                ),
+            );
+        } else {
+            ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
+                terminal_view_id: owner_view_id,
+            });
+        }
+    }
+}
+
 impl TypedActionView for OrchestrationPillBar {
     type Action = OrchestrationPillBarAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             OrchestrationPillBarAction::OpenMenu(id) => {
+                let pill_kind = self.pill_kind_for(*id, ctx);
+                self.emit_pill_bar_interaction(PillBarActionKind::OpenMenu, pill_kind, *id, ctx);
                 self.open_menu_for(*id, ctx);
             }
             OrchestrationPillBarAction::CloseMenu => {
@@ -649,6 +855,12 @@ impl TypedActionView for OrchestrationPillBar {
                 // dispatch it through the pane header action surface so
                 // it bubbles up the standard way (mirrors the pill-click
                 // path in `render_pill`).
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::OpenInNewPane,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
                 self.close_menu(ctx);
                 ctx.dispatch_typed_action(
                     &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -659,6 +871,12 @@ impl TypedActionView for OrchestrationPillBar {
                 );
             }
             OrchestrationPillBarAction::OpenInNewTab(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::OpenInNewTab,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
                 self.close_menu(ctx);
                 ctx.dispatch_typed_action(
                     &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -669,6 +887,12 @@ impl TypedActionView for OrchestrationPillBar {
                 );
             }
             OrchestrationPillBarAction::Stop(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::Stop,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
                 self.close_menu(ctx);
                 ctx.dispatch_typed_action(
                     &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -679,6 +903,12 @@ impl TypedActionView for OrchestrationPillBar {
                 );
             }
             OrchestrationPillBarAction::Kill(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::Kill,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
                 self.close_menu(ctx);
                 ctx.dispatch_typed_action(
                     &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -691,70 +921,64 @@ impl TypedActionView for OrchestrationPillBar {
             OrchestrationPillBarAction::SetHoveredPill(id) => {
                 self.set_hovered_pill(*id, ctx);
             }
-            OrchestrationPillBarAction::FocusOpenedConversation(id) => {
-                self.close_menu(ctx);
-                // "Focus pane" is purely a focus operation: the
-                // conversation already lives in some other visible
-                // terminal view (verified by
-                // `is_conversation_open_in_other_visible_view` before we
-                // surface this menu item) and we just want to move the
-                // user's cursor there. We deliberately do *not* go
-                // through `RestoreOrNavigateToConversation`: that path
-                // calls `set_active_conversation_id` with whichever
-                // `terminal_view_id` it receives, which would either
-                // re-transfer ownership to a stale id pulled from
-                // `AgentConversationsModel::nav_data` or, worse, blank
-                // out the real owner pane while the conversation pops
-                // back into the orchestrator.
-                //
-                // Resolve the canonical owner directly from
-                // `BlocklistAIHistoryModel` (the single source of truth)
-                // and pick the appropriate focus action based on whether
-                // the owner pane lives in the same pane group as us:
-                //   * Same pane group (sibling pane in this tab) —
-                //     dispatch `TerminalAction::RevealChildAgent`. The
-                //     pane group's handler walks visible terminal panes
-                //     and calls `group.focus_pane(.., true, ctx)` from
-                //     its own `ViewContext<PaneGroup>`, which actually
-                //     shifts focus to the sibling pane. Going through
-                //     the workspace's `focus_pane` from a different
-                //     `ViewContext` doesn't reliably move focus when the
-                //     destination is in the same pane group.
-                //   * Different pane group (other tab / window) —
-                //     dispatch `WorkspaceAction::FocusTerminalViewInWorkspace`,
-                //     which walks all tabs/windows and activates the
-                //     containing tab as needed.
-                let owner_view_id =
-                    BlocklistAIHistoryModel::as_ref(ctx).terminal_view_id_for_conversation(id);
-                let Some(owner_view_id) = owner_view_id else {
-                    log::warn!(
-                        "FocusOpenedConversation: no canonical owner for {id:?}; falling back to switch-in-place"
-                    );
-                    ctx.dispatch_typed_action(
-                        &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
-                            TerminalAction::SwitchAgentViewToConversation {
-                                conversation_id: *id,
-                            },
-                        ),
-                    );
-                    return;
-                };
-                let self_pane_group_id = self.agent_view_controller.as_ref(ctx).pane_group_id();
-                let owner_pane_group_id =
-                    pane_group_id_containing_terminal_view(owner_view_id, ctx);
-                if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
-                    ctx.dispatch_typed_action(
-                        &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
-                            TerminalAction::RevealChildAgent {
-                                conversation_id: *id,
-                            },
-                        ),
-                    );
+            OrchestrationPillBarAction::TogglePin(id) => {
+                // Singleton emits an event that drives the re-render in every
+                // pill bar, so no `ctx.notify()` needed here.
+                let id = *id;
+                // Determine which way the toggle is going before applying
+                // it so the telemetry payload reports the resulting state
+                // rather than the prior one.
+                let was_pinned = OrchestrationPillBarModel::as_ref(ctx).is_pinned(&id);
+                let action_kind = if was_pinned {
+                    PillBarActionKind::TogglePinOff
                 } else {
-                    ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
-                        terminal_view_id: owner_view_id,
-                    });
+                    PillBarActionKind::TogglePinOn
+                };
+                self.emit_pill_bar_interaction(action_kind, PillBarPillKind::Child, id, ctx);
+                OrchestrationPillBarModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.toggle_pin(id, ctx);
+                });
+            }
+            OrchestrationPillBarAction::PillClicked {
+                conversation_id,
+                pill_kind,
+            } => {
+                let id = *conversation_id;
+                let self_terminal_view_id =
+                    self.agent_view_controller.as_ref(ctx).terminal_view_id();
+                let is_open_elsewhere =
+                    is_conversation_open_in_other_visible_view(id, self_terminal_view_id, ctx);
+                // Pill-body clicks always emit a single `Switch` event,
+                // with `switch_outcome` capturing what navigation
+                // actually happened. Analysts can count all pill clicks
+                // with `action = switch` and slice by outcome — no need
+                // to UNION with `FocusOpenedConversation` (which is
+                // reserved for the menu-driven "Focus pane" gesture).
+                let outcome = if is_open_elsewhere {
+                    PillSwitchOutcome::FocusedExistingPane
+                } else {
+                    PillSwitchOutcome::SwitchedInPlace
+                };
+                self.emit_pill_switch(pill_kind.telemetry_kind(), id, outcome, ctx);
+                if is_open_elsewhere {
+                    self.navigate_to_owner_pane(id, ctx);
+                } else {
+                    ctx.dispatch_typed_action(
+                        &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
+                            navigation_action_for_pill(*pill_kind, id),
+                        ),
+                    );
                 }
+            }
+            OrchestrationPillBarAction::FocusOpenedConversation(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::FocusOpenedConversation,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
+                self.close_menu(ctx);
+                self.navigate_to_owner_pane(*id, ctx);
             }
         }
     }
@@ -766,26 +990,16 @@ impl View for OrchestrationPillBar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let Some(specs) = self.pill_specs(app) else {
+        let Some((orchestrator_id, specs)) = self.pill_specs(app) else {
             return Empty::new().finish();
         };
 
-        let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
-
-        // The row uses `MainAxisSize::Max` so the bar's intrinsic width
-        // is the parent's available width (i.e. the pane width passed in
-        // by the wrapping `Flex::column` in `pane_impl.rs`), not the sum
-        // of the children. With `MainAxisSize::Min` the row reports its
-        // full intrinsic width upward and the surrounding `Clipped`
-        // wrapper has nothing tighter to clip against, so the trailing
-        // pills paint into whichever pane sits to the right. Children
-        // remain left-packed via `MainAxisAlignment::Start`; any pills
-        // that overflow to the right of the available width get clipped
-        // by the `Clipped` element below.
+        // Row reports its intrinsic width so the wrapping horizontal
+        // scrollable below has something larger than the pane width to
+        // pan through when there are many child pills.
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_size(MainAxisSize::Min)
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_spacing(PILL_GAP);
 
@@ -799,6 +1013,7 @@ impl View for OrchestrationPillBar {
         // mouse-down.
         let mut mouse_states = self.mouse_states.borrow_mut();
         let mut overflow_states = self.overflow_button_mouse_states.borrow_mut();
+        let mut pin_states = self.pin_button_mouse_states.borrow_mut();
         let menu_open_for = self.menu_open_for;
         // Cache this view's terminal_view_id once so each pill click can
         // cheaply check whether its target conversation is currently
@@ -806,6 +1021,11 @@ impl View for OrchestrationPillBar {
         // the orchestrator pane, so any child whose owner differs from
         // this id has been split off into another pane/tab.
         let self_terminal_view_id = self.agent_view_controller.as_ref(app).terminal_view_id();
+        // Bucket pills so the row is: orchestrator, pinned, divider, unpinned.
+        // Spawn order within each child bucket is preserved by iteration order.
+        let mut orchestrator_pill: Option<Box<dyn Element>> = None;
+        let mut pinned_pills: Vec<Box<dyn Element>> = Vec::new();
+        let mut unpinned_pills: Vec<Box<dyn Element>> = Vec::new();
         for spec in specs {
             let mouse_state = mouse_states
                 .entry(spec.conversation_id)
@@ -820,41 +1040,81 @@ impl View for OrchestrationPillBar {
                 .entry(spec.conversation_id)
                 .or_default()
                 .clone();
+            // Orchestrator pills don't render a pin button but we keep an
+            // entry for symmetry.
+            let pin_mouse_state = pin_states.entry(spec.conversation_id).or_default().clone();
             let menu_is_open_for_this = menu_open_for == Some(spec.conversation_id);
-            row.add_child(render_pill(
+            let kind = spec.kind;
+            let pin_state = spec.pin_state;
+            let pill = render_pill(
                 spec,
                 mouse_state,
                 overflow_mouse_state,
+                pin_mouse_state,
                 menu_is_open_for_this,
                 self_terminal_view_id,
                 app,
-            ));
+            );
+            match (kind, pin_state) {
+                (PillKind::Orchestrator, _) => orchestrator_pill = Some(pill),
+                (PillKind::Child, PillPinState::Pinned) => pinned_pills.push(pill),
+                (PillKind::Child, PillPinState::Unpinned) => unpinned_pills.push(pill),
+            }
         }
         drop(mouse_states);
         drop(overflow_states);
+        drop(pin_states);
 
-        // Wrap in a container with a touch of horizontal padding so the bar
-        // doesn't sit flush against the pane edges, and with the same overlay
-        // background as the rest of the agent view header so it merges visually.
-        //
-        // Wrap the whole thing in a `Clipped` so when the orchestrator's
-        // pane is narrower than the natural width of the pill row
-        // (orchestrator + N child pills), the pills get clipped at the pane
-        // boundary instead of bleeding into whichever pane sits to the
-        // right. Without this clip the row's `MainAxisSize::Min` reports
-        // its full intrinsic width upward and the parent doesn't enforce
-        // a horizontal bound, so the trailing pills paint outside the
-        // pane (visible in split layouts).
-        let bar = Clipped::new(
-            Container::new(row.finish())
-                .with_padding_left(12.)
-                .with_padding_right(12.)
-                .with_padding_top(4.)
-                .with_padding_bottom(4.)
-                .with_background(theme.surface_overlay_1())
-                .finish(),
+        if let Some(pill) = orchestrator_pill {
+            row.add_child(pill);
+        }
+        let has_pinned = !pinned_pills.is_empty();
+        let has_unpinned = !unpinned_pills.is_empty();
+        for pill in pinned_pills {
+            row.add_child(pill);
+        }
+        // Only show the divider when both sides actually have pills.
+        if has_pinned && has_unpinned {
+            row.add_child(render_pinned_divider(app));
+        }
+        for pill in unpinned_pills {
+            row.add_child(pill);
+        }
+
+        // Pan + clip the pill row when it overflows the pane. The scroll
+        // handle is keyed by orchestrator id and shared across sibling
+        // panes so the user's scroll position survives navigating between
+        // pill bars rendered for the same orchestration tree.
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let horizontal_scroll_state =
+            OrchestrationPillBarModel::as_ref(app).horizontal_scroll_state_for(orchestrator_id);
+        let scrollable = NewScrollable::horizontal(
+            SingleAxisConfig::Clipped {
+                handle: horizontal_scroll_state,
+                child: row.finish(),
+            },
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            ElementFill::None,
         )
+        // 4px overlaid scrollbar so the bar height stays constant
+        // whether or not the row overflows.
+        .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Custom(4.), true))
+        // Let a standard vertical mouse wheel pan the bar horizontally;
+        // trackpad horizontal swipes already work through the default path.
+        .with_remap_cross_axis_wheel_to_main_axis(true)
+        .with_propagate_mousewheel_if_not_handled(true)
         .finish();
+
+        // Padding lives outside the scrollable so it doesn't scroll away
+        // with the content.
+        let bar = Container::new(scrollable)
+            .with_padding_left(12.)
+            .with_padding_right(12.)
+            .with_padding_top(4.)
+            .with_padding_bottom(4.)
+            .finish();
 
         // When the 3-dot menu is open, overlay it directly beneath the
         // clicked pill's overflow button. We anchor to the saved position id
@@ -969,8 +1229,7 @@ enum MenuOrCard {
 
 /// Builds the hover details card overlay for the given conversation, or
 /// returns `None` if there's no conversation to summarise (e.g. the id
-/// has just been removed from history). Hidden by `View::render` until the
-/// hover-in delay elapses.
+/// has just been removed from history).
 ///
 /// V1 scope keeps the card pragmatic: title + description + a compact
 /// chips row showing the agent's harness (placeholder for now), branch
@@ -1336,10 +1595,61 @@ fn navigation_action_for_pill(kind: PillKind, conversation_id: AIConversationId)
     }
 }
 
+/// 1px vertical divider between the pinned and unpinned sections.
+fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
+    const DIVIDER_HEIGHT: f32 = 14.;
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    ConstrainedBox::new(
+        Container::new(Empty::new().finish())
+            .with_background(theme.outline())
+            .finish(),
+    )
+    .with_width(1.)
+    .with_height(DIVIDER_HEIGHT)
+    .finish()
+}
+
+/// Pin glyph centered in an avatar-sized hit target so swapping in and out
+/// on hover doesn't jitter sibling pill widths. Solid glyph when pinned,
+/// outline when unpinned.
+fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
+    let glyph_size = AVATAR_SIZE * 0.625;
+    let icon_variant = if is_pinned {
+        Icon::PinFilled
+    } else {
+        Icon::Pin
+    };
+    let glyph: Box<dyn Element> =
+        ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
+            .with_width(glyph_size)
+            .with_height(glyph_size)
+            .finish();
+
+    let centered = Flex::column()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::Center)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(glyph)
+                .finish(),
+        )
+        .finish();
+    ConstrainedBox::new(centered)
+        .with_width(AVATAR_SIZE)
+        .with_height(AVATAR_SIZE)
+        .finish()
+}
+
 fn render_pill(
     spec: PillSpec,
     mouse_state: MouseStateHandle,
     overflow_mouse_state: MouseStateHandle,
+    pin_button_mouse_state: MouseStateHandle,
     menu_is_open_for_this: bool,
     self_terminal_view_id: warpui::EntityId,
     app: &AppContext,
@@ -1350,8 +1660,19 @@ fn render_pill(
     let kind = spec.kind;
     let is_selected = spec.is_selected;
     let pin_state = spec.pin_state;
-    let is_pinned = matches!(pin_state, PillPinState::PinnedInOtherPane);
+    let is_pinned = matches!(pin_state, PillPinState::Pinned);
+    // The 3-dot overflow menu offers pane-management actions (open in new
+    // pane / tab, focus pane) that don't apply to the single-pane web
+    // viewer. Suppress the dots on WASM so the menu can never open.
+    #[cfg(not(target_family = "wasm"))]
     let show_overflow_button = matches!(kind, PillKind::Child);
+    #[cfg(target_family = "wasm")]
+    let show_overflow_button = {
+        let _ = &kind;
+        false
+    };
+    // Orchestrator is always anchored at the leading edge with no pin.
+    let supports_pinning = matches!(kind, PillKind::Child);
     // `spec` is owned by value, so we can move `label` directly into the
     // build closure below without cloning.
     let label = spec.label;
@@ -1437,28 +1758,72 @@ fn render_pill(
                 .finish()
         };
 
-        // Pinned pills swap the avatar for a pin glyph (per Figma); unpinned
-        // child pills delegate to the shared icon-with-status helper so cloud
-        // and local children get the same badge treatment as other surfaces.
-        let leading: Box<dyn Element> = match (is_pinned, status.as_ref()) {
-            (true, _) => ConstrainedBox::new(Icon::Pin.to_warpui_icon(text_color.into()).finish())
-                .with_width(AVATAR_SIZE)
-                .with_height(AVATAR_SIZE)
-                .finish(),
-            (false, Some(status)) => render_avatar_with_status_overlay(
-                avatar_color,
-                avatar_glyph,
-                status.clone(),
-                is_remote_child,
-                background,
-                theme,
-                appearance,
-            ),
-            (false, None) => {
-                render_avatar_disc(avatar_color, avatar_glyph, AVATAR_SIZE, theme, appearance)
+        // Child pills swap the leading avatar for a clickable pin glyph on
+        // pill hover. Pin state is communicated by position (left of the
+        // divider), not the icon — the glyph only appears on hover.
+        let outer_pill_hovered = hover_state.is_hovered() || hover_state.is_clicked();
+        let show_pin_glyph = supports_pinning && outer_pill_hovered;
+        let leading: Box<dyn Element> = match kind {
+            PillKind::Orchestrator => match status.as_ref() {
+                // Defensive: orchestrator pills don't currently carry a status.
+                Some(status) => render_avatar_with_status_overlay(
+                    avatar_color,
+                    avatar_glyph,
+                    status.clone(),
+                    is_remote_child,
+                    background,
+                    theme,
+                    appearance,
+                ),
+                None => {
+                    render_avatar_disc(avatar_color, avatar_glyph, AVATAR_SIZE, theme, appearance)
+                }
+            },
+            PillKind::Child => {
+                if show_pin_glyph {
+                    // Hovered: the leading slot becomes the clickable pin
+                    // button. We only attach the Hoverable + TogglePin
+                    // click handler here so that when the avatar is the
+                    // visible content (not hovered), clicks bubble up to
+                    // the outer pill body and navigate as expected.
+                    let pin_button_mouse_state = pin_button_mouse_state.clone();
+                    Hoverable::new(pin_button_mouse_state, move |pin_hover_state| {
+                        let pin_button_hovered =
+                            pin_hover_state.is_hovered() || pin_hover_state.is_clicked();
+                        let mut container =
+                            Container::new(render_pin_glyph_centered(is_pinned, text_color))
+                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+                        if pin_button_hovered {
+                            container =
+                                container.with_background(internal_colors::fg_overlay_1(theme));
+                        }
+                        container.finish()
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _app, _| {
+                        ctx.dispatch_typed_action(OrchestrationPillBarAction::TogglePin(
+                            conversation_id,
+                        ));
+                    })
+                    .finish()
+                } else if let Some(ref status) = status {
+                    render_avatar_with_status_overlay(
+                        avatar_color,
+                        avatar_glyph,
+                        status.clone(),
+                        is_remote_child,
+                        background,
+                        theme,
+                        appearance,
+                    )
+                } else {
+                    render_avatar_disc(avatar_color, avatar_glyph, AVATAR_SIZE, theme, appearance)
+                }
             }
         };
-        let leading_label_spacing = if !is_pinned && status.is_some() {
+        // Tighter spacing only applies when the wider status-overlay avatar
+        // is showing; the pin glyph is a plain avatar-sized square.
+        let leading_label_spacing = if !show_pin_glyph && status.is_some() {
             PILL_GAP_WITH_STATUS
         } else {
             PILL_GAP
@@ -1529,8 +1894,6 @@ fn render_pill(
     // skips the outer click whenever a child already handled it so the
     // 3-dot click only opens the menu.
     .with_defer_events_to_children()
-    .with_hover_in_delay(HOVER_CARD_IN_DELAY)
-    .with_hover_out_delay(HOVER_CARD_OUT_DELAY)
     .on_hover(move |is_hovered, ctx, _app, _pos| {
         // Drive the hover-details-card overlay via a typed action so the
         // pill bar's `handle_action` can update its `hovered_pill` field
@@ -1546,43 +1909,19 @@ fn render_pill(
         };
         ctx.dispatch_typed_action(OrchestrationPillBarAction::SetHoveredPill(payload));
     })
-    .on_click(move |ctx, app, _| {
+    .on_click(move |ctx, _app, _| {
         if is_selected {
             return;
         }
-        // Single source of truth: if the conversation is currently owned
-        // by a *different* visible terminal view than this orchestrator
-        // pane (because it was split off into a separate pane or tab),
-        // the pill should focus that existing pane rather than re-render
-        // the conversation in place. Route through the pill bar's own
-        // `FocusOpenedConversation` action so this path and the 3-dot
-        // menu's "Focus pane" item share a single implementation — the
-        // pill bar's `handle_action` then dispatches
-        // `WorkspaceAction::FocusTerminalViewInWorkspace` from a
-        // `ViewContext<Self>`, which reliably reaches the workspace.
-        let is_open_elsewhere =
-            is_conversation_open_in_other_visible_view(conversation_id, self_terminal_view_id, app);
-        if is_open_elsewhere {
-            ctx.dispatch_typed_action(OrchestrationPillBarAction::FocusOpenedConversation(
-                conversation_id,
-            ));
-            return;
-        }
-        // Child pills should reveal the existing child pane/session, not
-        // switch the current pane in place. The hidden child pane owns the
-        // live harness/ambient session and associated view-scoped models; if
-        // we merely re-enter the child conversation in the current pane, the
-        // actual running session stays attached to the hidden pane and the
-        // user sees an empty child view. The orchestrator pill still switches
-        // the current pane back to the parent conversation.
-        //
-        // We keep the visible-owner fast path above so a child that's already
-        // open in another visible pane/tab still focuses that existing
-        // destination rather than trying to reveal the hidden bootstrap pane.
-        let action = navigation_action_for_pill(kind, conversation_id);
-        ctx.dispatch_typed_action(
-            PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(action),
-        );
+        // Route the click through `PillClicked` so the pill bar can
+        // emit telemetry before forwarding the navigation. The
+        // handler reads `self_terminal_view_id` from its own
+        // controller, so we no longer need the value captured here.
+        let _ = self_terminal_view_id;
+        ctx.dispatch_typed_action(OrchestrationPillBarAction::PillClicked {
+            conversation_id,
+            pill_kind: kind,
+        });
     })
     .finish();
 
@@ -1661,14 +2000,17 @@ fn render_avatar_with_status_overlay(
     theme: &WarpTheme,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // Disc sized to match the helper's brand-circle slot.
-    let avatar = render_avatar_disc(
+    // `Align` centers the disc in the helper's `total_size` box; without it
+    // the disc anchors top-left and sits ~2.5px higher than the orchestrator
+    // pill's plain avatar.
+    let avatar = Align::new(render_avatar_disc(
         avatar_color,
         glyph,
         icon_with_status::circle_size(AVATAR_WITH_STATUS_TOTAL_SIZE),
         theme,
         appearance,
-    );
+    ))
+    .finish();
     render_icon_with_status(
         IconWithStatusVariant::CustomAvatar {
             avatar,
@@ -1765,84 +2107,6 @@ struct CrumbSpec {
 const CRUMB_HEIGHT: f32 = 24.;
 const CRUMB_RADIUS: f32 = 4.;
 const CRUMB_HORIZONTAL_PADDING: f32 = 6.;
-
-/// Returns `true` if `conversation_id` is canonically owned (per
-/// `BlocklistAIHistoryModel::live_conversation_ids_for_terminal_view`) by
-/// some *visible* terminal view that is not `self_terminal_view_id`. Used
-/// by the orchestration pill bar to decide between "open in new pane / new
-/// tab" (when no other visible pane shows the conversation) and "focus
-/// pane" (when one does).
-///
-/// `BlocklistAIHistoryModel` is the single source of truth for which
-/// terminal view renders a given conversation's AI blocks (see
-/// `ConversationOwnershipTransferred`), so it correctly reflects the
-/// orchestrator after an in-place switch and the new pane after a split.
-/// However, before any user interaction the canonical owner is the
-/// hidden child-agent pane created by
-/// `create_hidden_child_agent_conversation` — a real terminal view that
-/// we deliberately keep off-screen. Using only the history-model owner
-/// here would treat that hidden pane as "elsewhere" and falsely surface
-/// "Focus pane" for every child the user has not yet opened.
-///
-/// The visible-pane filter resolves both edge cases: walking
-/// `Workspace::tab_views()` and consulting `PaneGroup::visible_pane_ids()`
-/// (which excludes hidden-for-child-agent / hidden-for-close / etc.
-/// panes) confirms the owner is a pane the user can actually navigate to.
-fn is_conversation_open_in_other_visible_view(
-    conversation_id: AIConversationId,
-    self_terminal_view_id: EntityId,
-    app: &AppContext,
-) -> bool {
-    let Some(owner) =
-        BlocklistAIHistoryModel::as_ref(app).terminal_view_id_for_conversation(&conversation_id)
-    else {
-        return false;
-    };
-    if owner == self_terminal_view_id {
-        return false;
-    }
-    let registry = WorkspaceRegistry::as_ref(app);
-    for (_, workspace_handle) in registry.all_workspaces(app) {
-        let workspace = workspace_handle.as_ref(app);
-        for pane_group_handle in workspace.tab_views() {
-            let pane_group = pane_group_handle.as_ref(app);
-            for pane_id in pane_group.visible_pane_ids() {
-                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
-                    if terminal_view.id() == owner {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Walks every visible terminal pane across every workspace/tab and
-/// returns the `EntityId` of the `PaneGroup` that contains the given
-/// `terminal_view_id`, if any. Used by the pill bar to decide between
-/// the same-pane-group focus path (`RevealChildAgent`) and the
-/// cross-pane-group path (`FocusTerminalViewInWorkspace`).
-fn pane_group_id_containing_terminal_view(
-    terminal_view_id: EntityId,
-    app: &AppContext,
-) -> Option<EntityId> {
-    let registry = WorkspaceRegistry::as_ref(app);
-    for (_, workspace_handle) in registry.all_workspaces(app) {
-        let workspace = workspace_handle.as_ref(app);
-        for pane_group_handle in workspace.tab_views() {
-            let pane_group = pane_group_handle.as_ref(app);
-            for pane_id in pane_group.visible_pane_ids() {
-                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
-                    if terminal_view.id() == terminal_view_id {
-                        return Some(pane_group_handle.id());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
 
 /// Renders a `[Parent Avatar] [Parent Title] > [Child Avatar] [Child Name]`
 /// breadcrumb row when the active conversation is a child agent under an
@@ -2000,8 +2264,9 @@ pub fn render_orchestration_breadcrumbs(
     // whenever the row overflows; overlaying keeps the row vertically
     // centered in the title slot at the cost of the scrollbar briefly
     // crossing through the bottom edge of the labels — which the user
-    // explicitly accepted as a fine trade-off.
-    .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, true))
+    // explicitly accepted as a fine trade-off. 4px matches the pill bar
+    // for a consistent hairline treatment across orchestration surfaces.
+    .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Custom(4.), true))
     .with_propagate_mousewheel_if_not_handled(true)
     .finish();
 

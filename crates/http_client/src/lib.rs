@@ -145,9 +145,7 @@ impl Client {
         let client_builder = reqwest::ClientBuilder::new()
             // Don't load any SSL/TLS certificates, as doing so can be slow and we should
             // never be making real requests in tests.
-            .tls_built_in_native_certs(false)
-            .tls_built_in_root_certs(false)
-            .tls_built_in_webpki_certs(false)
+            .tls_certs_only([])
             // Disable proxy usage in tests, as loading system proxy configuration can be
             // slow.
             .no_proxy();
@@ -555,6 +553,16 @@ impl<'a> RequestBuilder<'a> {
         }
     }
 
+    /// Attach a `multipart/form-data` body.
+    /// Not available on wasm because reqwest's multipart builder API is native-only.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn multipart(self, form: reqwest::multipart::Form) -> RequestBuilder<'a> {
+        Self {
+            wrapped: self.wrapped.multipart(form),
+            ..self
+        }
+    }
+
     /// Prevents the system from sleeping due to idle while this request is in progress.
     ///
     /// The provided reason will be used in user-visible logging, so make sure it is
@@ -567,12 +575,14 @@ impl<'a> RequestBuilder<'a> {
     }
 }
 
-/// An error returned from `Response::error_for_status` that includes response headers.
-/// This allows callers to inspect headers (like X-Warp-Error-Code) when handling errors.
+/// An error returned from `Response::error_for_status` that includes response metadata.
+/// This allows callers to inspect headers (like X-Warp-Error-Code) and the response body when
+/// handling errors.
 #[derive(Debug)]
 pub struct ResponseError {
     pub source: reqwest::Error,
-    pub headers: HeaderMap,
+    pub headers: Box<HeaderMap>,
+    pub body: Option<String>,
 }
 
 impl std::fmt::Display for ResponseError {
@@ -619,7 +629,28 @@ impl Response {
         let headers = self.0.headers().clone();
         match self.0.error_for_status() {
             Ok(response) => Ok(Self(response)),
-            Err(source) => Err(ResponseError { source, headers }),
+            Err(source) => Err(ResponseError {
+                source,
+                headers: Box::new(headers),
+                body: None,
+            }),
+        }
+    }
+
+    /// Checks the response status and returns an error if it's not successful.
+    /// Unlike `error_for_status`, this also reads and preserves the response body on errors.
+    pub async fn error_for_status_with_body(self) -> Result<Self, ResponseError> {
+        let headers = self.0.headers().clone();
+        match self.0.error_for_status_ref() {
+            Ok(_) => Ok(self),
+            Err(source) => {
+                let body = self.text().await.ok();
+                Err(ResponseError {
+                    source,
+                    headers: Box::new(headers),
+                    body,
+                })
+            }
         }
     }
 
@@ -629,7 +660,11 @@ impl Response {
         let headers = self.0.headers().clone();
         match self.0.error_for_status_ref() {
             Ok(response) => Ok(response),
-            Err(source) => Err(ResponseError { source, headers }),
+            Err(source) => Err(ResponseError {
+                source,
+                headers: Box::new(headers),
+                body: None,
+            }),
         }
     }
 
