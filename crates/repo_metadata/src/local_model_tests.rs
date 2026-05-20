@@ -1286,6 +1286,57 @@ Thumbs.db
         });
     }
 
+    /// A path that shares a string prefix with a failed walk path but is NOT
+    /// a true component-wise descendant must still be processed normally.
+    /// This is a regression guard against `StandardizedPath::starts_with`
+    /// (delegating to `typed_path::TypedPath::starts_with`) silently switching
+    /// to byte-prefix semantics in a future version — today it is documented
+    /// as component-aware, and this test pins that contract for the cache.
+    #[test]
+    fn test_failed_walk_cache_respects_component_boundaries() {
+        VirtualFS::test("failed_walk_cache_substring", |dirs, mut vfs| {
+            vfs.mkdir("Temp").mkdir("Tempest");
+
+            let temp_dir = dirs.tests().join("Temp");
+            let tempest_dir = dirs.tests().join("Tempest");
+
+            let failed_path = StandardizedPath::try_from_local(&temp_dir).unwrap();
+
+            let mut failed_walk_paths = std::collections::HashSet::new();
+            failed_walk_paths.insert(failed_path);
+
+            let update = RepoUpdate {
+                added: vec![tempest_dir.clone()],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+
+            let (mutations, _newly_failed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &[],
+                    &failed_walk_paths,
+                ));
+
+            // `Tempest` is a sibling of `Temp`, not a descendant. The cache
+            // must NOT short-circuit it — the walk should have run and produced
+            // a directory mutation.
+            let has_dir_mutation = mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    FileTreeMutation::AddDirectorySubtree { .. }
+                        | FileTreeMutation::AddEmptyDirectory { .. }
+                )
+            });
+            assert!(
+                has_dir_mutation,
+                "Cache short-circuit must not match on string prefix \
+                 (Tempest is not a descendant of Temp), got: {:?}",
+                mutations
+            );
+        });
+    }
+
     // ── WatchFilter system-dir exclusion tests (Windows only) ─────────────────
 
     #[cfg(target_os = "windows")]

@@ -142,6 +142,14 @@ pub struct LocalRepoMetadataModel {
     /// that descends from a cached entry are short-circuited before starting
     /// a new walk, eliminating the hot-loop on directories like
     /// `AppData\Local\Temp` that are guaranteed to exceed the quota.
+    ///
+    /// The cache is currently unbounded — each distinct over-limit subtree
+    /// the user encounters during a session adds one entry. In typical use
+    /// (a handful of system or build directories under any given workspace
+    /// root) growth is negligible, but for very long-lived sessions that
+    /// traverse many large subtrees an eviction policy (e.g. LRU with a
+    /// reasonable cap) could be added without changing the short-circuit
+    /// semantics. Deferred until measured pressure justifies the complexity.
     failed_walk_paths: HashSet<StandardizedPath>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
