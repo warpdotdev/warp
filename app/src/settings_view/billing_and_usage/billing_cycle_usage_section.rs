@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Local, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -25,7 +25,7 @@ use crate::{
             billing_cycle_usage_common::{
                 filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
             },
-            billing_cycle_usage_rows::{render_rows, SourceFilter},
+            billing_cycle_usage_rows::{has_cloud_usage, render_rows, SourceFilter},
             billing_cycle_usage_team_totals::render_team_totals_block,
         },
         billing_and_usage_page_v2::{
@@ -38,8 +38,8 @@ use crate::{
         update_manager::TeamUpdateManager,
         user_workspaces::UserWorkspaces,
         workspace::{
-            AiCreditsUsageAndCostType, BillingCycleUsageData, BillingCycleUsageSummary,
-            MaxPriorCycles, UsageVisibility, UsageVisibilityGranularity, Workspace,
+            AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
+            UsageVisibilityGranularity, Workspace,
         },
     },
 };
@@ -140,11 +140,10 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &'a Workspace,
     ) -> Option<&'a BillingCycleUsageSummary> {
-        let data = workspace.billing_cycle_usage.as_ref()?;
-        let aligned = aligned_summaries(data);
+        let summaries = &workspace.billing_cycle_usage.as_ref()?.summaries;
         match self.selected_period_end {
-            Some(end) => aligned.into_iter().find(|s| s.period_end == end),
-            None => aligned.into_iter().next(),
+            Some(end) => summaries.iter().find(|s| s.period_end == end),
+            None => summaries.first(),
         }
     }
 
@@ -155,11 +154,7 @@ impl BillingCycleUsageSectionView {
         let still_present = UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .and_then(|ws| ws.billing_cycle_usage.as_ref())
-            .map(|data| {
-                aligned_summaries(data)
-                    .iter()
-                    .any(|s| s.period_end == selected)
-            })
+            .map(|data| data.summaries.iter().any(|s| s.period_end == selected))
             .unwrap_or(false);
         if !still_present {
             self.selected_period_end = None;
@@ -213,8 +208,9 @@ impl BillingCycleUsageSectionView {
         let Some(data) = workspace.billing_cycle_usage.as_ref() else {
             return;
         };
-        let items: Vec<MenuItem<BillingCycleUsageAction>> = aligned_summaries(data)
-            .into_iter()
+        let items: Vec<MenuItem<BillingCycleUsageAction>> = data
+            .summaries
+            .iter()
             .map(|summary| {
                 let label = format_period_range(summary.period_start, summary.period_end);
                 MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
@@ -271,6 +267,14 @@ impl View for BillingCycleUsageSectionView {
         let shows_team_section = visibility.granularity != UsageVisibilityGranularity::OwnOnly
             && (workspace.members.len() > 1
                 || has_non_viewer_data(&entries, viewer_uid.as_deref()));
+        let show_source_filter_toggle = shows_team_section
+            && visibility.granularity == UsageVisibilityGranularity::FullBreakdown
+            && has_cloud_usage(&entries);
+        let source_filter = if show_source_filter_toggle {
+            self.source_filter
+        } else {
+            SourceFilter::All
+        };
 
         if shows_team_section {
             column.add_child(
@@ -297,7 +301,7 @@ impl View for BillingCycleUsageSectionView {
                 &entries,
                 &visibility,
                 shows_team_section,
-                self.source_filter,
+                source_filter,
                 &self.row_mouse_states,
                 appearance,
                 app,
@@ -340,13 +344,13 @@ impl BillingCycleUsageSectionView {
 
         // Collapse to a static label when there's effectively one period to
         // pick from: either the tier policy doesn't expose history at all, or
-        // we've deduped/grid-aligned down to a single canonical cycle.
-        let aligned_count = workspace
+        // the server returned a single canonical cycle.
+        let summary_count = workspace
             .billing_cycle_usage
             .as_ref()
-            .map(|d| aligned_summaries(d).len())
+            .map(|d| d.summaries.len())
             .unwrap_or(0);
-        let use_selector = visibility.max_prior_cycles != MaxPriorCycles::None && aligned_count > 1;
+        let use_selector = visibility.max_prior_cycles != MaxPriorCycles::None && summary_count > 1;
         let period_element = if use_selector {
             self.render_period_selector(workspace, appearance)
         } else {
@@ -747,47 +751,4 @@ fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
             end.format("%b %d, %Y")
         )
     }
-}
-
-fn aligned_summaries(data: &BillingCycleUsageData) -> Vec<&BillingCycleUsageSummary> {
-    let anchor = data.current_period_end;
-    let mut seen: std::collections::HashSet<DateTime<Utc>> = std::collections::HashSet::new();
-    let mut result: Vec<&BillingCycleUsageSummary> = Vec::new();
-    for summary in &data.summaries {
-        if !is_on_grid(summary.period_end, anchor) {
-            continue;
-        }
-        if !seen.insert(summary.period_end) {
-            continue;
-        }
-        result.push(summary);
-    }
-    result
-}
-
-fn is_on_grid(period_end: DateTime<Utc>, anchor_end: DateTime<Utc>) -> bool {
-    let anchor_day = anchor_end.day();
-    let last_day = last_day_of_month(period_end.year(), period_end.month());
-    let expected_day = anchor_day.min(last_day);
-
-    period_end.day() == expected_day
-        && period_end.hour() == anchor_end.hour()
-        && period_end.minute() == anchor_end.minute()
-        && period_end.second() == anchor_end.second()
-        // Match `warp-server-3`'s ms-precision comparison rather than
-        // chrono's nanosecond precision, so we don't reject summaries that
-        // differ from the anchor only in sub-ms noise.
-        && period_end.nanosecond() / 1_000_000 == anchor_end.nanosecond() / 1_000_000
-}
-
-fn last_day_of_month(year: i32, month: u32) -> u32 {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    NaiveDate::from_ymd_opt(next_year, next_month, 1)
-        .and_then(|d| d.pred_opt())
-        .map(|d| d.day())
-        .unwrap_or(28)
 }
