@@ -389,6 +389,44 @@ fn test_git_path_filtering_allowlist() {
 }
 
 #[test]
+fn should_descend_into_git_path_prunes_git_objects_and_allows_git_head() {
+    use super::should_descend_into_git_path;
+    use std::path::Path;
+    for path in [
+        "/repo/.git",
+        "/repo/.git/refs",
+        "/repo/.git/refs/heads",
+        "/repo/.git/refs/remotes",
+        "/repo/.git/refs/remotes/origin",
+        "/repo/.git/worktrees",
+        "/repo/.git/worktrees/my-wt",
+        "/repo/.git/worktrees/my-wt/refs",
+        "/repo/.git/worktrees/my-wt/refs/heads",
+    ] {
+        assert!(
+            should_descend_into_git_path(Path::new(path)),
+            "{path} should remain traversable so allowlisted git children stay reachable"
+        );
+    }
+
+    for path in [
+        "/repo/.git/objects",
+        "/repo/.git/hooks",
+        "/repo/.git/logs",
+        "/repo/.git/worktrees/my-wt/objects",
+        "/repo/.git/worktrees/my-wt/logs",
+    ] {
+        assert!(
+            !should_descend_into_git_path(Path::new(path)),
+            "{path} should be pruned from recursive watcher registration"
+        );
+    }
+    assert!(!should_descend_into_git_path(Path::new(
+        "/repo/.git/objects/ab/blob"
+    )));
+    assert!(should_descend_into_git_path(Path::new("/repo/.git/HEAD")));
+}
+#[test]
 fn test_is_shared_git_ref() {
     use super::is_shared_git_ref;
     use std::path::Path;

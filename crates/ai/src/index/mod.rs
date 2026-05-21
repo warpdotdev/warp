@@ -13,6 +13,7 @@ pub use repo_metadata::{BuildTreeError, DirectoryEntry, Entry, FileId, FileMetad
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        pub use repo_metadata::entry::{path_passes_gitignore, should_descend_into_git_path};
         pub use repo_metadata::{
             matches_gitignores, path_passes_filters,
         };
