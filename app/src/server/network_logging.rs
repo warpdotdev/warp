@@ -26,6 +26,13 @@ pub struct NetworkLogModel {
     items: BoundedVecDeque<NetworkLogItem>,
 }
 
+/// Human-friendly snapshot plus a plain-text export for copying/sharing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkLogSnapshot {
+    pub display_text: String,
+    pub plain_text: String,
+}
+
 impl Default for NetworkLogModel {
     fn default() -> Self {
         Self {
@@ -44,18 +51,37 @@ impl NetworkLogModel {
         ctx.notify();
     }
 
-    /// Returns the current snapshot as a single string with one item per line,
-    /// in chronological order. Returns an empty string when no items have been
-    /// captured.
-    pub fn snapshot_text(&self) -> String {
-        let mut out = String::new();
+    /// Returns both a human-friendly snapshot for the pane and a plain-text
+    /// export suitable for copying into another editor.
+    pub fn snapshot(&self) -> NetworkLogSnapshot {
+        if self.items.is_empty() {
+            return NetworkLogSnapshot {
+                display_text: String::new(),
+                plain_text: String::new(),
+            };
+        }
+
+        let mut display_text = String::new();
+        let mut plain_text = String::new();
+
         for (i, item) in self.items.iter().enumerate() {
             if i > 0 {
-                out.push('\n');
+                display_text.push_str("\n\n");
+                plain_text.push_str("\n\n");
             }
-            out.push_str(&item.0);
+            display_text.push_str(&item.display_text);
+            plain_text.push_str(&item.plain_text);
         }
-        out
+
+        NetworkLogSnapshot {
+            display_text,
+            plain_text,
+        }
+    }
+
+    /// Returns the current display snapshot as a single string.
+    pub fn snapshot_text(&self) -> String {
+        self.snapshot().display_text
     }
 
     /// Number of items currently retained. Exposed for tests.
@@ -121,11 +147,12 @@ pub(super) fn init<'a>(
 }
 
 /// Represents an item (either a request or response) captured for the network
-/// activity log. The inner string contains a timestamp and the
-/// [`Debug`]-formatted representation of the request or response, matching the
-/// format previously written to `warp_network.log`.
+/// activity log.
 #[derive(Clone, Debug)]
-pub struct NetworkLogItem(String);
+pub struct NetworkLogItem {
+    display_text: String,
+    plain_text: String,
+}
 
 impl NetworkLogItem {
     pub fn request(
@@ -133,34 +160,100 @@ impl NetworkLogItem {
         serialized_payload: Option<String>,
         timestamp: DateTime<FixedOffset>,
     ) -> Self {
-        Self(format!(
-            "[{}]: {:?}{}",
-            timestamp.format("%Y-%m-%d %H:%M:%S,%3f"),
-            request,
-            serialized_payload.map_or("".to_owned(), |payload| format!("\nBody {payload}"))
-        ))
+        let timestamp = timestamp.format("%Y-%m-%d %H:%M:%S,%3f").to_string();
+        let request_debug = format!("{:?}", request);
+        let body_suffix = serialized_payload
+            .as_ref()
+            .map_or(String::new(), |payload| format!("\nBody {payload}"));
+        let plain_text = format!("[{timestamp}]: {request_debug}{body_suffix}");
+        let display_text =
+            format_request_for_display(&timestamp, request, serialized_payload.as_deref());
+        Self {
+            display_text,
+            plain_text,
+        }
     }
 
     pub fn response(response: &reqwest::Response, timestamp: DateTime<FixedOffset>) -> Self {
-        Self(format!(
-            "[{}]: {:?}",
-            timestamp.format("%Y-%m-%d %H:%M:%S,%3f"),
-            response
-        ))
+        let timestamp = timestamp.format("%Y-%m-%d %H:%M:%S,%3f").to_string();
+        let response_debug = format!("{:?}", response);
+        let plain_text = format!("[{timestamp}]: {response_debug}");
+        let display_text = format_response_for_display(&timestamp, response);
+        Self {
+            display_text,
+            plain_text,
+        }
     }
 
     /// Constructs a log item directly from a pre-formatted string. Used in
     /// tests where we don't have a real `reqwest` request/response handy.
     #[cfg(test)]
     pub fn from_string(s: impl Into<String>) -> Self {
-        Self(s.into())
+        let s = s.into();
+        Self {
+            display_text: s.clone(),
+            plain_text: s,
+        }
     }
 }
 
 impl fmt::Display for NetworkLogItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.plain_text)
     }
+}
+
+fn format_request_for_display(
+    timestamp: &str,
+    request: &reqwest::Request,
+    serialized_payload: Option<&str>,
+) -> String {
+    let method = request.method();
+    let url = request.url();
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    let query = url
+        .query()
+        .map_or(String::new(), |query| format!("?{query}"));
+
+    let mut lines = vec![
+        format!("[{timestamp}] Request"),
+        format!("Method: {method}"),
+        format!("Host: {}", url.host_str().unwrap_or("")),
+        format!("Path: {path}{query}"),
+        format!("URL: {url}"),
+    ];
+
+    if let Some(payload) = serialized_payload {
+        lines.push(format!("Body: {payload}"));
+    }
+
+    lines.join("\n")
+}
+
+fn format_response_for_display(timestamp: &str, response: &reqwest::Response) -> String {
+    let status = response.status();
+    let url = response.url();
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    let query = url
+        .query()
+        .map_or(String::new(), |query| format!("?{query}"));
+
+    [
+        format!("[{timestamp}] Response"),
+        format!("Status: {status}"),
+        format!("Host: {}", url.host_str().unwrap_or("")),
+        format!("Path: {path}{query}"),
+        format!("URL: {url}"),
+    ]
+    .join("\n")
 }
 
 #[cfg(test)]
