@@ -1067,6 +1067,7 @@ impl BillingAndUsagePageV2View {
                 appearance,
                 description_text,
                 warning_text,
+                app,
             ),
             AddonCreditsPanelState::Purchase(state) => {
                 self.render_addon_credits_purchase_card(workspace, team_uid, state, appearance, app)
@@ -1348,11 +1349,12 @@ impl BillingAndUsagePageV2View {
         appearance: &Appearance,
         description_text: String,
         warning_text: Option<&'static str>,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg = theme.background();
         let auto_reload_header = Text::new_inline(
-            MANAGED_AUTO_RELOAD_HEADER,
+            crate::i18n::tr_static(app, MANAGED_AUTO_RELOAD_HEADER),
             appearance.ui_font_family(),
             HEADER_FONT_SIZE,
         )
