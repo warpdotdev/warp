@@ -19,6 +19,7 @@ use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
 };
 use crate::terminal::view::CliAgentRouting;
+use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::workspace::util::get_context_target_terminal_view;
 use crate::workspace::TabBarDropTargetData;
 use crate::{code::EditorTabBarDropTargetData, pane_group::pane::ActionOrigin};
@@ -829,8 +830,7 @@ impl CodeView {
             .is_some_and(|t| t.editor_view.as_ref(ctx).is_new_file());
 
         let title = match &file_location {
-            Some(LocalOrRemotePath::Local(path)) => path.display().to_string(),
-            Some(LocalOrRemotePath::Remote(remote_path)) => remote_path.path.as_str().to_string(),
+            Some(location) => display_path_with_host(location, false, ctx),
             None => "Untitled".to_string(),
         };
 
@@ -1145,7 +1145,7 @@ impl CodeView {
             let file_name = tab
                 .location
                 .as_ref()
-                .map(|loc| loc.display_name().to_string())
+                .map(|loc| display_name_with_host(loc, ctx))
                 .filter(|n| !n.is_empty());
             let summary = UnsavedStateSummary::for_editor_tab(
                 file_name,
@@ -1492,6 +1492,7 @@ impl CodeView {
         is_hovered: bool,
         has_unsaved_changes: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = if is_active {
@@ -1507,7 +1508,7 @@ impl CodeView {
         let file_name = tab_data
             .location
             .as_ref()
-            .map(|loc| loc.display_name().to_string())
+            .map(|loc| display_name_with_host(loc, app))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Untitled".to_string());
         let language_icon =
@@ -1543,6 +1544,7 @@ impl CodeView {
         )
         .with_color(text_color)
         .with_style(style)
+        .with_clip(ClipConfig::start())
         .finish();
         row.add_child(
             Shrinkable::new(
@@ -1723,6 +1725,7 @@ impl CodeView {
                             tab_handle.is_hovered(),
                             Self::has_unsaved_changes(tab_data, app),
                             appearance,
+                            app,
                         ))
                         .with_horizontal_margin(TAB_HORIZONTAL_MARGIN)
                         .with_padding(Padding::uniform(TAB_PADDING))
@@ -1884,7 +1887,7 @@ impl CodeView {
             .and_then(|tab| {
                 tab.location
                     .as_ref()
-                    .map(|loc| loc.display_name().to_string())
+                    .map(|loc| display_name_with_host(loc, app))
                     .filter(|n| !n.is_empty())
             })
             .unwrap_or_else(|| "Untitled".to_string());

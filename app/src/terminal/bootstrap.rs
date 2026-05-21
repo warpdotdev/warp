@@ -27,6 +27,18 @@ lazy_static! {
 /// errors
 const BYTE_ORDER_MARK: &str = "\u{FEFF}";
 
+#[cfg(feature = "local_fs")]
+pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
+    session_info.subshell_info.as_ref().is_some_and(|info| {
+        let first_token = info
+            .spawning_command
+            .split_ascii_whitespace()
+            .next()
+            .unwrap_or("");
+        first_token == "docker" || first_token == "podman"
+    })
+}
+
 /// Returns `true` if Warp should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
 /// associated `session_type` and `subshell_initialization_info`.
@@ -56,6 +68,12 @@ pub fn should_use_rc_file_bootstrap_method(
     session_info: &SessionInfo,
 ) -> bool {
     use super::ShellLaunchData;
+
+    // Container subshells cannot access host temp files, so the RC-file
+    // method is never viable for them.
+    if is_container_subshell(session_info) {
+        return false;
+    }
 
     let session_type = &session_info.session_type;
     match session_type {

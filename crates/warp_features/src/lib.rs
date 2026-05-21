@@ -940,10 +940,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
-    FeatureFlag::SoloUserByok,
-    FeatureFlag::CustomInferenceEndpoints,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::BillingAndUsagePageV2,
     FeatureFlag::RemoteCodeReview,
 ];
 

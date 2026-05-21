@@ -840,6 +840,39 @@ impl AIExecutionProfilesModel {
         }
     }
 
+    pub fn set_run_agents(
+        &mut self,
+        profile_id: ClientProfileId,
+        permission: super::RunAgentsPermission,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let current_value = self
+            .get_profile_by_id(profile_id, ctx)
+            .map(|p| p.data().run_agents);
+
+        self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.run_agents != permission {
+                    profile.run_agents = permission;
+                    return true;
+                }
+                false
+            },
+            ctx,
+        );
+
+        if current_value != Some(permission) {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AIExecutionProfileSettingUpdated {
+                    setting_type: "run_agents".to_string(),
+                    setting_value: format!("{permission:?}"),
+                },
+                ctx
+            );
+        }
+    }
+
     pub fn set_web_search_enabled(
         &mut self,
         profile_id: ClientProfileId,

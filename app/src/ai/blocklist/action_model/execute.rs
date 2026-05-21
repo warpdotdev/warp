@@ -89,10 +89,9 @@ use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
 use crate::{
     ai::{
         agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentAction, AIAgentActionId,
-            AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
-            AIAgentActionTypeDiscriminants, CancellationReason, FileContext, FileLocations,
-            ServerOutputId,
+            conversation::AIConversationId, AIAgentAction, AIAgentActionId, AIAgentActionResult,
+            AIAgentActionResultType, AIAgentActionType, AIAgentActionTypeDiscriminants,
+            CancellationReason, FileContext, FileLocations, ServerOutputId,
         },
         ambient_agents::AmbientAgentTaskId,
         get_relevant_files::controller::GetRelevantFilesController,
@@ -331,8 +330,8 @@ impl BlocklistAIActionExecutor {
         let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new());
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
-        let run_agents_executor =
-            ctx.add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone()));
+        let run_agents_executor = ctx
+            .add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone(), terminal_view_id));
         let send_message_executor = ctx.add_model(|_| SendMessageToAgentExecutor::new());
         let ask_user_question_executor =
             ctx.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
@@ -720,8 +719,6 @@ impl BlocklistAIActionExecutor {
                 .ask_user_question_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
-            // Standard executor path (un-edited request). The card
-            // view's Accept uses `execute_run_agents` instead.
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
@@ -858,78 +855,6 @@ impl BlocklistAIActionExecutor {
         for action_id in action_ids {
             self.cancel_running_async_action(&action_id, reason, ctx);
         }
-    }
-
-    /// Dispatches a `RunAgents` action with a user-edited request
-    /// (from the confirmation card's Accept handler).
-    pub fn execute_run_agents(
-        &mut self,
-        action_id: AIAgentActionId,
-        request: ai::agent::action::RunAgentsRequest,
-        conversation_id: AIConversationId,
-        task_id: TaskId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.is_shared_session_viewer() {
-            log::warn!("RunAgents dispatch attempted in shared-session-viewer mode; ignoring");
-            return;
-        }
-        if self.async_executing_actions.contains_key(&action_id) {
-            log::warn!("RunAgents dispatch reentered for {action_id:?}; ignoring");
-            return;
-        }
-
-        let receiver = self.run_agents_executor.update(ctx, |executor, exec_ctx| {
-            executor.dispatch_run_agents(
-                action_id.clone(),
-                request.clone(),
-                conversation_id,
-                exec_ctx,
-            )
-        });
-
-        // Synthesize an AIAgentAction for cancellation and task_id
-        // plumbing.
-        let action = AIAgentAction {
-            id: action_id.clone(),
-            task_id,
-            action: AIAgentActionType::RunAgents(request),
-            requires_result: true,
-        };
-        self.async_executing_actions.insert(
-            action_id.clone(),
-            AsyncExecutingAction {
-                action,
-                conversation_id,
-            },
-        );
-        ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
-            action_id: action_id.clone(),
-        });
-
-        ctx.spawn(
-            async move { receiver.recv().await },
-            move |me, result, ctx| {
-                let Some(running) = me.async_executing_actions.remove(&action_id) else {
-                    return;
-                };
-                let result_type = match result {
-                    Ok(r) => AIAgentActionResultType::RunAgents(r),
-                    Err(_) => AIAgentActionResultType::RunAgents(
-                        ai::agent::action_result::RunAgentsResult::Cancelled,
-                    ),
-                };
-                ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                    result: Arc::new(AIAgentActionResult {
-                        id: action_id,
-                        task_id: running.action.task_id,
-                        result: result_type,
-                    }),
-                    conversation_id: running.conversation_id,
-                    cancellation_reason: None,
-                });
-            },
-        );
     }
 
     fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {

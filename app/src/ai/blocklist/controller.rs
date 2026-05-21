@@ -2020,7 +2020,9 @@ impl BlocklistAIController {
                 forked_from_conversation_token: conversation
                     .forked_from_server_conversation_token()
                     .cloned(),
-                ambient_agent_task_id: self.ambient_agent_task_id,
+                // Do not tie passive suggestion requests to the cloud agent task, since they are
+                // separate, read-only requests.
+                ambient_agent_task_id: None,
                 existing_suggestions: None,
             };
             (conversation_id, task_id, conversation_data)
@@ -2036,7 +2038,9 @@ impl BlocklistAIController {
                 tasks: vec![],
                 server_conversation_token: None,
                 forked_from_conversation_token: None,
-                ambient_agent_task_id: self.ambient_agent_task_id,
+                // Do not tie passive suggestion requests to the cloud agent task, since they are
+                // separate, read-only requests.
+                ambient_agent_task_id: None,
                 existing_suggestions: None,
             };
             (conversation_id, task_id, conversation_data)
@@ -2146,6 +2150,11 @@ impl BlocklistAIController {
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.set_ambient_agent_task_id(id, ctx);
         });
+    }
+
+    #[cfg(test)]
+    pub fn get_ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
+        self.ambient_agent_task_id
     }
 
     /// Set the per-session directory for downloading file attachments.
@@ -3183,3 +3192,7 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
         is_alt_screen_active,
     })
 }
+
+#[cfg(test)]
+#[path = "controller_tests.rs"]
+mod tests;

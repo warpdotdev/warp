@@ -9,7 +9,6 @@ use crate::{
             conversation::{
                 AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
             },
-            PassiveSuggestionTrigger,
         },
         agent_conversations_model::AgentConversationsModel,
         ambient_agents::github_auth_notifier::GitHubAuthNotifier,
@@ -574,7 +573,6 @@ fn create_already_fullscreen_parent_pane_data(
 
 fn request_ambient_agent_task_id_for_hidden_child(
     panes: &PaneGroup,
-    child_conversation_id: AIConversationId,
     child_pane_id: PaneId,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<AmbientAgentTaskId> {
@@ -583,18 +581,7 @@ fn request_ambient_agent_task_id_for_hidden_child(
         .expect("child pane should have a terminal view");
     let ai_controller = terminal_view.as_ref(ctx).ai_controller().clone();
 
-    ai_controller.update(ctx, |controller, ctx| {
-        controller
-            .build_passive_suggestions_request_params(
-                Some(child_conversation_id),
-                PassiveSuggestionTrigger::FilesChanged,
-                vec![],
-                ctx,
-            )
-            .expect("child pane should build passive suggestion request params")
-            .1
-            .ambient_agent_task_id
-    })
+    ai_controller.update(ctx, |controller, _| controller.get_ambient_agent_task_id())
 }
 
 fn ambient_child_session_state(
@@ -839,12 +826,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                 .expect("fresh hidden child pane should be tracked");
 
             assert_eq!(
-                request_ambient_agent_task_id_for_hidden_child(
-                    panes,
-                    child.conversation_id,
-                    child_pane_id,
-                    ctx,
-                ),
+                request_ambient_agent_task_id_for_hidden_child(panes, child_pane_id, ctx,),
                 Some(task_id)
             );
         });
@@ -878,12 +860,7 @@ fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
                 .expect("restored hidden child pane should be tracked");
 
             assert_eq!(
-                request_ambient_agent_task_id_for_hidden_child(
-                    panes,
-                    child_conversation_id,
-                    child_pane_id,
-                    ctx,
-                ),
+                request_ambient_agent_task_id_for_hidden_child(panes, child_pane_id, ctx,),
                 Some(task_id)
             );
         });

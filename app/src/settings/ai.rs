@@ -1920,6 +1920,10 @@ impl AISettings {
         self.is_any_ai_enabled(app)
     }
 
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
+    }
+
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {
         self.is_any_ai_enabled(app) && *self.show_code_suggestion_speedbump
     }

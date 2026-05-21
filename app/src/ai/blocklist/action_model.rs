@@ -691,12 +691,10 @@ impl BlocklistAIActionModel {
         request: ai::agent::action::RunAgentsRequest,
         ctx: &mut ModelContext<Self>,
     ) {
-        let mut found: Option<(AIConversationId, AIAgentAction)> = None;
+        let mut found = None;
         for (conv_id, queue) in self.pending_actions.iter_mut() {
-            if let Some(idx) = queue.iter().position(|a| &a.id == action_id) {
-                if let Some(action) = queue.remove(idx) {
-                    found = Some((*conv_id, action));
-                }
+            if let Some(action) = queue.iter_mut().find(|action| &action.id == action_id) {
+                found = Some((*conv_id, action));
                 break;
             }
         }
@@ -708,33 +706,12 @@ impl BlocklistAIActionModel {
         };
         if !matches!(action.action, AIAgentActionType::RunAgents(_)) {
             log::warn!(
-                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents; re-queueing"
+                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents"
             );
-            self.pending_actions
-                .entry(conversation_id)
-                .or_default()
-                .push_front(action);
             return;
         }
-        let task_id = action.task_id.clone();
-        let action_id_clone = action_id.clone();
-
-        self.executor.update(ctx, |executor, exec_ctx| {
-            executor.execute_run_agents(
-                action_id_clone,
-                request,
-                conversation_id,
-                task_id,
-                exec_ctx,
-            );
-        });
-
-        self.update_conversation_in_progress_status(conversation_id, ctx);
-        self.add_running_action(
-            conversation_id,
-            action_id.clone(),
-            RunningActionPhase::Serial,
-        );
+        action.action = AIAgentActionType::RunAgents(request);
+        self.execute_action(action_id, conversation_id, ctx);
     }
 
     /// Removes a pending `RunAgents` action and records a `Denied`

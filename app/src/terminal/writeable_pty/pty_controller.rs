@@ -468,6 +468,19 @@ impl<T: EventLoopSender> PtyController<T> {
                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
                 self.write_terminating_bootstrap_bytes(ctx);
             }
+        } else if bootstrap::is_container_subshell(pending_session_info) {
+            // Write in 4KB chunks with 50ms delays to avoid overwhelming
+            // PTY buffers in container exec sessions (podman/docker exec -it),
+            // where the double-PTY proxy drops data for large writes.
+            const CHUNK_SIZE: usize = 4096;
+            let bytes: Vec<u8> = bootstrap.into_owned();
+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                ctx.spawn(
+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
+                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                );
+            }
         } else {
             self.write_bytes(bootstrap, ctx);
         }
