@@ -1536,6 +1536,12 @@ impl TerminalView {
         send_telemetry_from_ctx!(TelemetryEvent::CopiedSharedSessionLink { source }, ctx);
     }
 
+    pub fn open_shared_session_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.open_sharing_qr_code(SharingDialogSource::StartedSessionShare, ctx);
+        });
+    }
+
     fn insert_shared_session_started_banner(
         &mut self,
         scrollback_type: SharedSessionScrollbackType,

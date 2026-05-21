@@ -11,14 +11,16 @@ use crate::{
     drive::{items::WarpDriveItem, CloudObjectTypeAndId},
     persistence::ModelEvent,
     server::{
-        ids::{ObjectUid, ServerId, SyncId},
+        ids::{ServerId, SyncId},
         server_api::object::ObjectClient,
         sync_queue::{QueueItem, SerializedModel},
     },
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+
+// Re-exported from warp_server_client.
+pub use warp_server_client::ids::GenericStringObjectId;
 
 /// A trait that generic string-based objects should implement.
 pub trait CloudStringObject: CloudObject + Send + Sync {
@@ -359,22 +361,5 @@ where
 
     pub fn json_model(&self) -> &M {
         &self.string_model
-    }
-}
-
-/// Object id type that is common for all generic string objects.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct GenericStringObjectId(ServerId);
-crate::server_id_traits! { GenericStringObjectId, "GenericStringObject" }
-
-impl From<GenericStringObjectId> for SyncId {
-    fn from(id: GenericStringObjectId) -> Self {
-        Self::ServerId(id.into())
-    }
-}
-
-impl GenericStringObjectId {
-    pub fn uid(&self) -> ObjectUid {
-        self.0.uid()
     }
 }
