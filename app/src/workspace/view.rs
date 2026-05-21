@@ -308,6 +308,8 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::server_api::ai::OrchestrationHandoffInfo;
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
@@ -743,6 +745,24 @@ struct LocalToCloudHandoffOpenParams {
     launch: Option<PendingCloudLaunch>,
     environment_id: Option<SyncId>,
     intent: LocalToCloudHandoffIntent,
+}
+
+/// Computes the orchestration handoff annotation for a local-to-cloud handoff
+/// from the source conversation and the local history model. Returns `None`
+/// when the source had no parent agent and no locally-known children, so the
+/// server-side prompt injection only fires when at least one relationship was
+/// severed by the handoff.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+fn derive_orchestration_handoff_info(
+    source: &AIConversation,
+    history: &BlocklistAIHistoryModel,
+) -> Option<OrchestrationHandoffInfo> {
+    let had_parent = source.has_parent_agent();
+    let had_children = !history.child_conversation_ids_of(&source.id()).is_empty();
+    (had_parent || had_children).then_some(OrchestrationHandoffInfo {
+        had_parent,
+        had_children,
+    })
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -13680,6 +13700,7 @@ impl Workspace {
             snapshot_upload: SnapshotUploadStatus::Pending,
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
+            orchestration_handoff: None,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -13805,28 +13826,6 @@ impl Workspace {
                 None => history_model.active_conversation(terminal_view_id).cloned(),
             }
         };
-
-        if !AISettings::as_ref(ctx)
-            .is_cloud_handoff_enabled_for_conversation(source_conversation.as_ref(), ctx)
-        {
-            if show_user_feedback {
-                Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
-                let window_id = ctx.window_id();
-                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Cloud handoff isn't available for orchestrated agent conversations."
-                                .to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-            } else {
-                Self::record_automatic_handoff_failed(intent, ctx);
-            }
-            return;
-        }
 
         let has_existing_conversation = source_conversation.as_ref().is_some_and(|c| !c.is_empty());
 
@@ -14091,6 +14090,9 @@ impl Workspace {
             });
         }
 
+        let orchestration_handoff =
+            derive_orchestration_handoff_info(&source_conversation, history_model.as_ref(ctx));
+
         // Keep handoff state on the cloud model until snapshot prep and submit finish.
         let pending = PendingHandoff {
             forked_conversation_id: Some(forked_conversation_id.clone()),
@@ -14099,6 +14101,7 @@ impl Workspace {
             snapshot_upload: SnapshotUploadStatus::Pending,
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
+            orchestration_handoff,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);

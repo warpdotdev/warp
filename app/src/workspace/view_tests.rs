@@ -3207,6 +3207,61 @@ fn test_tab_mru_order() {
     });
 }
 
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+#[test]
+fn derive_orchestration_handoff_info_returns_none_for_standalone_conversation() {
+    use crate::ai::agent::conversation::AIConversation;
+    let history = BlocklistAIHistoryModel::new_for_test();
+    let source = AIConversation::new(false, false);
+
+    assert!(super::derive_orchestration_handoff_info(&source, &history).is_none());
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+#[test]
+fn derive_orchestration_handoff_info_flags_child_source() {
+    use crate::ai::agent::conversation::AIConversation;
+    let history = BlocklistAIHistoryModel::new_for_test();
+    let mut source = AIConversation::new(false, false);
+    source.set_parent_agent_id("parent-run-id".to_string());
+
+    let info = super::derive_orchestration_handoff_info(&source, &history)
+        .expect("child source should derive orchestration handoff info");
+    assert!(info.had_parent);
+    assert!(!info.had_children);
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+#[test]
+fn derive_orchestration_handoff_info_flags_parent_source() {
+    use crate::ai::agent::conversation::AIConversation;
+    let mut history = BlocklistAIHistoryModel::new_for_test();
+    let source = AIConversation::new(false, false);
+    let child_id = AIConversation::new(false, false).id();
+    history.set_parent_for_conversation(child_id, source.id());
+
+    let info = super::derive_orchestration_handoff_info(&source, &history)
+        .expect("parent source should derive orchestration handoff info");
+    assert!(!info.had_parent);
+    assert!(info.had_children);
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+#[test]
+fn derive_orchestration_handoff_info_flags_both_bits_when_both_relationships_exist() {
+    use crate::ai::agent::conversation::AIConversation;
+    let mut history = BlocklistAIHistoryModel::new_for_test();
+    let mut source = AIConversation::new(false, false);
+    source.set_parent_agent_id("parent-run-id".to_string());
+    let child_id = AIConversation::new(false, false).id();
+    history.set_parent_for_conversation(child_id, source.id());
+
+    let info = super::derive_orchestration_handoff_info(&source, &history)
+        .expect("middle-of-tree source should derive orchestration handoff info");
+    assert!(info.had_parent);
+    assert!(info.had_children);
+}
+
 #[test]
 fn test_create_new_tab_group_groups_active_tab() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);

@@ -246,6 +246,27 @@ pub struct SpawnAgentRequest {
     /// Set by the client when cloud conversation storage is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_disabled: Option<bool>,
+    /// Records that the source conversation was part of an orchestration tree at
+    /// handoff time. Only set on local-to-cloud handoff spawns; absent otherwise.
+    /// The server uses this to inject a hidden first-turn message into the cloud
+    /// agent's conversation telling it that prior orchestration relationships are
+    /// unreachable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orchestration_handoff: Option<OrchestrationHandoffInfo>,
+}
+
+/// Records the orchestration relationships the source conversation had at the
+/// moment of a local-to-cloud handoff. Populated by `build_handoff_spawn_request`
+/// from the source conversation. The server stamps this onto the new task's
+/// `AgentConfigSnapshot` and the runtime reads it at first-turn time to inject
+/// a hidden system message telling the cloud agent that those prior
+/// relationships no longer reach it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OrchestrationHandoffInfo {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub had_parent: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub had_children: bool,
 }
 
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch

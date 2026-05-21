@@ -19,12 +19,18 @@ The client makes no other use of orchestration-vs-non-orchestration to different
 - `complete_local_to_cloud_handoff_open` owns the `source_conversation: AIConversation` and an `&mut ViewContext<Workspace>` (which can access `BlocklistAIHistoryModel`), so it is the natural place to compute `had_parent`/`had_children` once per handoff and stash on `PendingHandoff`.
 - The forked conversation that the cloud agent will receive comes from `ai_client.fork_conversation(...)` (`app/src/workspace/view.rs:13945`). Inside the fork helper on the server, the source `.pb` is copied verbatim, so the cloud agent will see the source's `parent_agent_id` and any child-related transcript content. The new `orchestration_handoff` field is the explicit "both relationships are severed" annotation that the server uses to inject the hidden first-turn message.
 ## Proposed changes
-### 1. Drop the orchestration gate from the per-conversation handoff helpers
+### 1. Delete the per-conversation / per-terminal-view handoff helpers
 In `app/src/settings/ai.rs`:
-- Delete the orchestration gate from `is_cloud_handoff_enabled_for_conversation` so the function reduces to delegating to `is_cloud_handoff_enabled(app)`. Keep the per-conversation entry point as a thin wrapper so the auto-handoff controller, the footer chip, the slash command, and the workspace toast path all keep calling the same function name with no signature change.
-- Delete the now-unused `is_orchestration_conversation` private function (lines 2057-2062). It has a single call site and no other consumers.
-- `is_ampersand_handoff_enabled_for_conversation` and `is_ampersand_handoff_enabled_for_terminal_view` keep their current bodies; they continue to delegate to the per-conversation helper and inherit the looser gate automatically.
-The shape of the helper is preserved (it still takes an `Option<&AIConversation>` and an `&AppContext`) so call sites remain unchanged. We do not collapse it into `is_cloud_handoff_enabled` because future per-conversation gating (e.g. blocking handoff while a viewer is attached) may want this hook back.
+- Delete `is_cloud_handoff_enabled_for_conversation` (lines 1722-1730), `is_cloud_handoff_enabled_for_terminal_view` (lines 1732-1740), `is_ampersand_handoff_enabled_for_conversation` (lines 1745-1752), and `is_ampersand_handoff_enabled_for_terminal_view` (lines 1754-1761). Once the orchestration gate is gone, each is a passthrough to its non-suffixed sibling (`is_cloud_handoff_enabled` / `is_ampersand_handoff_enabled`) that never touches its conversation/terminal-view parameter.
+- Delete the now-unused `is_orchestration_conversation` private function (lines 2057-2062). Its single call site is going away.
+- Replace every call site with the equivalent non-suffixed call:
+  - `app/src/workspace/auto_handoff.rs:177-178` → `AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx)`
+  - `app/src/workspace/view.rs:13822` → removed entirely as part of §2 (the surrounding `if` block is the orchestration toast we're dropping)
+  - `app/src/ai/blocklist/agent_view/agent_input_footer/mod.rs:2066` → `is_cloud_handoff_enabled(app)`
+  - `app/src/terminal/input/slash_commands/mod.rs:902` → `is_cloud_handoff_enabled(app)`
+  - `app/src/terminal/input.rs:3919` (and any other `&`-prefix gate) → `is_ampersand_handoff_enabled(app)`
+  - The settings UI page (`app/src/settings_view/ai_page.rs:6845`) and any tests under `app/src/settings/ai_tests.rs` → the equivalent non-suffixed call.
+We collapse rather than wrap because the conversation/terminal-view arguments were only ever there to evaluate `is_orchestration_conversation`. Without that, they're dead weight, and dead arguments invite future drift. If a per-conversation gate is ever needed again, it can be re-introduced at that point.
 ### 2. Drop the orchestration toast from `start_local_to_cloud_handoff_from_source`
 In `app/src/workspace/view.rs:13822-13842`, remove the entire per-conversation gate block. The remaining flow already handles the relevant invariants:
 - The global gate at line 13794 (`is_cloud_handoff_enabled(ctx)`) is unaffected and continues to short-circuit handoff when the user/org has it off.
