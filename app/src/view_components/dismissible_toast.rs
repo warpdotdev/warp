@@ -11,14 +11,16 @@ use warpui::keymap::Keystroke;
 use warpui::r#async::Timer;
 use warpui::{
     elements::{
-        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
+        Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+        Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, EventHandler,
+        Fill as ElementFill, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
         MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+        PositionedElementOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
     },
     fonts::Weight,
     r#async::SpawnedFutureHandle,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
+    units::Pixels,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 use warpui::{Action, ViewHandle};
@@ -57,6 +59,7 @@ struct ToastData<A: Action + Clone> {
 /// be rendered according to the order they were generated.
 pub struct DismissibleToastStack<A: Action + Clone = ()> {
     timeout: Duration,
+    scroll_state: ClippedScrollStateHandle,
     /// A vector of individual toasts. Manual dismissals dismiss the specific toast that was
     /// clicked, while timeouts pass the toast's UUID to the dismiss method.
     /// Since the user may close any arbitrary toast, we use a vector, and assign UUIDs to
@@ -69,6 +72,7 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
     pub fn new(timeout: Duration) -> Self {
         Self {
             timeout,
+            scroll_state: Default::default(),
             toasts: Vec::new(),
         }
     }
@@ -95,6 +99,7 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
             abort_handle: Some(abort_handle),
             uuid,
         });
+        self.scroll_state.scroll_to(Pixels::zero());
 
         ctx.notify();
     }
@@ -115,6 +120,7 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
             abort_handle: None,
             uuid: Uuid::new_v4(),
         });
+        self.scroll_state.scroll_to(Pixels::zero());
 
         ctx.notify();
     }
@@ -189,8 +195,27 @@ impl<A: Action + Clone> View for DismissibleToastStack<A> {
                     .finish(),
             );
         }
+        if self.toasts.is_empty() {
+            return rendered_toasts.finish();
+        }
 
-        rendered_toasts.finish()
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let scrollable_contents = Container::new(rendered_toasts.finish())
+            .with_padding_top(4.)
+            .with_padding_right(4.)
+            .finish();
+
+        ClippedScrollable::vertical(
+            self.scroll_state.clone(),
+            scrollable_contents,
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish()
     }
 }
 

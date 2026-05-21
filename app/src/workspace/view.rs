@@ -20419,7 +20419,7 @@ impl Workspace {
         OffsetPositioning::offset_from_save_position_element(
             TAB_CONTENT_POSITION_ID,
             vec2f(0., 16.),
-            PositionedElementOffsetBounds::WindowByPosition,
+            PositionedElementOffsetBounds::WindowBySize,
             PositionedElementAnchor::TopMiddle,
             ChildAnchor::TopMiddle,
         )
