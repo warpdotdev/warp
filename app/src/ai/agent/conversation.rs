@@ -1804,7 +1804,7 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-            let llm_preferences = LLMPreferences::as_ref(ctx);
+            let llm_preferences = crate::ai::llms::LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, |config_key| {
                     llm_preferences.custom_endpoint_usage_display_label(config_key)
