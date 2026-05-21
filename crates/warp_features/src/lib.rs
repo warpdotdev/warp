@@ -114,9 +114,6 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
-    /// Enables rect selection.
-    RectSelection,
-
     /// Adds Alacritty as a supported terminal to import settings from.
     AlacrittySettingsImport,
 

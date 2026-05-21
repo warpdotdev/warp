@@ -1547,11 +1547,8 @@ impl BlockListElement {
                                 .bounds
                                 .expect("Bounds should be set before event dispatching");
                             let side = self.size_info.get_mouse_side(position - bounds.origin());
-                            let selection_type = if FeatureFlag::RectSelection.is_enabled() {
-                                SelectionType::from_mouse_event(*modifiers, click_count)
-                            } else {
-                                SelectionType::from_click_count(click_count)
-                            };
+                            let selection_type =
+                                SelectionType::from_mouse_event(*modifiers, click_count);
 
                             let block_index = match viewport.block_index_from_point(point) {
                                 None => {
@@ -1642,11 +1639,8 @@ impl BlockListElement {
                                 .bounds
                                 .expect("Bounds should be set before event dispatching");
                             let side = self.size_info.get_mouse_side(position - bounds.origin());
-                            let selection_type = if FeatureFlag::RectSelection.is_enabled() {
-                                SelectionType::from_mouse_event(*modifiers, click_count)
-                            } else {
-                                SelectionType::from_click_count(click_count)
-                            };
+                            let selection_type =
+                                SelectionType::from_mouse_event(*modifiers, click_count);
 
                             if self.snackbar_header_state().mouse_down(position, ctx) {
                                 return true;
@@ -4637,12 +4631,9 @@ impl Element for BlockListElement {
                 modifiers,
                 ..
             } => {
-                let is_selecting_blocks = if FeatureFlag::RectSelection.is_enabled() {
-                    // If cmd and alt are both active, this should be treated as a rect selection.
-                    !(modifiers.cmd && modifiers.alt) && (modifiers.cmd || modifiers.shift)
-                } else {
-                    modifiers.cmd || modifiers.shift
-                };
+                // If cmd and alt are both active, this should be treated as a rect selection.
+                let is_selecting_blocks =
+                    !(modifiers.cmd && modifiers.alt) && (modifiers.cmd || modifiers.shift);
                 self.mouse_dragged(*position, is_selecting_blocks, modifiers, ctx, app)
             }
             Event::MouseMoved { position, .. } => self.mouse_moved(*position, app, ctx),

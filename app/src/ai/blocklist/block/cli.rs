@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::Ordering, rc::Rc};
-use warp_core::features::FeatureFlag;
 use warp_core::report_error;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::new_scrollable::SingleAxisConfig;
@@ -1023,11 +1022,8 @@ impl View for CLISubagentView {
                     text.finish(),
                 )
                 .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-                .with_smart_select_fn(semantic_selection.smart_select_fn());
-
-                if FeatureFlag::RectSelection.is_enabled() {
-                    selectable_text = selectable_text.should_support_rect_select();
-                }
+                .with_smart_select_fn(semantic_selection.smart_select_fn())
+                .should_support_rect_select();
 
                 let scrollable_container = render_scrollable_container(
                     ScrollableContainerProps {
@@ -1264,11 +1260,8 @@ impl View for CLISubagentView {
                 output_items.finish(),
             )
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-            .with_smart_select_fn(semantic_selection.smart_select_fn());
-
-            if FeatureFlag::RectSelection.is_enabled() {
-                output = output.should_support_rect_select();
-            }
+            .with_smart_select_fn(semantic_selection.smart_select_fn())
+            .should_support_rect_select();
 
             result.add_child(
                 render_scrollable_container(
@@ -1383,11 +1376,8 @@ impl View for CLISubagentView {
                 rendered_action,
             )
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-            .with_smart_select_fn(semantic_selection.smart_select_fn());
-
-            if FeatureFlag::RectSelection.is_enabled() {
-                selectable_action = selectable_action.should_support_rect_select();
-            }
+            .with_smart_select_fn(semantic_selection.smart_select_fn())
+            .should_support_rect_select();
 
             result.add_child(
                 Container::new(selectable_action.finish())

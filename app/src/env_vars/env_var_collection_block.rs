@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_core::{features::FeatureFlag, ui::Icon};
+use warp_core::ui::Icon;
 use warpui::{
     elements::{
         get_rich_content_position_id, Border, Clipped, Container, CornerRadius, CrossAxisAlignment,
@@ -392,11 +392,7 @@ impl View for EnvVarCollectionBlock {
                 ))
             });
 
-            if FeatureFlag::RectSelection.is_enabled() {
-                selectable = selectable.should_support_rect_select();
-            }
-
-            content.add_child(selectable.finish());
+            content.add_child(selectable.should_support_rect_select().finish());
         }
 
         let border_color = if self.state == EnvVarCollectionState::WaitingForUser {

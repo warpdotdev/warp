@@ -479,7 +479,6 @@ default = [
     "workflow_aliases",
     "ligatures",
     "dynamic_workflow_enums",
-    "rect_selection",
     "reload_stale_conversation_files",
     "loginless_conversion",
     "warp_packs",
@@ -806,7 +805,6 @@ integration_tests = [
 traces = []
 viewing_shared_sessions = []
 workflow_aliases = []
-rect_selection = []
 alacritty_settings_import = []
 shared_with_me = []
 ai_rules = []

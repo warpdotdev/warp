@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::{
     elements::{
@@ -211,11 +210,8 @@ impl View for PendingUserQueryBlock {
                     position_in_rich_content: position,
                 },
             ))
-        });
-
-        if FeatureFlag::RectSelection.is_enabled() {
-            text_column = text_column.should_support_rect_select();
-        }
+        })
+        .should_support_rect_select();
 
         let mut buttons_column = Flex::column().with_spacing(2.);
         if let Some(close_button) = &self.close_button {

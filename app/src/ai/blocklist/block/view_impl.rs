@@ -1217,7 +1217,7 @@ impl View for AIBlock {
         let selected_text = self.selected_text.clone();
         let view_id = self.view_id;
 
-        let mut selectable = SelectableArea::new(
+        let selectable = SelectableArea::new(
             self.state_handles.selection_handle.clone(),
             move |selection_args, _, _| {
                 *selected_text.write() = selection_args.selection;
@@ -1236,11 +1236,8 @@ impl View for AIBlock {
         })
         .on_selection_updated(|ctx, _| {
             ctx.dispatch_typed_action(AIBlockAction::SelectText);
-        });
-
-        if FeatureFlag::RectSelection.is_enabled() {
-            selectable = selectable.should_support_rect_select();
-        }
+        })
+        .should_support_rect_select();
 
         // TODO(Simon): Bottom padding should be 24px on the final block when the input isn't visible.
         // It isn't sufficient to do an `is_streaming()` check because inline actions waiting for user
