@@ -1,6 +1,8 @@
-use crate::on_cancel::OnCancelFutureExt;
-use futures_util::future::{AbortHandle, Abortable, Aborted};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use futures_util::future::{AbortHandle, Abortable, Aborted};
+
+use crate::on_cancel::OnCancelFutureExt;
 
 #[test]
 fn test_ready_future_doesnt_call_callback() {

@@ -1,7 +1,9 @@
-use crate::{
-    error::UserFacingError, object::ObjectMetadata, object_permissions::Owner,
-    request_context::RequestContext, response_context::ResponseContext, schema,
-};
+use crate::error::UserFacingError;
+use crate::object::ObjectMetadata;
+use crate::object_permissions::Owner;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct TransferGenericStringObjectOwnerVariables {

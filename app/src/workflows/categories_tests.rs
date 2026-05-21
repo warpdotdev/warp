@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
 use crate::workflows::categories::{CategoriesView, WorkflowMatchType};
 use crate::workflows::workflow::Workflow;
 use crate::workflows::WorkflowType;
-use std::sync::Arc;
 
 #[test]
 fn test_workflow_matches() {

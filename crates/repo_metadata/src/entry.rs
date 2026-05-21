@@ -1,13 +1,14 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
-use ignore::gitignore::Gitignore;
-#[cfg(feature = "local_fs")]
-use notify_debouncer_full::notify::WatchFilter;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+
+use ignore::gitignore::Gitignore;
+#[cfg(feature = "local_fs")]
+use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 

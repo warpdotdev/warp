@@ -1,31 +1,26 @@
 use std::collections::HashMap;
 
 use settings::Setting as _;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::subshell::util::ssh_command;
+use warp::integration_testing::subshell::{
+    assert_subshell_banner_is_showing, assert_subshell_is_bootstrapped,
+    enter_local_subshell_command, enter_remote_subshell_command, enter_ssh_password,
+    setup_gcloud_sdk, trigger_subshell_bootstrap, wait_for_password_prompt,
+};
 use warp::integration_testing::terminal::util::current_shell_starter_and_version;
+use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::single_input_view_for_tab;
 use warp::root_view::SubshellCommandArg;
 use warp::terminal::shell::ShellType;
-use warp::{
-    integration_testing::{
-        step::new_step_with_default_assertions,
-        subshell::{
-            assert_subshell_banner_is_showing, assert_subshell_is_bootstrapped,
-            enter_local_subshell_command, enter_remote_subshell_command, enter_ssh_password,
-            setup_gcloud_sdk, trigger_subshell_bootstrap, util::ssh_command,
-            wait_for_password_prompt,
-        },
-        terminal::wait_until_bootstrapped_single_pane_for_tab,
-    },
-    terminal::warpify::settings::AddedSubshellCommands,
-};
+use warp::terminal::warpify::settings::AddedSubshellCommands;
 use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
 use warpui::{async_assert, UpdateModel};
 
-use crate::util::skip_if_powershell_core_2303;
-
 use super::{new_builder, Builder};
+use crate::util::skip_if_powershell_core_2303;
 
 /// Generates an integration test that asserts that a local subshell of the given shell type can be
 /// successfully bootstrapped.

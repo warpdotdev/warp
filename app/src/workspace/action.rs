@@ -2,8 +2,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use session_sharing_protocol::common::SessionId;
+use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
+use warpui::accessibility::AccessibilityVerbosity;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::Vector2F;
+use warpui::platform::Cursor;
+use warpui::{EntityId, WeakViewHandle, WindowId};
 
+use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+    VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
@@ -29,21 +42,6 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
-use session_sharing_protocol::common::SessionId;
-
-use ui_components::lightbox;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::platform::Cursor;
-use warpui::{EntityId, WeakViewHandle, WindowId};
-
-use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
-use super::tab_settings::{
-    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
-    VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use super::view::{OnboardingTutorial, WorkspaceBanner};
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]

@@ -1,26 +1,24 @@
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    appearance::Appearance,
-    cloud_object::{
-        CloudModelType, CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult,
-        CreateObjectRequest, GenericCloudObject, GenericServerObject, GenericStringObjectFormat,
-        GenericStringObjectUniqueKey, ObjectType, Revision, UpdateCloudObjectResult,
-    },
-    drive::{items::WarpDriveItem, CloudObjectTypeAndId},
-    persistence::ModelEvent,
-    server::{
-        ids::{ServerId, SyncId},
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
-};
 use anyhow::Result;
 use async_trait::async_trait;
-
 // Re-exported from warp_server_client.
 pub use warp_server_client::ids::GenericStringObjectId;
+
+use crate::appearance::Appearance;
+use crate::cloud_object::{
+    CloudModelType, CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult,
+    CreateObjectRequest, GenericCloudObject, GenericServerObject, GenericStringObjectFormat,
+    GenericStringObjectUniqueKey, ObjectType, Revision, UpdateCloudObjectResult,
+};
+use crate::drive::items::WarpDriveItem;
+use crate::drive::CloudObjectTypeAndId;
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
 
 /// A trait that generic string-based objects should implement.
 pub trait CloudStringObject: CloudObject + Send + Sync {

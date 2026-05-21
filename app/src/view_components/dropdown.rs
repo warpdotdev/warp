@@ -1,28 +1,24 @@
 use std::fmt::Debug;
 
 use pathfinder_color::ColorU;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Element, Fill, Icon,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::fonts::FamilyId;
+use warpui::geometry::vector::vec2f;
+use warpui::scene::DropShadow;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Element, Fill,
-        Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
-    },
-    fonts::FamilyId,
-    geometry::vector::vec2f,
-    scene::DropShadow,
-    text_layout::ClipConfig,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     Action, AppContext, BlurContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant},
-};
+use crate::appearance::Appearance;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 
 pub const TOP_MENU_BAR_HEIGHT: f32 = 30.;
 pub const TOP_MENU_BAR_MAX_WIDTH: f32 = 190.;

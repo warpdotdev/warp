@@ -1,12 +1,15 @@
-use crate::server::telemetry::CLIAgentType;
-use crate::view_components::find::FindDirection;
-use crate::{code_review::diff_state::DiffMode, features::FeatureFlag};
+use std::fmt::Display;
+
 use serde::Serialize;
 use serde_json::json;
 use serde_with::SerializeDisplay;
-use std::fmt::Display;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+
+use crate::code_review::diff_state::DiffMode;
+use crate::features::FeatureFlag;
+use crate::server::telemetry::CLIAgentType;
+use crate::view_components::find::FindDirection;
 
 /// Identifies which git button the user clicked in the code review header.
 /// Each variant maps to one of the primary action button / dropdown items.

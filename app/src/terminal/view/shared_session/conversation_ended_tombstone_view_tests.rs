@@ -1,12 +1,11 @@
 use chrono::{Duration, Utc};
 
+use super::TombstoneDisplayData;
 use crate::ai::ambient_agents::task::{RequestUsage, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::format_credits;
 use crate::util::time_format::human_readable_precise_duration;
-
-use super::TombstoneDisplayData;
 
 const RUN_DURATION_SECONDS: i64 = 90;
 const INFERENCE_COST: f64 = 1.5;

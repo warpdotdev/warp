@@ -1,26 +1,22 @@
 use std::sync::Arc;
 
+use ai::api_keys::ApiKeyManager;
 use chrono::Duration;
+use warp_core::features::FeatureFlag;
+use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
 
+use super::*;
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::workspaces::{
-    user_workspaces::UserWorkspaces,
-    workspace::{
-        AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
-        EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
-    },
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
+    EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
 };
-
-use ai::api_keys::ApiKeyManager;
-use warp_core::features::FeatureFlag;
-use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
-
-use super::*;
 
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     let server_id: crate::server::ids::ServerId = 1_i64.into();

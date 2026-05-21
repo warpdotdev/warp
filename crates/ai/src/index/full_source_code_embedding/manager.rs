@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
 use repo_metadata::{BuildTreeError, DirectoryWatcher, Repository};
@@ -29,19 +27,14 @@ cfg_if::cfg_if! {
 use warp_core::safe_anyhow;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{
-    codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress},
-    fragment_metadata::FragmentMetadata,
-    priority_queue::{BuildQueue, Priority},
-    snapshot::*,
-    store_client::StoreClient,
-    CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash,
-};
-
-use crate::{
-    index::locations::CodeContextLocation,
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
+use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
+use super::fragment_metadata::FragmentMetadata;
+use super::priority_queue::{BuildQueue, Priority};
+use super::snapshot::*;
+use super::store_client::StoreClient;
+use super::{CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash};
+use crate::index::locations::CodeContextLocation;
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 /// The interval for debouncing filesystem events.
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);

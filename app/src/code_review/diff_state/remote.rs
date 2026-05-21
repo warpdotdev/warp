@@ -10,9 +10,6 @@
 
 use std::sync::Arc;
 
-use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
-use crate::remote_server::proto;
-use crate::util::git::{BranchEntry, Commit, PrInfo};
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use warp_core::{HostId, SessionId};
 use warp_util::remote_path::RemotePath;
@@ -23,6 +20,9 @@ use super::{
     DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, DiffStats, FileDiffAndContent,
     GitDiffData, GitDiffWithBaseContent,
 };
+use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
+use crate::remote_server::proto;
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 
 // ── Internal state ────────────────────────────────────────────────
 

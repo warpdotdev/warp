@@ -1,16 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision,
-    },
-    server::sync_queue::QueueItem,
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
 };
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::server::sync_queue::QueueItem;
 
 /// Data model for a workflow enum, one type of argument that can be inserted into a workflow
 /// A workflow enum can either be static or dynamic, as determined by the type of `EnumVariants` it uses

@@ -1,14 +1,14 @@
-use crate::fonts::{canvas, RasterizedGlyph};
-use crate::rendering::atlas::{self, AllocatedRegion, TextureId};
-use crate::{fonts::SubpixelAlignment, rendering, scene::GlyphKey};
+use std::collections::HashMap;
+
 use anyhow::Result;
 use ordered_float::OrderedFloat;
-use pathfinder_geometry::rect::RectI;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{Vector2F, Vector2I},
-};
-use std::collections::HashMap;
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{Vector2F, Vector2I};
+
+use crate::fonts::{canvas, RasterizedGlyph, SubpixelAlignment};
+use crate::rendering;
+use crate::rendering::atlas::{self, AllocatedRegion, TextureId};
+use crate::scene::GlyphKey;
 
 const ATLAS_SIZE: usize = 1024;
 

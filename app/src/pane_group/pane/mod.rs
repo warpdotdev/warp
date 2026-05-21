@@ -30,49 +30,45 @@ pub(super) mod welcome_pane;
 pub(crate) mod welcome_view;
 pub mod workflow_pane;
 
-use std::{any::Any, fmt::Display};
+use std::any::Any;
+use std::fmt::Display;
 
-#[cfg(feature = "local_fs")]
-use crate::code::buffer_location::LocalOrRemotePath;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::get_started_view::GetStartedView;
-use crate::view_components::action_button::ActionButton;
-use crate::{
-    ai::execution_profiles::editor::ExecutionProfileEditorView,
-    ai::{
-        ai_document_view::AIDocumentView, blocklist::inline_action::code_diff_view::CodeDiffView,
-        facts::AIFactView,
-    },
-    code::view::CodeView,
-    drive::sharing::ShareableObject,
-    env_vars::view::env_var_collection::EnvVarCollectionView,
-    menu::MenuItem,
-    notebooks::{file::FileNotebookView, notebook::NotebookView},
-    server::network_log_view::NetworkLogView,
-    server::telemetry::SharingDialogSource,
-    settings::PaneSettings,
-    settings_view::{environments_page::EnvironmentsPageView, SettingsView},
-    terminal::{available_shells::AvailableShell, TerminalView},
-    workflows::workflow_view::WorkflowView,
-};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use warp_util::remote_path::RemotePath;
+use warpui::elements::{DispatchEventResult, EventHandler, MouseInBehavior};
+use warpui::presenter::ChildView;
 use warpui::{
-    elements::{DispatchEventResult, EventHandler, MouseInBehavior},
-    presenter::ChildView,
     Action, AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     View, ViewContext, ViewHandle, WeakModelHandle,
 };
-
-pub use self::view::PaneHeaderAction;
-pub use self::view::PaneHeaderCustomAction;
-pub use self::view::PaneView;
-pub use self::view::PaneViewEvent;
-
 use welcome_view::WelcomeView;
 
+pub use self::view::{PaneHeaderAction, PaneHeaderCustomAction, PaneView, PaneViewEvent};
 use super::{ActivationReason, LeafContents, PaneGroup, PaneGroupAction};
+use crate::ai::ai_document_view::AIDocumentView;
+use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+use crate::ai::execution_profiles::editor::ExecutionProfileEditorView;
+use crate::ai::facts::AIFactView;
+#[cfg(feature = "local_fs")]
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::view::CodeView;
+use crate::drive::sharing::ShareableObject;
+use crate::env_vars::view::env_var_collection::EnvVarCollectionView;
+use crate::menu::MenuItem;
+use crate::notebooks::file::FileNotebookView;
+use crate::notebooks::notebook::NotebookView;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::get_started_view::GetStartedView;
+use crate::server::network_log_view::NetworkLogView;
+use crate::server::telemetry::SharingDialogSource;
+use crate::settings::PaneSettings;
+use crate::settings_view::environments_page::EnvironmentsPageView;
+use crate::settings_view::SettingsView;
+use crate::terminal::available_shells::AvailableShell;
+use crate::terminal::TerminalView;
+use crate::view_components::action_button::ActionButton;
+use crate::workflows::workflow_view::WorkflowView;
 
 pub(super) fn init(app: &mut AppContext) {
     self::view::init(app);

@@ -1,45 +1,43 @@
 #[cfg(feature = "local_tty")]
 use std::sync::mpsc::SyncSender;
 
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 #[cfg(feature = "local_tty")]
 use warpui::geometry::vector::Vector2F;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::FutureExt;
 #[cfg(feature = "local_tty")]
 use warpui::ModelHandle;
 use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::{SingletonEntity, View, ViewHandle};
 
-#[cfg(feature = "local_tty")]
-use crate::pane_group::TerminalViewResources;
-#[cfg(feature = "local_tty")]
-use crate::persistence::ModelEvent;
-#[cfg(feature = "local_tty")]
-use crate::server::server_api::ServerApiProvider;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-#[cfg(feature = "local_tty")]
-use crate::terminal::TerminalManager;
-
+use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
     environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(feature = "local_tty")]
+use crate::pane_group::TerminalViewResources;
+#[cfg(feature = "local_tty")]
+use crate::persistence::ModelEvent;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::ids::{ServerId, SyncId};
+#[cfg(feature = "local_tty")]
+use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt;
-
-use super::TerminalView;
+#[cfg(feature = "local_tty")]
+use crate::terminal::TerminalManager;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///

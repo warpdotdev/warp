@@ -1,19 +1,19 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
-use cpal::{
-    Sample, StreamConfig,
-    traits::{DeviceTrait, HostTrait},
-};
+use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{Sample, StreamConfig};
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
-
 use warpui::event::KeyState;
-use warpui::{Entity, ModelContext, SingletonEntity, platform::MicrophoneAccessState};
+use warpui::platform::MicrophoneAccessState;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
 const DEFAULT_CHUNK_SIZE: u32 = 512;
 // We only support mono for now.

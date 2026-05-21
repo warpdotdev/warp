@@ -1,12 +1,17 @@
+use std::collections::HashSet;
+use std::io;
+use std::io::Write;
+use std::path::PathBuf;
+
 use hex;
 use warp_core::command::ExitCode;
 use warpui::color::ColorU;
 
 use super::*;
+use crate::terminal::model::ansi::InputBufferValue;
 use crate::terminal::model::index::VisibleRow;
+use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::{ansi::InputBufferValue, selection::ScrollDelta};
-use std::{collections::HashSet, io, io::Write, path::PathBuf};
 
 const HEX_ENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x64];
 const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];

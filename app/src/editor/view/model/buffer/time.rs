@@ -1,7 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::rc::Rc;
+
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const BASE_REPLICA_ID: &str = "0";

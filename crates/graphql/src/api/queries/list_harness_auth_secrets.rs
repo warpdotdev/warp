@@ -1,6 +1,7 @@
-use crate::{
-    error::UserFacingError, managed_secrets::ManagedSecret, request_context::RequestContext, schema,
-};
+use crate::error::UserFacingError;
+use crate::managed_secrets::ManagedSecret;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 /// Input-side `AgentHarness` enum without fallback, required by cynic for input objects.
 /// The output-side `crate::ai::AgentHarness` has `Other(String)` which makes it

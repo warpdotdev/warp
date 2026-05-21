@@ -129,12 +129,6 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::AwsCredentialRefresher as _;
-use crate::ai::mcp::FileBasedMCPManager;
-use crate::ai::mcp::FileMCPWatcher;
-use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 use ::ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerConfig,
 };
@@ -143,7 +137,8 @@ use ::ai::index::full_source_code_embedding::SnapshotStorage;
 use ::ai::index::full_source_code_embedding::SyncTask;
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 use ::ai::project_context::model::ProjectContextModel;
-pub use ai::agent::{todos::AIAgentTodoList, AIAgentActionResultType, FileEdit, TodoOperation};
+pub use ai::agent::todos::AIAgentTodoList;
+pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
@@ -151,52 +146,92 @@ use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use ai::persisted_workspace::PersistedWorkspace;
-use auth::auth_state::AuthStateProvider;
-use auth::{auth_manager::AuthManager, auth_state::AuthState};
+use auth::auth_manager::AuthManager;
+use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
+#[cfg(feature = "local_fs")]
+use repo_metadata::{
+    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
+};
 use server::network_log_pane_manager::NetworkLogPaneManager;
 use server::network_logging::NetworkLogModel;
 use server::telemetry::context_provider::AppTelemetryContextProvider;
 use server::voice_transcriber::ServerVoiceTranscriber;
 #[cfg(feature = "local_fs")]
 use settings::import::model::ImportedConfigModel;
-use voice::transcriber::VoiceTranscriber;
-use warp_cli::GlobalOptions;
-use warp_cli::{agent::AgentCommand, CliCommand};
-
-#[cfg(feature = "local_fs")]
-use repo_metadata::{
-    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
-};
-#[cfg(feature = "local_fs")]
-use watcher::HomeDirectoryWatcher;
-
 use settings_view::pane_manager::SettingsPaneManager;
 use terminal::general_settings::GeneralSettings;
 use terminal::keys_settings::KeysSettings;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
+use voice::transcriber::VoiceTranscriber;
+use warp_cli::agent::AgentCommand;
+use warp_cli::{CliCommand, GlobalOptions};
+#[cfg(feature = "local_fs")]
+use watcher::HomeDirectoryWatcher;
+
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
+use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
 pub mod workspace;
 
-#[cfg(feature = "integration_tests")]
-pub use persistence::testing as sqlite_testing;
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::ops::Deref;
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ::settings::{Setting, ToggleableSetting};
-pub use warp_core::errors::{report_error, report_if_error};
-
+#[cfg(feature = "local_tty")]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
+use appearance::{Appearance, AppearanceManager};
+use channel::ChannelState;
+use interval_timer::IntervalTimer;
+use itertools::Itertools;
+#[cfg(feature = "integration_tests")]
+pub use persistence::testing as sqlite_testing;
 #[cfg(feature = "plugin_host")]
 pub use plugin::{run_plugin_host, PLUGIN_HOST_FLAG};
+use referral_theme_status::ReferralThemeStatus;
+use server::server_api::ServerApiProvider;
+use settings::{ExtraMetaKeys, PrivacySettings};
+#[cfg(feature = "local_fs")]
+use shellexpand::tilde;
+use terminal::input;
+use terminal::session_settings::SessionSettings;
+use url::Url;
+pub use warp_core::errors::{report_error, report_if_error};
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the send_telemetry_from_ctx macro at the crate root level
+pub use warp_core::send_telemetry_from_app_ctx;
+pub use warp_core::send_telemetry_from_ctx;
 use warp_core::user_preferences::GetUserPreferences as _;
+// Re-export the safe logging macros at the crate root level for backwards compatibility
+pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
+#[cfg(feature = "local_fs")]
+use warp_files::FileModel;
+use warp_logging::LogDestination;
+use warp_managed_secrets::ManagedSecretManager;
+use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 use warpui::platform::app::ApproveTerminateResult;
+use warpui::platform::TerminationMode;
+use warpui::windowing::state::ApplicationStage;
+use warpui::{App, AppContext, Event, SingletonEntity, WindowId};
 use window_settings::WindowSettings;
 use workflows::manager::WorkflowManager;
+use workspace::sync_inputs::SyncedInputState;
 
+use self::features::FeatureFlag;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
@@ -204,15 +239,17 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::mcp::MCPGalleryManager;
-use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
 use crate::ai::AIRequestUsageModel;
+use crate::antivirus::AntivirusInfo;
+use crate::app_state::AppState;
 use crate::autoupdate::{AutoupdateState, RelaunchModel};
 use crate::changelog_model::ChangelogModel;
-use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::actions::{ObjectAction, ObjectActions};
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::code::global_buffer_model::GlobalBufferModel;
 #[cfg(feature = "local_fs")]
@@ -220,19 +257,31 @@ use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager
 use crate::context_chips::prompt::Prompt;
 use crate::default_terminal::DefaultTerminal;
 use crate::drive::export::ExportManager;
+use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::manager::EnvVarCollectionManager;
+use crate::experiments::ImprovedPaletteSearch;
+pub use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 use crate::gpu_state::GPUState;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebook;
+use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
 use crate::persistence::model::AgentConversationData;
 use crate::persistence::PersistenceWriter;
 use crate::projects::ProjectManagementModel;
-use crate::server::cloud_objects::{listener::Listener, update_manager::UpdateManager};
+use crate::root_view::{
+    quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
+};
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
+pub use crate::server::telemetry::{
+    AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
+};
+use crate::server::telemetry::{AppStartupInfo, CloseTarget, PaletteSource, TelemetryCollector};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
@@ -245,78 +294,21 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
-use crate::terminal::{AudibleBell, History};
+use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
+use crate::util::bindings::is_binding_cross_platform;
 use crate::vim_registers::VimRegisters;
 use crate::warp_managed_paths_watcher::{ensure_warp_watch_roots_exist, WarpManagedPathsWatcher};
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::local_workflows::LocalWorkflows;
-use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack};
+use crate::workspace::{
+    ActiveSession, OneTimeModalModel, PaneViewLocator, ToastStack, Workspace, WorkspaceAction,
+};
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_profiles::UserProfiles;
-#[cfg(feature = "local_tty")]
-use anyhow::Context;
-use anyhow::{anyhow, Result};
-use appearance::{Appearance, AppearanceManager};
-use channel::ChannelState;
-use interval_timer::IntervalTimer;
-use itertools::Itertools;
-use referral_theme_status::ReferralThemeStatus;
-use server::server_api::ServerApiProvider;
-use settings::{ExtraMetaKeys, PrivacySettings};
-#[cfg(feature = "local_fs")]
-use shellexpand::tilde;
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Deref;
-#[cfg(feature = "local_fs")]
-use std::path::PathBuf;
-use std::sync::Arc;
-use terminal::input;
-use terminal::session_settings::SessionSettings;
-use url::Url;
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warp_managed_secrets::ManagedSecretManager;
-use workspace::sync_inputs::SyncedInputState;
-
-use warpui::{integration::TestDriver, App, Event};
-
-use self::features::FeatureFlag;
-use crate::app_state::AppState;
-use crate::cloud_object::model::actions::ObjectAction;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::drive::CloudObjectTypeAndId;
-use crate::experiments::ImprovedPaletteSearch;
-pub use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-use crate::notification::NotificationContext;
-use crate::root_view::{
-    quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
-};
-pub use crate::server::telemetry::{
-    AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
-};
-use crate::server::telemetry::{AppStartupInfo, CloseTarget, PaletteSource, TelemetryCollector};
-use crate::terminal::CustomSecretRegexUpdater;
-use crate::util::bindings::is_binding_cross_platform;
-use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use warp_logging::LogDestination;
-
-// Re-export the send_telemetry_from_ctx macro at the crate root level
-pub use warp_core::send_telemetry_from_app_ctx;
-pub use warp_core::send_telemetry_from_ctx;
-
-// Re-export the safe logging macros at the crate root level for backwards compatibility
-pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
-
-use crate::antivirus::AntivirusInfo;
-#[cfg(feature = "local_fs")]
-use warp_files::FileModel;
-use warpui::platform::TerminationMode;
-use warpui::windowing::state::ApplicationStage;
-use warpui::{AppContext, SingletonEntity, WindowId};
 
 /// Our embedded application assets.
 pub static ASSETS: warp_assets::Assets = warp_assets::Assets;
@@ -962,8 +954,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        use crate::settings::ForceX11;
         use warpui::platform::linux::{self, AppBuilderExt};
+
+        use crate::settings::ForceX11;
 
         app_builder.set_window_class(ChannelState::app_id().to_string());
 

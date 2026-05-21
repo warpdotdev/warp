@@ -12,11 +12,10 @@ use std::sync::{Arc, Mutex};
 use event_listener::Event;
 use warpui::EntityId;
 
+use super::BlockInfo;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::model::blocks::TotalIndex;
 use crate::terminal::model::terminal_model::BlockIndex;
-
-use super::BlockInfo;
 
 /// A unit of work for the background find task.
 #[derive(Debug, Clone)]

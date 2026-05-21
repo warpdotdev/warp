@@ -1,20 +1,19 @@
 mod wrap;
 
-pub use wrap::*;
+use std::any::Any;
 
-use crate::{
-    event::DispatchedEvent,
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+pub use wrap::*;
 
 use super::{
     AfterLayoutContext, AppContext, Axis, AxisOrientation, Element, EventContext, LayoutContext,
     PaintContext, Point, SelectableElement, Selection, SelectionFragment, SizeConstraint,
     Vector2FExt,
 };
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::any::Any;
+use crate::event::DispatchedEvent;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
 
 pub struct Flex {
     axis: Axis,

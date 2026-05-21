@@ -1,7 +1,8 @@
-use command::blocking::Command;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::process::Stdio;
 use std::{env, fs, path};
+
+use command::blocking::Command;
 
 /// Attempt to find a running process that we believe is the window compositor.
 ///

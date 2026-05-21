@@ -1,86 +1,77 @@
-use crate::code::editor::scroll::ScrollPosition;
-use crate::code::editor::view::CodeEditorRenderOptions;
-use crate::code::editor_management::CodeEditorStatus;
-use crate::code::global_buffer_model::GlobalBufferModel;
-use crate::code::local_code_editor::ShowFindReferencesCard;
-use crate::code::{ImmediateSaveError, SaveOutcome, SaveStatus};
-use crate::editor::InteractionState;
-use crate::input::Vector2F;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::render_pane_header_draggable;
-use crate::pane_group::{CodePane, PaneConfigurationEvent, PaneDragDropLocation};
-use crate::quit_warning::UnsavedStateSummary;
-use crate::server::telemetry::CodeContextDestination;
-use crate::terminal::cli_agent::{
-    build_selection_line_range_prompt, build_selection_substring_prompt,
-};
-use crate::terminal::view::CliAgentRouting;
-use crate::util::path::{display_name_with_host, display_path_with_host};
-use crate::workspace::util::get_context_target_terminal_view;
-use crate::workspace::TabBarDropTargetData;
-use crate::{code::EditorTabBarDropTargetData, pane_group::pane::ActionOrigin};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use lsp::LspManagerModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
-use warpui::elements::Rect;
-use warpui::fonts::Style;
-use warpui::text::point::Point;
-use warpui::text_layout::ClipConfig;
-
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    AcceptedByDropTarget, Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Draggable, DraggableState, DropTarget, Empty,
+    Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
+    SavePosition, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Style, Weight};
+use warpui::keymap::EditableBinding;
+use warpui::text::point::Point;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        AcceptedByDropTarget, Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Draggable, DraggableState, DropTarget, Empty,
-        Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-        SavePosition, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::EditableBinding,
-    ui_components::{button::ButtonVariant, components::UiComponent},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WindowId,
+    id, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WindowId,
 };
 
-use crate::{
-    menu::{MenuItem, MenuItemFields},
-    notebooks::file::{is_markdown_file, MarkdownDisplayMode},
-    search::{files::icon::icon_from_file_path, ItemHighlightState},
-    tab::TAB_BAR_BORDER_HEIGHT,
-    ui_components::{blended_colors, buttons::icon_button},
-    view_components::{DismissibleToast, MarkdownToggleEvent, MarkdownToggleView},
-    workspace::{ActiveSession, ToastStack, WorkspaceAction},
+use super::buffer_location::LocalOrRemotePath;
+use super::diff_viewer::DiffViewer;
+use super::editor::view::{CodeEditorEvent, CodeEditorView};
+use super::editor_management::{CodeManager, CodeSource};
+use super::local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView};
+use crate::code::editor::scroll::ScrollPosition;
+use crate::code::editor::view::CodeEditorRenderOptions;
+use crate::code::editor_management::CodeEditorStatus;
+use crate::code::global_buffer_model::GlobalBufferModel;
+use crate::code::local_code_editor::ShowFindReferencesCard;
+use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, SaveStatus};
+use crate::editor::InteractionState;
+use crate::input::Vector2F;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::notebooks::file::{is_markdown_file, MarkdownDisplayMode};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view::header::components::{
+    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
+    CenteredHeaderEdgeWidth,
 };
-
+use crate::pane_group::pane::view::header::render_pane_header_draggable;
+use crate::pane_group::pane::{view, ActionOrigin, PaneHeaderAction};
 use crate::pane_group::{
-    pane::{view, PaneHeaderAction},
-    BackingView, PaneConfiguration, PaneEvent,
+    BackingView, CodePane, PaneConfiguration, PaneConfigurationEvent, PaneDragDropLocation,
+    PaneEvent,
 };
-
-use super::{
-    buffer_location::LocalOrRemotePath,
-    diff_viewer::DiffViewer,
-    editor::view::{CodeEditorEvent, CodeEditorView},
-    editor_management::{CodeManager, CodeSource},
-    local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView},
+use crate::quit_warning::UnsavedStateSummary;
+use crate::search::files::icon::icon_from_file_path;
+use crate::search::ItemHighlightState;
+use crate::server::telemetry::CodeContextDestination;
+use crate::tab::TAB_BAR_BORDER_HEIGHT;
+use crate::terminal::cli_agent::{
+    build_selection_line_range_prompt, build_selection_substring_prompt,
 };
-
+use crate::terminal::view::CliAgentRouting;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::util::path::{display_name_with_host, display_path_with_host};
+use crate::view_components::{DismissibleToast, MarkdownToggleEvent, MarkdownToggleView};
+use crate::workspace::util::get_context_target_terminal_view;
+use crate::workspace::{ActiveSession, TabBarDropTargetData, ToastStack, WorkspaceAction};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 type SaveCallback =

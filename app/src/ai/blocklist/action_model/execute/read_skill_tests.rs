@@ -1,25 +1,27 @@
-use super::*;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentActionResultType;
-use crate::ai::agent::ReadSkillRequest;
-use crate::ai::agent::ReadSkillResult;
-use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
-use crate::ai::blocklist::action_model::AIConversationId;
-use crate::ai::skills::{BundledSkillActivation, SkillManager};
-use crate::settings::AISettings;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use ai::skills::{parse_skill, ParsedSkill, SkillProvider, SkillReference, SkillScope};
-use repo_metadata::{
-    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
-};
-use settings::Setting as _;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+
+use ai::skills::{parse_skill, ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
+use repo_metadata::RepoMetadataModel;
+use settings::Setting as _;
 use tempfile::TempDir;
 use warp_core::features::FeatureFlag;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
+
+use super::*;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, ReadSkillRequest,
+    ReadSkillResult,
+};
+use crate::ai::blocklist::action_model::AIConversationId;
+use crate::ai::skills::{BundledSkillActivation, SkillManager};
+use crate::settings::AISettings;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 fn initialize_app(app: &mut App) {
     app.add_singleton_model(DirectoryWatcher::new);

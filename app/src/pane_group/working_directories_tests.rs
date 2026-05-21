@@ -4,10 +4,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::code::buffer_location::LocalOrRemotePath;
 use repo_metadata::repositories::DetectedRepositories;
 use warpui::{App, EntityId};
 
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::WorkingDirectoriesModel;
 
 fn local(path: &std::path::Path) -> LocalOrRemotePath {

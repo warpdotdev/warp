@@ -1,41 +1,36 @@
-use super::{
-    platform::{
-        CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
-        ExpireApiKeyButtonEvent,
-    },
-    settings_page::{
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-        CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
-    },
-    SettingsSection,
-};
-use crate::auth::AuthStateProvider;
-use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
-use crate::{
-    appearance::Appearance,
-    modal::{Modal, ModalEvent, ModalViewState},
-    ui_components::icons::Icon,
-    util::time_format::format_approx_duration_from_now_utc,
-};
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
-use warpui::text_layout::ClipConfig;
-use warpui::{
-    elements::{
-        resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
-        CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
-        ResizableStateHandle, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+use warpui::elements::{
+    resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
+    CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
+    ResizableStateHandle, Shrinkable, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::platform::{
+    CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
+    ExpireApiKeyButtonEvent,
+};
+use super::settings_page::{
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
+};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::server::ids::ApiKeyUid;
+use crate::server::server_api::auth::AuthClient;
+use crate::ui_components::icons::Icon;
+use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;

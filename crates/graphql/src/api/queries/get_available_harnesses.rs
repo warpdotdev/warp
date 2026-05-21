@@ -1,4 +1,6 @@
-use crate::{ai::AgentHarness, request_context::RequestContext, schema};
+use crate::ai::AgentHarness;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetAvailableHarnessesVariables {

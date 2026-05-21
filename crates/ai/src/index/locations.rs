@@ -1,5 +1,7 @@
+use std::ops::Range;
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
-use std::{ops::Range, path::PathBuf};
 
 /// A line-based file fragment location.
 ///

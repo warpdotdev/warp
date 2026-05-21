@@ -1,79 +1,66 @@
-use std::{
-    mem,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::mem;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warp_util::path::user_friendly_path;
-#[cfg(feature = "local_fs")]
-use warpui::clipboard::ClipboardContent;
-use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{
-        Align, Container, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
-        Stack, Text,
-    },
-    keymap::EditableBinding,
-    presenter::ChildView,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
-#[cfg(feature = "local_fs")]
-use crate::notebooks::post_process_notebook;
-use crate::{
-    appearance::Appearance,
-    cmd_or_ctrl_shift,
-    editor::InteractionState,
-    menu::{MenuItem, MenuItemFields},
-    notebooks::editor::{model::NotebooksEditorModel, rich_text_styles},
-    pane_group::{
-        focus_state::PaneFocusHandle,
-        pane::view,
-        pane::view::header::components::{
-            render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-            CenteredHeaderEdgeWidth,
-        },
-        BackingView, PaneConfiguration, PaneEvent,
-    },
-    safe_warn, send_telemetry_from_ctx,
-    server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, TelemetryEvent},
-    settings::FontSettings,
-    terminal::model::session::Session,
-    ui_components::icons::Icon,
-    view_components::{MarkdownToggleEvent, MarkdownToggleView},
-    workflows::{WorkflowSource, WorkflowType},
-    workspace::ActiveSession,
-};
-
-use super::{
-    context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState},
-    editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView},
-    link::{NotebookLinks, SessionSource},
-    styles,
-    telemetry::NotebookTelemetryAction,
-    NotebookLocation,
-};
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::FileTarget;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::model::CoreEditorModel;
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, FileModelEvent};
 #[cfg(feature = "local_fs")]
 use warp_util::file::FileId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::path::user_friendly_path;
 use warp_util::remote_path::RemotePath;
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+#[cfg(feature = "local_fs")]
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Container, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
+    Stack, Text,
+};
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
+use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
+use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
+use super::link::{NotebookLinks, SessionSource};
+use super::telemetry::NotebookTelemetryAction;
+use super::{styles, NotebookLocation};
+use crate::appearance::Appearance;
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::editor::InteractionState;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::notebooks::editor::model::NotebooksEditorModel;
+use crate::notebooks::editor::rich_text_styles;
+#[cfg(feature = "local_fs")]
+use crate::notebooks::post_process_notebook;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::pane::view::header::components::{
+    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
+    CenteredHeaderEdgeWidth,
+};
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, TelemetryEvent};
+use crate::settings::FontSettings;
+use crate::terminal::model::session::Session;
+use crate::ui_components::icons::Icon;
 pub use crate::util::openable_file_type::is_markdown_file;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::FileTarget;
+use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
+use crate::workflows::{WorkflowSource, WorkflowType};
+use crate::workspace::ActiveSession;
+use crate::{cmd_or_ctrl_shift, safe_warn, send_telemetry_from_ctx};
 
 /// Display mode for markdown files shown via the header segmented control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1174,8 +1161,10 @@ impl BackingView for FileNotebookView {
             let title_element: Box<dyn Element> =
                 if let Some(display_path) = self.file_state.path().map(|p| p.display_path()) {
                     use pathfinder_geometry::vector::vec2f;
-                    use warpui::elements::{ChildAnchor, ParentAnchor, ParentOffsetBounds};
-                    use warpui::elements::{Hoverable, OffsetPositioning, Stack};
+                    use warpui::elements::{
+                        ChildAnchor, Hoverable, OffsetPositioning, ParentAnchor,
+                        ParentOffsetBounds, Stack,
+                    };
                     Hoverable::new(self.header_title_mouse_state.clone(), move |hover_state| {
                         let mut stack = Stack::new();
                         stack.add_child(title_text);

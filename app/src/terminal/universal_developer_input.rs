@@ -1,86 +1,70 @@
+use std::borrow::Cow;
+use std::boxed::Box;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use pathfinder_color::ColorU;
+#[cfg(not(target_family = "wasm"))]
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::contrast::{
+    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
+};
+use warp_core::ui::color::{coloru_with_opacity, Opacity, Rgb};
+use warp_core::ui::theme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Rect, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch,
+};
+use warpui::ui_components::components::UiComponentStyles;
+use warpui::ui_components::segmented_control::{
+    RenderableOptionConfig, SegmentedControl, SegmentedControlEvent, TooltipConfig,
+};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
+    View, ViewAsRef, ViewContext, ViewHandle,
+};
+
+use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::prompt::PromptIconButtonTheme;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIInputModel, InputConfig, InputType,
+};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::LLMPreferences;
+use crate::ai::AIRequestUsageModel;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::SettingsSection;
+use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::model::block::BlockMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::model::session::SessionType;
-use crate::{
-    ai::{blocklist::block::cli_controller::CLISubagentController, llms::LLMPreferences},
-    cloud_object::model::generic_string_model::StringModel,
-    settings::AISettingsChangedEvent,
-    terminal::profile_model_selector::{
-        calculate_max_profile_name_width, calculate_scaled_font_size,
-    },
-    terminal::view::ambient_agent::AmbientAgentViewModel,
+use crate::terminal::model::session::Sessions;
+use crate::terminal::profile_model_selector::{
+    calculate_max_profile_name_width, calculate_scaled_font_size, ProfileModelSelector,
+    ProfileModelSelectorEvent,
 };
-use pathfinder_color::ColorU;
-#[cfg(not(target_family = "wasm"))]
-use settings::Setting as _;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use warpui::{
-    elements::{
-        ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
-        MainAxisAlignment, MainAxisSize, ParentElement, Radius, Rect, Shrinkable,
-        SizeConstraintCondition, SizeConstraintSwitch,
-    },
-    ui_components::{components::UiComponentStyles, segmented_control::RenderableOptionConfig},
-    AppContext, Element, Entity, EntityId, SingletonEntity as _, TypedActionView, View, ViewAsRef,
-    ViewContext, ViewHandle,
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
 };
-
-use warp_core::ui::{
-    color::{
-        coloru_with_opacity,
-        contrast::{foreground_color_with_minimum_contrast, MinimumAllowedContrast},
-        Opacity, Rgb,
-    },
-    theme,
-};
-
-use std::boxed::Box;
-use warpui::{
-    ui_components::segmented_control::{SegmentedControl, SegmentedControlEvent},
-    ModelHandle,
-};
-
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-
-use crate::ai::blocklist::prompt::PromptIconButtonTheme;
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
-
-use crate::{
-    ai::{
-        blocklist::{
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            BlocklistAIInputModel, InputConfig, InputType,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        AIRequestUsageModel,
-    },
-    network::NetworkStatus,
-    settings::AISettings,
-    settings_view::SettingsSection,
-    terminal::{
-        input::MenuPositioningProvider,
-        keys::TerminalKeybindings,
-        model::{block::BlockMetadata, session::Sessions},
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent},
-        shared_session::permissions_manager::SessionPermissionsManager,
-    },
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-    BlocklistAIHistoryModel,
-};
-use warp_core::features::FeatureFlag;
-use warpui::ui_components::segmented_control::TooltipConfig;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::BlocklistAIHistoryModel;
 
 pub enum AtContextMenuDisabledReason {
     #[cfg(target_family = "wasm")]

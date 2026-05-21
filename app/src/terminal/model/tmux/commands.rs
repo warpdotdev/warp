@@ -1,7 +1,9 @@
-use crate::util::parse_ascii_u32;
+use std::collections::HashMap;
+
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
-use std::collections::HashMap;
+
+use crate::util::parse_ascii_u32;
 
 // The below strings are used as a tag/prefix at the beginning of a response
 // from tmux to determine the type of response. These strings must be unique

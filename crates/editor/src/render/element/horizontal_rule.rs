@@ -1,20 +1,12 @@
-use warpui::{
-    elements::{CornerRadius, Radius},
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-};
-
-use crate::{
-    extract_block,
-    render::{
-        element::paint::{CursorData, CursorDisplayType},
-        model::{BlockItem, RenderState, RichTextStyles, viewport::ViewportItem},
-    },
-};
+use warpui::elements::{CornerRadius, Radius};
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
 
 use super::{RenderContext, RenderableBlock};
+use crate::extract_block;
+use crate::render::element::paint::{CursorData, CursorDisplayType};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState, RichTextStyles};
 
 /// Renderable representation of a single horizontal rule separator.
 pub struct HorizontalRule {

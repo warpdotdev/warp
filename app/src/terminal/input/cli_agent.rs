@@ -1,28 +1,27 @@
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Border, Clipped, ConstrainedBox, Container, DispatchEventResult, DropTarget, Element,
+    EventHandler, Flex, Hoverable, ParentElement, SavePosition, Stack,
+};
+use warpui::presenter::ChildView;
+use warpui::{AppContext, SingletonEntity as _, ViewContext};
+
+use super::common::{
+    add_input_suggestions_overlays, wrap_input_with_terminal_padding_and_focus_handler,
+};
 use super::{
-    common::{add_input_suggestions_overlays, wrap_input_with_terminal_padding_and_focus_handler},
     Input, InputAction, InputDropTargetData, CLI_AGENT_RICH_INPUT_EDITOR_BOTTOM_PADDING,
     CLI_AGENT_RICH_INPUT_EDITOR_MAX_HEIGHT, CLI_AGENT_RICH_INPUT_EDITOR_TOP_PADDING,
     TERMINAL_VIEW_PADDING_LEFT,
 };
-use crate::{
-    appearance::Appearance,
-    context_chips::spacing,
-    editor::TextColors,
-    features::FeatureFlag,
-    terminal::{cli_agent_sessions::CLIAgentSessionsModel, view::TerminalAction},
-};
-use warp_core::ui::{
-    color::{contrast::MinimumAllowedContrast, ContrastingColor},
-    theme::color::internal_colors,
-};
-use warpui::{
-    elements::{
-        Border, Clipped, ConstrainedBox, Container, DispatchEventResult, DropTarget, Element,
-        EventHandler, Flex, Hoverable, ParentElement, SavePosition, Stack,
-    },
-    presenter::ChildView,
-    AppContext, SingletonEntity as _, ViewContext,
-};
+use crate::appearance::Appearance;
+use crate::context_chips::spacing;
+use crate::editor::TextColors;
+use crate::features::FeatureFlag;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::view::TerminalAction;
 
 impl Input {
     /// Renders the CLI rich input (editor + CLI agent footer).

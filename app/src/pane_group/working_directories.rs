@@ -1,9 +1,3 @@
-#[cfg(feature = "local_fs")]
-use indexmap::IndexSet;
-#[cfg(feature = "local_fs")]
-use remote_server::manager::RemoteServerManager;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
 use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
 use std::collections::HashSet;
@@ -11,12 +5,18 @@ use std::collections::HashSet;
 use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
+
+#[cfg(feature = "local_fs")]
+use indexmap::IndexSet;
+#[cfg(feature = "local_fs")]
+use remote_server::manager::RemoteServerManager;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::DetectedRepositories;
 #[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::{AppContext, SingletonEntity as _};
-use warpui::{Entity, EntityId, ModelContext};
-use warpui::{ModelHandle, ViewHandle};
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]

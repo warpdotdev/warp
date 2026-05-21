@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-
 use winit::event::ElementState;
 #[cfg(windows)]
 use winit::keyboard::NativeKey;
@@ -10,10 +9,10 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 #[cfg(not(target_family = "wasm"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
-use crate::platform::KEYS_TO_IGNORE;
-use crate::{event::KeyEventDetails, keymap::Keystroke};
-
 use super::WindowState;
+use crate::event::KeyEventDetails;
+use crate::keymap::Keystroke;
+use crate::platform::KEYS_TO_IGNORE;
 
 lazy_static! {
     /// Mapping between a printable ASCII character and its corresponding control code had `ctrl`

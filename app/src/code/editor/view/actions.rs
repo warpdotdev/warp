@@ -1,42 +1,37 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
-use crate::code::editor::{
-    line::EditorLineLocation,
-    model::CodeEditorModel,
-    view::{CodeEditorEvent, CodeEditorView, VimMode},
-};
-use crate::{
-    cmd_or_ctrl_shift, code_review::comments::CommentId,
-    code_review::telemetry_event::CodeReviewTelemetryEvent, editor::InteractionState,
-    features::FeatureFlag, notebooks::editor::model::word_unit, send_telemetry_from_ctx,
-    util::bindings::CustomAction,
-};
-use lazy_static::lazy_static;
-use rangemap::RangeSet;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::Range;
+
+use lazy_static::lazy_static;
+use rangemap::RangeSet;
 use string_offset::CharOffset;
-use warp_editor::{
-    content::version::BufferVersion,
-    editor::{EmbeddedItemModel, RunnableCommandModel, TextDecoration},
-    model::{CoreEditorModel, PlainTextEditorModel},
-    render::{
-        element::RichTextAction,
-        model::{ExpansionType, LineCount, Location},
-    },
-    selection::{TextDirection, TextUnit},
-};
+use warp_editor::content::version::BufferVersion;
+use warp_editor::editor::{EmbeddedItemModel, RunnableCommandModel, TextDecoration};
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::render::element::RichTextAction;
+use warp_editor::render::model::{ExpansionType, LineCount, Location};
+use warp_editor::selection::{TextDirection, TextUnit};
 use warp_util::user_input::UserInput;
-use warpui::{
-    actions::StandardAction,
-    elements::Axis,
-    event::ModifiersState,
-    keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke},
-    units::Pixels,
-    AppContext, TypedActionView, ViewContext, WeakViewHandle,
-};
+use warpui::actions::StandardAction;
+use warpui::elements::Axis;
+use warpui::event::ModifiersState;
+use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
+use warpui::units::Pixels;
+use warpui::{AppContext, TypedActionView, ViewContext, WeakViewHandle};
+
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::model::CodeEditorModel;
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorView, VimMode};
+use crate::code_review::comments::CommentId;
+use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
+use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
+use crate::notebooks::editor::model::word_unit;
+use crate::util::bindings::CustomAction;
+use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 /// Limit the keybindings that conflict with the Agent Mode embedded editor.
 const NON_EDITABLE_KEYMAP_CONTEXT: &str = "NonEditableKeymapContext";

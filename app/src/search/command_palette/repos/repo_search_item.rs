@@ -1,13 +1,12 @@
+use std::path::Path;
+
 use ai::workspace::WorkspaceMetadata;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use std::path::Path;
 use warp_core::ui::theme::Fill;
-use warpui::{
-    elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Shrinkable, Text},
-    fonts::{Properties, Weight},
-    AppContext, Element, SingletonEntity,
-};
+use warpui::elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Shrinkable, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::action::search_item::styles;

@@ -1,5 +1,6 @@
-use crate::ui::theme::Fill;
 use warpui::elements::Icon as WarpUiIcon;
+
+use crate::ui::theme::Fill;
 
 /// Default icon dimensions that apply to all icons used within the ui system.
 pub const ICON_DIMENSIONS: f32 = 24.;

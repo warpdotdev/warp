@@ -3,7 +3,9 @@
 // Windows).
 #![allow(clippy::disallowed_types)]
 
-use std::{env, path::PathBuf, process::Command};
+use std::env;
+use std::path::PathBuf;
+use std::process::Command;
 
 use cfg_aliases::cfg_aliases;
 

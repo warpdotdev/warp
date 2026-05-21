@@ -2,15 +2,11 @@ use std::path::PathBuf;
 
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
-use crate::{
-    app_state::LeafContents,
-    pane_group::{
-        pane::{welcome_view::WelcomeView, ShareableLink, ShareableLinkError},
-        BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView,
-    },
-};
-
 use super::PaneId;
+use crate::app_state::LeafContents;
+use crate::pane_group::pane::welcome_view::WelcomeView;
+use crate::pane_group::pane::{ShareableLink, ShareableLinkError};
+use crate::pane_group::{BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView};
 
 pub struct WelcomePane {
     view: ViewHandle<PaneView<WelcomeView>>,

@@ -4,9 +4,8 @@ use anyhow::Result;
 use llm_generate::LLMGenerateRequest;
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use warp_multi_agent_api::{
-    apply_file_diffs_result::success::UpdatedFileContent, message, Message,
-};
+use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
+use warp_multi_agent_api::{message, Message};
 
 use crate::ai::agent::conversation::AIConversation;
 

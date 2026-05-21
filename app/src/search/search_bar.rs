@@ -1,39 +1,31 @@
-use itertools::{Either, Itertools};
-use warp_editor::editor::NavigationKey;
-use warpui::elements::ConstrainedBox;
-use warpui::FocusContext;
-
 use std::collections::HashSet;
 
-use warpui::fonts::FamilyId;
+use itertools::{Either, Itertools};
+use warp_editor::editor::NavigationKey;
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable, Text,
+};
+use warpui::fonts::{FamilyId, Properties, Style, Weight};
+use warpui::presenter::ChildView;
 use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{Clipped, Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable, Text},
-    fonts::{Properties, Style, Weight},
-    presenter::ChildView,
-    Action, AppContext, Element, Entity, ModelContext, ModelHandle, SingletonEntity,
+    Action, AppContext, Element, Entity, FocusContext, ModelContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::editor::AutosuggestionType;
+use super::mixer::SearchMixerEvent;
+use crate::appearance::Appearance;
+use crate::editor::{
+    AutosuggestionLocation, AutosuggestionType, EditorView, Event as EditorEvent,
+    PlainTextEditorViewAction as EditorAction, PropagateAndNoOpNavigationKeys,
+    SingleLineEditorOptions,
+};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::SearchMixer;
-use crate::search::result_renderer::QueryResultIndex;
-use crate::search::result_renderer::QueryResultRenderer;
+use crate::search::result_renderer::{QueryResultIndex, QueryResultRenderer};
 use crate::search::QueryFilter;
-
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::{
-    appearance::Appearance,
-    editor::{
-        AutosuggestionLocation, EditorView, Event as EditorEvent,
-        PlainTextEditorViewAction as EditorAction, PropagateAndNoOpNavigationKeys,
-        SingleLineEditorOptions,
-    },
-};
-
-use super::mixer::SearchMixerEvent;
 
 /// Function to create a [`QueryResultRenderer`] from a [`QueryResult`]. Used to specify the styles
 /// and click-action of a a rendered query result.

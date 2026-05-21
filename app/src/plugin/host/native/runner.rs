@@ -3,12 +3,10 @@ use async_channel::Receiver;
 use rquickjs::{Context, Function, Runtime};
 use warp_js::JsFunctionId;
 
-use super::{
-    js_api,
-    plugin::{AppServiceCallers, PluginHandle},
-    plugin_ref::PluginRef,
-    runners::PluginRunnerMessage,
-};
+use super::js_api;
+use super::plugin::{AppServiceCallers, PluginHandle};
+use super::plugin_ref::PluginRef;
+use super::runners::PluginRunnerMessage;
 
 /// The name of the entrypoint JS file for a plugin.
 pub(super) const PLUGIN_ENTRYPOINT_JS_FILE_NAME: &str = "main.js";

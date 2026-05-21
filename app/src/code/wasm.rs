@@ -1,21 +1,18 @@
 use std::path::{Path, PathBuf};
 
+use ai::diff_validation::DiffDelta;
 use warp_util::path::LineAndColumnArg;
+use warpui::elements::{DraggableState, Empty, MouseStateHandle};
 use warpui::{
-    elements::{DraggableState, Empty, MouseStateHandle},
     AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::{
-    buffer_location::LocalOrRemotePath, editor_management::CodeSource,
-    local_code_editor::LocalCodeEditorView,
-};
-use crate::pane_group::{
-    focus_state::PaneFocusHandle,
-    pane::view::{HeaderContent, HeaderRenderContext},
-    BackingView, CodePane, PaneConfiguration, PaneEvent,
-};
-use ai::diff_validation::DiffDelta;
+use super::buffer_location::LocalOrRemotePath;
+use super::editor_management::CodeSource;
+use super::local_code_editor::LocalCodeEditorView;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
+use crate::pane_group::{BackingView, CodePane, PaneConfiguration, PaneEvent};
 
 // Keybinding constants - exported so AI document view can reuse
 pub const SAVE_FILE_BINDING_NAME: &str = "code_view:save";

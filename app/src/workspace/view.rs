@@ -20,20 +20,134 @@ mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
 
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "local_fs")]
+use std::convert::TryFrom;
+#[cfg(target_os = "macos")]
+use std::env;
+use std::fmt::Write;
+#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
+use std::fs;
+use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use ::settings::{Setting, ToggleableSetting};
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use autoupdate::AutoupdateStage;
+#[cfg(target_os = "macos")]
+use command::blocking::Command;
+use futures::Future;
+use itertools::Itertools;
+use lazy_static::lazy_static;
+pub(crate) use onboarding::OnboardingTutorial;
+use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::DetectedRepositories;
+#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
+use sentry::protocol::{Attachment, AttachmentType};
+use serde_json;
+use session_sharing_protocol::common::SessionId as SharedSessionId;
+#[cfg(target_family = "wasm")]
+use url::Url;
+use warp_cli::agent::Harness;
+use warp_core::context_flag::ContextFlag;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_core::ui::color::coloru_with_opacity;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::phenomenon::PhenomenonStyle;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::Icon;
+use warp_core::user_preferences::GetUserPreferences as _;
+use warp_editor::editor::NavigationKey;
+use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warpui::accessibility::{
+    AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
+};
+use warpui::clipboard::ClipboardContent;
+#[cfg(target_family = "wasm")]
+use warpui::elements::Percentage;
+use warpui::elements::{
+    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DraggableState, DropTarget,
+    Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
+    Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize, MouseInBehavior, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::keymap::Context;
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
+use warpui::platform::{
+    Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
+};
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::{Button, ButtonVariant};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::windowing::state::ApplicationStage;
+use warpui::windowing::{StateEvent, WindowManager};
+use warpui::{
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
+};
+
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
     VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
-use crate::workspace::cross_window_tab_drag::{
-    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use super::action::AutoCloudHandoffTrigger;
+use super::action::{
+    InitContent, RestoreConversationLayout, TabContextMenuAnchor,
+    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
-pub(crate) use onboarding::OnboardingTutorial;
-
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use super::auto_handoff::AutoCloudHandoffController;
+use super::close_session_confirmation_dialog::{
+    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
+};
+use super::delete_conversation_confirmation_dialog::{
+    DeleteConversationConfirmationDialog, DeleteConversationConfirmationEvent,
+    DeleteConversationDialogSource,
+};
+use super::hoa_onboarding::{
+    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
+};
+use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
+use super::native_modal::{NativeModal, NativeModalEvent};
+use super::one_time_modal_model::OneTimeModalEvent;
+use super::rewind_confirmation_dialog::{
+    RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
+};
+use super::tab_settings::{
+    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
+    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+};
+use super::util::{
+    PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
+    WorkspaceMouseStates, WorkspaceState,
+};
+use super::{util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
+use crate::ai::agent::EntrypointType;
+#[cfg(target_family = "wasm")]
+use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
@@ -52,6 +166,7 @@ use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
+use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
@@ -60,418 +175,168 @@ use crate::ai::blocklist::handoff::touched_repos::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
-use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
+use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+use crate::ai::blocklist::suggested_agent_mode_workflow_modal::{
+    SuggestedAgentModeWorkflowAndId, SuggestedAgentModeWorkflowModal,
+    SuggestedAgentModeWorkflowModalEvent,
+};
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
 };
-use crate::ai::blocklist::FORK_PREFIX;
-use crate::ai::conversation_utils;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, PendingQueryState, SerializedBlockListItem, SlashCommandRequest,
+    FORK_PREFIX,
+};
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+#[cfg(target_family = "wasm")]
+use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
+use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::facts::view::AIFactPage;
+use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::AIRequestUsageModel;
-use crate::ai::{
-    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
-    blocklist::{
-        inline_action::code_diff_view::CodeDiffView,
-        suggested_agent_mode_workflow_modal::{
-            SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
-        },
-        SlashCommandRequest,
-    },
-    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
-};
+use crate::ai::{conversation_utils, AIRequestUsageModel};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
+use crate::ai_assistant::{AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR};
 use crate::app_state::{
     LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
-use crate::code::buffer_location::LocalOrRemotePath;
-use crate::code_review::diff_state::DiffStateModel;
-#[cfg(feature = "local_fs")]
-use crate::code_review::CodeReviewTelemetryEvent;
-use crate::code_review::GlobalCodeReviewModel;
-use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::default_terminal::DefaultTerminal;
-use crate::notebooks::CloudNotebook;
-use crate::notification::NotificationContext;
-use crate::pane_group::pane::ActionOrigin;
-use crate::projects::ProjectManagementModel;
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::terminal::enable_auto_reload_modal::{
-    EnableAutoReloadModal, EnableAutoReloadModalEvent,
-};
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
-use crate::terminal::session_settings::SessionSettings;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
-use crate::terminal::view::{
-    AgentOnboardingVersion, ConversationRestorationInNewPaneType, OnboardingIntention,
-    OnboardingVersion,
-};
-use crate::ui_components::red_notification_dot::RedNotificationDot;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::settings::OpenConversationPreference;
-use crate::workspace::bonus_grant_notification_model::BonusGrantNotificationEvent;
-use crate::workspace::toast_stack::ToastStack;
-use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
-use crate::workspace::view::left_panel::{
-    LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
-};
-use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
-
-use crate::ui_components::window_focus_dimming::WindowFocusDimming;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::Editor;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::EditorSettings;
-use crate::util::openable_file_type::FileTarget;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
-
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
-use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
-use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
-use crate::workspace::tab_settings::TabCloseButtonPosition;
-use crate::workspace::view::build_plan_migration_modal::{
-    BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
-};
-use crate::workspace::view::cloud_agent_capacity_modal::{
-    CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
-};
-use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
-use crate::workspace::view::free_tier_limit_hit_modal::{
-    FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
-};
-use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
-use crate::workspace::view::openwarp_launch_modal::{
-    OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
-};
-use crate::workspace::view::orchestration_launch_modal::{
-    OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
-};
-use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
-use crate::BlocklistAIHistoryModel;
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
-use sentry::protocol::{Attachment, AttachmentType};
-use serde_json;
-use warpui::notification::NotificationSendError;
-
-use super::hoa_onboarding::{
-    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
-};
-use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
-use super::util;
-use super::WorkspaceRegistry;
-use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_override_warning_modal::{
     AuthOverrideWarningModal, AuthOverrideWarningModalEvent, AuthOverrideWarningModalVariant,
 };
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::{AuthRedirectPayload, AuthView, AuthViewEvent, AuthViewVariant};
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeManager;
-use crate::code::editor_management::CodeSource;
-use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::drive::export::ExportManager;
-use crate::drive::settings::WarpDriveSettings;
-use crate::launch_configs::launch_config::WindowTemplate;
-use crate::pane_group::{
-    AIFactPane, ChildAgentOrigin, CodeReviewPanelArg, Direction as PaneGroupDirection,
-    EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, PaneGroup, PaneId,
-    TerminalPaneId,
-};
-use crate::quit_warning::UnsavedStateSummary;
-use crate::search::command_palette::view::NavigationMode;
-use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::network_log_pane_manager::NetworkLogPaneManager;
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::auth::AuthClient;
-use crate::settings::{
-    AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
-    DefaultSessionMode, InputModeSettings,
-};
-use crate::settings_view::environments_page::EnvironmentsPage;
-use crate::settings_view::handoff_environment_creation_modal::{
-    HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
-};
-use crate::settings_view::pane_manager::SettingsPaneManager;
-use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent};
-#[cfg(all(target_os = "windows", feature = "local_tty"))]
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::available_shells::AvailableShell;
-#[cfg(target_os = "windows")]
-use crate::terminal::available_shells::AvailableShells;
-use crate::terminal::block_list_viewport::InputMode;
-use crate::terminal::ligature_settings::should_use_ligature_rendering;
-use crate::terminal::warpify::settings::WarpifySettings;
-use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
-
-#[cfg(target_family = "wasm")]
-use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
-#[cfg(target_family = "wasm")]
-use crate::ai::conversation_details_panel::ConversationDetailsPanel;
-#[cfg(target_family = "wasm")]
-use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
-use crate::workflows::manager::WorkflowManager;
-use crate::workflows::workflow::Workflow;
-#[cfg(target_family = "wasm")]
-use url::Url;
-
-use crate::billing::shared_objects_creation_denied_modal::{
-    SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
-};
-
-#[cfg(target_family = "wasm")]
-use crate::wasm_nux_dialog::WasmNUXDialog;
-
-use crate::drive::items::WarpDriveItemId;
-use crate::drive::settings::WarpDriveSettingsChangedEvent;
-use crate::env_vars::{
-    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
-    CloudEnvVarCollection,
-};
-use crate::settings::cloud_preferences::CloudPreferencesSettings;
-
-use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
     is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
 };
 use crate::banner::BannerState;
+use crate::billing::shared_objects_creation_denied_modal::{
+    SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
+};
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelState};
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::toast_message::CloudObjectToastMessage;
 use crate::cloud_object::{
     CloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType, Owner, Space,
 };
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::editor::{add_color, remove_color};
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeManager;
+use crate::code::editor_management::CodeSource;
+use crate::code_review::diff_state::DiffStateModel;
+use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+#[cfg(feature = "local_fs")]
+use crate::code_review::CodeReviewTelemetryEvent;
+use crate::code_review::GlobalCodeReviewModel;
+use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::context_chips::ChipRuntimeCapabilities;
+use crate::default_terminal::DefaultTerminal;
+use crate::drive::export::ExportManager;
 use crate::drive::import::modal::{ImportModal, ImportModalEvent};
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::settings::{WarpDriveSettings, WarpDriveSettingsChangedEvent};
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::drive::workflows::modal::{WorkflowModal, WorkflowModalEvent};
 use crate::drive::{
     CloudObjectTypeAndId, DriveObjectType, DrivePanel, DrivePanelEvent, OpenWarpDriveObjectSettings,
 };
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
+use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
+use crate::launch_configs::launch_config::WindowTemplate;
+use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
+use crate::notebooks::CloudNotebook;
+use crate::notification::NotificationContext;
+use crate::palette::PaletteMode;
+use crate::pane_group::pane::ActionOrigin;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::{
-    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
-    TabBarHoverIndex,
+    self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
+    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
+    ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
+    TabBarHoverIndex, TerminalPaneId,
 };
-use crate::remote_server::manager::RemoteServerManager;
-use crate::terminal::keys_settings::KeysSettings;
-use crate::terminal::shared_session::SharedSessionActionSource;
-
-use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::persistence::ModelEvent;
+use crate::projects::ProjectManagementModel;
 use crate::prompt::editor_modal::{
     EditorModal as PromptEditorModal, EditorModalEvent as PromptEditorModalEvent,
     OpenSource as PromptEditorOpenSource,
 };
+use crate::quit_warning::UnsavedStateSummary;
 use crate::referral_theme_status::ReferralThemeEvent;
+use crate::remote_server::manager::RemoteServerManager;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
 use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
+use crate::search::command_palette::view::{
+    Event as CommandPaletteEvent, NavigationMode, View as CommandPalette,
+};
 use crate::search::command_search::searcher::{
     AcceptedHistoryItem, AcceptedWorkflow, CommandSearchItemAction,
 };
 use crate::search::command_search::view::{CommandSearchEvent, CommandSearchView};
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::search::{self, QueryFilter};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
+use crate::server::network_log_pane_manager::NetworkLogPaneManager;
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
-    MCPServerCollectionPaneEntrypoint, OpenedWarpAISource, SharingDialogSource, TierLimitHitEvent,
-    WarpDriveSource,
+    MCPServerCollectionPaneEntrypoint, NotificationsTurnedOnSource, OpenedWarpAISource,
+    PaletteSource, SharingDialogSource, TabRenameEvent, TierLimitHitEvent, WarpDriveSource,
 };
 use crate::session_management::{SessionNavigationData, SessionSource, TabNavigationData};
+use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
-    AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CursorBlink, DebugSettings,
-    FontSettings, GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
-    SelectionSettings, Settings, SshSettings, ThemeSettings,
+    active_theme_kind, respect_system_theme, AISettings, AISettingsChangedEvent,
+    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    ChangelogSettings, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior, CursorBlink,
+    DebugSettings, DefaultSessionMode, FontSettings, GPUSettings, InputModeSettings, InputSettings,
+    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
+    ThemeSettings,
 };
-use crate::settings_view::flags;
+use crate::settings_view::environments_page::EnvironmentsPage;
+use crate::settings_view::handoff_environment_creation_modal::{
+    HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
+};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
-use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::general_settings::GeneralSettings;
-use crate::terminal::input::{Input, MenuPositioning};
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-use crate::terminal::model::blockgrid::BlockGrid;
-#[cfg(feature = "local_fs")]
-use crate::terminal::model::session::Session;
-use crate::terminal::model::session::SessionId;
-use crate::terminal::resizable_data::{
-    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
+use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEvent};
+#[cfg(all(target_os = "windows", feature = "local_tty"))]
+use crate::shell_indicator::ShellIndicatorType;
+use crate::tab::{
+    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
+    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
 };
-use crate::terminal::safe_mode_settings::SafeModeSettings;
-use crate::terminal::session_settings::{
-    NewSessionSource, NotificationsMode, NotificationsSettings, SessionSettingsChangedEvent,
-    WorkingDirectoryMode,
-};
-use crate::terminal::settings::{SpacingMode, TerminalSettings};
-use crate::terminal::shell::ShellType;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{
-    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
-};
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
-#[cfg(feature = "local_tty")]
-use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
-use crate::terminal::{self, SizeInfo, TerminalView};
-#[cfg(target_os = "macos")]
-use crate::workspace::cli_install;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_if_error, AgentNotificationsModel};
-use ::settings::{Setting, ToggleableSetting};
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-
-use crate::search::{self, QueryFilter};
-use crate::terminal::view::{
-    SyncEvent, SyncInputType, TerminalAction, NOTIFICATIONS_TROUBLESHOOT_URL,
-};
-use crate::terminal::{BlockListSettings, TerminalModel};
-use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
-use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
-use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
-use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
-use crate::tips::{TipsEvent, TipsView};
-use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
-use crate::undo_close::UndoCloseStack;
-#[cfg(feature = "local_fs")]
-use crate::user_config::{
-    ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
-    find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
-    tab_configs_dir,
-};
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::util::bindings::{
-    keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
-};
-use crate::util::links;
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
-use crate::util::truncation::truncate_from_end;
-#[cfg(target_family = "wasm")]
-use crate::view_components::action_button::ActionButton;
-use crate::view_components::callout_bubble::{
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
-};
-use crate::view_components::{
-    AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
-};
-use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
-use crate::workflows::{
-    manager::WorkflowOpenSource, AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource,
-    WorkflowSource, WorkflowType, WorkflowViewMode,
-};
-use crate::workspace::action::CommandSearchOptions;
-use crate::workspace::one_time_modal_model::OneTimeModalModel;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::toast_stack::{
-    ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
-};
-use crate::{
-    ai_assistant::{
-        panel::{AIAssistantPanelEvent, AIAssistantPanelView},
-        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
-    },
-    settings,
-    ui_components::blended_colors,
-};
-use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
-
-use futures::Future;
-use itertools::Itertools;
-use parking_lot::FairMutex;
-use pathfinder_geometry::rect::RectF;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
-use session_sharing_protocol::common::SessionId as SharedSessionId;
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "local_fs")]
-use std::convert::TryFrom;
-use std::time::Duration;
-#[cfg(target_os = "macos")]
-use std::time::{SystemTime, UNIX_EPOCH};
-use warp_core::context_flag::ContextFlag;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
-use warpui::fonts::Weight;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-
-use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::clipboard::ClipboardContent;
-#[cfg(target_family = "wasm")]
-use warpui::elements::Percentage;
-use warpui::elements::{
-    CacheOption, DispatchEventResult, DraggableState, DropTarget, EventHandler, Image,
-    MouseInBehavior, Rect,
-};
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::windowing::{state::ApplicationStage, StateEvent, WindowManager};
-use warpui::{elements::MouseStateHandle, fonts::Properties};
-
-use crate::{autoupdate, channel::ChannelState};
-
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use super::action::AutoCloudHandoffTrigger;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use super::auto_handoff::AutoCloudHandoffController;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, PendingQueryState, SerializedBlockListItem};
-use crate::editor::{
-    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-    TextOptions,
-};
-use crate::persistence::ModelEvent;
-
-use super::action::{
-    InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
-};
-use super::close_session_confirmation_dialog::{
-    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
-};
-use super::delete_conversation_confirmation_dialog::{
-    DeleteConversationConfirmationDialog, DeleteConversationConfirmationEvent,
-    DeleteConversationDialogSource,
-};
-use super::native_modal::{NativeModal, NativeModalEvent};
-use super::one_time_modal_model::OneTimeModalEvent;
-use super::rewind_confirmation_dialog::{
-    RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
-};
-use super::{ActiveSession, TabBarDropTargetData, TabBarLocation};
-
-use super::tab_settings::{
-    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
-};
-use super::util::{
-    PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
-    WorkspaceMouseStates, WorkspaceState,
-};
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
     RemoveTabConfigConfirmationDialog, RemoveTabConfigConfirmationEvent,
@@ -485,65 +350,151 @@ use crate::tab_configs::telemetry::{NewWorktreeConfigOpenSource, WorktreeBranchN
 use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
-
-use crate::code::editor::{add_color, remove_color};
-use crate::palette::PaletteMode;
-use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
-use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
-use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::available_shells::AvailableShell;
+#[cfg(target_os = "windows")]
+use crate::terminal::available_shells::AvailableShells;
+use crate::terminal::block_list_viewport::InputMode;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::enable_auto_reload_modal::{
+    EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::input::{Input, MenuPositioning};
+use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::ligature_settings::should_use_ligature_rendering;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
+use crate::terminal::model::blockgrid::BlockGrid;
+#[cfg(feature = "local_fs")]
+use crate::terminal::model::session::Session;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::resizable_data::{
+    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
+};
+use crate::terminal::safe_mode_settings::SafeModeSettings;
+use crate::terminal::session_settings::{
+    NewSessionSource, NotificationsMode, NotificationsSettings, SessionSettings,
+    SessionSettingsChangedEvent, WorkingDirectoryMode,
+};
+use crate::terminal::settings::{SpacingMode, TerminalSettings};
+use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::shell::ShellType;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
+};
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
+#[cfg(feature = "local_tty")]
+use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
+use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
+use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
 use crate::terminal::view::ssh_file_upload::FileUploadId;
-use crate::ui_components::icons;
-use crate::TelemetryEvent;
-use autoupdate::AutoupdateStage;
-#[cfg(target_os = "macos")]
-use command::blocking::Command;
-use lazy_static::lazy_static;
-use pathfinder_color::ColorU;
-#[cfg(target_os = "macos")]
-use std::env;
-use std::fmt::Write;
-#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process;
-use std::sync::{mpsc, Mutex};
-use std::{cmp::Ordering, sync::Arc};
-use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
-use warp_core::ui::{color::coloru_with_opacity, Icon};
-use warp_editor::editor::NavigationKey;
-use warpui::keymap::Context;
-use warpui::notification::{RequestPermissionsOutcome, UserNotification};
-use warpui::platform::{
-    Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
+use crate::terminal::view::{
+    AgentOnboardingVersion, ConversationRestorationInNewPaneType, LeftPanelTargetView,
+    OnboardingIntention, OnboardingVersion, SyncEvent, SyncInputType, TerminalAction,
+    NOTIFICATIONS_TROUBLESHOOT_URL,
 };
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
-    accessibility::{
-        AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
-    },
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Fill as ElementFill, Flex,
-        Highlight, Hoverable, Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
-        Stack, Text,
-    },
-    geometry::vector::{vec2f, Vector2F},
-    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
+use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
+use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
+use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
+use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
+use crate::tips::{TipsEvent, TipsView};
+use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
+use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
+use crate::ui_components::red_notification_dot::RedNotificationDot;
+use crate::ui_components::window_focus_dimming::WindowFocusDimming;
+use crate::ui_components::{blended_colors, icons};
+use crate::undo_close::UndoCloseStack;
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
+#[cfg(feature = "local_fs")]
+use crate::user_config::{
+    ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
+    find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
+    tab_configs_dir,
 };
-use warpui::{
-    EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
-    WindowId,
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::util::bindings::{
+    keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
 };
-
-use crate::terminal::view::LeftPanelTargetView;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::settings::OpenConversationPreference;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::Editor;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::EditorSettings;
+use crate::util::links;
+use crate::util::openable_file_type::FileTarget;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
+use crate::util::truncation::truncate_from_end;
+#[cfg(target_family = "wasm")]
+use crate::view_components::action_button::ActionButton;
+use crate::view_components::callout_bubble::{
+    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+};
+use crate::view_components::{
+    AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
+};
+#[cfg(target_family = "wasm")]
+use crate::wasm_nux_dialog::WasmNUXDialog;
+use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
+use crate::workflows::manager::{WorkflowManager, WorkflowOpenSource};
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{
+    AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource, WorkflowSource, WorkflowType,
+    WorkflowViewMode,
+};
+use crate::workspace::action::CommandSearchOptions;
+use crate::workspace::bonus_grant_notification_model::BonusGrantNotificationEvent;
+#[cfg(target_os = "macos")]
+use crate::workspace::cli_install;
+use crate::workspace::cross_window_tab_drag::{
+    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
+};
+use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
+use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_settings::TabCloseButtonPosition;
+use crate::workspace::toast_stack::{
+    ToastStack, ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
+};
+use crate::workspace::view::build_plan_migration_modal::{
+    BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
+};
+use crate::workspace::view::cloud_agent_capacity_modal::{
+    CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
+};
+use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
+use crate::workspace::view::free_tier_limit_hit_modal::{
+    FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
+};
+use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
+use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
+use crate::workspace::view::left_panel::{
+    LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
+};
+use crate::workspace::view::openwarp_launch_modal::{
+    OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
+};
+use crate::workspace::view::orchestration_launch_modal::{
+    OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
+};
+use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
+use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{
+    autoupdate, report_if_error, send_telemetry_from_ctx, settings, AgentNotificationsModel,
+    BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
+};
 
 /// The padding that should be applied to the workspace as a whole.
 pub const WORKSPACE_PADDING: f32 = 1.0;
