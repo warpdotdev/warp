@@ -54,9 +54,9 @@ pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -
         TerminalSettings::as_ref(ctx).terminal_spacing(appearance.line_height_ratio(), ctx);
     let size_info = if ctx.is_headless() {
         // In headless mode, we don't actually have a font since we aren't rendering anything.
-        // We skip the font-based size computation and hardcode a standard 80x24 terminal, so that
+        // We skip the font-based size computation and hardcode a terminal size, so that
         // viewers of the shared session see a reasonable terminal width.
-        SizeInfo::new_without_font_metrics(24, 80)
+        SizeInfo::new_without_font_metrics(24, 120)
     } else {
         let font_cache = ctx.font_cache();
         create_size_info_for_blocklist(

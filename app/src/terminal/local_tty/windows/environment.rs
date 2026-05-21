@@ -25,6 +25,8 @@ const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
 const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
 const SSH_SOCKET_DIR: &str = "SSH_SOCKET_DIR";
 const PATH_APPEND_NAME: &str = "WARP_PATH_APPEND";
+const CLIENT_VERSION_NAME: &str = "WARP_CLIENT_VERSION";
+const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
 const WSLENV: &str = "WSLENV";
 const HISTIGNORE: &str = "HISTIGNORE";
 
@@ -102,18 +104,18 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
 
     let client_version = ChannelState::app_version().unwrap_or("local");
     env.insert(
-        map_key("WARP_CLIENT_VERSION".into()),
+        map_key(CLIENT_VERSION_NAME.into()),
         EnvEntry {
-            preferred_key: "WARP_CLIENT_VERSION".into(),
+            preferred_key: CLIENT_VERSION_NAME.into(),
             value: client_version.into(),
         },
     );
 
     if FeatureFlag::HOANotifications.is_enabled() {
         env.insert(
-            map_key("WARP_CLI_AGENT_PROTOCOL_VERSION".into()),
+            map_key(CLI_AGENT_PROTOCOL_VERSION_NAME.into()),
             EnvEntry {
-                preferred_key: "WARP_CLI_AGENT_PROTOCOL_VERSION".into(),
+                preferred_key: CLI_AGENT_PROTOCOL_VERSION_NAME.into(),
                 value: current_protocol_version().to_string().into(),
             },
         );
@@ -153,19 +155,8 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
             );
         }
         ShellStarter::Wsl(_) => {
-            // See https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
-            // for more on how WSLENV should be formatted.
             // TODO(CORE-3107): Hook this up to a new setting "Working directory for new sessions" setting for WSL.
-            let mut wslenv = format!(
-                "{HONOR_PS1_NAME}/u:{USE_SSH_WRAPPER_NAME}/u:{SHELL_DEBUG_MODE_NAME}/u:\
-                {TERM_PROGRAM_NAME}/u:{IS_LOCAL_SESSION_NAME}/u:{SSH_SOCKET_DIR}/u"
-            );
-            if options.start_dir.is_some() {
-                wslenv.push(':');
-                wslenv.push_str(INITIAL_WORKING_DIR_NAME);
-                wslenv.push_str("/pu");
-            }
-            let mut wslenv = OsString::from(wslenv);
+            let mut wslenv = wsl_env_allowlist(options.start_dir.is_some());
             if let Some(user_val) = env.get(&map_key(WSLENV.into())) {
                 wslenv.push(":");
                 wslenv.push(&user_val.value);
@@ -193,6 +184,32 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
     }
 
     environment_block(env.into_iter())
+}
+
+/// Build the WSLENV allowlist for variables that Windows should forward into WSL.
+///
+/// See https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
+/// for more on how WSLENV should be formatted.
+fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
+    let mut entries = vec![
+        format!("{HONOR_PS1_NAME}/u"),
+        format!("{USE_SSH_WRAPPER_NAME}/u"),
+        format!("{SHELL_DEBUG_MODE_NAME}/u"),
+        format!("{TERM_PROGRAM_NAME}/u"),
+        format!("{IS_LOCAL_SESSION_NAME}/u"),
+        format!("{SSH_SOCKET_DIR}/u"),
+        format!("{CLIENT_VERSION_NAME}/u"),
+    ];
+
+    if FeatureFlag::HOANotifications.is_enabled() {
+        entries.push(format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"));
+    }
+
+    if include_initial_working_dir {
+        entries.push(format!("{INITIAL_WORKING_DIR_NAME}/pu"));
+    }
+
+    OsString::from(entries.join(":"))
 }
 
 /// Merges the local machine and user env var scopes
@@ -344,4 +361,51 @@ fn environment_block(env: impl Iterator<Item = (OsString, EnvEntry)>) -> Vec<u16
     block.push(0);
 
     block
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wsl_env_allowlist_includes_client_version_without_notifications_flag() {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(false);
+
+        let wslenv = wsl_env_allowlist(false).to_string_lossy().into_owned();
+
+        assert_eq!(
+            wslenv.split(':').collect::<Vec<_>>(),
+            vec![
+                format!("{HONOR_PS1_NAME}/u"),
+                format!("{USE_SSH_WRAPPER_NAME}/u"),
+                format!("{SHELL_DEBUG_MODE_NAME}/u"),
+                format!("{TERM_PROGRAM_NAME}/u"),
+                format!("{IS_LOCAL_SESSION_NAME}/u"),
+                format!("{SSH_SOCKET_DIR}/u"),
+                format!("{CLIENT_VERSION_NAME}/u"),
+            ],
+        );
+    }
+
+    #[test]
+    fn wsl_env_allowlist_includes_cli_agent_protocol_when_notifications_flag_is_enabled() {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+
+        let wslenv = wsl_env_allowlist(true).to_string_lossy().into_owned();
+
+        assert_eq!(
+            wslenv.split(':').collect::<Vec<_>>(),
+            vec![
+                format!("{HONOR_PS1_NAME}/u"),
+                format!("{USE_SSH_WRAPPER_NAME}/u"),
+                format!("{SHELL_DEBUG_MODE_NAME}/u"),
+                format!("{TERM_PROGRAM_NAME}/u"),
+                format!("{IS_LOCAL_SESSION_NAME}/u"),
+                format!("{SSH_SOCKET_DIR}/u"),
+                format!("{CLIENT_VERSION_NAME}/u"),
+                format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
+                format!("{INITIAL_WORKING_DIR_NAME}/pu"),
+            ],
+        );
+    }
 }

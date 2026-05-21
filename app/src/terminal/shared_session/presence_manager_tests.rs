@@ -14,6 +14,48 @@ use session_sharing_protocol::common::{
 use warp_core::command::ExitCode;
 use warpui::App;
 
+fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
+    Viewer {
+        info: ParticipantInfo {
+            profile_data: ProfileData {
+                firebase_uid: uid.to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        role: Role::Reader,
+        is_present,
+    }
+}
+
+#[test]
+fn single_distinct_present_viewer_uid_filters_absent_duplicates() {
+    let viewers = [
+        viewer_with_uid("same", true),
+        viewer_with_uid("same", true),
+        viewer_with_uid("other", false),
+    ];
+
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers(viewers.iter()),
+        Some("same")
+    );
+}
+
+#[test]
+fn single_distinct_present_viewer_uid_returns_none_for_zero_or_multiple_uids() {
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers([].iter()),
+        None
+    );
+
+    let viewers = [viewer_with_uid("one", true), viewer_with_uid("two", true)];
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers(viewers.iter()),
+        None
+    );
+}
+
 #[test]
 fn test_choosing_preset_colors() {
     App::test((), |mut app| async move {

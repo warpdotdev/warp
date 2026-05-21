@@ -1,8 +1,11 @@
 use super::{
     AttachedReviewComment, AttachedReviewCommentTarget, CommentId, PendingImportedReviewComment,
 };
-use crate::{code::editor::EditorReviewComment, code_review::diff_state::DiffMode};
-use std::{collections::HashMap, path::Path};
+use crate::{
+    code::buffer_location::LocalOrRemotePath, code::editor::EditorReviewComment,
+    code_review::diff_state::DiffMode,
+};
+use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
 use warpui::{Entity, ModelContext};
@@ -54,27 +57,23 @@ impl ReviewCommentBatch {
         self.comments.iter().all(|comment| comment.outdated)
     }
 
-    /// `file` param should always be the filepath from the root of the repository.
-    /// This ensures we'll never confuse files in different subdirectories with
-    /// the same suffix, for example `/my_repo/src/a/file.txt` and `/my_repo/src/b/file.txt`.
+    /// `file` should be the host-aware absolute path for the editor file.
     pub fn file_comments<'a>(
         &'a self,
-        file: &'a Path,
+        file: &'a LocalOrRemotePath,
     ) -> impl Iterator<Item = &'a AttachedReviewComment> + 'a {
         self.comments.iter().filter(move |comment| {
             comment
                 .target
                 .absolute_file_path()
-                .is_some_and(|comment_file| comment_file.ends_with(file))
+                .is_some_and(|comment_file| comment_file == file)
         })
     }
 
-    /// `file` param should always be the filepath from the root of the repository.
-    /// This ensures we'll never confuse files in different subdirectories with
-    /// the same suffix, for example `/my_repo/src/a/file.txt` and `/my_repo/src/b/file.txt`.
+    /// `file` should be the host-aware absolute path for the editor file.
     pub fn comment_line_numbers_for_file<'a>(
         &'a self,
-        file: &'a Path,
+        file: &'a LocalOrRemotePath,
     ) -> impl Iterator<Item = LineCount> + 'a {
         self.file_comments(file).filter_map(move |comment| {
             if let AttachedReviewCommentTarget::Line {
@@ -83,7 +82,7 @@ impl ReviewCommentBatch {
                 ..
             } = &comment.target
             {
-                if comment_file_path.ends_with(file) {
+                if comment_file_path == file {
                     line.line_number()
                 } else {
                     None
@@ -94,7 +93,10 @@ impl ReviewCommentBatch {
         })
     }
 
-    pub(crate) fn editor_comments_for_file(&self, file: &Path) -> Vec<EditorReviewComment> {
+    pub(crate) fn editor_comments_for_file(
+        &self,
+        file: &LocalOrRemotePath,
+    ) -> Vec<EditorReviewComment> {
         self.file_comments(file)
             .filter(|comment| {
                 if FeatureFlag::PRCommentsSlashCommand.is_enabled() {

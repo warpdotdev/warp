@@ -20,6 +20,7 @@ use crate::ai::predict::predict_am_queries::{PredictAMQueriesRequest, PredictAMQ
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
+use crate::auth::UserUid;
 use crate::server::graphql::default_request_options;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use ai::AIClient;
@@ -153,10 +154,18 @@ pub enum DeserializationError {
     Transport(reqwest::Error),
 }
 
+#[derive(Deserialize, Debug)]
+struct OutOfCreditsResponse {
+    #[serde(default, rename = "userDisplayMessage")]
+    user_display_message: Option<String>,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum AIApiError {
     #[error("Request failed due to lack of AI quota.")]
-    QuotaLimit,
+    QuotaLimit {
+        user_display_message: Option<String>,
+    },
 
     #[error("Warp is currently overloaded. Please try again later.")]
     ServerOverloaded,
@@ -186,7 +195,12 @@ pub enum AIApiError {
 
 impl From<http_client::ResponseError> for AIApiError {
     fn from(err: http_client::ResponseError) -> Self {
-        Self::from_response_error(err.source, &err.headers)
+        let http_client::ResponseError {
+            source,
+            headers,
+            body,
+        } = err;
+        Self::from_response_error(source, &headers, body)
     }
 }
 
@@ -205,11 +219,15 @@ impl From<serde_json::Error> for AIApiError {
 impl AIApiError {
     /// Converts a reqwest error to an AIApiError, using response headers to distinguish
     /// between different types of 429 errors.
-    fn from_response_error(err: reqwest::Error, headers: &::http::HeaderMap) -> Self {
+    fn from_response_error(
+        err: reqwest::Error,
+        headers: &::http::HeaderMap,
+        body: Option<String>,
+    ) -> Self {
         // For HTTP 429 errors, check the X-Warp-Error-Code header to distinguish
         // between out-of-credits and server-overload.
         if err.status() == Some(http::StatusCode::TOO_MANY_REQUESTS) {
-            return Self::error_for_429(headers);
+            return Self::error_for_429(headers, body);
         }
 
         Self::from_transport_error(err)
@@ -245,13 +263,18 @@ impl AIApiError {
     }
 
     /// Returns the appropriate error for a 429 response by checking the X-Warp-Error-Code header.
-    fn error_for_429(headers: &::http::HeaderMap) -> Self {
+    fn error_for_429(headers: &::http::HeaderMap, body: Option<String>) -> Self {
         if headers
             .get(WARP_ERROR_CODE_HEADER)
             .and_then(|v| v.to_str().ok())
             == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
         {
-            AIApiError::QuotaLimit
+            let user_display_message = body
+                .and_then(|body| serde_json::from_str::<OutOfCreditsResponse>(&body).ok())
+                .and_then(|r| r.user_display_message);
+            AIApiError::QuotaLimit {
+                user_display_message,
+            }
         } else {
             AIApiError::ServerOverloaded
         }
@@ -263,8 +286,12 @@ impl AIApiError {
         match err {
             reqwest_eventsource::Error::InvalidStatusCode(
                 http::StatusCode::TOO_MANY_REQUESTS,
-                ref res,
-            ) => Self::error_for_429(res.headers()),
+                res,
+            ) => {
+                let headers = res.headers().clone();
+                let body = res.text().await.ok();
+                Self::error_for_429(&headers, body)
+            }
             reqwest_eventsource::Error::InvalidStatusCode(status, res) => Self::ErrorStatus(
                 status,
                 res.text()
@@ -315,9 +342,9 @@ impl ErrorExt for AIApiError {
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
             AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::QuotaLimit | AIApiError::ServerOverloaded | AIApiError::NoContextFound => {
-                false
-            }
+            AIApiError::QuotaLimit { .. }
+            | AIApiError::ServerOverloaded
+            | AIApiError::NoContextFound => false,
         }
     }
 }
@@ -417,6 +444,16 @@ impl ServerApi {
         event_sender: async_channel::Sender<ServerApiEvent>,
         agent_source: Option<ai::AgentSource>,
     ) -> Self {
+        let client = Arc::new(http_client::Client::new());
+        Self::new_with_parts(client, auth_state, event_sender, agent_source)
+    }
+
+    fn new_with_parts(
+        client: Arc<http_client::Client>,
+        auth_state: Arc<AuthState>,
+        event_sender: async_channel::Sender<ServerApiEvent>,
+        agent_source: Option<ai::AgentSource>,
+    ) -> Self {
         // We generate a random user ID for evals so we can run evals in parallel.
         #[cfg(feature = "agent_mode_evals")]
         let eval_user_id = {
@@ -427,7 +464,7 @@ impl ServerApi {
         let oauth_client = Self::create_oauth_client();
 
         Self {
-            client: Arc::new(http_client::Client::new()),
+            client,
             auth_state,
             event_sender,
             telemetry_api: TelemetryApi::new(),
@@ -444,22 +481,45 @@ impl ServerApi {
     #[cfg(test)]
     fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
+        let auth_state = Arc::new(AuthState::new_for_test());
+        let client = Arc::new(http_client::Client::new_for_test());
 
-        let oauth_client = Self::create_oauth_client();
+        Self::new_with_parts(client, auth_state, tx, None)
+    }
 
-        Self {
-            client: Arc::new(http_client::Client::new_for_test()),
-            auth_state: Arc::new(AuthState::new_for_test()),
-            event_sender: tx,
-            telemetry_api: TelemetryApi::new(),
-            last_server_time: Arc::new(Mutex::new(None)),
-            oauth_client,
-            ambient_workload_token: Arc::new(Mutex::new(None)),
-            ambient_agent_task_id: Arc::new(RwLock::new(None)),
-            agent_source: None,
-            #[cfg(feature = "agent_mode_evals")]
-            eval_user_id: None,
+    #[cfg(test)]
+    fn new_for_test_with_bearer_token(
+        bearer_token: Option<String>,
+        event_sender: async_channel::Sender<ServerApiEvent>,
+    ) -> Self {
+        let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+        if let Some(bearer_token) = bearer_token {
+            auth_state.set_remote_server_bearer_token(bearer_token);
         }
+        Self::new_with_parts(
+            Arc::new(http_client::Client::new_for_test()),
+            auth_state,
+            event_sender,
+            None,
+        )
+    }
+
+    pub fn allowed_to_refresh_token(&self) -> bool {
+        self.auth_state
+            .credentials()
+            .is_none_or(|credentials| !credentials.is_externally_managed())
+    }
+
+    fn access_token_ignoring_validity(&self) -> Option<String> {
+        self.auth_state.get_access_token_ignoring_validity()
+    }
+
+    pub(super) fn anonymous_id(&self) -> String {
+        self.auth_state.anonymous_id()
+    }
+
+    fn user_id(&self) -> Option<UserUid> {
+        self.auth_state.user_id()
     }
 
     /// Sets the ambient agent task ID to be sent with all subsequent requests.
@@ -538,7 +598,7 @@ impl ServerApi {
         Box::pin(async move {
             let operation_name = operation.operation_name().map(Cow::into_owned);
             let auth_token = self
-                .get_or_refresh_access_token()
+                .access_token()
                 .await
                 .context("Failed to get access token for GraphQL request")?;
 
@@ -564,7 +624,12 @@ impl ServerApi {
                     let _ = event_sender.try_send(ServerApiEvent::StagingAccessBlocked);
                     anyhow::bail!(GraphQLError::StagingAccessBlocked)
                 }
-                Err(err) => anyhow::bail!(err),
+                Err(err) => {
+                    if !self.allowed_to_refresh_token() && Self::is_graphql_auth_rejection(&err) {
+                        anyhow::bail!("server rejected authentication credentials");
+                    }
+                    anyhow::bail!(err)
+                }
             };
 
             if let Some(errors) = response.errors.as_ref() {
@@ -581,8 +646,12 @@ impl ServerApi {
                     .iter()
                     .any(|error| error.message.contains("User not in context: Not found"))
                 {
-                    log::error!("GraphQL request failed due to unauthenticated user");
-                    let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
+                    if self.allowed_to_refresh_token() {
+                        log::error!("GraphQL request failed due to unauthenticated user");
+                        let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
+                    } else {
+                        anyhow::bail!("server rejected authentication credentials");
+                    }
                 }
             }
 
@@ -613,6 +682,17 @@ impl ServerApi {
                 }
             })
         })
+    }
+
+    fn is_graphql_auth_rejection(err: &GraphQLError) -> bool {
+        match err {
+            GraphQLError::HttpError { status, .. } => {
+                *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
+            }
+            GraphQLError::RequestError(_)
+            | GraphQLError::StagingAccessBlocked
+            | GraphQLError::ResponseError(_) => false,
+        }
     }
 
     /// Sends a GET request to a public API endpoint.
@@ -818,7 +898,13 @@ impl ServerApi {
             }
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
-            return AIApiError::QuotaLimit.into();
+            let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
+                .ok()
+                .and_then(|r| r.user_display_message);
+            return AIApiError::QuotaLimit {
+                user_display_message,
+            }
+            .into();
         }
 
         // Try to deserialize error response as { "error": "message" }
@@ -904,7 +990,7 @@ impl ServerApi {
                     // content-type is sufficient (elides the content-length requirement), but
                     // since this request has no body, it makes more sense to set content-length.
                     .header(CONTENT_LENGTH, 0)
-                    .header(EXPERIMENT_ID_HEADER, self.auth_state.anonymous_id());
+                    .header(EXPERIMENT_ID_HEADER, self.anonymous_id());
 
                 let response = request.send().await;
                 if let Err(err) = response {
@@ -925,8 +1011,8 @@ impl ServerApi {
         event: impl TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        let user_id = self.auth_state.user_id();
-        let anonymous_id = self.auth_state.anonymous_id();
+        let user_id = self.user_id();
+        let anonymous_id = self.anonymous_id();
         self.telemetry_api
             .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)
             .await
@@ -990,7 +1076,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1014,7 +1101,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
 
@@ -1051,7 +1139,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1074,7 +1163,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1304,7 +1394,7 @@ impl ServerApi {
             .client
             .get(url.as_str())
             .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
-            .header(EXPERIMENT_ID_HEADER, self.auth_state.anonymous_id());
+            .header(EXPERIMENT_ID_HEADER, self.anonymous_id());
 
         // Authorization for /client_version is optional. Attach authorization header if an access
         // token is present. First, try to get a valid token. If our cached one is expired, try to
@@ -1314,7 +1404,7 @@ impl ServerApi {
             .await
             .ok()
             .and_then(|token| token.bearer_token())
-            .or_else(|| self.auth_state.get_access_token_ignoring_validity());
+            .or_else(|| self.access_token_ignoring_validity());
         if let Some(token_str) = auth_token {
             request_builder = request_builder.bearer_auth(token_str);
         }
@@ -1466,3 +1556,217 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cynic::{GraphQlError, GraphQlResponse};
+    use futures::executor::block_on;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FakeGraphqlOperation {
+        expected_auth_token: Option<String>,
+        send_count: Arc<AtomicUsize>,
+        result: FakeGraphqlResult,
+    }
+
+    enum FakeGraphqlResult {
+        Success,
+        Rejected(StatusCode),
+        ResponseErrors(Vec<String>),
+    }
+
+    impl FakeGraphqlOperation {
+        fn successful(expected_auth_token: Option<&str>, send_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+                send_count,
+                result: FakeGraphqlResult::Success,
+            }
+        }
+
+        fn rejected(
+            expected_auth_token: Option<&str>,
+            send_count: Arc<AtomicUsize>,
+            status: StatusCode,
+        ) -> Self {
+            Self {
+                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+                send_count,
+                result: FakeGraphqlResult::Rejected(status),
+            }
+        }
+
+        fn response_errors(
+            expected_auth_token: Option<&str>,
+            send_count: Arc<AtomicUsize>,
+            messages: Vec<String>,
+        ) -> Self {
+            Self {
+                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+                send_count,
+                result: FakeGraphqlResult::ResponseErrors(messages),
+            }
+        }
+    }
+
+    impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
+        fn operation_name(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed("FakeGraphqlOperation"))
+        }
+
+        fn send_request(
+            self,
+            _client: Arc<http_client::Client>,
+            options: warp_graphql::client::RequestOptions,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>
+                    + Send
+                    + 'static,
+            >,
+        >
+        where
+            Self: Sized,
+        {
+            Box::pin(async move {
+                assert_eq!(options.auth_token, self.expected_auth_token);
+                self.send_count.fetch_add(1, Ordering::SeqCst);
+                match self.result {
+                    FakeGraphqlResult::Success => Ok(GraphQlResponse {
+                        data: Some(()),
+                        errors: None,
+                    }),
+                    FakeGraphqlResult::Rejected(status) => Err(GraphQLError::HttpError {
+                        status,
+                        body: "redacted auth rejection".to_string(),
+                    }),
+                    FakeGraphqlResult::ResponseErrors(messages) => Ok(GraphQlResponse {
+                        data: None,
+                        errors: Some(
+                            messages
+                                .into_iter()
+                                .map(|message| GraphQlError::new(message, None, None, None))
+                                .collect(),
+                        ),
+                    }),
+                }
+            })
+        }
+    }
+
+    fn has_error_message(error: &anyhow::Error, expected: &str) -> bool {
+        error.chain().any(|cause| cause.to_string() == expected)
+    }
+
+    #[test]
+    fn send_graphql_request_refresh_enabled_uses_auth_state() {
+        let server_api = ServerApi::new_for_test();
+        let send_count = Arc::new(AtomicUsize::new(0));
+
+        block_on(server_api.send_graphql_request(
+            FakeGraphqlOperation::successful(None, send_count.clone()),
+            None,
+        ))
+        .unwrap();
+
+        assert!(server_api.allowed_to_refresh_token());
+        assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn send_graphql_request_refresh_disabled_uses_provided_bearer_token() {
+        let (event_sender, _) = async_channel::unbounded();
+        let server_api = ServerApi::new_for_test_with_bearer_token(
+            Some("daemon-token".to_string()),
+            event_sender,
+        );
+        let send_count = Arc::new(AtomicUsize::new(0));
+
+        block_on(server_api.send_graphql_request(
+            FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone()),
+            None,
+        ))
+        .unwrap();
+
+        assert!(!server_api.allowed_to_refresh_token());
+        assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn send_graphql_request_refresh_disabled_missing_token_returns_auth_error() {
+        let (event_sender, event_receiver) = async_channel::unbounded();
+        let server_api = ServerApi::new_for_test_with_bearer_token(None, event_sender);
+        let send_count = Arc::new(AtomicUsize::new(0));
+
+        let error = block_on(server_api.send_graphql_request(
+            FakeGraphqlOperation::successful(Some("unused-token"), send_count.clone()),
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(has_error_message(
+            &error,
+            "missing authentication credentials"
+        ));
+        assert_eq!(send_count.load(Ordering::SeqCst), 0);
+        assert!(event_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected() {
+        let (event_sender, event_receiver) = async_channel::unbounded();
+        let server_api = ServerApi::new_for_test_with_bearer_token(
+            Some("daemon-token".to_string()),
+            event_sender,
+        );
+        let send_count = Arc::new(AtomicUsize::new(0));
+
+        let error = block_on(server_api.send_graphql_request(
+            FakeGraphqlOperation::rejected(
+                Some("daemon-token"),
+                send_count.clone(),
+                StatusCode::UNAUTHORIZED,
+            ),
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(has_error_message(
+            &error,
+            "server rejected authentication credentials"
+        ));
+        assert_eq!(send_count.load(Ordering::SeqCst), 1);
+        assert!(event_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn send_graphql_request_refresh_disabled_user_not_in_context_is_credentials_rejected() {
+        let (event_sender, event_receiver) = async_channel::unbounded();
+        let server_api = ServerApi::new_for_test_with_bearer_token(
+            Some("daemon-token".to_string()),
+            event_sender,
+        );
+        let send_count = Arc::new(AtomicUsize::new(0));
+
+        let error = block_on(server_api.send_graphql_request(
+            FakeGraphqlOperation::response_errors(
+                Some("daemon-token"),
+                send_count.clone(),
+                vec!["User not in context: Not found".to_string()],
+            ),
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(has_error_message(
+            &error,
+            "server rejected authentication credentials"
+        ));
+        assert_eq!(send_count.load(Ordering::SeqCst), 1);
+        assert!(event_receiver.try_recv().is_err());
+    }
+}

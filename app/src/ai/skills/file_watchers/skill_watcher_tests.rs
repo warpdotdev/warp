@@ -69,6 +69,7 @@ fn test_handle_repository_update_single_skill_added() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -105,6 +106,7 @@ fn test_handle_repository_update_skill_modified() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -141,6 +143,7 @@ fn test_handle_repository_update_skill_deleted() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -181,6 +184,7 @@ fn test_handle_repository_update_multiple_skills_deleted() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -223,6 +227,7 @@ fn test_handle_repository_update_skill_moved() {
             )]),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -290,6 +295,7 @@ fn test_handle_repository_update_non_skill_directory_added_queues_project_direct
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -337,6 +343,7 @@ fn test_handle_repository_update_non_skill_file_modified_in_repo_does_not_queue_
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -380,6 +387,7 @@ fn test_handle_repository_update_non_skill_file_added_does_not_queue_project_dir
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {

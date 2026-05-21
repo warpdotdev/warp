@@ -311,6 +311,13 @@ impl ModelEventDispatcher {
     /// For legacy SSH sessions with the `SshRemoteServer` flag, this also
     /// sends the `SessionBootstrapped` notification to the remote server via
     /// the manager.
+    ///
+    /// The `SessionBootstrapped` notification is sent **before** initializing
+    /// the session so the daemon creates the `LocalCommandExecutor` before any
+    /// subscriber (e.g. `TerminalView::handle_session_bootstrapped`) can queue
+    /// a `RunCommand` request. Without this ordering, a race exists where the
+    /// daemon receives `RunCommand` before the executor is ready, producing
+    /// "No executor for RunCommand, session was never initialized" errors.
     fn complete_bootstrapped_session(
         &mut self,
         event: BootstrappedEvent,
@@ -333,16 +340,11 @@ impl ModelEventDispatcher {
             session_info.shell.shell_path().clone(),
         );
 
-        self.sessions.update(ctx, |sessions, ctx| {
-            sessions.initialize_bootstrapped_session(
-                *session_info,
-                spawning_command,
-                restored_block_commands,
-                rcfiles_duration_seconds,
-                ctx,
-            );
-        });
-
+        // Send the SessionBootstrapped notification to the daemon BEFORE
+        // initializing the session. `initialize_bootstrapped_session` emits
+        // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
+        // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
+        // The daemon must have the executor ready before those requests arrive.
         if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
@@ -352,6 +354,16 @@ impl ModelEventDispatcher {
                 );
             });
         }
+
+        self.sessions.update(ctx, |sessions, ctx| {
+            sessions.initialize_bootstrapped_session(
+                *session_info,
+                spawning_command,
+                restored_block_commands,
+                rcfiles_duration_seconds,
+                ctx,
+            );
+        });
     }
 
     /// Emits an event so `TerminalView` can render the remote server block.

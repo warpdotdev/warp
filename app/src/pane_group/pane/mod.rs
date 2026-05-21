@@ -55,7 +55,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
-use warp_core::HostId;
+use warp_util::remote_path::RemotePath;
 use warpui::{
     elements::{DispatchEventResult, EventHandler, MouseInBehavior},
     presenter::ChildView,
@@ -1105,8 +1105,7 @@ pub enum PaneEvent {
     RepoChanged,
     /// A remote server resolved the repo root for a session in this pane.
     RemoteRepoNavigated {
-        host_id: HostId,
-        indexed_path: String,
+        remote_path: RemotePath,
     },
     /// Split the current pane into two. If `initial_query` is `Some` fill the new pane's input with
     /// its value.

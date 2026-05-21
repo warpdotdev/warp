@@ -2,7 +2,7 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationProvenance,
 };
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::ai::conversation_status_ui::STATUS_ELEMENT_PADDING;
 use crate::appearance::Appearance;
 use crate::drive::sharing::dialog::SharingDialog;
 use crate::menu::Menu;
@@ -213,24 +213,13 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     }
 
     let status_element_size = font_size + STATUS_ELEMENT_PADDING * 2.;
-    // Prefer the unified agent icon-with-status circle (brand color + cloud lobe for
-    // ambient runs) so the row matches the vertical tab / pane header. Fall back to the
-    // plain status-only icon when the helper can't produce an agent variant (never today,
-    // but keeps the surface future-proof).
-    let icon_element: Box<dyn Element> = match agent_conversation_entry_icon_variant(conversation) {
-        Some(variant) => render_icon_with_status(
-            variant,
-            LIST_ITEM_AGENT_SIZE,
-            LIST_ITEM_OVERLAY_EXTRA_OVERHANG,
-            theme,
-            theme.background(),
-        ),
-        None => render_status_element(
-            &conversation.display.status.to_conversation_status(),
-            font_size,
-            appearance,
-        ),
-    };
+    let icon_element = render_icon_with_status(
+        agent_conversation_entry_icon_variant(conversation),
+        LIST_ITEM_AGENT_SIZE,
+        LIST_ITEM_OVERLAY_EXTRA_OVERHANG,
+        theme,
+        theme.background(),
+    );
 
     let icon_and_title_row = Shrinkable::new(
         1.0,

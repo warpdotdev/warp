@@ -672,6 +672,15 @@ impl Element for SelectableArea {
                 return true;
             }
         }
+        if matches!(
+            event.raw_event(),
+            Event::LeftMouseDown { .. } | Event::RightMouseDown { .. }
+        ) && self
+            .z_index()
+            .is_some_and(|z_index| event.at_z_index(z_index, ctx).is_none())
+        {
+            return false;
+        }
 
         match event.raw_event() {
             Event::LeftMouseDown {

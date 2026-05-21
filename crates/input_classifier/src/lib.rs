@@ -1,5 +1,3 @@
-#[cfg(feature = "fasttext")]
-mod fasttext;
 mod heuristic_classifier;
 mod input_type;
 #[cfg(feature = "onnx")]
@@ -10,8 +8,6 @@ pub mod util;
 
 use async_trait::async_trait;
 
-#[cfg(feature = "fasttext")]
-pub use fasttext::FasttextClassifier;
 pub use heuristic_classifier::HeuristicClassifier;
 pub use input_type::InputType;
 #[cfg(feature = "onnx")]

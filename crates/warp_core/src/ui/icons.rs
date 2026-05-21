@@ -263,6 +263,7 @@ pub enum Icon {
     FolderClosed,
     FileCopy,
     Credits,
+    CreditCard,
     AddressedComment,
     ClockSnooze,
     Hand,
@@ -311,6 +312,21 @@ pub enum Icon {
     HeartHand,
     MessageChatSquare,
     Pin,
+    PinFilled,
+    Atom02,
+    Cognition,
+    Dataflow04,
+    // Language-specific icons for the code block dropdown
+    MermaidLang,
+    GoLang,
+    CppLang,
+    JavaScriptLang,
+    PythonLang,
+    RustLang,
+    SqlLang,
+    JsonLang,
+    PhpLang,
+    KotlinLang,
 }
 
 impl From<Icon> for &'static str {
@@ -318,6 +334,7 @@ impl From<Icon> for &'static str {
         match icon {
             Icon::Menu => "bundled/svg/layout-left.svg",
             Icon::Pin => "bundled/svg/pin-01.svg",
+            Icon::PinFilled => "bundled/svg/pin-filled.svg",
             Icon::AtSign => "bundled/svg/at-sign.svg",
             Icon::Plus => "bundled/svg/plus.svg",
             Icon::Copy => "bundled/svg/copy.svg",
@@ -573,6 +590,7 @@ impl From<Icon> for &'static str {
             Icon::FolderClosed => "bundled/svg/folder-closed.svg",
             Icon::FileCopy => "bundled/svg/file_copy.svg",
             Icon::Credits => "bundled/svg/credits.svg",
+            Icon::CreditCard => "bundled/svg/credit-card.svg",
             Icon::AddressedComment => "bundled/svg/addressed-comment.svg",
             Icon::ClockSnooze => "bundled/svg/clock-snooze.svg",
             Icon::Hand => "bundled/svg/hand.svg",
@@ -619,6 +637,19 @@ impl From<Icon> for &'static str {
             Icon::ClockPlus => "bundled/svg/clock-plus.svg",
             Icon::HeartHand => "bundled/svg/heart-hand.svg",
             Icon::MessageChatSquare => "bundled/svg/message-chat-square.svg",
+            Icon::Atom02 => "bundled/svg/atom-02.svg",
+            Icon::Cognition => "bundled/svg/cognition.svg",
+            Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
+            Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
+            Icon::GoLang => "bundled/svg/file_type/go.svg",
+            Icon::CppLang => "bundled/svg/file_type/cpp.svg",
+            Icon::JavaScriptLang => "bundled/svg/file_type/javascript.svg",
+            Icon::PythonLang => "bundled/svg/file_type/python.svg",
+            Icon::RustLang => "bundled/svg/file_type/rust.svg",
+            Icon::SqlLang => "bundled/svg/file_type/sql.svg",
+            Icon::JsonLang => "bundled/svg/file_type/json.svg",
+            Icon::PhpLang => "bundled/svg/file_type/php.svg",
+            Icon::KotlinLang => "bundled/svg/file_type/kotlin.svg",
         }
     }
 }

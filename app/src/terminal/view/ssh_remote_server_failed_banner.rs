@@ -1,6 +1,7 @@
 //! Banner shown when the remote-server binary check, installation, or connection fails on the remote host.
 //! We fall back to the existing Warpification behavior and display this banner so the user knows why advanced features are unavailable.
 
+use remote_server::transport::UserFacingError;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::{
@@ -13,6 +14,8 @@ use warpui::{
 };
 
 use crate::{terminal::model::session::SessionId, ui_components::icons::Icon, Appearance};
+
+const BANNER_TITLE: &str = "Couldn't connect to the Warp SSH extension";
 
 const BANNER_BODY: &str =
     "While advanced features like file browsing and code review are currently \
@@ -28,47 +31,16 @@ pub enum SshRemoteServerFailedBannerEvent {
     Dismissed,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum SshRemoteServerFailureKind {
-    BinaryCheck,
-    BinaryInstall,
-    Launch,
-}
-
-impl SshRemoteServerFailureKind {
-    fn title(self) -> &'static str {
-        match self {
-            Self::BinaryCheck => "SSH extension couldn't be verified",
-            Self::BinaryInstall => "SSH extension couldn't be installed",
-            Self::Launch => "SSH extension couldn't be started",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::BinaryCheck => {
-                "The SSH extension binary could not be verified on the remote host."
-            }
-            Self::BinaryInstall => {
-                "The binary could not be written or executed on the remote host."
-            }
-            Self::Launch => "The SSH extension could not be started on the remote host.",
-        }
-    }
-}
-
 pub struct SshRemoteServerFailedBanner {
     session_id: SessionId,
-    kind: SshRemoteServerFailureKind,
-    error: String,
+    error: UserFacingError,
     close_mouse_state: MouseStateHandle,
 }
 
 impl SshRemoteServerFailedBanner {
-    pub fn new(session_id: SessionId, kind: SshRemoteServerFailureKind, error: String) -> Self {
+    pub fn new(session_id: SessionId, error: UserFacingError) -> Self {
         Self {
             session_id,
-            kind,
             error,
             close_mouse_state: MouseStateHandle::default(),
         }
@@ -106,27 +78,36 @@ impl View for SshRemoteServerFailedBanner {
         .with_margin_right(8.)
         .finish();
 
-        let title = Text::new(self.kind.title(), appearance.ui_font_family(), font_size)
-            .with_color(fg_color)
-            .finish();
+        let title = Text::new(
+            BANNER_TITLE.to_string(),
+            appearance.ui_font_family(),
+            font_size,
+        )
+        .with_color(fg_color)
+        .finish();
 
-        let body_text = format!("{} {BANNER_BODY}", self.kind.description());
-        let body = Text::new(body_text, appearance.ui_font_family(), small_font_size)
-            .soft_wrap(true)
-            .with_color(muted_color)
-            .finish();
+        let body = Text::new(
+            BANNER_BODY.to_string(),
+            appearance.ui_font_family(),
+            small_font_size,
+        )
+        .soft_wrap(true)
+        .with_color(muted_color)
+        .finish();
 
-        // Error detail line wrapped in a red-tinted background container.
-        let trimmed_error = self.error.trim();
-        let error_element = if trimmed_error.is_empty() {
-            None
-        } else {
+        let error_container = {
             let ansi_red = AnsiColorIdentifier::Red.to_ansi_color(&theme.terminal_colors().normal);
             let error_bg = theme.ansi_overlay_1(ansi_red);
             let error_text_color = theme.ansi_fg_red();
 
+            let error_description = if let Some(detail) = &self.error.detail {
+                format!("{}. {}", self.error.body, detail)
+            } else {
+                format!("{}.", self.error.body)
+            };
+
             let error_text = Text::new(
-                format!("ERROR: {trimmed_error}"),
+                error_description,
                 appearance.ui_font_family(),
                 small_font_size,
             )
@@ -134,18 +115,16 @@ impl View for SshRemoteServerFailedBanner {
             .with_color(error_text_color)
             .finish();
 
-            let error_container = Container::new(error_text)
+            let error_box = Container::new(error_text)
                 .with_background(error_bg)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .with_uniform_padding(12.)
                 .finish();
 
-            Some(
-                Container::new(error_container)
-                    .with_margin_top(8.)
-                    .with_margin_left(24.)
-                    .finish(),
-            )
+            Container::new(error_box)
+                .with_margin_top(8.)
+                .with_horizontal_margin(24.)
+                .finish()
         };
 
         // Close (X) button
@@ -195,9 +174,7 @@ impl View for SshRemoteServerFailedBanner {
             .with_child(header_row)
             .with_child(body_container);
 
-        if let Some(error) = error_element {
-            content = content.with_child(error);
-        }
+        content = content.with_child(error_container);
 
         let content = content.finish();
 

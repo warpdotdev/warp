@@ -65,7 +65,7 @@ use warpui::{EntityId, ModelHandle, SingletonEntity as _};
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
 use super::blockgrid_renderer::GridRenderParams;
-use super::find::{BlockListFindRun, BlockListMatch, TerminalFindModel};
+use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 
 use super::meta_shortcuts::handle_keystroke_despite_composing;
@@ -216,7 +216,7 @@ pub type FilterBuilderFn = dyn Fn(
     &AppContext,
 ) -> Vec<Option<Box<dyn Element>>>;
 
-#[derive(Debug, PartialEq, Copy, Clone, Eq, PartialOrd, Sequence)]
+#[derive(Debug, PartialEq, Copy, Clone, Eq, PartialOrd, Sequence, Hash)]
 pub enum GridType {
     Prompt,
     Rprompt,          // Right side prompt
@@ -1201,9 +1201,7 @@ impl BlockListElement {
             self.ask_ai_assistant_button = Some(element);
         }
 
-        if FeatureFlag::BlockToolbeltSaveAsWorkflow.is_enabled()
-            && WarpDriveSettings::is_warp_drive_enabled(app)
-        {
+        if WarpDriveSettings::is_warp_drive_enabled(app) {
             let icon = Container::new(
                 ConstrainedBox::new(
                     ui_components::icons::Icon::Save
@@ -2465,7 +2463,7 @@ impl BlockListElement {
         block: &Block,
         grid_origin: &mut Vector2F,
         element_origin: Vector2F,
-        block_list_find_run: Option<&BlockListFindRun>,
+        find_render_data: Option<BlockFindRenderData>,
         highlighted_url: Option<&WithinBlock<Link>>,
         link_tool_tip: Option<&WithinBlock<Link>>,
         hovered_secret: Option<SecretHandle>,
@@ -2512,129 +2510,133 @@ impl BlockListElement {
             Self::draw_border_between_blocks(border_origin, block_grid_params, ctx);
         }
 
-        let prompt_height_offset = cell_size_height * block.padding_top().as_f64() as f32;
-
-        *grid_origin += vec2f(0., prompt_height_offset);
-
-        let prompt_origin = snackbar_header
-            .and_then(|header| header.header_rect())
-            .map_or(*grid_origin, |r| {
-                let y = r.origin().y() + prompt_height_offset + block_banner_height;
-                vec2f(grid_origin.x(), y)
-            });
-
         let cursor_visible = block.is_mode_set(TermMode::SHOW_CURSOR);
-        // Draw prompt
-        if let Some(label_element) = label_element {
-            label_element.paint(prompt_origin, ctx, app);
-        } else {
-            let size_info = &block_grid_params.grid_render_params.size_info;
-            if block.should_display_rprompt(size_info) {
-                let rprompt_origin = prompt_origin + block.rprompt_render_offset(size_info);
-                block.rprompt_grid().draw(
-                    rprompt_origin,
-                    element_origin,
-                    glyphs,
-                    COMMAND_ALPHA,
-                    None,
-                    None,
-                    hovered_secret,
-                    None::<std::iter::Empty<&RangeInclusive<IndexPoint>>>,
-                    None,
-                    Properties::default(),
-                    block_grid_params,
-                    None,
-                    image_metadata,
+        let command_origin = if !block.should_hide_command_grid() {
+            let prompt_height_offset = cell_size_height * block.padding_top().as_f64() as f32;
+
+            *grid_origin += vec2f(0., prompt_height_offset);
+
+            let prompt_origin = snackbar_header
+                .and_then(|header| header.header_rect())
+                .map_or(*grid_origin, |r| {
+                    let y = r.origin().y() + prompt_height_offset + block_banner_height;
+                    vec2f(grid_origin.x(), y)
+                });
+
+            // Draw prompt
+            if let Some(label_element) = label_element {
+                label_element.paint(prompt_origin, ctx, app);
+            } else {
+                let size_info = &block_grid_params.grid_render_params.size_info;
+                if block.should_display_rprompt(size_info) {
+                    let rprompt_origin = prompt_origin + block.rprompt_render_offset(size_info);
+                    block.rprompt_grid().draw(
+                        rprompt_origin,
+                        element_origin,
+                        glyphs,
+                        COMMAND_ALPHA,
+                        None,
+                        None,
+                        hovered_secret,
+                        None::<std::iter::Empty<&RangeInclusive<IndexPoint>>>,
+                        None,
+                        Properties::default(),
+                        block_grid_params,
+                        None,
+                        image_metadata,
+                        ctx,
+                        app,
+                    );
+                }
+            }
+
+            // If Warp prompt (non-PS1) is being used, the command is drawn below the prompt,
+            // hence we account for the prompt's vertical offset.
+            let prompt_vertical_offset_px = if !block.honor_ps1() {
+                cell_size_height
+                    * (block.command_padding_top() + block.prompt_height()).as_f64() as f32
+            } else {
+                // Otherwise, the prompt/command are drawn together, in a single grid. Hence, we haven't
+                // drawn the prompt above and we do not account for the offset.
+                0.0
+            };
+
+            *grid_origin += vec2f(0.0, prompt_vertical_offset_px);
+
+            // Determine command_origin based on snackbar_header.
+            let command_origin = if snackbar_header.is_some() {
+                prompt_origin + vec2f(0.0, prompt_vertical_offset_px)
+            } else {
+                *grid_origin
+            };
+
+            // Update grid_origin and draw command.
+            let command_grid_properties = Properties::default();
+            let command_focused_range =
+                find_render_data
+                    .as_ref()
+                    .and_then(|data: &BlockFindRenderData<'_>| {
+                        data.focused_range_for_grid(GridType::PromptAndCommand)
+                    });
+            block.prompt_and_command_grid().draw(
+                command_origin,
+                element_origin,
+                glyphs,
+                COMMAND_ALPHA,
+                highlighted_url
+                    .filter(|url| url.is_in_command_content() && url.block_index == block_index)
+                    .map(|url| &url.inner),
+                link_tool_tip
+                    .filter(|url| url.is_in_command_content() && url.block_index == block_index)
+                    .map(|url| &url.inner),
+                hovered_secret,
+                find_render_data
+                    .as_ref()
+                    .and_then(|data: &BlockFindRenderData<'_>| data.command_grid_matches()),
+                command_focused_range.as_ref(),
+                command_grid_properties,
+                block_grid_params,
+                cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
+                image_metadata,
+                ctx,
+                app,
+            );
+
+            // Only render the cursor in the command grid if the command grid is active and if it's
+            // long running. This is to avoid jitter where a cursor just flickers while the pty is
+            // initializing.
+            if block.is_active_and_long_running()
+                && block.is_command_grid_active()
+                // Check if the "hide cursor" escape sequence is present.
+                && block.is_mode_set(TermMode::SHOW_CURSOR)
+            {
+                block.prompt_and_command_grid().draw_cursor(
+                    command_origin,
+                    &block_grid_params.grid_render_params,
                     ctx,
+                    terminal_view_id,
+                    None,
+                    block_grid_params
+                        .grid_render_params
+                        .warp_theme
+                        .cursor()
+                        .into(),
                     app,
                 );
             }
-        }
 
-        // If Warp prompt (non-PS1) is being used, the command is drawn below the prompt,
-        // hence we account for the prompt's vertical offset.
-        let prompt_vertical_offset_px = if !block.honor_ps1() {
-            cell_size_height * (block.command_padding_top() + block.prompt_height()).as_f64() as f32
-        } else {
-            // Otherwise, the prompt/command are drawn together, in a single grid. Hence, we haven't
-            // drawn the prompt above and we do not account for the offset.
-            0.0
-        };
+            // Update grid_origin & draw output
+            *grid_origin += vec2f(
+                0.,
+                cell_size_height
+                    * (block.padding_middle() + block.prompt_and_command_grid().len().into_lines())
+                        .as_f64() as f32,
+            );
 
-        *grid_origin += vec2f(0.0, prompt_vertical_offset_px);
-
-        // Determine command_origin based on snackbar_header.
-        let command_origin = if snackbar_header.is_some() {
-            prompt_origin + vec2f(0.0, prompt_vertical_offset_px)
+            command_origin
         } else {
             *grid_origin
         };
-
-        // Update grid_origin and draw command.
-        let command_grid_properties = Properties::default();
-        block.prompt_and_command_grid().draw(
-            command_origin,
-            element_origin,
-            glyphs,
-            COMMAND_ALPHA,
-            highlighted_url
-                .filter(|url| url.is_in_command_content() && url.block_index == block_index)
-                .map(|url| &url.inner),
-            link_tool_tip
-                .filter(|url| url.is_in_command_content() && url.block_index == block_index)
-                .map(|url| &url.inner),
-            hovered_secret,
-            block_list_find_run
-                .map(|run| run.matches_for_block_grid(block_index, GridType::PromptAndCommand)),
-            block_list_find_run
-                .and_then(|run| run.focused_match())
-                .and_then(|focused_match| match focused_match {
-                    BlockListMatch::CommandBlock(m)
-                        if m.block_index == block_index
-                            && m.grid_type == GridType::PromptAndCommand =>
-                    {
-                        Some(&m.range)
-                    }
-                    _ => None,
-                }),
-            command_grid_properties,
-            block_grid_params,
-            cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
-            image_metadata,
-            ctx,
-            app,
-        );
-
-        // Only render the cursor in the command grid if the command grid is active and if it's
-        // long running. This is to avoid jitter where a cursor just flickers while the pty is
-        // initializing.
-        if block.is_active_and_long_running()
-            && block.is_command_grid_active()
-            // Check if the "hide cursor" escape sequence is present.
-            && block.is_mode_set(TermMode::SHOW_CURSOR)
-        {
-            block.prompt_and_command_grid().draw_cursor(
-                command_origin,
-                &block_grid_params.grid_render_params,
-                ctx,
-                terminal_view_id,
-                None,
-                block_grid_params
-                    .grid_render_params
-                    .warp_theme
-                    .cursor()
-                    .into(),
-                app,
-            );
-        }
-
-        // Update grid_origin & draw output
-        *grid_origin += vec2f(
-            0.,
-            cell_size_height
-                * (block.padding_middle() + block.prompt_and_command_grid().len().into_lines())
-                    .as_f64() as f32,
-        );
 
         let block_middle_lines =
             block.padding_middle() + block.prompt_and_command_number_of_rows().into_lines();
@@ -2672,6 +2674,12 @@ impl BlockListElement {
 
             let output_grid_properties =
                 Properties::default().weight(block_grid_params.grid_render_params.font_weight);
+            let output_focused_range =
+                find_render_data
+                    .as_ref()
+                    .and_then(|data: &BlockFindRenderData<'_>| {
+                        data.focused_range_for_grid(GridType::Output)
+                    });
             block.output_grid().draw(
                 *grid_origin,
                 viewport_origin,
@@ -2684,19 +2692,11 @@ impl BlockListElement {
                     .filter(|url| !url.is_in_command_content() && url.block_index == block_index)
                     .map(|url| &url.inner),
                 hovered_secret,
-                // Render find matches in output grid
-                block_list_find_run
-                    .map(|run| run.matches_for_block_grid(block_index, GridType::Output)),
-                block_list_find_run
-                    .and_then(|run| run.focused_match())
-                    .and_then(|focused_match| match focused_match {
-                        BlockListMatch::CommandBlock(m)
-                            if m.block_index == block_index && m.grid_type == GridType::Output =>
-                        {
-                            Some(&m.range)
-                        }
-                        _ => None,
-                    }),
+                // Render find matches in output grid.
+                find_render_data
+                    .as_ref()
+                    .and_then(|data: &BlockFindRenderData<'_>| data.output_grid_matches()),
+                output_focused_range.as_ref(),
                 output_grid_properties,
                 block_grid_params,
                 cursor_visible.then(|| block.output_grid().cursor_style().shape),
@@ -4037,7 +4037,13 @@ impl Element for BlockListElement {
                         self.find_model
                             .as_ref(app)
                             .is_find_bar_open()
-                            .then(|| self.find_model.as_ref(app).block_list_find_run())
+                            .then(|| {
+                                self.find_model.as_ref(app).find_render_data_for_block(
+                                    *block_index,
+                                    Some(block.prompt_and_command_grid().grid_handler()),
+                                    Some(block.output_grid().grid_handler()),
+                                )
+                            })
                             .flatten(),
                         self.highlighted_url.as_ref(),
                         self.link_tool_tip.as_ref(),
@@ -4182,27 +4188,15 @@ impl Element for BlockListElement {
                             ask_ai_assistant_button.paint(ask_ai_assistant_button_origin, ctx, app);
                         }
 
-                        if FeatureFlag::BlockToolbeltSaveAsWorkflow.is_enabled() {
-                            if let Some(save_as_workflow_button) =
-                                self.save_as_workflow_button.as_mut()
-                            {
-                                save_as_workflow_button.paint(bookmark_button_origin, ctx, app);
-                            }
+                        if let Some(save_as_workflow_button) = self.save_as_workflow_button.as_mut()
+                        {
+                            save_as_workflow_button.paint(bookmark_button_origin, ctx, app);
                         }
                     }
 
                     // When a block has an active filter on it, we want the filter icon to show even when the block is not hovered over.
                     if let Some(filter_element) = self.filter_elements.get_mut(block_index) {
                         filter_element.paint(filter_button_origin, ctx, app);
-                    }
-
-                    if !FeatureFlag::BlockToolbeltSaveAsWorkflow.is_enabled() {
-                        // When a block is bookmarked, we want the bookmark icon to show even when the block is not hovered over.
-                        if let Some(bookmark_element) = self.bookmark_elements.get_mut(block_index)
-                        {
-                            // Paint the bookmark icon to the left of the overflow button.
-                            bookmark_element.paint(bookmark_button_origin, ctx, app);
-                        }
                     }
 
                     // Paint the CLI subagent view on top of everything else for this block
@@ -4346,7 +4340,11 @@ impl Element for BlockListElement {
                         }
                     }
 
-                    draw_border_above_block = true;
+                    // Don't draw a border below session headers (i.e. above the next block).
+                    draw_border_above_block = !matches!(
+                        self.rich_content_metadata.get(view_id),
+                        Some(RichContentMetadata::HarnessSessionHeader)
+                    );
 
                     grid_origin += vec2f(0., *height_px);
                 }
@@ -4445,7 +4443,29 @@ impl Element for BlockListElement {
             event.raw_event()
         } else {
             let Some(e) = event.at_z_index(z_index, ctx) else {
-                // Only proceed if there's a relevant event at this z-index.
+                // The event is behind an overlay. Still dispatch interactive
+                // events to rich content views so overlay children (e.g.
+                // ask-user-question speedbump dropdowns) can handle them.
+                if matches!(
+                    event.raw_event(),
+                    Event::ScrollWheel { .. }
+                        | Event::LeftMouseDown { .. }
+                        | Event::LeftMouseUp { .. }
+                        | Event::LeftMouseDragged { .. }
+                        | Event::MiddleMouseDown { .. }
+                        | Event::RightMouseDown { .. }
+                        | Event::BackMouseDown { .. }
+                        | Event::ForwardMouseDown { .. }
+                ) && self.pane_state.is_focused()
+                {
+                    let mut handled = false;
+                    for view_id in self.visible_rich_content_views() {
+                        if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id) {
+                            handled |= rich_content.dispatch_event(event, ctx, app);
+                        }
+                    }
+                    return handled;
+                }
                 return false;
             };
             e

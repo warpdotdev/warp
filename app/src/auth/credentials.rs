@@ -23,6 +23,8 @@ pub enum Credentials {
         /// The owner type for this API key. Only set after user info is fetched from the server.
         owner_type: Option<OwnerType>,
     },
+    /// Request-scoped or externally managed bearer token.
+    Bearer(String),
     /// Authentication derived from an ambient browser session cookie.
     SessionCookie,
     /// Test credentials used in unit tests, integration tests, and skip_login builds.
@@ -36,6 +38,7 @@ impl Credentials {
         match self {
             Credentials::Firebase(tokens) => Some(tokens),
             Credentials::ApiKey { .. } => None,
+            Credentials::Bearer(_) => None,
             Credentials::SessionCookie => None,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => None,
@@ -47,6 +50,7 @@ impl Credentials {
         match self {
             Credentials::ApiKey { key, .. } => Some(key),
             Credentials::Firebase(_) => None,
+            Credentials::Bearer(_) => None,
             Credentials::SessionCookie => None,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => None,
@@ -58,6 +62,7 @@ impl Credentials {
         match self {
             Credentials::ApiKey { owner_type, .. } => *owner_type,
             Credentials::Firebase(_) => None,
+            Credentials::Bearer(_) => None,
             Credentials::SessionCookie => None,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => None,
@@ -69,6 +74,7 @@ impl Credentials {
         match self {
             Credentials::Firebase(tokens) => Some(&tokens.refresh_token),
             Credentials::ApiKey { .. } => None,
+            Credentials::Bearer(_) => None,
             Credentials::SessionCookie => None,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => None,
@@ -80,9 +86,22 @@ impl Credentials {
         match self {
             Credentials::Firebase(tokens) => AuthToken::Firebase(tokens.id_token.clone()),
             Credentials::ApiKey { key, .. } => AuthToken::ApiKey(key.clone()),
+            Credentials::Bearer(token) => AuthToken::Bearer(token.clone()),
             Credentials::SessionCookie => AuthToken::NoAuth,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => AuthToken::NoAuth,
+        }
+    }
+    /// Returns whether these credentials are externally managed and should not trigger local token
+    /// refresh or reauth flows.
+    pub fn is_externally_managed(&self) -> bool {
+        match self {
+            Credentials::Bearer(_) => true,
+            Credentials::Firebase(_) | Credentials::ApiKey { .. } | Credentials::SessionCookie => {
+                false
+            }
+            #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
+            Credentials::Test => false,
         }
     }
 
@@ -93,6 +112,7 @@ impl Credentials {
                 RefreshToken::new(&tokens.refresh_token),
             ))),
             Credentials::ApiKey { key, .. } => Some(LoginToken::ApiKey(key.clone())),
+            Credentials::Bearer(_) => None,
             Credentials::SessionCookie => Some(LoginToken::SessionCookie),
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => None,
@@ -107,6 +127,8 @@ pub enum AuthToken {
     Firebase(String),
     /// API key for direct server authentication.
     ApiKey(String),
+    /// Request-scoped or externally managed bearer token.
+    Bearer(String),
     /// No authentication token available (e.g. session cookie auth or test credentials).
     #[cfg_attr(
         not(any(test, feature = "integration_tests", feature = "skip_login")),
@@ -122,6 +144,7 @@ impl AuthToken {
         match self {
             AuthToken::Firebase(token) => Some(token),
             AuthToken::ApiKey(key) => Some(key),
+            AuthToken::Bearer(token) => Some(token),
             AuthToken::NoAuth => None,
         }
     }
@@ -131,6 +154,7 @@ impl AuthToken {
         match self {
             AuthToken::Firebase(token) => Some(token.clone()),
             AuthToken::ApiKey(key) => Some(key.clone()),
+            AuthToken::Bearer(token) => Some(token.clone()),
             AuthToken::NoAuth => None,
         }
     }

@@ -2,16 +2,20 @@ use anyhow::Result;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::RepoDetectionSource;
 use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::GlobalRules;
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use async_channel::Sender;
+        use ignore::gitignore::Gitignore;
         use repo_metadata::entry::{Entry, FileMetadata};
         use repo_metadata::repository::RepositorySubscriber;
-        use repo_metadata::{Repository, DirectoryWatcher, RepositoryUpdate};
-        use ignore::gitignore::Gitignore;
-        use async_channel::Sender;
+        use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 
         const RULES_FILE_PATTERN: [&str; 2] = ["WARP.md", "AGENTS.md"];
         const MAX_SCAN_DEPTH: usize = 3;
@@ -175,6 +179,13 @@ pub struct ProjectContextModel {
     /// the Vec holds updates that arrived while that task was running.
     #[cfg(feature = "local_fs")]
     pending_updates: HashMap<PathBuf, Vec<RepositoryUpdate>>,
+    /// Repo roots that already have a watcher registered, so we never
+    /// subscribe more than once per root.
+    #[cfg(feature = "local_fs")]
+    watched_roots: HashSet<PathBuf>,
+    /// File-based global rules and their local watcher state. Kept separate
+    /// from `path_to_rules`, which is project-scoped.
+    pub(super) global_rules: GlobalRules,
 }
 
 #[derive(Default, Debug)]
@@ -213,12 +224,20 @@ impl RulesDelta {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct GlobalRulesDelta {
+    pub discovered_rules: Vec<PathBuf>,
+    pub deleted_rules: Vec<PathBuf>,
+}
+
 /// Events emitted by the ProjectContextModel
 pub enum ProjectContextModelEvent {
     /// Emitted when a path has been indexed
     PathIndexed,
     /// Emitted when the known set of rule files changed
     KnownRulesChanged(RulesDelta),
+    /// Emitted when the set of indexed global rule files changed
+    GlobalRulesChanged(GlobalRulesDelta),
 }
 
 impl ProjectContextModel {
@@ -254,9 +273,6 @@ impl ProjectContextModel {
         root_path: PathBuf,
         ctx: &mut ModelContext<Self>,
     ) -> Result<()> {
-        if self.path_to_rules.contains_key(&root_path) {
-            return Ok(());
-        }
         #[cfg(feature = "local_fs")]
         {
             let root_clone = root_path.clone();
@@ -308,7 +324,7 @@ impl ProjectContextModel {
     /// the actual repo watcher might not have been registered yet. We will attempt to register that repo watcher
     /// if it doesn't yet exists.
     #[cfg(feature = "local_fs")]
-    fn try_initialize_and_register_watcher(&self, path: &Path, ctx: &mut ModelContext<Self>) {
+    fn try_initialize_and_register_watcher(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
         use repo_metadata::repositories::DetectedRepositories;
 
         let directory_watcher = DirectoryWatcher::handle(ctx);
@@ -322,7 +338,7 @@ impl ProjectContextModel {
         }
 
         let fut = DetectedRepositories::handle(ctx).update(ctx, |model, ctx| {
-            model.detect_possible_git_repo(
+            model.detect_possible_local_git_repo(
                 &path.to_string_lossy(),
                 RepoDetectionSource::ProjectRulesIndexing,
                 ctx,
@@ -337,12 +353,18 @@ impl ProjectContextModel {
     }
 
     #[cfg(feature = "local_fs")]
-    fn register_watcher_for_path(&self, path: &Path, ctx: &mut ModelContext<Self>) {
+    fn register_watcher_for_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
+        if self.watched_roots.contains(path) {
+            return;
+        }
+
         let Some(repository_model) =
             DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(path)
         else {
             return;
         };
+
+        self.watched_roots.insert(path.to_path_buf());
 
         let (repository_update_tx, repository_update_rx) = async_channel::unbounded();
         let start = repository_model.update(ctx, |repo, ctx| {
@@ -464,41 +486,89 @@ impl ProjectContextModel {
         );
     }
 
-    pub fn find_applicable_rules(&self, path: &Path) -> Option<ProjectRulesResult> {
-        let mut current_path = path.to_owned();
-        let mut active_rules = Vec::new();
-        let mut available_rule_paths = Vec::new();
+    /// Index all configured global rule sources.
+    ///
+    /// `ProjectContextModel` remains the public rule-context facade; the
+    /// global source registry, cache, and watcher plumbing live in
+    /// `global_rules`.
+    pub fn index_global_rules(&mut self, ctx: &mut ModelContext<Self>) {
+        self.global_rules.index(ctx);
+    }
 
-        // Find the root path with indexed rules and collect active rules
-        let mut found_rules = false;
+    /// Project-only rule lookup. Returns `Some` only when an indexed project
+    /// root above `path` actually contributes a rule — globals are
+    /// deliberately ignored.
+    ///
+    /// Use this for callers that need a project-initialization signal rather
+    /// than the full rule context sent to agents.
+    pub fn find_applicable_project_rules(&self, path: &Path) -> Option<ProjectRulesResult> {
+        let mut current_path = path.to_owned();
+
+        // Walk upwards from `path` toward the filesystem root, stopping at the
+        // first directory we have indexed project rules for. `path_to_rules`
+        // is keyed by indexed project root, so popping the path produces
+        // every ancestor directory until we hit a known root or `pop()`
+        // returns false (we've reached the top of the path).
         loop {
             if let Some(rules) = self.path_to_rules.get(&current_path) {
                 let result = rules.find_active_or_applicable_rules(path);
-
-                active_rules = result.active_rules;
-                available_rule_paths = result.available_rule_paths;
-
-                found_rules = true;
-                break;
+                if result.active_rules.is_empty() && result.available_rule_paths.is_empty() {
+                    return None;
+                }
+                return Some(ProjectRulesResult {
+                    root_path: current_path,
+                    active_rules: result.active_rules,
+                    additional_rule_paths: result.available_rule_paths,
+                });
             }
 
             if !current_path.pop() {
-                break;
+                return None;
             }
         }
+    }
 
-        if !found_rules {
+    /// Returns the rules applicable to `path`, layering global rules on top of
+    /// any project rules discovered up the directory tree.
+    ///
+    /// Precedence is `global > project WARP.md > project AGENTS.md`. Globals
+    /// are always included (when present) regardless of project state; the
+    /// existing in-directory `WARP.md > AGENTS.md` shadow inside
+    /// [`RuleAtPath::respected_rule`] still applies to project rules.
+    ///
+    /// This is the entry point used by `BlocklistAIContextModel` when packing
+    /// `AIAgentContext::ProjectRules` for an agent query. Callers that need
+    /// a project-only signal should use
+    /// [`Self::find_applicable_project_rules`] instead.
+    pub fn find_applicable_rules(&self, path: &Path) -> Option<ProjectRulesResult> {
+        let project_result = self.find_applicable_project_rules(path);
+
+        // Layered precedence: global rules are always included alongside
+        // project rules. `global_rules` is a `BTreeMap`, so iteration is
+        // sorted by path — deterministic without needing a separate
+        // ordering pass.
+        let mut active_rules: Vec<ProjectRule> = self.global_rules.active_rules().collect();
+        let (project_root, additional_rule_paths) = match project_result {
+            Some(project) => {
+                active_rules.extend(project.active_rules);
+                (Some(project.root_path), project.additional_rule_paths)
+            }
+            None => (None, Vec::new()),
+        };
+
+        if active_rules.is_empty() && additional_rule_paths.is_empty() {
             return None;
         }
 
-        if active_rules.is_empty() && available_rule_paths.is_empty() {
-            return None;
-        }
+        // Use the indexed project root when available; otherwise fall back to
+        // the parent of the first global rule (or empty).
+        let root_path = project_root
+            .unwrap_or_else(|| self.global_rules.first_rule_parent().unwrap_or_default());
 
         Some(ProjectRulesResult {
-            root_path: current_path,
+            root_path,
             active_rules,
-            additional_rule_paths: available_rule_paths,
+            additional_rule_paths,
         })
     }
 
@@ -571,6 +641,10 @@ impl ProjectContextModel {
                     match async_fs::read_to_string(&target_file.path).await {
                         Ok(content) => {
                             existing_rules.upsert_rule(&target_file.path, content);
+                            rules_delta.discovered_rules.push(ProjectRulePath {
+                                path: target_file.path.clone(),
+                                project_root: project_root.clone(),
+                            });
                         }
                         Err(e) => {
                             log::warn!(
@@ -680,6 +754,12 @@ impl ProjectContextModel {
                     .map(|project_rule| project_rule.path.clone())
             })
         })
+    }
+
+    /// Absolute paths of every indexed global rule file (e.g. `~/.agents/AGENTS.md`).
+    /// Iteration order is sorted by path because global rules are backed by a `BTreeMap`.
+    pub fn global_rule_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.global_rules.paths()
     }
 
     /// Returns the rule file paths associated with a specific workspace root path.

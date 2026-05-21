@@ -626,6 +626,23 @@ fn is_pacman_signing_key_installed() -> bool {
         return false;
     };
 
+    // After parsing the pub: line, also check validity field (index 1 = validity)
+    let fields: Vec<&str> = stdout
+        .lines()
+        .find(|line| line.starts_with("pub:"))
+        .map(|line| line.split(':').collect())
+        .unwrap_or_default();
+
+    // Field index 1 = validity: 'f' (full), 'u' (ultimate) are valid;
+    // 'e' (expired), 'r' (revoked), '-', 'q' = invalid
+    let validity = fields
+        .get(1)
+        .and_then(|field| field.chars().next())
+        .unwrap_or('\0');
+    if !matches!(validity, 'f' | 'u') {
+        return false; // Force key reconfiguration
+    }
+
     // Parse the expiry timestamp from the pub: line (field 7, 1-indexed).
     let Some(expiry_field) = stdout
         .lines()

@@ -1,4 +1,6 @@
-use crate::ai::llms::{is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo};
+use crate::ai::llms::{
+    is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences,
+};
 use crate::i18n::{self, I18nKey};
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 use itertools::Itertools;
@@ -10,7 +12,7 @@ use warpui::{
         Shrinkable, Text,
     },
     fonts::{Properties, Style},
-    Action, AppContext, Element,
+    Action, AppContext, Element, SingletonEntity as _,
 };
 
 pub fn is_auto(llm: &LLMInfo) -> bool {
@@ -81,7 +83,10 @@ fn make_item_fields<A: Action + Clone>(
     } else {
         llm.menu_display_name()
     };
-    let is_using_api_key = is_using_api_key_for_provider(&llm.provider, app);
+    let is_custom_endpoint = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&llm.id)
+        .is_some();
+    let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
         let position_id = position_id_fn(&llm.id);

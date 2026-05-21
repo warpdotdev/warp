@@ -893,6 +893,82 @@ fn test_multi_parse_url() {
 }
 
 #[test]
+fn test_autolink_with_escaped_dot() {
+    // After a save cycle, `parse_url` may see `https://google\.com` (with `\.` from
+    // the serializer's escape of `.`). The URL should be unescaped so the buffer
+    // stores the clean string and the round-trip is stable.
+    assert_eq!(
+        test_parse_markdown("https://google\\.com"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink("https://google.com", "https://google.com"),
+        ])]
+    );
+}
+
+#[test]
+fn test_autolink_with_escaped_dash() {
+    assert_eq!(
+        test_parse_markdown("https://warp\\-dev.com"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink("https://warp-dev.com", "https://warp-dev.com"),
+        ])]
+    );
+}
+
+#[test]
+fn test_autolink_with_multiple_escapes() {
+    // Multiple escaped characters (`.`, `-`, `#`) should all be unescaped.
+    assert_eq!(
+        test_parse_markdown("https://github\\.com/foo\\-bar\\#anchor"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink(
+                "https://github.com/foo-bar#anchor",
+                "https://github.com/foo-bar#anchor"
+            ),
+        ])]
+    );
+}
+
+#[test]
+fn test_autolink_in_link_label_with_escapes() {
+    // When an escaped URL appears as the display text of an explicit link
+    // (the `can_autolink = false` path), it should also be unescaped.
+    let source = "[https://google\\.com](https://google.com)";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink("https://google.com", "https://google.com"),
+        ])]
+    );
+}
+
+#[test]
+fn test_autolink_escape_roundtrip_is_stable() {
+    // Parsing a URL with no escapes should produce the same result as
+    // parsing the same URL with `\.` in place of `.` (simulating a save cycle).
+    // Both should yield the clean, unescaped URL.
+    let clean = test_parse_markdown("https://google.com");
+    let escaped = test_parse_markdown("https://google\\.com");
+    assert_eq!(clean, escaped);
+}
+
+#[test]
+fn test_parse_url_preserves_non_escaped_backslash() {
+    // A backslash followed by a non-punctuation character is not a markdown escape
+    // sequence and should be left as-is.
+    let source = "https://example.com/path\\nname";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink(
+                "https://example.com/path\\nname",
+                "https://example.com/path\\nname"
+            ),
+        ])]
+    );
+}
+
+#[test]
 fn test_parse_url_embedded() {
     let source = "This iswww.google.comabc";
     assert_eq!(

@@ -27,7 +27,7 @@ pub trait AIBlockModelHelper {
 
     fn contains_update_document_action(&self, app: &AppContext) -> bool;
 
-    fn is_latest_non_passive_exchange_in_root_task(&self, app: &AppContext) -> bool;
+    fn is_latest_visible_exchange_in_root_task(&self, app: &AppContext) -> bool;
 
     fn is_latest_exchange_in_terminal_pane(
         &self,
@@ -100,10 +100,10 @@ impl<T: ?Sized + AIBlockModel> AIBlockModelHelper for T {
         }
     }
 
-    fn is_latest_non_passive_exchange_in_root_task(&self, app: &AppContext) -> bool {
+    fn is_latest_visible_exchange_in_root_task(&self, app: &AppContext) -> bool {
         self.conversation(app).is_some_and(|conversation| {
             match (
-                conversation.last_non_passive_exchange(),
+                conversation.latest_visible_exchange(),
                 self.exchange_id(app),
             ) {
                 (Some(latest_exchange), Some(id)) => latest_exchange.id == id,

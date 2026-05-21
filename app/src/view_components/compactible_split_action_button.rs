@@ -107,6 +107,19 @@ impl CompactibleSplitActionButton {
     ) {
         self.primary_button.set_keybinding(keybinding, ctx);
     }
+
+    /// Sets the disabled state on both the primary and menu buttons.
+    pub fn set_disabled<T: View>(&mut self, disabled: bool, ctx: &mut ViewContext<T>) {
+        self.primary_button.set_disabled(disabled, ctx);
+        self.menu_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+    }
+
+    /// Sets the tooltip on the primary button.
+    pub fn set_tooltip<T: View>(&mut self, tooltip: Option<String>, ctx: &mut ViewContext<T>) {
+        self.primary_button.set_tooltip(tooltip, ctx);
+    }
 }
 
 impl RenderCompactibleActionButton for CompactibleSplitActionButton {

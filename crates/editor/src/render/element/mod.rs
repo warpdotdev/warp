@@ -886,7 +886,15 @@ impl<V: EditorView> RichTextElement<V> {
                         .finish()
                     }
                     BlockItem::MermaidDiagram { .. } => {
-                        RenderableMermaidDiagram::new(item).finish()
+                        let start_offset = item.block_offset;
+                        let runnable_command = parent.runnable_command_at(start_offset, ctx);
+                        RenderableMermaidDiagram::new(
+                            item,
+                            runnable_command,
+                            self.display_options.focused,
+                            ctx,
+                        )
+                        .finish()
                     }
                     BlockItem::TemporaryBlock {
                         decoration,

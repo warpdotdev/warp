@@ -3,11 +3,12 @@ use std::fs;
 use crate::repositories::{stub_git_repository, RepoDetectionSource};
 use crate::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
 use virtual_fs::{Stub, VirtualFS};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 #[test]
-fn test_detect_possible_git_repo_non_existent_directory() {
+fn test_detect_possible_local_git_repo_non_existent_directory() {
     VirtualFS::test("detect_non_existent", |dirs, _vfs| {
         let non_existent_path = dirs.tests().join("non_existent_directory");
 
@@ -16,7 +17,7 @@ fn test_detect_possible_git_repo_non_existent_directory() {
             let repo_handle = app.add_model(|_| DetectedRepositories::default());
 
             repo_handle.update(&mut app, |watcher, ctx| {
-                std::mem::drop(watcher.detect_possible_git_repo(
+                std::mem::drop(watcher.detect_possible_local_git_repo(
                     &non_existent_path.to_string_lossy(),
                     RepoDetectionSource::TerminalNavigation,
                     ctx,
@@ -33,7 +34,7 @@ fn test_detect_possible_git_repo_non_existent_directory() {
 }
 
 #[test]
-fn test_detect_possible_git_repo_not_a_git_repo() {
+fn test_detect_possible_local_git_repo_not_a_git_repo() {
     VirtualFS::test("detect_not_git", |dirs, mut vfs| {
         // Create a regular directory structure without .git
         vfs.mkdir("regular_dir/subdir").with_files(vec![
@@ -48,7 +49,7 @@ fn test_detect_possible_git_repo_not_a_git_repo() {
             let repo_handle = app.add_model(|_| DetectedRepositories::default());
 
             repo_handle.update(&mut app, |watcher, ctx| {
-                std::mem::drop(watcher.detect_possible_git_repo(
+                std::mem::drop(watcher.detect_possible_local_git_repo(
                     &regular_dir.to_string_lossy(),
                     RepoDetectionSource::TerminalNavigation,
                     ctx,
@@ -66,14 +67,15 @@ fn test_detect_possible_git_repo_not_a_git_repo() {
             let regular_canonical =
                 StandardizedPath::from_local_canonicalized(&regular_dir).unwrap();
             repo_handle.read(&app, |watcher, _ctx| {
-                assert!(!watcher.repository_roots.contains(&regular_canonical));
+                let key = LocalOrRemotePath::Local(regular_canonical.to_local_path().unwrap());
+                assert!(!watcher.repository_roots.contains(&key));
             });
         });
     });
 }
 
 #[test]
-fn test_detect_possible_git_repo_nested_repo_created_after_parent_registration() {
+fn test_detect_possible_local_git_repo_nested_repo_created_after_parent_registration() {
     VirtualFS::test("detect_nested_repo", |dirs, mut vfs| {
         // Create a parent git repository structure
         stub_git_repository(&mut vfs, "parent_repo");
@@ -91,7 +93,7 @@ fn test_detect_possible_git_repo_nested_repo_created_after_parent_registration()
             // Now, try to detect the nested git repo.
             repo_handle
                 .update(&mut app, |repo, ctx| {
-                    std::mem::drop(repo.detect_possible_git_repo(
+                    std::mem::drop(repo.detect_possible_local_git_repo(
                         &parent_repo.to_string_lossy(),
                         RepoDetectionSource::TerminalNavigation,
                         ctx,
@@ -104,7 +106,9 @@ fn test_detect_possible_git_repo_nested_repo_created_after_parent_registration()
             // Verify parent is registered
             repo_handle.read(&app, |repo, _ctx| {
                 assert!(repo
-                    .get_root_for_path(parent_canonical_path.to_local_path().as_deref().unwrap())
+                    .get_root_for_path(&LocalOrRemotePath::Local(
+                        parent_canonical_path.to_local_path().unwrap(),
+                    ))
                     .is_some());
             });
 
@@ -115,7 +119,7 @@ fn test_detect_possible_git_repo_nested_repo_created_after_parent_registration()
             // Now, try to detect the nested git repo.
             repo_handle
                 .update(&mut app, |repo, ctx| {
-                    std::mem::drop(repo.detect_possible_git_repo(
+                    std::mem::drop(repo.detect_possible_local_git_repo(
                         &nested_project.to_string_lossy(),
                         RepoDetectionSource::TerminalNavigation,
                         ctx,
@@ -131,11 +135,15 @@ fn test_detect_possible_git_repo_nested_repo_created_after_parent_registration()
             repo_handle.read(&app, |repo, _ctx| {
                 // Parent should still be registered
                 assert!(repo
-                    .get_root_for_path(parent_canonical_path.to_local_path().as_deref().unwrap())
+                    .get_root_for_path(&LocalOrRemotePath::Local(
+                        parent_canonical_path.to_local_path().unwrap(),
+                    ))
                     .is_some());
                 // Nested project should now also be registered as its own repo
                 assert!(repo
-                    .get_root_for_path(nested_canonical_path.to_local_path().as_deref().unwrap())
+                    .get_root_for_path(&LocalOrRemotePath::Local(
+                        nested_canonical_path.to_local_path().unwrap(),
+                    ))
                     .is_some());
             });
 

@@ -38,7 +38,7 @@ impl ReadSkillExecutor {
             return ActionExecution::<ReadSkillResult>::InvalidAction;
         };
 
-        match SkillManager::as_ref(ctx).skill_by_reference(skill_ref) {
+        match SkillManager::as_ref(ctx).active_skill_by_reference(skill_ref, ctx) {
             Some(skill) => {
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {

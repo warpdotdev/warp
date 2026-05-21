@@ -32,6 +32,7 @@ use persistence::model::AMBIENT_AGENT_PANE_KIND;
 use uuid::Uuid;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::platform::FullscreenState;
+use warpui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
 use warpui::{AppContext, SingletonEntity};
 
 use super::agent::{delete_agent_conversations, upsert_agent_conversation};
@@ -50,8 +51,8 @@ use super::model::{
 };
 use super::schema;
 use super::{
-    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, StartedCommandMetadata,
-    WriterHandles,
+    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, PersistenceScope,
+    StartedCommandMetadata, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::scheduled::{
@@ -152,39 +153,31 @@ type DeleteCloudObjectFn =
 /// Runs any migrations and creates the Sqlite database if it doesn't exist.
 /// Reads from the sqlite database to get the app state for session restoration.
 /// Starts a writer thread that listens for ModelEvents and processes them.
-pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<WriterHandles>) {
+pub fn initialize(
+    ctx: &mut AppContext,
+    scope: PersistenceScope,
+) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     unsafe {
         // Set up logging before any SQLite calls.
         init_logging();
     }
-    let database_path = database_file_path();
-    match init_db() {
+    let database_path = database_file_path_for_scope(&scope);
+    match init_db(&scope) {
         Ok(mut conn) => {
-            let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
-            let app_state = match read_sqlite_data(&mut conn, user_uid) {
-                Ok(app_state) => Some(app_state),
-                Err(err) => {
-                    send_telemetry_from_app_ctx!(
-                        TelemetryEvent::DatabaseReadError(err.to_string()),
-                        ctx
-                    );
-                    report_error!(anyhow::Error::new(err).context("Failed to read app state"));
-                    None
-                }
-            };
+            let persisted_data = read_persisted_data(&mut conn, ctx);
 
-            let writer_handles = match start_writer(conn, database_path) {
+            let writer_handles = match start_writer(conn, database_path.clone()) {
                 Ok(writer_handles) => Some(writer_handles),
                 Err(err) => {
                     send_telemetry_from_app_ctx!(
                         TelemetryEvent::DatabaseWriteError(err.to_string()),
                         ctx
                     );
-                    report_db_error("starting writer", err, &database_file_path());
+                    report_db_error("starting writer", err, &database_path);
                     None
                 }
             };
-            (app_state, writer_handles)
+            (persisted_data, writer_handles)
         }
         Err(err) => {
             send_telemetry_from_app_ctx!(
@@ -193,6 +186,21 @@ pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<Writer
             );
             report_db_error("initialization", err, &database_path);
             (None, None)
+        }
+    }
+}
+
+fn read_persisted_data(
+    conn: &mut SqliteConnection,
+    ctx: &mut AppContext,
+) -> Option<Box<PersistedData>> {
+    let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
+    match read_sqlite_data(conn, user_uid) {
+        Ok(app_state) => Some(Box::new(app_state)),
+        Err(err) => {
+            send_telemetry_from_app_ctx!(TelemetryEvent::DatabaseReadError(err.to_string()), ctx);
+            report_error!(anyhow::Error::new(err).context("Failed to read persisted data"));
+            None
         }
     }
 }
@@ -331,65 +339,78 @@ unsafe fn init_logging() {
 }
 
 /// Determines the db path, establishes a connection and runs any migrations.
-pub(super) fn init_db() -> Result<SqliteConnection> {
+pub(super) fn init_db(scope: &PersistenceScope) -> Result<SqliteConnection> {
     // First, make sure the parent directory of the file exists, otherwise
     // we'll get an error if the file doesn't already exist.
-    let db_path = database_file_path();
+    let db_path = database_file_path_for_scope(scope);
     // If we fail to create the necessary directories, log a warning and
     // continue; we'll return a sqlite error if it actually fails to initialize
     // a database connection.
-    if let Err(err) = std::fs::create_dir_all(
-        db_path
-            .parent()
-            .expect("database file path should be absolute"),
-    ) {
+    let db_parent = db_path
+        .parent()
+        .expect("database file path should be absolute");
+    if let Err(err) = std::fs::create_dir_all(db_parent) {
         log::warn!(
             "Encountered an error while creating parent directories for sqlite database: {err:#}"
         );
     }
-
-    // Migrate old SQLite files into the secure application container.
-    let old_db_path = warp_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
-    if old_db_path != db_path && old_db_path.exists() && !db_path.exists() {
-        match std::fs::rename(&old_db_path, &db_path) {
-            Ok(_) => {
-                safe_info!(
-                    safe: ("Migrated SQLite database into application container"),
-                    full: ("Migrated SQLite database from `{}` to `{}`", old_db_path.display(), db_path.display())
-                );
-
-                // Also migrate the associated WAL and SHM files.
-                let old_wal = old_db_path.with_extension("sqlite-wal");
-                let old_shm = old_db_path.with_extension("sqlite-shm");
-                let new_wal = db_path.with_extension("sqlite-wal");
-                let new_shm = db_path.with_extension("sqlite-shm");
-
-                if let Err(err) = std::fs::rename(&old_wal, &new_wal) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Failed to migrate SQLite WAL into application container"));
-                    }
-                } else {
-                    log::info!("Migrated SQLite WAL into application container");
-                }
-
-                if let Err(err) = std::fs::rename(&old_shm, &new_shm) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Failed to migrate SQLite SHM into application container"));
-                    }
-                } else {
-                    log::info!("Migrated SQLite shared memory file into application container");
-                }
-            }
-            Err(err) => {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to migrate SQLite database into application container"));
-            }
-        }
+    if matches!(scope, PersistenceScope::RemoteServerDaemon { .. }) {
+        ensure_owner_only_dir(db_parent)?;
     }
 
-    setup_database(&database_file_path())
+    if matches!(scope, PersistenceScope::App) {
+        migrate_old_sqlite_into_secure_container_if_needed(&db_path);
+    }
+
+    let conn = setup_database(&db_path)?;
+    if matches!(scope, PersistenceScope::RemoteServerDaemon { .. }) {
+        ensure_owner_only_file(&db_path)?;
+    }
+    Ok(conn)
+}
+
+fn migrate_old_sqlite_into_secure_container_if_needed(db_path: &Path) {
+    let old_db_path = warp_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
+    if old_db_path == db_path || !old_db_path.exists() || db_path.exists() {
+        return;
+    }
+
+    match std::fs::rename(&old_db_path, db_path) {
+        Ok(_) => {
+            safe_info!(
+                safe: ("Migrated SQLite database into application container"),
+                full: ("Migrated SQLite database from `{}` to `{}`", old_db_path.display(), db_path.display())
+            );
+
+            // Also migrate the associated WAL and SHM files.
+            let old_wal = old_db_path.with_extension("sqlite-wal");
+            let old_shm = old_db_path.with_extension("sqlite-shm");
+            let new_wal = db_path.with_extension("sqlite-wal");
+            let new_shm = db_path.with_extension("sqlite-shm");
+
+            if let Err(err) = std::fs::rename(&old_wal, &new_wal) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    report_error!(anyhow::Error::new(err)
+                        .context("Failed to migrate SQLite WAL into application container"));
+                }
+            } else {
+                log::info!("Migrated SQLite WAL into application container");
+            }
+
+            if let Err(err) = std::fs::rename(&old_shm, &new_shm) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    report_error!(anyhow::Error::new(err)
+                        .context("Failed to migrate SQLite SHM into application container"));
+                }
+            } else {
+                log::info!("Migrated SQLite shared memory file into application container");
+            }
+        }
+        Err(err) => {
+            report_error!(anyhow::Error::new(err)
+                .context("Failed to migrate SQLite database into application container"));
+        }
+    }
 }
 
 /// Creates or connects to the database at `database_path` and runs any migrations.
@@ -409,14 +430,60 @@ fn setup_database(database_path: &Path) -> Result<SqliteConnection> {
     Ok(conn)
 }
 
-/// The path at which the sqlite database is located.
+/// The path at which the sqlite database is located for the given scope.
 ///
 /// Integration tests that initialize the database with known data should use
 /// this function to determine where to create the database file.
-pub fn database_file_path() -> PathBuf {
+pub fn database_file_path_for_scope(scope: &PersistenceScope) -> PathBuf {
+    match scope {
+        PersistenceScope::App => app_database_file_path(),
+        PersistenceScope::RemoteServerDaemon { identity_key } => {
+            remote_server_daemon_database_file_path(identity_key)
+        }
+    }
+}
+
+fn app_database_file_path() -> PathBuf {
     warp_core::paths::secure_state_dir()
         .unwrap_or_else(warp_core::paths::state_dir)
         .join(WARP_SQLITE_FILE_NAME)
+}
+
+fn remote_server_daemon_database_file_path(identity_key: &str) -> PathBuf {
+    let data_dir = remote_server::setup::remote_server_daemon_data_dir(identity_key);
+    let expanded_data_dir = shellexpand::tilde(&data_dir).into_owned();
+    PathBuf::from(expanded_data_dir).join(WARP_SQLITE_FILE_NAME)
+}
+
+#[cfg(unix)]
+fn ensure_owner_only_dir(path: &Path) -> Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, Permissions::from_mode(0o700))
+        .with_context(|| format!("setting permissions on directory {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn ensure_owner_only_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_owner_only_file(path: &Path) -> Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    if path.exists() {
+        std::fs::set_permissions(path, Permissions::from_mode(0o600))
+            .with_context(|| format!("setting permissions on file {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_owner_only_file(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 pub(super) fn remove(sender: SyncSender<ModelEvent>) {
@@ -839,14 +906,21 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
 
             // In the database each individual field is nullable but in practice these
             // fields are either all null or all non-null as they together represent
-            // the stored window bound.
+            // the stored window bound. Bounds smaller than the platform minimum
+            // window size are treated as missing so that we fall back to default
+            // geometry on restore instead of replaying a corrupt size (see GH#10083).
             let (window_width, window_height, origin_x, origin_y) = match window.bounds {
-                Some(rect) => (
-                    Some(rect.size().x()),
-                    Some(rect.size().y()),
-                    Some(rect.origin().x()),
-                    Some(rect.origin().y()),
-                ),
+                Some(rect)
+                    if rect.size().x() >= MIN_WINDOW_WIDTH
+                        && rect.size().y() >= MIN_WINDOW_HEIGHT =>
+                {
+                    (
+                        Some(rect.size().x()),
+                        Some(rect.size().y()),
+                        Some(rect.origin().x()),
+                        Some(rect.origin().y()),
+                    )
+                }
                 _ => (None, None, None, None),
             };
 
@@ -1622,7 +1696,9 @@ fn get_all_mcp_server_installations(
 
     let improper_rows = rows_len - result.len();
     if improper_rows > 0 {
-        log::warn!("Skipping {improper_rows} rows from mcp_server_installations table due to malformation.");
+        log::warn!(
+            "Skipping {improper_rows} rows from mcp_server_installations table due to malformation."
+        );
     }
 
     Ok(result)
@@ -2730,13 +2806,18 @@ fn read_sqlite_data(
                 FullscreenState::from_i32(window.fullscreen_state).unwrap_or_default();
 
             // The origin and size of the bound should be all null or all non-null.
+            // Reject bounds smaller than the platform minimum window size so users
+            // with an already-corrupted warp.sqlite (see GH#10083) restore to
+            // default geometry instead of a sliver.
             let bounds = match (
                 window.window_width,
                 window.window_height,
                 window.origin_x,
                 window.origin_y,
             ) {
-                (Some(mut width), Some(mut height), Some(x), Some(y)) => {
+                (Some(mut width), Some(mut height), Some(x), Some(y))
+                    if width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT =>
+                {
                     // When fullscreen or maximized, the `inner_size` we snapshotted will be the
                     // size of the full screen. This will cause problems with winit. When you set
                     // maximized/fullscreen, setting the inner_size will by the size the window

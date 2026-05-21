@@ -17,8 +17,8 @@ mod preprocess;
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{
-    AIAgentActionResultType, AIAgentActionType, AIAgentExchange, CancellationReason,
-    CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+    AIAgentActionResultType, AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange,
+    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
 };
 use crate::ai::{
     agent::AIAgentInput,
@@ -1099,6 +1099,13 @@ impl BlocklistAIActionModel {
             return;
         };
         for action in actions_to_cancel.drain(..).collect_vec() {
+            log::info!(
+                "Canceling pending action of type {:?} conversation_id={conversation_id:?} action_id={:?}, reason={:?}, backtrace=\n{}",
+                AIAgentActionTypeDiscriminants::from(&action.action),
+                action.id,
+                reason,
+                std::backtrace::Backtrace::force_capture()
+            );
             self.cancel_pending_action(conversation_id, action, reason, ctx);
         }
     }

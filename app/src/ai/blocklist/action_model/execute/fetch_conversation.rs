@@ -41,8 +41,9 @@ impl FetchConversationExecutor {
         let conversation_id = conversation_id.clone();
         let server_token = ServerConversationToken::new(conversation_id.clone());
 
-        let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let load_future = history.load_conversation_by_server_token(&server_token, ctx);
+        let load_future = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.load_conversation_by_server_token(&server_token, ctx)
+        });
 
         ActionExecution::new_async(load_future, move |cloud_conversation, _ctx| {
             // TODO(REMOTE-1203): FetchConversation can't materialize non-Oz conversation transcripts yet.

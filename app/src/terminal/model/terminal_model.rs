@@ -29,8 +29,8 @@ use super::ansi::{
     WarpificationUnavailableReason,
 };
 use super::block::{
-    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlocklistEnvVarMetadata,
-    SerializedBlock,
+    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlockState,
+    BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
 use super::grid::grid_handler::{
@@ -1222,22 +1222,29 @@ impl TerminalModel {
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
     ) -> Self {
-        let mut me = Self::new_for_shared_session_viewer_internal(
+        Self::new_internal(
+            None,
             sizes,
             colors,
             event_proxy,
             background_executor,
+            false,
+            false,
             show_memory_stats,
             honor_ps1,
             is_inverted,
             obfuscate_secrets,
+            false,
+            None,
+            // TODO: use the same shell type as the sharer
+            ShellLaunchState::ShellSpawned {
+                available_shell: None,
+                display_name: ShellName::blank(),
+                shell_type: ShellType::Zsh,
+            },
+            SharedSessionStatus::ViewPending,
             true,
-        );
-        if FeatureFlag::CloudModeSetupV2.is_enabled() {
-            me.block_list_mut()
-                .set_is_executing_oz_environment_startup_commands(true);
-        }
-        me
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1250,7 +1257,6 @@ impl TerminalModel {
         honor_ps1: bool,
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
-        is_dummy_cloud_mode_session: bool,
     ) -> Self {
         Self::new_internal(
             None,
@@ -1273,7 +1279,7 @@ impl TerminalModel {
                 shell_type: ShellType::Zsh,
             },
             SharedSessionStatus::ViewPending,
-            is_dummy_cloud_mode_session,
+            false,
         )
     }
 
@@ -1298,7 +1304,6 @@ impl TerminalModel {
             honor_ps1,
             is_inverted,
             obfuscate_secrets,
-            false,
         )
     }
 
@@ -1431,6 +1436,11 @@ impl TerminalModel {
 
     pub fn is_dummy_cloud_mode_session(&self) -> bool {
         self.is_dummy_cloud_mode_session
+    }
+
+    #[cfg(test)]
+    pub fn set_is_dummy_cloud_mode_session(&mut self, value: bool) {
+        self.is_dummy_cloud_mode_session = value;
     }
 
     pub fn is_shared_ambient_agent_session(&self) -> bool {
@@ -2143,7 +2153,10 @@ impl TerminalModel {
     fn restored_block_commands(&self) -> Vec<HistoryEntry> {
         let mut commands = Vec::new();
         for block in self.block_list.blocks() {
-            if block.is_restored() && !block.is_background() {
+            if block.is_restored()
+                && !block.is_background()
+                && block.state() != BlockState::DoneWithNoExecution
+            {
                 let entry = HistoryEntry::for_restored_block(block.command_to_string(), block);
                 commands.push(entry);
             }

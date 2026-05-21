@@ -88,16 +88,16 @@ pub(crate) fn terminal_view_agent_icon_variant(
 
 pub(crate) fn agent_conversation_entry_icon_variant(
     entry: &AgentConversationEntry,
-) -> Option<IconWithStatusVariant> {
+) -> IconWithStatusVariant {
     let status = entry.display.status.to_conversation_status();
     let is_ambient = matches!(entry.provenance, AgentConversationProvenance::AmbientRun)
         || entry.backing.has_ambient_run
         || entry.identity.ambient_agent_task_id.is_some();
-    Some(agent_icon_variant_for_run(
+    agent_icon_variant_for_run(
         entry.display.harness.unwrap_or(Harness::Oz),
         status,
         is_ambient,
-    ))
+    )
 }
 
 /// Primitive inputs to the terminal-view waterfall, gathered once from the live
@@ -178,7 +178,7 @@ fn agent_icon_variant_from_terminal_inputs(
 /// [`IconWithStatusVariant`]. Falls back to the Oz variant for [`Harness::Oz`] and
 /// [`Harness::Unknown`], the latter so a future-server harness this client doesn't
 /// recognize doesn't render an unbranded gray circle.
-fn agent_icon_variant_for_run(
+pub(crate) fn agent_icon_variant_for_run(
     harness: Harness,
     status: ConversationStatus,
     is_ambient: bool,

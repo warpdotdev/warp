@@ -101,12 +101,12 @@ We ask everyone to be respectful and empathetic. Warp follows the [Code of Condu
 
 We'd like to call out a few of the [open source dependencies](https://docs.warp.dev/help/licenses) that have helped Warp to get off the ground:
 
-* [Tokio](https://github.com/tokio-rs/tokio)
-* [NuShell](https://github.com/nushell/nushell)
-* [Fig Completion Specs](https://github.com/withfig/autocomplete)
-* [Warp Server Framework](https://github.com/seanmonstar/warp)
-* [Alacritty](https://github.com/alacritty/alacritty)
-* [Hyper HTTP library](https://github.com/hyperium/hyper)
-* [FontKit](https://github.com/servo/font-kit)
-* [Core-foundation](https://github.com/servo/core-foundation-rs)
-* [Smol](https://github.com/smol-rs/smol)
+- [Tokio](https://github.com/tokio-rs/tokio)
+- [NuShell](https://github.com/nushell/nushell)
+- [Fig Completion Specs](https://github.com/withfig/autocomplete)
+- [Warp Server Framework](https://github.com/seanmonstar/warp)
+- [Alacritty](https://github.com/alacritty/alacritty)
+- [Hyper HTTP library](https://github.com/hyperium/hyper)
+- [FontKit](https://github.com/servo/font-kit)
+- [Core-foundation](https://github.com/servo/core-foundation-rs)
+- [Smol](https://github.com/smol-rs/smol)

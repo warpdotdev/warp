@@ -429,13 +429,22 @@ impl FileModel {
                     let version = ContentVersion::new();
                     me.set_version(file_id, version);
 
-                    // Only register individual watcher if not using repo subscription
+                    // Only register individual watcher if not using repo subscription.
+                    // Watch the parent directory (NonRecursive) instead of the file
+                    // itself so the watch survives editors that use a
+                    // delete+create/rename pattern (vim, sed -i, etc.). Watching
+                    // the file directly would lose the inotify watch when the
+                    // original inode is deleted.
                     if use_individual_watcher {
+                        let watch_path = file_path_clone
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| file_path_clone.clone());
                         me.watcher.update(ctx, |watcher, _ctx| {
                             std::mem::drop(watcher.register_path(
-                                &file_path_clone,
+                                &watch_path,
                                 WatchFilter::accept_all(),
-                                RecursiveMode::Recursive,
+                                RecursiveMode::NonRecursive,
                             ));
                         });
                     }
@@ -638,9 +647,28 @@ impl FileModel {
                 if !path_still_used {
                     match watcher_type {
                         WatcherType::Individual => {
-                            self.watcher.update(ctx, |watcher, _ctx| {
-                                std::mem::drop(watcher.unregister_path(path.as_path()));
-                            });
+                            // Unwatch the parent directory (matching the register
+                            // in open() which watches the parent, not the file).
+                            // Only unregister if no other individually-watched
+                            // files share the same parent directory.
+                            let watch_path = path
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| path.clone());
+                            let other_files_share_parent =
+                                self.file_state.local_values().any(|f| {
+                                    f.watcher_type == WatcherType::Individual
+                                        && f.path
+                                            .as_deref()
+                                            .and_then(|p| p.parent())
+                                            .map(|p| p == watch_path)
+                                            .unwrap_or(false)
+                                });
+                            if !other_files_share_parent {
+                                self.watcher.update(ctx, |watcher, _ctx| {
+                                    std::mem::drop(watcher.unregister_path(&watch_path));
+                                });
+                            }
                         }
                         WatcherType::Repository => {
                             if let Some((repo_root, unused_repo)) =
@@ -928,7 +956,7 @@ impl FileModel {
 
         // Try to find a repository for this path
         let repository =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(file_path, ctx)?;
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(file_path, ctx)?;
 
         let repo_root = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 

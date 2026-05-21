@@ -586,17 +586,20 @@ impl TextLayoutSystem {
             );
             total_height += line.height();
 
-            // We add 1 to the last caret position here to skip the newline character.
-            // Since we're working with separate lines within a text frame, there is guaranteed
-            // to be a newline to skip at the end of each iteration of the loop.
-            // The only exception is on the last iteration; in that case, we don't use this
-            // value later anyway.
-            line_glyph_start_index = line
-                .caret_positions
-                .last()
-                .map(|position| position.last_offset)
-                .unwrap_or(line_glyph_start_index)
-                + 1;
+            // Only update line_glyph_start_index at paragraph boundaries (when there's a trailing
+            // newline). For soft-wrapped lines within the same paragraph, glyph.start values from
+            // cosmic-text are always byte offsets relative to the paragraph start, so
+            // line_glyph_start_index must stay at the paragraph's starting byte offset in the full
+            // text.
+            if has_trailing_newline {
+                // Convert the last caret's char index back to a byte index, then advance past the
+                // newline separator to get the next paragraph's byte offset.
+                line_glyph_start_index = line
+                    .caret_positions
+                    .last()
+                    .and_then(|position| str_index_map.byte_index(position.last_offset + 1))
+                    .unwrap_or(line_glyph_start_index);
+            }
 
             // TODO(alokedesai): Properly clip multi-line text using the same strategy we use on mac.
             // See https://github.com/warpdotdev/warp-internal/blob/91dfe429074c6129a6b5c1c57c55c1daf6d274a9/ui/src/platform/mac/text_layout.rs#L318-L359.

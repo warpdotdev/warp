@@ -301,6 +301,48 @@ fn test_loading_scrollback() {
 }
 
 #[test]
+fn test_loading_scrollback_with_completed_last_block_creates_active_block() {
+    let scrollback_blocks = &[
+        SerializedBlock::new_for_test("block1".into(), "block1".into()),
+        SerializedBlock::new_for_test("block2".into(), "block2".into()),
+    ];
+    let channel_event_proxy = ChannelEventListener::new_for_test();
+    let mut model = terminal_model_for_viewer(channel_event_proxy);
+    model.load_shared_session_scrollback(scrollback_blocks);
+
+    // 4 blocks: first is the bootstrap block, the next two are completed scrollback blocks.
+    // Since no active block was serialized, restore creates a fresh active block.
+    assert_eq!(model.block_list().blocks().len(), 4);
+
+    assert_eq!(
+        model
+            .block_list()
+            .block_at(1.into())
+            .unwrap()
+            .command_to_string(),
+        "block1"
+    );
+    assert_eq!(
+        model
+            .block_list()
+            .block_at(2.into())
+            .unwrap()
+            .command_to_string(),
+        "block2"
+    );
+
+    assert_eq!(model.block_list().active_block_index(), 3.into());
+    assert_eq!(
+        model
+            .block_list()
+            .active_block()
+            .height(&AgentViewState::Inactive),
+        Lines::zero()
+    );
+    assert!(!model.block_list().active_block().started());
+}
+
+#[test]
 fn test_loading_scrollback_in_alt_screen() {
     let scrollback_blocks = &[
         SerializedBlock::new_for_test("block1".into(), "block1".into()),

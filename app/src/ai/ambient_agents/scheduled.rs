@@ -13,7 +13,7 @@ use crate::{
             persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Owner, Revision, ServerCloudObject,
+        JsonObjectType, Owner, Revision,
     },
     drive::CloudObjectTypeAndId,
     server::{
@@ -120,15 +120,6 @@ impl StringModel for ScheduledAmbientAgent {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::ScheduledAmbientAgent(server_scheduled_agent) =
-            server_cloud_object
-        {
-            return Some(server_scheduled_agent.model.clone().string_model);
-        }
         None
     }
 

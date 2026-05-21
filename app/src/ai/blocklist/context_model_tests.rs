@@ -100,7 +100,9 @@ fn has_locking_attachment_is_false_for_default_state() {
 }
 
 #[test]
-fn has_locking_attachment_is_true_with_pending_block_id() {
+fn has_locking_attachment_is_false_with_only_pending_block_id() {
+    // A pending block alone is *not* a locking attachment: only image/file attachments
+    // should force the input into AI mode (skipping NLD).
     App::test((), |mut app| async move {
         let model = build_test_context_model(&mut app);
 
@@ -108,7 +110,7 @@ fn has_locking_attachment_is_true_with_pending_block_id() {
             m.insert_pending_block_id_for_test(BlockId::new());
         });
 
-        model.read(&app, |m, _| assert!(m.has_locking_attachment()));
+        model.read(&app, |m, _| assert!(!m.has_locking_attachment()));
     });
 }
 
@@ -116,7 +118,7 @@ fn has_locking_attachment_is_true_with_pending_block_id() {
 fn has_locking_attachment_is_false_with_only_pending_selected_text() {
     // Selected text alone is *not* a locking attachment: the user could be selecting shell
     // command text (e.g. to copy a previously-run command), and forcing the input into AI
-    // mode in that case would be wrong. Only images, files, or blocks should force the lock.
+    // mode in that case would be wrong. Only image or file attachments should force the lock.
     App::test((), |mut app| async move {
         let model = build_test_context_model(&mut app);
 

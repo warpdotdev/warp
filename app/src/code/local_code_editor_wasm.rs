@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{path::PathBuf, rc::Rc};
 
 use std::ops::Range;
 
@@ -16,6 +13,7 @@ use ai::diff_validation::DiffType;
 
 use super::editor::view::CodeEditorView;
 use super::ImmediateSaveError;
+use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
 use crate::terminal::TerminalView;
 use crate::{code::editor::EditorReviewComment, code_review::comments::CommentId};
 use warp_core::ui::appearance::Appearance;
@@ -97,7 +95,9 @@ impl LocalCodeEditorView {
         false
     }
 
-    pub fn file_path(&self) -> Option<&Path> {
+    /// Returns the unified file location (local or remote).
+    /// The WASM stub has no backing file, so this always returns `None`.
+    pub fn file_location(&self) -> Option<&BufferFileLocation> {
         None
     }
 }

@@ -91,7 +91,7 @@ fn initialize_permissions_test_with_mode(
     let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
 
     let conversation_id = history.update(app, |history_model, ctx| {
-        history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
 
     PermissionsTestState {

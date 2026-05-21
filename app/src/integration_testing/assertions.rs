@@ -67,6 +67,7 @@ pub fn join_a_workspace() -> TestStep {
                     teams: teams.clone(),
                     billing_metadata: Default::default(),
                     bonus_grants_purchased_this_month: Default::default(),
+                    billing_cycle_usage: None,
                     has_billing_history: false,
                     settings: Default::default(),
                     invite_code: Default::default(),

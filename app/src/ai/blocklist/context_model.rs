@@ -358,9 +358,9 @@ impl BlocklistAIContextModel {
     }
 
     /// Returns `true` if the next AI query has any context that should force the input to be
-    /// locked in AI mode (skipping NLD): a pending image or file attachment, or a pending block.
+    /// locked in AI mode (skipping NLD): a pending image or file attachment.
     pub fn has_locking_attachment(&self) -> bool {
-        !self.pending_context_block_ids.is_empty() || !self.pending_attachments.is_empty()
+        !self.pending_attachments.is_empty()
     }
 
     /// Returns the set `BlockId`s corresponding to blocks to be included as context with the next

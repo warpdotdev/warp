@@ -45,6 +45,7 @@ use warpui::text::point::Point;
 use crate::content::buffer::{Buffer, StyledBufferRun};
 
 use super::{BufferEvent, EditResult, ToBufferCharOffset};
+use warp_util::content_version::ContentVersion;
 
 #[derive(Debug)]
 pub struct TestEmbeddedItem {
@@ -14162,6 +14163,65 @@ fn test_undo_redo_versions() {
 
             assert!(!buffer.version_match(&version1));
             assert!(buffer.version_match(&version2));
+        });
+    });
+}
+
+/// Regression test: after a remote file save, the server's file-watcher sends a
+/// `BufferUpdatedPush` with the same content the client just saved.
+/// `insert_at_char_offset_ranges` is a no-op (content unchanged) and returns early
+/// without calling `set_version(new_version)`. But the caller updates
+/// `base_content_version` to `new_version` anyway, creating a mismatch that makes
+/// `has_unsaved_changes` return true — causing a spurious "Save changes?" dialog.
+#[test]
+fn test_insert_at_char_offset_ranges_noop_skips_set_version() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            // Step 1: Simulate initial file load — populate buffer and set version.
+            buffer.replace_all("hello world", ctx);
+            let load_version = ContentVersion::new();
+            buffer.set_version(load_version);
+            assert!(buffer.version_match(&load_version));
+
+            // Step 2: User edits the buffer.
+            buffer.update_content(
+                BufferEditAction::Insert {
+                    text: "!",
+                    style: TextStyles::default(),
+                    override_text_style: None,
+                },
+                EditOrigin::UserTyped,
+                selection.clone(),
+                ctx,
+            );
+            assert!(!buffer.version_match(&load_version));
+
+            // Step 3: Simulate save — capture the current buffer version as the base.
+            let save_version = buffer.version();
+            assert!(buffer.version_match(&save_version));
+
+            // Step 4: Simulate post-save server push with NO edits.
+            // The server file-watcher detected the save, computed a diff against
+            // the buffer content, and found zero changes — so the push carries
+            // an empty edit list.
+            let push_version = ContentVersion::new();
+            buffer.insert_at_char_offset_ranges(vec![], push_version, ctx);
+
+            // Step 5: The caller (GlobalBufferModel) would set base_content_version = push_version.
+            // version_match(push_version) should be true — the content hasn't changed.
+            // BUG: insert_at_char_offset_ranges returned early without calling set_version,
+            // so the buffer version is still save_version, not push_version.
+            assert!(
+                buffer.version_match(&push_version),
+                "version_match should return true after a no-op insert_at_char_offset_ranges, \
+                 but the buffer version was not updated because the no-op early return \
+                 skipped set_version. Buffer version is {:?}, expected to match {:?}",
+                buffer.version(),
+                push_version,
+            );
         });
     });
 }

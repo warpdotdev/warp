@@ -139,6 +139,7 @@ async fn driver_skips_duplicate_sequences_and_persists_new_cursor() {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 2,
         reconnect_backoff_steps: DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+        permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
     };
@@ -184,6 +185,7 @@ async fn driver_resets_failures_after_successful_event_delivery() {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
     };
@@ -228,6 +230,7 @@ async fn driver_ignores_persist_cursor_errors() {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
     };
@@ -261,6 +264,7 @@ async fn driver_ignores_driver_state_errors() {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
     };
@@ -296,6 +300,7 @@ async fn driver_retries_initial_connection_until_stream_opens() {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
     };
@@ -349,4 +354,118 @@ fn failure_threshold_is_reached_at_and_above_limit() {
     assert!(!agent_event_failures_exceeded_threshold(4, 5));
     assert!(agent_event_failures_exceeded_threshold(5, 5));
     assert!(agent_event_failures_exceeded_threshold(6, 5));
+}
+
+fn make_http_status_error(status: u16) -> anyhow::Error {
+    use crate::server::server_api::presigned_upload::HttpStatusError;
+    anyhow::Error::new(HttpStatusError {
+        status,
+        body: "not found".to_string(),
+    })
+    .context("SSE stream error")
+}
+
+#[tokio::test]
+async fn driver_uses_slow_backoff_on_permanent_http_error() {
+    let source = FakeAgentEventSource::new(vec![
+        // First attempt: stream opens then returns a 404-enriched error.
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Err(make_http_status_error(404)),
+        ]),
+        // Second attempt: succeeds with a stoppable event.
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    // Use asymmetric values: transient=9999s (would block if chosen),
+    // permanent=0s (instant). Proving backoff is 0s confirms the
+    // permanent schedule was selected.
+    let config = AgentEventDriverConfig {
+        run_ids: vec!["child-run".to_string()],
+        since_sequence: 0,
+        reconnect_backoff_steps: &[9999],
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+
+    assert_eq!(consumer.handled_sequences, vec![1]);
+    // The backoff must be from the permanent schedule (0s), not transient (9999s).
+    let retry_backoff = consumer
+        .driver_states
+        .iter()
+        .find_map(|s| match s {
+            AgentEventDriverState::RetryScheduled { backoff, .. } => Some(*backoff),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(retry_backoff, Duration::from_secs(0));
+}
+
+#[tokio::test]
+async fn driver_uses_fast_backoff_on_transient_http_error() {
+    let source = FakeAgentEventSource::new(vec![
+        // First attempt: stream opens then returns a 500-enriched error.
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Err(make_http_status_error(500)),
+        ]),
+        // Second attempt: succeeds.
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    // Set permanent backoff to something large so we can verify it was NOT used.
+    let config = AgentEventDriverConfig {
+        run_ids: vec!["child-run".to_string()],
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: &[9999],
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+
+    // Should have retried with the fast backoff (0s) and succeeded.
+    assert_eq!(consumer.handled_sequences, vec![1]);
+    // The backoff used should be from ZERO_BACKOFF_STEPS (0s), not permanent (9999s).
+    let retry_backoff = consumer
+        .driver_states
+        .iter()
+        .find_map(|s| match s {
+            AgentEventDriverState::RetryScheduled { backoff, .. } => Some(*backoff),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(retry_backoff, Duration::from_secs(0));
 }

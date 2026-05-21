@@ -25,7 +25,7 @@ use warpui::ModelSpawner;
 
 use crate::ai::agent_events::{
     run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, MessageHydrator, ServerApiAgentEventSource,
+    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
 };
 use crate::ai::agent_sdk::driver::{AgentDriver, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -340,6 +340,32 @@ pub(super) fn stage_parent_bridge_message(
         write_parent_bridge_json_atomically(&target, record)?;
     }
     Ok(())
+}
+
+pub(super) async fn prime_parent_bridge_for_wake(
+    hydrator: &MessageHydrator,
+    state_dir: &Path,
+    wake_message: Option<&AgentMessageEventMetadata>,
+) -> Result<()> {
+    acknowledge_parent_bridge_hook_output(hydrator, state_dir).await?;
+
+    let Some(wake_message) = wake_message else {
+        return Ok(());
+    };
+
+    stage_parent_bridge_message(
+        state_dir,
+        &MessageBridgeMessageRecord {
+            sequence: wake_message.sequence,
+            message_id: wake_message.message_id.clone(),
+            sender_run_id: String::new(),
+            subject: String::new(),
+            body: String::new(),
+            occurred_at: wake_message.occurred_at.clone(),
+        },
+    )?;
+    write_parent_bridge_event_cursor(state_dir, wake_message.sequence)?;
+    prepare_parent_bridge_hook_output(hydrator, state_dir, parent_bridge_max_context_chars()).await
 }
 
 pub(super) fn parent_bridge_max_context_chars() -> usize {

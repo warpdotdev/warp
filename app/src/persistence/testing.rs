@@ -2,14 +2,15 @@
 
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
 
-use super::{schema, sqlite::init_db};
+use super::{schema, sqlite::init_db, PersistenceScope};
 
 /// Updates the 'user' and 'host' columns for stored blocks to the given values.
 ///
 /// This is used at runtime to update the user and host values to real values based on the running
 /// machine in integration tests that rely on accuracy of these values.
 pub fn set_user_and_hostname_for_blocks(user: String, hostname: String) {
-    let mut conn = init_db().expect("Should be able to establish sqlite connection.");
+    let mut conn =
+        init_db(&PersistenceScope::App).expect("Should be able to establish sqlite connection.");
 
     // Update the 'user' and 'host' columns to their real values (based on the machine on which this test is running)
     // for blocks that were stored with the placeholder 'local:user' and 'local:host' values.
@@ -26,7 +27,8 @@ pub fn set_user_and_hostname_for_blocks(user: String, hostname: String) {
 }
 
 pub fn set_user_and_hostname_for_commands(user: String, hostname: String) {
-    let mut conn = init_db().expect("Should be able to establish sqlite connection.");
+    let mut conn =
+        init_db(&PersistenceScope::App).expect("Should be able to establish sqlite connection.");
 
     // Update the 'user' and 'host' columns to their real values (based on the machine on which
     // this test is running) for commands that were stored with the placeholder 'local:user' and

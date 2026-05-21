@@ -30,7 +30,6 @@ impl UserDefinedKeybinding {
     }
 }
 
-#[cfg(not(test))]
 const KEYBINDINGS_FILE_NAME: &str = "keybindings.yaml";
 
 /// Load all stored custom keybindings into the UI framework so that they are used
@@ -93,7 +92,6 @@ where
     save_custom_keybindings(map);
 }
 
-#[cfg(not(test))]
 pub fn keybinding_file_path() -> std::path::PathBuf {
     warp_core::paths::config_local_dir().join(KEYBINDINGS_FILE_NAME)
 }

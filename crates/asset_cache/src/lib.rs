@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_fs::{OpenOptions, create_dir_all};
 use bytes::Bytes;
-use futures::AsyncWriteExt;
 use reqwest::Url;
 use warpui_core::assets::asset_cache::{
     Asset, AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
@@ -89,7 +87,7 @@ async fn fetch_file_to_memory(url: Url) -> Result<Bytes, anyhow::Error> {
             let response = async_compat::Compat::new(async move { reqwest::get(url).await }).await?;
         }
     }
-    let content = response.bytes().await?;
+    let content = response.error_for_status()?.bytes().await?;
     Ok(content)
 }
 
@@ -109,7 +107,11 @@ fn get_file_path_for_asset(url: &Url, cache_dir: &Path) -> PathBuf {
     cache_dir.join(filename)
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn persist_bytes(bytes: &Bytes, file: &Path) {
+    use async_fs::{OpenOptions, create_dir_all};
+    use futures::AsyncWriteExt;
+
     let Some(parent_folder) = file.parent() else {
         log::error!("attempted to write cache file in filesystem root");
         return;
@@ -140,6 +142,11 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
     if let Err(e) = file.flush().await {
         log::error!("Error flushing file: {e:#}");
     };
+}
+
+#[cfg(target_family = "wasm")]
+async fn persist_bytes(_bytes: &Bytes, file: &Path) {
+    log::debug!("Cannot persist asset to {} on the web", file.display());
 }
 
 async fn fetch_file_and_persist_bytes(url: Url, file: Option<PathBuf>) -> Result<Bytes> {

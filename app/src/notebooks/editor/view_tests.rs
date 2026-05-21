@@ -4,25 +4,34 @@ use parking_lot::Mutex;
 use std::{path::PathBuf, sync::Arc};
 use string_offset::CharOffset;
 use tempfile::tempdir;
-use warp_editor::render::{
-    element::RichTextAction,
-    model::{HitTestBlockType, Location, RenderEvent},
+use warp_editor::{
+    content::mermaid_diagram::mermaid_asset_source,
+    render::{
+        element::RichTextAction,
+        model::{
+            BlockItem, BlockSpacing, HitTestBlockType, ImageBlockConfig, Location, RenderEvent,
+        },
+    },
 };
 use warp_util::user_input::UserInput;
+use warpui::assets::asset_cache::{AssetCache, AssetState};
 
 use warpui::event::ModifiersState;
+use warpui::image_cache::ImageType;
 use warpui::r#async::block_on;
+use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
 use warpui::{platform::WindowStyle, presenter::ChildView, App, Element, Entity, View, ViewHandle};
 use warpui::{SingletonEntity, TypedActionView, WindowId};
 
-use super::{EditorViewAction, RichTextEditorConfig, RichTextEditorView};
+use super::{EditorViewAction, LayoutAffectingAssetLoad, RichTextEditorConfig, RichTextEditorView};
 use crate::appearance::Appearance;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::link_editor::LinkEditorAction;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
+use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::link::{LinkEvent, NotebookLinks, SessionSource};
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -181,6 +190,68 @@ fn rendered_mermaid_block_range(
 }
 
 #[test]
+fn test_loaded_mermaid_diagram_with_placeholder_height_needs_relayout() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let contents = "graph TD\nA[Start] --> B[Finish]\n";
+        let asset_source = mermaid_asset_source(contents);
+
+        let pending = app.read(|ctx| {
+            let asset_cache = AssetCache::as_ref(ctx);
+            match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => handle.when_loaded(asset_cache),
+                AssetState::Loaded { .. } => None,
+                AssetState::Evicted => panic!("Mermaid asset should not be evicted during test"),
+                AssetState::FailedToLoad(err) => {
+                    panic!("Mermaid asset should load successfully: {err}")
+                }
+            }
+        });
+        if let Some(future) = pending {
+            future.await;
+        }
+
+        app.read(|ctx| {
+            let config = ImageBlockConfig {
+                width: Pixels::new(640.),
+                height: Pixels::new(120.),
+                spacing: BlockSpacing::default(),
+            };
+            let block = BlockItem::MermaidDiagram {
+                content_length: CharOffset::from(contents.chars().count()),
+                asset_source,
+                config,
+            };
+            let asset_cache = AssetCache::as_ref(ctx);
+
+            assert!(matches!(
+                RichTextEditorView::layout_affecting_asset_load(&block, asset_cache),
+                Some(LayoutAffectingAssetLoad::LoadedNeedsRelayout)
+            ));
+        });
+    })
+}
+
+#[test]
+fn layout_affecting_asset_loads_rebuild_selectable_and_editable_layouts() {
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::Selectable,
+        )
+    );
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::Editable,
+        )
+    );
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::EditableWithInvalidSelection,
+        )
+    );
+}
+
+#[test]
 fn test_focus() {
     App::test((), |mut app| async move {
         let (window, editor_view, test_view) = initialize_editor(&mut app);
@@ -298,6 +369,22 @@ fn test_omnibar_is_hidden_for_rendered_mermaid_selection() {
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
 
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+
         editor_view.update(&mut app, |editor, ctx| {
             let mermaid_block_range =
                 rendered_mermaid_block_range(editor, ctx).expect("Expected rendered Mermaid block");
@@ -320,6 +407,22 @@ fn test_shift_click_on_rendered_mermaid_dispatches_selection_update_to_block_bou
         let (_, editor_view, _) = initialize_editor(&mut app);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
 
         editor_view.update(&mut app, |editor, ctx| {
             editor.selection_start(CharOffset::from(2), false, ctx);
@@ -400,6 +503,22 @@ fn test_drag_on_rendered_mermaid_dispatches_selection_update_to_block_boundary()
         let (_, editor_view, _) = initialize_editor(&mut app);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
 
         editor_view.update(&mut app, |editor, ctx| {
             editor.selection_start(CharOffset::from(2), false, ctx);

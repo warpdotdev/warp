@@ -1,6 +1,7 @@
 use parking_lot::{FairMutex, RwLock};
 use pathfinder_color::ColorU;
 use settings::Setting as _;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::Ordering, rc::Rc};
@@ -734,9 +735,8 @@ impl CLISubagentView {
                             .and_then(|language| language.to_extension())
                         {
                             // Since this is a code snippet, construct a fake path name for looking up the language.
-                            let fake_path_string = format!("snippet.{extension}");
-                            let fake_path = std::path::Path::new(&fake_path_string);
-                            view.set_language_with_path(fake_path, ctx);
+                            let fake_path = format!("/snippet.{extension}");
+                            view.set_language_with_local_path(Path::new(&fake_path), ctx);
                         }
                     }
                     let starting_line_number = source.as_ref().and_then(|s| {

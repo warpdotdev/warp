@@ -30,6 +30,7 @@ use crate::editor::CrdtOperation;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::ShellLaunchState;
 use crate::view_components::ToastFlavor;
@@ -127,6 +128,15 @@ type RemoteServerController =
     writeable_pty::remote_server_controller::RemoteServerController<mio_channel::Sender<Message>>;
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
+
+/// Whether the given CRDT operation should be dropped when broadcasting
+/// sharer input to viewers. In ambient agent sessions the sharer is a
+/// headless worker — forwarding its selection ops would produce a phantom
+/// cursor on the viewer side. Content ops (Edit / Undo) are kept so the
+/// buffer stays in sync.
+fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
+    is_ambient_session && matches!(op, CrdtOperation::UpdateSelections(_))
+}
 
 /// The TerminalManager is responsible for
 /// - creating the terminal model
@@ -263,22 +273,41 @@ impl TerminalManager {
         let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
         let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
 
-        // If we have explicit restored_blocks, prioritize those (these come from db on startup).
-        // Otherwise if there's a conversation we're restoring, get blocks from those.
-        let all_restored_blocks =
-            restored_blocks
-                .cloned()
-                .or_else(|| match &conversation_restoration {
-                    Some(ConversationRestorationInNewPaneType::Historical {
-                        conversation, ..
-                    })
-                    | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
-                        Some(conversation.to_serialized_blocklist_items())
+        // If we have explicit non-empty restored_blocks, prioritize those (these come from db on startup).
+        // Otherwise if there's a conversation we're restoring, get blocks from those (including when
+        // restored_blocks is missing or an empty vec).
+        let all_restored_blocks = restored_blocks
+            .filter(|blocks| !blocks.is_empty())
+            .cloned()
+            .or_else(|| match &conversation_restoration {
+                Some(ConversationRestorationInNewPaneType::Historical { conversation, .. })
+                | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
+                    Some(conversation.to_serialized_blocklist_items())
+                }
+                Some(ConversationRestorationInNewPaneType::Startup { conversations, .. }) => {
+                    let mut items: Vec<_> = conversations
+                        .iter()
+                        .flat_map(|c| c.to_serialized_blocklist_items())
+                        .collect();
+                    // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
+                    items.sort_by_key(|item| item.start_ts());
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(items)
                     }
-                    _ => None,
-                });
+                }
+                _ => None,
+            });
 
         // Create the terminal model with all restored blocks
+        log::info!(
+            "Creating terminal model with {} restored blocks",
+            all_restored_blocks
+                .as_ref()
+                .map(|blocks| blocks.len())
+                .unwrap_or(0)
+        );
         let model = terminal_manager::create_terminal_model(
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
@@ -305,12 +334,22 @@ impl TerminalManager {
         // If this session should be a shared-session creator, configure its initial
         // shared-session state before we construct the view, so that bootstrap
         // events can observe the correct pending status and source type.
-        if FeatureFlag::CreatingSharedSessions.is_enabled() {
-            if let IsSharedSessionCreator::Yes { source_type } = is_shared_session_creator {
+        match is_shared_session_creator {
+            IsSharedSessionCreator::Yes { source_type }
+                if FeatureFlag::CreatingSharedSessions.is_enabled() =>
+            {
                 model.lock().set_shared_session_status(
                     SharedSessionStatus::SharePendingPreBootstrap { source_type },
                 );
+                log::info!("Configured terminal to start sharing after bootstrap");
             }
+            IsSharedSessionCreator::Yes { .. } => {
+                log::warn!(
+                    "Session sharing was requested, but CreatingSharedSessions is disabled; \
+                     skipping shared-session startup"
+                );
+            }
+            IsSharedSessionCreator::No => {}
         }
 
         // Initialize the PtyController.
@@ -1284,6 +1323,7 @@ impl TerminalManager {
             log::warn!("Tried to share a session that's already being shared.");
             return;
         }
+        log::info!("Starting shared session");
 
         // Record the source type on the model so we can distinguish ambient agent
         // sessions from user-initiated shared sessions in the UI logic.
@@ -1476,19 +1516,23 @@ impl TerminalManager {
 
                 // Flush the initial input operations that the sharer performed
                 // in the latest buffer before the share was started.
+                let is_ambient = model.lock().is_shared_ambient_agent_session();
                 let init_input_ops: Vec<CrdtOperation> = terminal_view
                     .as_ref(ctx)
                     .input()
                     .as_ref(ctx)
                     .latest_buffer_operations()
+                    .filter(|op| !should_skip_sharer_op(is_ambient, op))
                     .cloned()
                     .collect();
-                network.update(ctx, |network, _ctx| {
-                    network.send_input_update(
-                        model.lock().block_list().active_block_id(),
-                        init_input_ops.iter(),
-                    );
-                });
+                if !init_input_ops.is_empty() {
+                    network.update(ctx, |network, _ctx| {
+                        network.send_input_update(
+                            model.lock().block_list().active_block_id(),
+                            init_input_ops.iter(),
+                        );
+                    });
+                }
 
                 // Stream historical agent conversations so viewers have conversation and task context.
                 if FeatureFlag::AgentSharedSessions.is_enabled() {
@@ -1671,23 +1715,25 @@ impl TerminalManager {
                 // Check eligibility from the incoming participant list directly,
                 // since the presence manager processes new viewers asynchronously.
                 if was_viewer_driven_sizing_eligible {
-                    let sharer_uid = &participant_list.sharer.info.profile_data.firebase_uid;
                     let is_ambient_agent = terminal_view
                         .as_ref(ctx)
                         .is_shared_session_for_ambient_agent();
-                    let present_viewers: Vec<_> = participant_list
-                        .viewers
-                        .iter()
-                        .filter(|v| v.is_present)
-                        .collect();
-                    let still_eligible = present_viewers.len() == 1
-                        && (is_ambient_agent
-                            || present_viewers[0].info.profile_data.firebase_uid
-                                == *sharer_uid);
-                    if !still_eligible {
-                        terminal_view.update(ctx, |view, ctx| {
-                            view.restore_pty_to_sharer_size(ctx);
-                        });
+                    // We never want to reset back to the sharer size if we are a cloud agent,
+                    // since it was a default. Prefer to keep the viewer-set size for transcript
+                    // persistence.
+                    if !is_ambient_agent {
+                        let sharer_uid =
+                            participant_list.sharer.info.profile_data.firebase_uid.as_str();
+                        let still_eligible =
+                            PresenceManager::single_distinct_present_viewer_uid_from_viewers(
+                                participant_list.viewers.iter(),
+                            )
+                            .is_some_and(|viewer_uid| viewer_uid == sharer_uid);
+                        if !still_eligible {
+                            terminal_view.update(ctx, |view, ctx| {
+                                view.restore_pty_to_sharer_size(ctx);
+                            });
+                        }
                     }
                 }
 
@@ -2112,6 +2158,10 @@ impl TerminalManager {
                     if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
+                        log::info!(
+                            "[sharer] UniversalDeveloperInputContextUpdated: \
+                             applying LRC interaction_state={interaction_state:?}"
+                        );
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,
@@ -2229,6 +2279,12 @@ impl TerminalManager {
                     ctx,
                 );
             }
+            TerminalViewEvent::StartSharingCurrentSession { .. } => {
+                log::warn!(
+                    "Ignoring request to start sharing current session because \
+                     CreatingSharedSessions is disabled"
+                );
+            }
             TerminalViewEvent::StopSharingCurrentSession { reason } => {
                 Self::end_shared_session(&view, session_sharer.clone(), *reason, model.clone(), ctx)
             }
@@ -2319,9 +2375,17 @@ impl TerminalManager {
                     return;
                 }
 
+                let is_ambient = model.lock().is_shared_ambient_agent_session();
+                let filtered: Vec<_> = operations
+                    .iter()
+                    .filter(|op| !should_skip_sharer_op(is_ambient, op))
+                    .collect();
+                if filtered.is_empty() {
+                    return;
+                }
                 if let Some(network) = session_sharer.borrow().as_ref() {
                     network.update(ctx, |network, _| {
-                        network.send_input_update(block_id, operations.iter());
+                        network.send_input_update(block_id, filtered.into_iter());
                     });
                 }
             }

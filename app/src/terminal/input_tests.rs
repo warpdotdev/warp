@@ -44,7 +44,7 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::event::BootstrappedEvent;
+use crate::terminal::event::{BlockMetadataReceivedEvent, BootstrappedEvent};
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -61,6 +61,7 @@ use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::model_events::ModelEvent;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use warpui::text::SelectionType;
@@ -136,6 +137,14 @@ pub fn initialize_app(app: &mut App) {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // Pill bar model subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(|ctx| {
+        crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel::new(
+            Default::default(),
+            ctx,
+        )
+    });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -148,6 +157,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
+    app.add_singleton_model(crate::remote_server::manager::RemoteServerManager::new);
     app.add_singleton_model(|_| crate::code_review::git_status_update::GitStatusUpdateModel::new());
     app.add_singleton_model(RepoMetadataModel::new);
     app.add_singleton_model(FileSearchModel::new);
@@ -202,6 +212,7 @@ pub fn initialize_app(app: &mut App) {
     });
     app.add_singleton_model(AgentConversationsModel::new);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
+    app.add_singleton_model(|ctx| crate::ai::agent_tips::AITipModel::new_for_agent_tips(ctx));
     // `LocalShellState` captures the user's interactive login-shell PATH (used
     // for MCP/sbx executable resolution). Tests don't exercise that capture, so
     // register the singleton in its `NotLoaded` state to satisfy callers that
@@ -336,20 +347,37 @@ pub fn simulate_directory_for_completion<A, S>(
 {
     let directory = directory.into();
     terminal.update(app, |terminal, ctx| {
-        terminal.model.lock().block_list_mut().precmd(PrecmdValue {
-            pwd: Some(directory.clone()),
-            session_id: Some(session_id.into()),
-            ..Default::default()
-        });
+        let block_metadata = BlockMetadata::new(Some(session_id), Some(directory.clone()));
+        let block_index = {
+            let mut model = terminal.model.lock();
+            model.block_list_mut().precmd(PrecmdValue {
+                pwd: Some(directory.clone()),
+                session_id: Some(session_id.into()),
+                ..Default::default()
+            });
+            model.block_list().active_block_index()
+        };
 
         // Normally, the precmd message should be sufficient to also set this block metadata.
-        // However, in unit tests the foreground executor does not relay the event.
+        // However, in unit tests the foreground executor does not relay the event, so notify
+        // the dispatcher directly for models that observe active-session metadata.
+        terminal
+            .model_event_dispatcher()
+            .update(ctx, |dispatcher, ctx| {
+                dispatcher.set_active_session_id(session_id);
+                ctx.emit(ModelEvent::BlockMetadataReceived(
+                    BlockMetadataReceivedEvent {
+                        block_metadata: block_metadata.clone(),
+                        block_index,
+                        is_after_in_band_command: false,
+                        is_done_bootstrapping: true,
+                    },
+                ));
+            });
+
+        // Keep the input's block metadata in sync with the active-session metadata above.
         terminal.input().update(ctx, |input, ctx| {
-            input.set_active_block_metadata(
-                BlockMetadata::new(Some(session_id), Some(directory)),
-                false,
-                ctx,
-            );
+            input.set_active_block_metadata(block_metadata, false, ctx);
         });
     });
 }
@@ -5615,11 +5643,7 @@ fn test_input_mode_setting_methods() {
     });
 }
 
-fn run_input_mode_prefix_test(
-    nld_improvements_enabled: bool,
-    udi_enabled: bool,
-    input_type: InputType,
-) {
+fn run_input_mode_prefix_test(udi_enabled: bool, input_type: InputType) {
     let input_prefix = match input_type {
         InputType::Shell => super::TERMINAL_INPUT_PREFIX,
         InputType::AI => super::AI_INPUT_PREFIX,
@@ -5627,7 +5651,6 @@ fn run_input_mode_prefix_test(
 
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-        let _nld_flag = FeatureFlag::NldImprovements.override_enabled(nld_improvements_enabled);
 
         initialize_app(&mut app);
 
@@ -5681,27 +5704,430 @@ fn run_input_mode_prefix_test(
 }
 
 macro_rules! input_mode_prefix_tests {
-    ($($name:ident: ($nld_improvements_enabled:literal, $udi_enabled:literal, $input_mode:expr),)*) => {
+    ($($name:ident: ($udi_enabled:literal, $input_mode:expr),)*) => {
         $(
             #[test]
             fn $name() {
-                run_input_mode_prefix_test($nld_improvements_enabled, $udi_enabled, $input_mode);
+                run_input_mode_prefix_test($udi_enabled, $input_mode);
             }
         )*
     };
 }
 
 input_mode_prefix_tests! {
-    test_ai_input_prefix_with_nld_improvements_and_udi: (true, true, InputType::AI),
-    test_ai_input_prefix_with_nld_improvements_and_no_udi: (true, false, InputType::AI),
-    test_ai_input_prefix_with_no_nld_improvements_and_udi: (false, true, InputType::AI),
-    test_ai_input_prefix_with_no_nld_improvements_and_no_udi: (false, false, InputType::AI),
-    test_shell_input_prefix_with_nld_improvements_and_udi: (true, true, InputType::Shell),
-    test_shell_input_prefix_with_nld_improvements_and_no_udi: (true, false, InputType::Shell),
-    test_shell_input_prefix_with_no_nld_improvements_and_udi: (false, true, InputType::Shell),
-    test_shell_input_prefix_with_no_nld_improvements_and_no_udi: (false, false, InputType::Shell),
+    test_ai_input_prefix_with_udi: (true, InputType::AI),
+    test_ai_input_prefix_with_no_udi: (false, InputType::AI),
+    test_shell_input_prefix_with_udi: (true, InputType::Shell),
+    test_shell_input_prefix_with_no_udi: (false, InputType::Shell),
+}
+fn enter_fullscreen_agent_view_for_test(terminal: &ViewHandle<TerminalView>, app: &mut App) {
+    terminal.update(app, |view, ctx| {
+        view.agent_view_controller().update(ctx, |controller, ctx| {
+            controller
+                .try_enter_agent_view(
+                    None,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                )
+                .expect("Should be able to enter agent view");
+        });
+    });
 }
 
+#[test]
+fn test_cloud_handoff_prefix_remains_text_when_handoff_flag_disabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(false);
+
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), CLOUD_HANDOFF_INPUT_PREFIX);
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_activates_when_handoff_flags_enabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+            app.read_model(input.ai_input_model(), |input_model, _| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+                assert!(input_model.was_lock_set_with_empty_buffer());
+            });
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_normal_deletion_does_not_exit() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(" ", ctx);
+        });
+
+        // Normal backspace that deletes the space (cursor at end) should NOT exit.
+        input.update(&mut app, |input, ctx| {
+            input
+                .editor
+                .update(ctx, |editor, ctx| editor.backspace(ctx));
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+
+        // Backspace on the now-empty buffer exits & mode.
+        input.update(&mut app, |input, ctx| {
+            input
+                .editor
+                .update(ctx, |editor, ctx| editor.backspace(ctx));
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_exits_on_backspace_at_beginning_of_buffer() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("fix tests", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        // Move cursor to the beginning, then backspace.
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, ctx| {
+                editor.handle_action(&EditorAction::MoveToLineStart, ctx);
+                editor.backspace(ctx);
+            });
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_keeps_shell_prefix_as_query_text() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(super::TERMINAL_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), super::TERMINAL_INPUT_PREFIX);
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+            app.read_model(input.ai_input_model(), |input_model, _| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+            });
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_escape_exits_mode_preserving_prompt_text() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("fix tests", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.editor_escape(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_remains_text_in_powershell_with_nld_enabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(true, ctx);
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, _| {
+                editor.set_shell_family(ShellFamily::PowerShell);
+            });
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), CLOUD_HANDOFF_INPUT_PREFIX);
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+
+#[test]
+fn test_cloud_handoff_prefix_activates_in_powershell_when_nld_disabled() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, _| {
+                editor.set_shell_family(ShellFamily::PowerShell);
+            });
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+#[test]
+fn test_cloud_handoff_prefix_vim_escape_exits_insert_before_handoff_mode() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        enable_vim_mode(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (input, editor) = terminal.read(&app, |terminal, ctx| {
+            let input = terminal.input().clone();
+            let editor = input.as_ref(ctx).editor().clone();
+            (input, editor)
+        });
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.activate_cloud_handoff_compose(HandoffEntryPoint::Ampersand, ctx);
+            input.user_insert("fix tests", ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Insert));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.escape(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Normal));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.escape(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.vim_mode(ctx), Some(VimMode::Normal));
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "fix tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::None);
+            assert!(!input.handoff_compose_state.as_ref(ctx).is_active());
+        });
+    });
+}
+#[test]
+fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
+        let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx);
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert(CLOUD_HANDOFF_INPUT_PREFIX, ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("run tests", ctx);
+            input.set_input_mode_terminal(true, ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "run tests");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::CloudHandoff);
+            assert!(input.handoff_compose_state.as_ref(ctx).is_active());
+            app.read_model(input.ai_input_model(), |input_model, _| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+            });
+        });
+    });
+}
 #[test]
 fn test_image_attachment_preserves_lock_state() {
     App::test((), |mut app| async move {

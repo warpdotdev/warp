@@ -9,10 +9,32 @@ use crate::{
 
 pub use crate::image_cache::CacheOption;
 use instant::Instant;
+use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
-use std::sync::Arc;
 use std::time::Duration;
+use std::{
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
+
+lazy_static! {
+    static ref IMAGE_LOAD_TIMEOUT_STARTED_AT: Mutex<HashMap<u64, Instant>> =
+        Mutex::new(HashMap::new());
+}
+struct LoadTimeout {
+    timeout: Duration,
+    element: Box<dyn Element>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackupElementKind {
+    BeforeLoad,
+    FailedToLoad,
+    LoadTimeout,
+}
 
 pub struct Image {
     source: AssetSource,
@@ -31,6 +53,8 @@ pub struct Image {
     /// This could be None in two situations: (1) the caller does not provide a before_load_element
     /// or (2) the caller provided one but it's no longer needed due to the image having loaded.
     before_load_element: Option<Box<dyn Element>>,
+    failed_to_load_element: Option<Box<dyn Element>>,
+    load_timeout: Option<LoadTimeout>,
 
     /// To avoid duplicating delayed repaint, we store whether or not we've requested a
     /// repaint on behalf of this element.
@@ -65,6 +89,8 @@ impl Image {
             top_aligned: false,
             right_aligned: false,
             before_load_element: None,
+            failed_to_load_element: None,
+            load_timeout: None,
             requested_repaint_after_load: false,
             #[cfg(debug_assertions)]
             constructor_location: Some(std::panic::Location::caller()),
@@ -133,6 +159,96 @@ impl Image {
     pub fn before_load(mut self, element: Box<dyn Element>) -> Self {
         self.before_load_element = Some(element);
         self
+    }
+    pub fn on_load_failure(mut self, element: Box<dyn Element>) -> Self {
+        self.failed_to_load_element = Some(element);
+        self
+    }
+
+    pub fn on_load_timeout(mut self, timeout: Duration, element: Box<dyn Element>) -> Self {
+        self.load_timeout = Some(LoadTimeout { timeout, element });
+        self
+    }
+
+    fn load_timeout_key(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.source.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn load_started_at(&self, now: Instant) -> Instant {
+        *IMAGE_LOAD_TIMEOUT_STARTED_AT
+            .lock()
+            .entry(self.load_timeout_key())
+            .or_insert(now)
+    }
+
+    fn clear_load_timeout_started_at(&self) {
+        IMAGE_LOAD_TIMEOUT_STARTED_AT
+            .lock()
+            .remove(&self.load_timeout_key());
+    }
+
+    fn loading_backup_element_kind(
+        &mut self,
+        now: Instant,
+    ) -> (Option<BackupElementKind>, Option<Duration>) {
+        let Some(load_timeout) = self.load_timeout.as_ref() else {
+            return (
+                self.before_load_element
+                    .as_ref()
+                    .map(|_| BackupElementKind::BeforeLoad),
+                None,
+            );
+        };
+        let started_at = self.load_started_at(now);
+        let elapsed = now.duration_since(started_at);
+        if elapsed >= load_timeout.timeout {
+            return (Some(BackupElementKind::LoadTimeout), None);
+        }
+
+        (
+            self.before_load_element
+                .as_ref()
+                .map(|_| BackupElementKind::BeforeLoad),
+            Some(load_timeout.timeout - elapsed),
+        )
+    }
+
+    fn failed_to_load_backup_element_kind(&self) -> Option<BackupElementKind> {
+        if self.failed_to_load_element.is_some() {
+            Some(BackupElementKind::FailedToLoad)
+        } else if self.before_load_element.is_some() {
+            Some(BackupElementKind::BeforeLoad)
+        } else {
+            None
+        }
+    }
+
+    fn paint_backup_element(
+        &mut self,
+        kind: BackupElementKind,
+        origin: Vector2F,
+        ctx: &mut PaintContext,
+        app: &AppContext,
+    ) {
+        match kind {
+            BackupElementKind::BeforeLoad => {
+                if let Some(before_load_element) = self.before_load_element.as_mut() {
+                    before_load_element.paint(origin, ctx, app);
+                }
+            }
+            BackupElementKind::FailedToLoad => {
+                if let Some(failed_to_load_element) = self.failed_to_load_element.as_mut() {
+                    failed_to_load_element.paint(origin, ctx, app);
+                }
+            }
+            BackupElementKind::LoadTimeout => {
+                if let Some(load_timeout) = self.load_timeout.as_mut() {
+                    load_timeout.element.paint(origin, ctx, app);
+                }
+            }
+        }
     }
 
     fn paint_static_image(
@@ -284,6 +400,12 @@ impl Element for Image {
         if let Some(before_load_element) = self.before_load_element.as_mut() {
             before_load_element.layout(constraint, ctx, app);
         }
+        if let Some(failed_to_load_element) = self.failed_to_load_element.as_mut() {
+            failed_to_load_element.layout(constraint, ctx, app);
+        }
+        if let Some(load_timeout) = self.load_timeout.as_mut() {
+            load_timeout.element.layout(constraint, ctx, app);
+        }
 
         size
     }
@@ -291,6 +413,12 @@ impl Element for Image {
     fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
         if let Some(before_load_element) = self.before_load_element.as_mut() {
             before_load_element.after_layout(ctx, app);
+        }
+        if let Some(failed_to_load_element) = self.failed_to_load_element.as_mut() {
+            failed_to_load_element.after_layout(ctx, app);
+        }
+        if let Some(load_timeout) = self.load_timeout.as_mut() {
+            load_timeout.element.after_layout(ctx, app);
         }
     }
 
@@ -335,25 +463,34 @@ impl Element for Image {
                     ctx.repaint_after_load(handle);
                     self.requested_repaint_after_load = true;
                 }
-
-                if let Some(before_load_element) = self.before_load_element.as_mut() {
-                    before_load_element.paint(origin, ctx, app);
+                let (backup_element_kind, repaint_after) =
+                    self.loading_backup_element_kind(Instant::now());
+                if let Some(repaint_after) = repaint_after {
+                    ctx.repaint_after(repaint_after);
+                }
+                if let Some(kind) = backup_element_kind {
+                    self.paint_backup_element(kind, origin, ctx, app);
                 }
             }
             AssetState::Evicted => {
+                self.clear_load_timeout_started_at();
                 if let Some(before_load_element) = self.before_load_element.as_mut() {
                     before_load_element.paint(origin, ctx, app);
                 }
             }
             AssetState::FailedToLoad(_) => {
-                if let Some(before_load_element) = self.before_load_element.as_mut() {
-                    before_load_element.paint(origin, ctx, app);
+                self.clear_load_timeout_started_at();
+                if let Some(kind) = self.failed_to_load_backup_element_kind() {
+                    self.paint_backup_element(kind, origin, ctx, app);
                 }
             }
             AssetState::Loaded { data } => {
                 // Don't waste time calling layout() and after_layout() on the backup element once the main
                 // one has loaded.
+                self.clear_load_timeout_started_at();
                 self.before_load_element = None;
+                self.failed_to_load_element = None;
+                self.load_timeout = None;
 
                 match data.as_ref() {
                     crate::image_cache::Image::Static(static_image) => {

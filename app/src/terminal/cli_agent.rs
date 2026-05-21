@@ -5,7 +5,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 
 use ai::skills::SkillProvider;
 use enum_iterator::Sequence;
@@ -112,6 +111,14 @@ const GOOSE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Hermes brand color (Nous Research purple #7C3AED)
+const HERMES_PURPLE: ColorU = ColorU {
+    r: 124,
+    g: 58,
+    b: 237,
+    a: 255,
+};
+
 /// Mistral brand orange (#FA520F)
 const MISTRAL_ORANGE: ColorU = ColorU {
     r: 250,
@@ -120,7 +127,7 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Mistral Vibe)
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -134,6 +141,7 @@ pub enum CLIAgent {
     Auggie,
     CursorCli,
     Goose,
+    Hermes,
     Vibe,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
@@ -154,6 +162,7 @@ impl CLIAgent {
             CLIAgent::Auggie => "auggie",
             CLIAgent::CursorCli => "agent",
             CLIAgent::Goose => "goose",
+            CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
             CLIAgent::Unknown => "",
         }
@@ -200,6 +209,7 @@ impl CLIAgent {
             CLIAgent::Auggie => "Auggie",
             CLIAgent::CursorCli => "Cursor",
             CLIAgent::Goose => "Goose",
+            CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -219,6 +229,7 @@ impl CLIAgent {
             CLIAgent::Auggie => Some(Icon::AuggieLogo),
             CLIAgent::CursorCli => Some(Icon::CursorLogo),
             CLIAgent::Goose => Some(Icon::GooseLogo),
+            CLIAgent::Hermes => None,
             // Vibe is recognized but ships without a brand asset. The brand color
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
@@ -251,6 +262,7 @@ impl CLIAgent {
             CLIAgent::Auggie => &[SkillProvider::Agents],
             CLIAgent::CursorCli => &[SkillProvider::Agents],
             CLIAgent::Goose => &[SkillProvider::Agents],
+            CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
             CLIAgent::Unknown => &[],
         }
@@ -292,6 +304,7 @@ impl CLIAgent {
             CLIAgent::Auggie => Some(AUGGIE_COLOR),
             CLIAgent::CursorCli => Some(CURSOR_COLOR),
             CLIAgent::Goose => Some(GOOSE_COLOR),
+            CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Unknown => None,
         }
@@ -410,7 +423,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 line,
                 ..
             } => {
-                let path = absolute_file_path.display();
+                let path = absolute_file_path.display_path();
                 match line {
                     EditorLineLocation::Current { line_number, .. } => {
                         let n = line_number.as_usize() + 1;
@@ -430,10 +443,9 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 }
             }
             AttachedReviewCommentTarget::File { absolute_file_path } => {
-                let path = absolute_file_path.display();
-                let abs_str = absolute_file_path.to_string_lossy();
+                let path = absolute_file_path.display_path();
                 let is_deleted = review.diff_set.iter().any(|(file_key, hunks)| {
-                    abs_str.ends_with(file_key.as_str())
+                    path.ends_with(file_key.as_str())
                         && !hunks.is_empty()
                         && hunks
                             .iter()
@@ -442,7 +454,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 if is_deleted {
                     format!("{path} (deleted file — see `git diff`)")
                 } else {
-                    format!("{path}")
+                    path
                 }
             }
             AttachedReviewCommentTarget::General => "General".to_string(),
@@ -478,15 +490,14 @@ fn export_review_comment_for_cli_prompt(comment: &str) -> String {
 /// `<path> L<start>-L<end>` where `start` and `end` are 1-indexed and both
 /// ends are **inclusive**.
 pub fn build_diff_hunk_prompt(
-    file_path: &Path,
+    file_path: &str,
     start_line: usize,
     end_line: usize,
     lines_added: u32,
     lines_removed: u32,
 ) -> String {
-    let path = file_path.display();
     format!(
-        "{path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
+        "{file_path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
          -- run `git diff` to see the full context."
     )
 }
@@ -556,6 +567,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Auggie => CLIAgentType::Auggie,
             CLIAgent::CursorCli => CLIAgentType::Cursor,
             CLIAgent::Goose => CLIAgentType::Goose,
+            CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }

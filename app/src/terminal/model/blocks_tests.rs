@@ -128,6 +128,13 @@ pub fn command_finished_and_precmd(block_list: &mut BlockList) {
     block_list.command_finished(Default::default());
     block_list.precmd(Default::default());
 }
+fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        events.push(event);
+    }
+    events
+}
 
 /// Advances the block list to the ScriptExecution stage.
 fn advance_to_script_execution(block_list: &mut BlockList) {
@@ -336,6 +343,7 @@ pub fn test_script_execution_block() {
 
     // We have the `WarpInput` block and the current script execution block.
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     // Ensure that script execution block has a height of 0 if nothing was added to it.
     assert!(block_list
         .active_block()
@@ -352,12 +360,14 @@ pub fn test_script_execution_block() {
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     assert!(block_list
         .active_block()
         .is_empty(&AgentViewState::Inactive));
 
     // Add characters to script execution block.
     block_list.input('c');
+    block_list.update_active_block_height();
 
     assert_eq!(block_list.blocks.len(), 2);
     assert!(!block_list
@@ -392,6 +402,49 @@ pub fn test_script_execution_block() {
         block_completed_events[3].block_type,
         BlockType::BootstrapVisible(_)
     ));
+}
+#[test]
+pub fn visible_bootstrap_block_event_fires_when_script_execution_becomes_visible() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let channel_event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    let mut block_list = TestBlockListBuilder::new()
+        .with_channel_event_proxy(channel_event_proxy)
+        .build();
+    advance_to_script_execution(&mut block_list);
+
+    assert!(block_list.active_block().started());
+    assert!(block_list
+        .active_block()
+        .is_empty(&AgentViewState::Inactive));
+
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.input('c');
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 1);
+
+    block_list.input('d');
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 0);
 }
 
 // Add a few restored blocks and ensure they show up appropriately.
@@ -578,7 +631,6 @@ pub fn test_basic_bootstrapping() {
         .build();
 
     // Simulate entering the bootstrap script for WarpInput mode.
-    block_list.start_active_block();
     input_string(&mut block_list, "i am the warp input");
     block_list.linefeed();
     block_list.preexec(Default::default());
@@ -649,11 +701,11 @@ pub fn test_session_restoration_separator() {
                 .as_f64()
     );
 
-    // With the active block not started during initialize,
-    // the gap is inserted before the active block in clear_visible_screen.
-    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5
+    // With the active block still hidden during initialize, the gap is inserted before the active
+    // block in clear_visible_screen.
+    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5.
     assert_eq!(block_list.block_heights.summary().total_count, 5);
-    // Gap is at index 3 (before the active block at index 4)
+    // Gap is at index 3 (before the active block at index 4).
     assert_eq!(block_list.active_gap.as_ref().unwrap().index, 3);
     assert_approx_eq!(
         Lines,
@@ -1563,6 +1615,74 @@ fn test_agent_origin_block_can_be_attached_to_other_conversation() {
     let user_block_index = block_list.block_index_for_id(&user_block_id).unwrap();
     let user_block = block_list.block_at(user_block_index).unwrap();
     assert!(user_block.is_empty(block_list.agent_view_state()));
+}
+
+#[test]
+fn test_finish_startup_commands_at_block_attaches_and_unhides_command_blocks_since_target_block() {
+    let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    block_list.set_is_executing_oz_environment_startup_commands(true);
+
+    let setup_block_index = insert_block(&mut block_list, "setup", "output");
+    let harness_block_index = insert_block(&mut block_list, "claude", "output");
+    let followup_block_index = insert_block(&mut block_list, "pwd", "output");
+    let setup_block_id = block_list.block_at(setup_block_index).unwrap().id().clone();
+    let harness_block_id = block_list
+        .block_at(harness_block_index)
+        .unwrap()
+        .id()
+        .clone();
+    let followup_block_id = block_list
+        .block_at(followup_block_index)
+        .unwrap()
+        .id()
+        .clone();
+    let conversation_id = AIConversationId::new();
+
+    block_list.set_agent_view_state(AgentViewState::Active {
+        conversation_id,
+        origin: AgentViewEntryOrigin::ThirdPartyCloudAgent,
+        display_mode: AgentViewDisplayMode::FullScreen,
+        original_conversation_length: 0,
+    });
+
+    block_list
+        .finish_oz_environment_startup_commands_at_block(&harness_block_id, Some(conversation_id));
+
+    assert!(!block_list.is_executing_oz_environment_startup_commands());
+
+    for block_id in [&harness_block_id, &followup_block_id] {
+        let block = block_list
+            .block_with_id(block_id)
+            .expect("block should still exist");
+        assert!(!block.is_hidden());
+        assert!(!block.is_oz_environment_startup_command());
+        assert!(!block.should_hide_block(block_list.agent_view_state()));
+        match block.agent_view_visibility() {
+            AgentViewVisibility::Terminal {
+                pending_conversation_ids,
+                conversation_ids,
+            } => {
+                assert!(pending_conversation_ids.is_empty());
+                assert!(conversation_ids.contains(&conversation_id));
+            }
+            AgentViewVisibility::Agent {
+                origin_conversation_id,
+                pending_other_conversation_ids,
+                other_conversation_ids,
+            } => panic!(
+                "expected terminal visibility, got agent visibility: {origin_conversation_id:?}, {pending_other_conversation_ids:?}, {other_conversation_ids:?}"
+            ),
+        }
+    }
+
+    let setup_block = block_list
+        .block_with_id(&setup_block_id)
+        .expect("setup block should still exist");
+    assert!(setup_block.is_hidden());
+    assert!(setup_block.is_oz_environment_startup_command());
+    assert!(setup_block.should_hide_block(block_list.agent_view_state()));
 }
 
 #[test]

@@ -964,11 +964,17 @@ fn test_github_pr_chip_transient_failure_retries_with_same_fingerprint() {
                     .to_chip()
                     .expect("expected github pr chip");
                 let generator = chip.generator().clone();
+                // Pass `allow_fingerprint_skip = true` to exercise the same
+                // path the periodic timer uses. The previous attempt left the
+                // chip in `Error` state with the fingerprint already recorded;
+                // without status-aware skip handling, this call would short-
+                // circuit as `Cached` and the transient failure would become
+                // sticky.
                 current_prompt.fetch_chip_value_once(
                     &ContextChipKind::GithubPullRequest,
                     &generator,
                     None,
-                    false,
+                    true,
                     ctx,
                 );
                 current_prompt.await_generators(ctx)

@@ -46,6 +46,7 @@ websocket.workspace = true
 instant.workspace = true
 schemars = "1"
 settings_value = { workspace = true, features = ["derive"] }
+warp_util.workspace = true
 async-broadcast.workspace = true
 futures.workspace = true
 line-ending.workspace = true

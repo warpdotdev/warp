@@ -4,8 +4,9 @@ pub use glibc::{GlibcVersion, RemoteLibc};
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use warp_core::channel::{Channel, ChannelState};
+pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
 /// State machine for the remote server install → launch → initialize flow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +64,18 @@ impl RemoteServerSetupState {
     }
 }
 
+impl From<&crate::transport::Error> for RemoteServerSetupState {
+    fn from(error: &crate::transport::Error) -> Self {
+        if let Some(reason) = UnsupportedReason::from_transport_error(error) {
+            Self::Unsupported { reason }
+        } else {
+            Self::Failed {
+                error: error.to_string(),
+            }
+        }
+    }
+}
+
 /// Outcome of [`crate::transport::RemoteTransport::run_preinstall_check`].
 ///
 /// The script runs over the existing SSH socket before any install UI
@@ -100,9 +113,47 @@ pub enum UnsupportedReason {
     NonGlibc {
         name: String,
     },
+    UnsupportedOs {
+        os: String,
+    },
+    UnsupportedArch {
+        arch: String,
+    },
+}
+
+impl UnsupportedReason {
+    pub fn from_transport_error(error: &crate::transport::Error) -> Option<Self> {
+        match error {
+            crate::transport::Error::UnsupportedOs { os } => {
+                Some(Self::UnsupportedOs { os: os.clone() })
+            }
+            crate::transport::Error::UnsupportedArch { arch } => {
+                Some(Self::UnsupportedArch { arch: arch.clone() })
+            }
+            crate::transport::Error::TimedOut
+            | crate::transport::Error::ScriptFailed { .. }
+            | crate::transport::Error::Other(_) => None,
+        }
+    }
+
+    pub fn as_telemetry_reason(&self) -> &'static str {
+        match self {
+            Self::GlibcTooOld { .. } => "glibc_too_old",
+            Self::NonGlibc { .. } => "non_glibc",
+            Self::UnsupportedOs { .. } => "unsupported_os",
+            Self::UnsupportedArch { .. } => "unsupported_arch",
+        }
+    }
 }
 
 impl PreinstallCheckResult {
+    pub fn unsupported(reason: UnsupportedReason) -> Self {
+        Self {
+            status: PreinstallStatus::Unsupported { reason },
+            libc: RemoteLibc::Unknown,
+            raw: String::new(),
+        }
+    }
     /// Whether the host is supported. Both `Supported` and `Unknown`
     /// return true — only positive detection of an incompatible libc
     /// triggers the silent fall-back.
@@ -240,31 +291,43 @@ impl RemoteArch {
 ///
 /// The expected format is `<os> <arch>`, e.g. `Linux x86_64` or `Darwin arm64`.
 /// Takes the last line to skip any shell initialization output.
-pub fn parse_uname_output(output: &str) -> Result<RemotePlatform> {
+pub fn parse_uname_output(
+    output: &str,
+) -> std::result::Result<RemotePlatform, crate::transport::Error> {
+    use crate::transport::Error;
+
     let line = output
         .lines()
         .last()
-        .ok_or_else(|| anyhow!("empty uname output"))?
-        .trim();
+        .ok_or_else(|| Error::Other(anyhow!("empty uname output")))
+        .map(str::trim)?;
 
     let mut parts = line.split_whitespace();
     let os_str = parts
         .next()
-        .ok_or_else(|| anyhow!("missing OS in uname output: {line}"))?;
+        .ok_or_else(|| Error::Other(anyhow!("missing OS in uname output: {line}")))?;
     let arch_str = parts
         .next()
-        .ok_or_else(|| anyhow!("missing arch in uname output: {line}"))?;
+        .ok_or_else(|| Error::Other(anyhow!("missing arch in uname output: {line}")))?;
 
     let os = match os_str {
         "Linux" => RemoteOs::Linux,
         "Darwin" => RemoteOs::MacOs,
-        other => return Err(anyhow!("unsupported OS: {other}")),
+        other => {
+            return Err(Error::UnsupportedOs {
+                os: other.to_string(),
+            })
+        }
     };
 
     let arch = match arch_str {
-        "x86_64" => RemoteArch::X86_64,
-        "aarch64" | "arm64" | "armv8l" => RemoteArch::Aarch64,
-        other => return Err(anyhow!("unsupported arch: {other}")),
+        "x86_64" | "amd64" => RemoteArch::X86_64,
+        "aarch64" | "arm64" => RemoteArch::Aarch64,
+        other => {
+            return Err(Error::UnsupportedArch {
+                arch: other.to_string(),
+            })
+        }
     };
 
     Ok(RemotePlatform { os, arch })
@@ -293,12 +356,29 @@ pub fn remote_server_dir() -> String {
     format!("~/{warp_dir}/remote-server")
 }
 
-/// Returns a filesystem-safe directory name for a remote-server identity key.
+/// Returns a short, deterministic directory name for a remote-server
+/// identity key, used for the daemon socket and PID file paths.
 ///
-/// The identity key is not secret, but it can contain bytes that are unsafe or
-/// ambiguous in paths. Keep ASCII alphanumeric characters plus `-` and `_`;
-/// percent-encode all other UTF-8 bytes.
+/// Hashes the key to 8 hex chars so the socket path stays within the
+/// `sun_path` limit across all channels.
 pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    if identity_key.is_empty() {
+        return "empty".to_string();
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity_key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())[..8].to_string()
+}
+
+/// Percent-encodes an identity key for use in filesystem paths.
+///
+/// Keeps ASCII alphanumeric characters plus `-` and `_`; percent-encodes
+/// all other bytes.  Used by [`remote_server_daemon_data_dir`] for
+/// persistent data that must not collide across identities.
+fn percent_encode_identity_key(identity_key: &str) -> String {
     if identity_key.is_empty() {
         return "empty".to_string();
     }
@@ -316,13 +396,69 @@ pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
 }
 
 /// Returns the identity-scoped remote directory used for the daemon socket
-/// and PID file.
+/// and PID file.  Uses the hashed identity dir name so the full socket
+/// path fits within `sun_path`.
 pub fn remote_server_daemon_dir(identity_key: &str) -> String {
     format!(
         "{}/{}",
         remote_server_dir(),
         remote_server_identity_dir_name(identity_key)
     )
+}
+
+/// Returns the identity-scoped remote directory used for daemon-owned
+/// per-user data files (e.g. SQLite databases).
+///
+/// Uses the full percent-encoded identity key (not the hash) so that
+/// persistent data is never shared between distinct identities due to
+/// a hash collision.  The `sun_path` limit does not apply here because
+/// this path is only used for regular file I/O, not Unix sockets.
+pub fn remote_server_daemon_data_dir(identity_key: &str) -> String {
+    format!(
+        "{}/{}/data",
+        remote_server_dir(),
+        percent_encode_identity_key(identity_key)
+    )
+}
+
+/// Returns a short, deterministic 8-hex-char hash of the app version string.
+///
+/// Used to version-discriminate daemon socket and PID files without
+/// embedding the full version string in the filename, which would push
+/// the Unix domain socket path over the `sun_path` limit (107 bytes on
+/// Linux, 103 on macOS) for users with moderately long identity keys or
+/// home directory paths.
+pub fn version_hash() -> Option<String> {
+    use std::hash::{Hash, Hasher};
+
+    let version = ChannelState::app_version()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    version.hash(&mut hasher);
+    Some(format!("{:016x}", hasher.finish())[..8].to_string())
+}
+
+/// Returns the daemon socket filename, versioned with a short hash when
+/// a release tag is baked in.
+///
+/// - With `GIT_RELEASE_TAG`:    `server-{hash8}.sock`  (e.g. `server-a1b2c3d4.sock`)
+/// - Without (plain cargo run): `server.sock`
+pub fn daemon_socket_name() -> String {
+    match version_hash() {
+        Some(hash) => format!("server-{hash}.sock"),
+        None => "server.sock".to_string(),
+    }
+}
+
+/// Returns the daemon PID filename, versioned with a short hash when a
+/// release tag is baked in.
+///
+/// - With `GIT_RELEASE_TAG`:    `server-{hash8}.pid`
+/// - Without (plain cargo run): `server.pid`
+pub fn daemon_pid_name() -> String {
+    match version_hash() {
+        Some(hash) => format!("server-{hash}.pid"),
+        None => "server.pid".to_string(),
+    }
 }
 
 /// Returns the binary name, keyed by channel.
@@ -360,10 +496,15 @@ pub fn remote_server_binary() -> String {
     }
 }
 
-/// Returns the shell command to check if the remote server binary exists and
-/// is executable.
+/// Returns the shell command to verify the remote server binary is
+/// installed and functional by running it with `--version`.
+///
+/// Exits 0 when the binary is present, executable, and can parse its
+/// own arguments. A missing binary produces exit 127 (command not
+/// found) or 126 (not executable), and a corrupted binary will fail
+/// with a non-zero exit of its own.
 pub fn binary_check_command() -> String {
-    format!("test -x {}", remote_server_binary())
+    format!("{} --version", remote_server_binary())
 }
 
 /// Returns the version string used to pin remote-server installs on
@@ -377,6 +518,20 @@ pub fn binary_check_command() -> String {
 /// fall through to the unversioned (Local/Oss-only) path.
 fn pinned_version() -> &'static str {
     ChannelState::app_version().unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+/// Returns the version key used to identify remote-server download artifacts.
+///
+/// This must match the versioning used by [`download_tarball_url`] and
+/// [`install_script`], so versioned download URLs do not reuse stale tarballs
+/// from a previous client version.
+pub fn remote_server_artifact_version() -> &'static str {
+    match ChannelState::channel() {
+        Channel::Local | Channel::Oss => REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED,
+        Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
+            pinned_version()
+        }
+    }
 }
 
 /// The install script template, loaded from a standalone `.sh` file for
@@ -479,13 +634,13 @@ pub const NO_HTTP_CLIENT_EXIT_CODE: i32 = 3;
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Timeout for the install script (curl/wget path).
-pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
+pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Timeout for the SCP upload fallback path (local download + SCP +
-/// extraction). Longer than [`INSTALL_TIMEOUT`] because SCP transfers
+/// extraction). Higher than [`INSTALL_TIMEOUT`] because SCP transfers
 /// the tarball over the user's SSH link, which is typically slower than
 /// the remote host's direct internet connection.
-pub const SCP_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+pub const SCP_INSTALL_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[cfg(test)]
 #[path = "setup_tests.rs"]

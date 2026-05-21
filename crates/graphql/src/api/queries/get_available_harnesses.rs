@@ -45,4 +45,12 @@ pub struct HarnessInfo {
     pub harness: AgentHarness,
     pub display_name: String,
     pub enabled: bool,
+    pub available_models: Vec<HarnessModel>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct HarnessModel {
+    pub id: cynic::Id,
+    pub display_name: String,
+    pub reasoning_level: Option<String>,
 }

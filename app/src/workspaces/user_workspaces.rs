@@ -487,10 +487,36 @@ impl UserWorkspaces {
     /// Whether BYO API key is enabled for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     /// For solo users (no workspace), this is controlled by the `SoloUserByok` feature flag.
-    pub fn is_byo_api_key_enabled(&self) -> bool {
+    /// Anonymous or logged-out users are not allowed to use BYO API keys.
+    pub fn is_byo_api_key_enabled(&self, app: &AppContext) -> bool {
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
         self.current_workspace()
             .map(|workspace| workspace.is_byo_api_key_enabled())
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
+    }
+    /// Whether custom inference endpoints are enabled for the current user.
+    /// Anonymous or logged-out users are not allowed to use custom inference.
+    /// Enterprise workspaces require the enterprise custom inference flag, Warp Plan, or dogfood.
+    pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
+
+        self.current_workspace()
+            .map(|workspace| {
+                workspace.billing_metadata.customer_type != CustomerType::Enterprise
+                    || FeatureFlag::CustomInferenceEndpointsEnterprise.is_enabled()
+                    || ChannelState::channel().is_dogfood()
+            })
+            .unwrap_or(true)
     }
 
     pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
@@ -1563,6 +1589,7 @@ impl UserWorkspaces {
             }],
             billing_metadata: BillingMetadata::default(),
             bonus_grants_purchased_this_month: Default::default(),
+            billing_cycle_usage: None,
             has_billing_history: false,
             settings: workspace_settings,
             invite_code: None,

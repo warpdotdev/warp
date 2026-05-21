@@ -17,22 +17,28 @@ use warp_core::features::FeatureFlag;
 
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::SearchCodebaseFailureReason;
 use crate::{
     ai::{
-        agent::AIAgentActionId,
-        get_relevant_files::api::{FileContext, GetRelevantFiles},
+        agent::{AIAgentActionId, SearchCodebaseResult},
+        blocklist::SessionContext,
+        get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles},
         outline::{OutlineStatus, RepoOutlines},
     },
     report_error, send_telemetry_from_ctx,
     server::server_api::{AIApiError, ServerApiProvider},
     TelemetryEvent,
 };
+#[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
+#[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
+mod remote_search;
 
 #[derive(Debug)]
 pub enum GetRelevantFilesControllerEvent {
     Success {
         action_id: AIAgentActionId,
-        fragments: Arc<HashSet<CodeContextLocation>>,
+        result: GetRelevantFilesControllerResult,
     },
     Error {
         action_id: AIAgentActionId,
@@ -48,6 +54,21 @@ impl GetRelevantFilesControllerEvent {
     }
 }
 
+#[derive(Debug)]
+pub enum GetRelevantFilesControllerResult {
+    Locations(Arc<HashSet<CodeContextLocation>>),
+    SearchResult(SearchCodebaseResult),
+}
+
+pub enum GetRelevantFilesRequestTarget {
+    Local {
+        directory: PathBuf,
+    },
+    Remote {
+        session_context: SessionContext,
+        requested_codebase_path: Option<String>,
+    },
+}
 #[derive(Debug, thiserror::Error)]
 pub enum GetRelevantFilesError {
     #[error("Repo outline is still being computed.")]
@@ -189,6 +210,35 @@ impl GetRelevantFilesController {
     /// Start a new search query based on the repo outline.
     pub fn send_request(
         &mut self,
+        target: GetRelevantFilesRequestTarget,
+        query: String,
+        partial_path_segments: Option<&Vec<String>>,
+        action_id: AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), GetRelevantFilesError> {
+        // Cancel any previous request for this action before dispatching to either the local or
+        // remote implementation.
+        self.cancel_request_for_action(&action_id, ctx);
+        match target {
+            GetRelevantFilesRequestTarget::Local { directory } => {
+                self.send_local_request(&directory, query, partial_path_segments, action_id, ctx)
+            }
+            GetRelevantFilesRequestTarget::Remote {
+                session_context,
+                requested_codebase_path,
+            } => self.send_remote_request(
+                session_context,
+                requested_codebase_path,
+                query,
+                partial_path_segments.cloned(),
+                action_id,
+                ctx,
+            ),
+        }
+    }
+
+    fn send_local_request(
+        &mut self,
         directory: &Path,
         query: String,
         partial_path_segments: Option<&Vec<String>>,
@@ -196,7 +246,6 @@ impl GetRelevantFilesController {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), GetRelevantFilesError> {
         const MINIMUM_FILE_COUNT_FOR_API_CALL: usize = 2;
-        self.cancel_request_for_action(&action_id, ctx);
 
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
             let codebase_mgr = CodebaseIndexManager::handle(ctx);
@@ -235,21 +284,21 @@ impl GetRelevantFilesController {
                 if file_outlines.len() < MINIMUM_FILE_COUNT_FOR_API_CALL {
                     ctx.emit(GetRelevantFilesControllerEvent::Success {
                         action_id,
-                        fragments: Arc::new(
+                        result: GetRelevantFilesControllerResult::Locations(Arc::new(
                             file_outlines
                                 .into_iter()
                                 .map(|file| {
                                     CodeContextLocation::WholeFile(PathBuf::from(file.path))
                                 })
                                 .collect(),
-                        ),
+                        )),
                     });
                 } else {
                     let outline_request = GetRelevantFiles {
                         query,
                         files: file_outlines
                             .into_iter()
-                            .map(|outline| FileContext {
+                            .map(|outline| FileContextRequest {
                                 path: outline.path,
                                 symbols: outline.symbols,
                             })
@@ -302,6 +351,38 @@ impl GetRelevantFilesController {
         }
     }
 
+    fn send_remote_request(
+        &mut self,
+        session_context: SessionContext,
+        requested_codebase_path: Option<String>,
+        query: String,
+        partial_path_segments: Option<Vec<String>>,
+        action_id: AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), GetRelevantFilesError> {
+        match remote_search::send_request(
+            query,
+            partial_path_segments,
+            session_context,
+            requested_codebase_path,
+            action_id.clone(),
+            ctx,
+        ) {
+            #[cfg(not(target_family = "wasm"))]
+            remote_search::RemoteSearchRequest::Pending(abort_handle) => {
+                self.pending_requests
+                    .insert(action_id, RequestHandle::AbortHandle(abort_handle));
+            }
+            remote_search::RemoteSearchRequest::Ready(result) => {
+                ctx.emit(GetRelevantFilesControllerEvent::Success {
+                    action_id,
+                    result: GetRelevantFilesControllerResult::SearchResult(result),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn handle_relevant_file_paths_result(
         &mut self,
         relevant_file_locations: anyhow::Result<Arc<HashSet<CodeContextLocation>>>,
@@ -315,7 +396,7 @@ impl GetRelevantFilesController {
             Ok(relevant_file_locations) => {
                 ctx.emit(GetRelevantFilesControllerEvent::Success {
                     action_id,
-                    fragments: relevant_file_locations,
+                    result: GetRelevantFilesControllerResult::Locations(relevant_file_locations),
                 });
             }
             Err(e) => {
@@ -323,6 +404,27 @@ impl GetRelevantFilesController {
                 ctx.emit(GetRelevantFilesControllerEvent::Error { action_id });
             }
         };
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_remote_search_result(
+        &mut self,
+        search_result: anyhow::Result<SearchCodebaseResult>,
+        action_id: AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.pending_requests.remove(&action_id).is_none() {
+            return;
+        }
+
+        let result = search_result.unwrap_or_else(|e| SearchCodebaseResult::Failed {
+            reason: SearchCodebaseFailureReason::ClientError,
+            message: e.to_string(),
+        });
+        ctx.emit(GetRelevantFilesControllerEvent::Success {
+            action_id,
+            result: GetRelevantFilesControllerResult::SearchResult(result),
+        });
     }
 
     /// Returns the path to the root directory for a codebase search where pwd is `directory`.
@@ -336,6 +438,15 @@ impl GetRelevantFilesController {
                 .get_outline(directory)
                 .map(|(_, root)| root)
         })
+    }
+
+    pub fn root_directory_for_remote_search(
+        &self,
+        session_context: &SessionContext,
+        requested_codebase_path: Option<&str>,
+        app: &AppContext,
+    ) -> Option<PathBuf> {
+        remote_search::root_directory_for_search(session_context, requested_codebase_path, app)
     }
 
     pub fn cancel_request_for_action(

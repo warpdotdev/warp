@@ -11,12 +11,13 @@ use super::{
         SettingsWidget, CONTENT_FONT_SIZE,
     },
     update_environment_form::{
-        EnvironmentFormInitArgs, EnvironmentFormValues, GithubAuthRedirectTarget,
-        UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
+        EnvironmentFormInitArgs, EnvironmentFormValues, UpdateEnvironmentForm,
+        UpdateEnvironmentFormEvent,
     },
     SettingsSection,
 };
 use crate::{
+    ai::ambient_agents::github_auth_url::GithubAuthRedirectTarget,
     ai::cloud_environments::{self, CloudAmbientAgentEnvironment},
     appearance::Appearance,
     cloud_object::{

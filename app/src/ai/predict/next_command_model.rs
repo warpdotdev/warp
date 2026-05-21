@@ -1,6 +1,8 @@
 use crate::ai::block_context::BlockContext;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::completer::SessionContext;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 use crate::report_error;
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::settings::AISettings;
@@ -156,10 +158,10 @@ impl NextCommandModel {
         server_api: Arc<ServerApi>,
     ) -> Self {
         #[cfg(feature = "local_fs")]
-        let conn = crate::persistence::database_file_path()
+        let conn = database_file_path_for_scope(&PersistenceScope::App)
             .to_str()
             .and_then(|db_url| {
-                crate::persistence::establish_ro_connection(db_url)
+                establish_ro_connection(db_url)
                     .ok()
                     .map(|conn| Arc::new(Mutex::new(conn)))
             });

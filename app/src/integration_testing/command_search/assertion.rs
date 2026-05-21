@@ -27,6 +27,18 @@ pub fn assert_history_filter_is_active() -> AssertionCallback {
     })
 }
 
+pub fn assert_command_search_has_results() -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let command_search_view = command_search_view(app, window_id);
+        command_search_view.read(app, |command_search_view, ctx| {
+            async_assert!(
+                command_search_view.has_search_results(ctx),
+                "Expected command search to have results, but it was empty"
+            )
+        })
+    })
+}
+
 pub fn assert_query(query: impl AsRef<str> + 'static) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let command_search_view = command_search_view(app, window_id);
