@@ -1002,24 +1002,30 @@ impl TypedActionView for FileNotebookView {
             FileNotebookAction::ReloadFile => self.reload_file(ctx),
             #[cfg(feature = "local_fs")]
             FileNotebookAction::CopyFilePath => {
-                if let Some(path) = self.local_path() {
+                if let Some(path) = self.file_state.path() {
                     ctx.clipboard()
-                        .write(ClipboardContent::plain_text(path.display().to_string()));
+                        .write(ClipboardContent::plain_text(path.display_path()));
                 }
             }
             #[cfg(feature = "local_fs")]
             FileNotebookAction::OpenInEditor => {
-                if let Some(path) = self.local_path() {
+                if let Some(local_path) = self.local_path() {
                     use crate::util::file::external_editor::EditorSettings;
                     use crate::util::openable_file_type::resolve_file_target;
                     // Resolve target and emit event - workspace will handle all cases
                     let settings = EditorSettings::as_ref(ctx);
-                    let target = resolve_file_target(&path, settings, None);
+                    let target = resolve_file_target(&local_path, settings, None);
                     ctx.emit(FileNotebookEvent::OpenFileWithTarget {
-                        path,
+                        path: local_path,
                         target,
                         line_col: None,
                     });
+                } else if let Some(path) = self.file_state.path().cloned() {
+                    // For remote files, open as a code editor pane.
+                    ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
+                        path,
+                        source: None,
+                    }));
                 }
             }
             #[cfg(feature = "local_fs")]
