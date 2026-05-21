@@ -303,7 +303,7 @@ use warp_core::{
     ui::theme::{color::internal_colors, AnsiColorIdentifier},
 };
 use warp_editor::editor::NavigationKey;
-use warp_util::path::ShellFamily;
+use warp_util::{path::ShellFamily, user_input::UserInput};
 use warpui::{
     accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
     clipboard::{ClipboardContent, ImageData},
@@ -8189,6 +8189,18 @@ impl Input {
     /// Appends text to the current buffer at the cursor position, preserving existing buffer content.
     pub fn append_to_buffer(&mut self, content: &str, ctx: &mut ViewContext<Self>) {
         self.system_insert(content, ctx);
+    }
+
+    /// Handles file paths dropped from the project explorer by routing them through
+    /// the editor's DragAndDropFiles action. This ensures consistent behavior with
+    /// Finder drops: image detection, shell escaping, and path transformation all
+    /// apply uniformly.
+    pub fn handle_drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            let user_paths: Vec<UserInput<String>> =
+                paths.iter().map(|p| UserInput::new(p.as_str())).collect();
+            editor.handle_action(&EditorAction::DragAndDropFiles(user_paths), ctx);
+        });
     }
 
     pub fn insert_typeahead_text(
