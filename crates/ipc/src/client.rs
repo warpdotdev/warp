@@ -1,17 +1,19 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use futures::{channel::oneshot, future::FutureExt, io::BufReader, AsyncRead, AsyncWrite};
+use futures::channel::oneshot;
+use futures::future::FutureExt;
+use futures::io::BufReader;
+use futures::{AsyncRead, AsyncWrite};
 use warpui::r#async::executor::Background;
 
-use crate::{platform::client::connect_client, protocol::Request};
-
-use super::{
-    protocol::{
-        receive_message, send_message, ConnectionAddress, ProtocolError, RequestId, Response,
-    },
-    service::service_id,
-    Service,
+use super::protocol::{
+    receive_message, send_message, ConnectionAddress, ProtocolError, RequestId, Response,
 };
+use super::service::service_id;
+use super::Service;
+use crate::platform::client::connect_client;
+use crate::protocol::Request;
 
 #[derive(Debug)]
 pub enum InitializationError {
@@ -125,7 +127,7 @@ impl Client {
         let request = Request::new(service_id::<S>(), request_bytes);
 
         // Create a channel for the response result. The sending end is sent to the outbound
-        // message task. The outbound meessage task uses it to relay any error that might occur
+        // message task. The outbound message task uses it to relay any error that might occur
         // when sending the message. If the message is sent successfully, the sending end is
         // forwarded to the _inbound_ message task, which will eventually use it to relay the
         // response bytes.

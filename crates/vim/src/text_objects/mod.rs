@@ -7,7 +7,8 @@ mod paragraph;
 mod quote;
 mod word;
 
-pub use self::block::*;
 pub use paragraph::*;
 pub use quote::*;
 pub use word::*;
+
+pub use self::block::*;

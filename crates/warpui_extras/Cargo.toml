@@ -35,7 +35,7 @@ cocoa = { workspace = true, optional = true }
 objc = { workspace = true, optional = true }
 security-framework = { version = "2.0.0", optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ouroboros = { version = "0.18", optional = true }
 rand = "0.8.5"
 ring = "0.17.13"

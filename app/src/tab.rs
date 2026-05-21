@@ -1,38 +1,10 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
-use crate::appearance::Appearance;
-/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
-/// the rendering and management of tabs in general.
-use crate::editor::EditorView;
-use crate::features::FeatureFlag;
-use crate::launch_configs::launch_config::LaunchConfig;
-use crate::menu::{MenuAction, MenuItem, MenuItemFields};
-use crate::pane_group::PaneGroup;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
-use settings::Setting as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::view::TerminalViewState;
-use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::util::color::{coloru_with_opacity, Opacity};
-use crate::util::truncation::truncate_from_end;
-
-use crate::window_settings::WindowSettings;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_settings::{TabCloseButtonPosition, TabSettings};
-use crate::workspace::{
-    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
-};
-use crate::BlocklistAIHistoryModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
@@ -50,6 +22,35 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, SingletonEntity, ViewHandle};
+
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::appearance::Appearance;
+/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
+/// the rendering and management of tabs in general.
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::menu::{MenuAction, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::render_util::shared_session_indicator_color;
+use crate::terminal::view::TerminalViewState;
+use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::util::color::{coloru_with_opacity, Opacity};
+use crate::util::truncation::truncate_from_end;
+use crate::window_settings::WindowSettings;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_settings::{
+    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
+};
+use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
@@ -192,6 +193,7 @@ impl TabData {
 
         for section_items in [
             self.session_sharing_menu_items(index, ctx),
+            self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
             self.close_tab_menu_items(index, tabs_len, ctx),
             Self::save_config_menu_items(index),
@@ -284,6 +286,111 @@ impl TabData {
         }
 
         menu_items
+    }
+
+    fn copyable_pane_title(
+        pane_group: &PaneGroup,
+        pane_id: PaneId,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        pane_group.pane_by_id(pane_id).and_then(|pane| {
+            let configuration = pane.pane_configuration();
+            let configuration = configuration.as_ref(ctx);
+            let title = configuration
+                .custom_vertical_tabs_title()
+                .unwrap_or_else(|| configuration.title());
+            Self::copyable_metadata_value(Some(title.to_string()))
+        })
+    }
+
+    fn copy_metadata_menu_items(
+        &self,
+        pane_name_target: Option<PaneNameMenuTarget>,
+        ctx: &AppContext,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
+        let pane_group = self.pane_group.as_ref(ctx);
+        let mut menu_items = vec![];
+        let tab_title = Self::copyable_metadata_value(Some(pane_group.display_title(ctx)));
+        if !uses_vertical_tabs(ctx) {
+            Self::push_copy_metadata_menu_item(&mut menu_items, "Copy tab title", tab_title);
+            return menu_items;
+        }
+
+        let vertical_tabs_display_granularity = *TabSettings::as_ref(ctx)
+            .vertical_tabs_display_granularity
+            .value();
+        let (title_label, title, terminal_view) = if matches!(
+            vertical_tabs_display_granularity,
+            VerticalTabsDisplayGranularity::Panes
+        ) {
+            let pane_id = pane_name_target
+                .filter(|target| self.pane_group.id() == target.locator.pane_group_id)
+                .and_then(|target| {
+                    pane_group
+                        .pane_by_id(target.locator.pane_id)
+                        .map(|_| target.locator.pane_id)
+                })
+                .unwrap_or_else(|| pane_group.focused_pane_id(ctx));
+            (
+                "Copy pane title",
+                Self::copyable_pane_title(pane_group, pane_id, ctx),
+                pane_group.terminal_view_from_pane_id(pane_id, ctx),
+            )
+        } else {
+            let terminal_view = pane_name_target
+                .filter(|target| self.pane_group.id() == target.locator.pane_group_id)
+                .and_then(|target| {
+                    pane_group.terminal_view_from_pane_id(target.locator.pane_id, ctx)
+                })
+                .or_else(|| pane_group.focused_session_view(ctx));
+            ("Copy tab title", tab_title, terminal_view)
+        };
+
+        if let Some(terminal_view) = terminal_view {
+            let terminal_view = terminal_view.as_ref(ctx);
+            Self::push_copy_metadata_menu_item(
+                &mut menu_items,
+                "Copy branch",
+                Self::copyable_metadata_value(terminal_view.current_git_branch(ctx)),
+            );
+            Self::push_copy_metadata_menu_item(&mut menu_items, title_label, title);
+            Self::push_copy_metadata_menu_item(
+                &mut menu_items,
+                "Copy working directory",
+                Self::copyable_metadata_value(
+                    terminal_view
+                        .pwd()
+                        .or_else(|| terminal_view.display_working_directory(ctx)),
+                ),
+            );
+            Self::push_copy_metadata_menu_item(
+                &mut menu_items,
+                "Copy pull request link",
+                Self::copyable_metadata_value(terminal_view.current_pull_request_url(ctx)),
+            );
+        } else {
+            Self::push_copy_metadata_menu_item(&mut menu_items, title_label, title);
+        }
+
+        menu_items
+    }
+
+    fn push_copy_metadata_menu_item(
+        menu_items: &mut Vec<MenuItem<WorkspaceAction>>,
+        label: &'static str,
+        value: Option<String>,
+    ) {
+        if let Some(value) = value {
+            menu_items.push(
+                MenuItemFields::new(label)
+                    .with_on_select_action(WorkspaceAction::CopyTextToClipboard(value))
+                    .into_item(),
+            );
+        }
+    }
+
+    fn copyable_metadata_value(value: Option<String>) -> Option<String> {
+        value.filter(|value| !value.trim().is_empty())
     }
 
     fn modify_tab_menu_items(
@@ -601,6 +708,16 @@ pub struct TabComponent<'a> {
     tooltip_git_branch: Option<String>,
     is_drag_target: bool,
     background_opacity: u8,
+    /// Set to `true` when this `TabComponent` is being rendered inside the
+    /// floating chip overlay used during a cross-window tab drag. In that
+    /// mode `build()` skips the outer `SavePosition`, `Draggable`, and
+    /// `DropTarget` wrappers so the chip:
+    ///   * does not write to `tab_position_id(tab_index)` in the target
+    ///     window's position cache (which would corrupt
+    ///     `tab_insertion_index_for_cursor` and cause the empty-slot
+    ///     flicker), and
+    ///   * does not act as its own draggable / drop target.
+    for_drag_ghost: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -672,14 +789,19 @@ impl<'a> TabComponent<'a> {
         let active_pane_is_ambient_agent_session = tab
             .pane_group
             .as_ref(ctx)
-            .active_session_terminal_model(ctx)
-            .map(|model| {
-                let model = model.lock();
-                model.is_shared_ambient_agent_session()
-                    || matches!(
-                        model.conversation_transcript_viewer_status(),
-                        Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
-                    )
+            .active_session_view(ctx)
+            .map(|view| {
+                let view = view.as_ref(ctx);
+                view.is_ambient_agent_session(ctx) || {
+                    let model = view.model.lock();
+                    model.is_shared_ambient_agent_session()
+                        || matches!(
+                            model.conversation_transcript_viewer_status(),
+                            Some(
+                                crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
+                            )
+                        )
+                }
             })
             .unwrap_or(false);
         let active_pane_has_unsaved_code_changes = tab
@@ -755,7 +877,15 @@ impl<'a> TabComponent<'a> {
             tooltip_git_branch,
             is_drag_target,
             background_opacity,
+            for_drag_ghost: false,
         }
+    }
+
+    /// Marks this tab as being rendered inside the floating chip used by the
+    /// cross-window tab drag overlay. See [`TabComponent::for_drag_ghost`].
+    pub fn for_drag_ghost(mut self) -> Self {
+        self.for_drag_ghost = true;
+        self
     }
 
     /// Returns the agent indicator for the focused session's active conversation,
@@ -1442,6 +1572,13 @@ impl<'a> TabComponent<'a> {
                         .into_solid_bias_top_color(),
                 )
                 .finish()
+        } else if self.for_drag_ghost {
+            // The chip overlay is a purely visual snapshot of the source tab.
+            // It must not act as a drop target — both because that's not
+            // semantically meaningful for an element that follows the cursor,
+            // and because the inner `DropTarget`'s position is unrelated to
+            // any real tab in the target window.
+            tab.finish()
         } else {
             DropTarget::new(
                 tab.finish(),
@@ -1472,6 +1609,8 @@ impl UiComponent for TabComponent<'_> {
         let is_any_tab_dragging = self.tab_bar.is_any_tab_dragging;
         let draggable_state = self.tab.draggable_state.clone();
         let mouse_close_state = self.tab.close_mouse_state.clone();
+        // Capture before `self` is moved into the Hoverable closure below.
+        let for_drag_ghost = self.for_drag_ghost;
 
         // Extract values before moving self into closure
         let tooltip_text = self.tooltip_message.clone();
@@ -1656,22 +1795,32 @@ impl UiComponent for TabComponent<'_> {
                 .finish()
         };
 
-        let draggable = Draggable::new(draggable_state, constrained_tab)
-            .on_drag_start(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag))
-            .on_drag(move |ctx, _, rect, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::DragTab {
-                    tab_index,
-                    tab_position: rect,
-                });
-            })
-            .on_drop(|ctx, _, _, _| ctx.dispatch_typed_action(WorkspaceAction::DropTab));
-        let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
-            draggable
+        // Skip the `Draggable` and `SavePosition` wrappers when rendering
+        // the tab inside the cross-window drag chip overlay. Wrapping the
+        // chip in another `Draggable` would interfere with the in-flight
+        // drag, and writing a `SavePosition` keyed by `tab_position_id(0)`
+        // would clobber the target window's real tab 0 entry in the
+        // position cache, breaking `tab_insertion_index_for_cursor`.
+        let full_tab: Box<dyn Element> = if for_drag_ghost {
+            constrained_tab
         } else {
-            draggable.with_drag_axis(DragAxis::HorizontalOnly)
+            let draggable = Draggable::new(draggable_state, constrained_tab)
+                .on_drag_start(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag))
+                .on_drag(move |ctx, _, rect, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::DragTab {
+                        tab_index,
+                        tab_position: rect,
+                    });
+                })
+                .on_drop(|ctx, _, _, _| ctx.dispatch_typed_action(WorkspaceAction::DropTab));
+            let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
+                draggable
+            } else {
+                draggable.with_drag_axis(DragAxis::HorizontalOnly)
+            };
+            let tab_with_drag: Box<dyn Element> = draggable.finish();
+            SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()
         };
-        let tab_with_drag: Box<dyn Element> = draggable.finish();
-        let full_tab = SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish();
 
         if FeatureFlag::NewTabStyling.is_enabled() {
             Shrinkable::new(1.0, full_tab)

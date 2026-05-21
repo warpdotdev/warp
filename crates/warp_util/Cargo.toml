@@ -10,6 +10,8 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow.workspace = true
+command.workspace = true
 content_inspector = "0.2.4"
 pathdiff = "0.2.1"
 rand.workspace = true
@@ -21,10 +23,12 @@ regex.workspace = true
 thiserror.workspace = true
 typed-path.workspace = true
 dunce.workspace = true
+event-listener.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 pin-project.workspace = true
 futures-util.workspace = true
+log.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
@@ -33,4 +37,5 @@ windows.workspace = true
 gloo.workspace = true
 
 [dev-dependencies]
+futures-lite.workspace = true
 warpui.workspace = true

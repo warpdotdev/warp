@@ -19,8 +19,8 @@ warpui = { workspace = true, features = ["settings_value"] }
 warpui_extras = { workspace = true, features = ["default"] }
 
 [dev-dependencies]
-serial_test = "0.8.0"
 tempfile.workspace = true
+warp_features = { workspace = true, features = ["test-util"] }
 warpui_extras = { workspace = true, features = ["user_preferences-toml"] }
 
 [features]

@@ -1,24 +1,20 @@
-use regex::Regex;
 use std::time::Duration;
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionOutcome, TestStep},
-};
 
-use crate::{
-    integration_testing::{
-        step::assert_no_pending_model_events,
-        terminal::{
-            assert_long_running_block_executing_for_single_terminal_in_tab,
-            execute_command_for_single_terminal_in_tab, util::ExpectedExitStatus,
-            validate_block_output, wait_until_bootstrapped_pane,
-        },
-        view_getters::{single_terminal_view, terminal_view},
-    },
-    terminal::{model::rich_content::RichContentType, view::WithinBlockBanner},
-};
+use regex::Regex;
+use warpui::integration::{AssertionOutcome, TestStep};
+use warpui::{async_assert, async_assert_eq};
 
-use super::util::{ssh_command, user_host};
+use super::util::{remote_server_ssh_command, remote_server_user_host, ssh_command, user_host};
+use crate::integration_testing::step::assert_no_pending_model_events;
+use crate::integration_testing::terminal::util::ExpectedExitStatus;
+use crate::integration_testing::terminal::{
+    assert_long_running_block_executing_for_single_terminal_in_tab,
+    execute_command_for_single_terminal_in_tab, validate_block_output,
+    wait_until_bootstrapped_pane,
+};
+use crate::integration_testing::view_getters::{single_terminal_view, terminal_view};
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::view::WithinBlockBanner;
 
 /// Sets environment variables needed by the Google Cloud SDK.
 pub fn setup_gcloud_sdk() -> TestStep {
@@ -40,6 +36,15 @@ pub fn enter_ssh_command(shell: &str) -> TestStep {
         .with_keystrokes(&["enter"])
         .set_post_step_pause(Duration::from_millis(250))
 }
+pub fn enter_remote_server_ssh_command(shell: &str) -> TestStep {
+    let ssh_command = remote_server_ssh_command(shell, true);
+    TestStep::new(&format!(
+        "Start remote-server ssh connection with remote shell '{shell}'"
+    ))
+    .with_typed_characters(&[&ssh_command])
+    .with_keystrokes(&["enter"])
+    .set_post_step_pause(Duration::from_millis(250))
+}
 
 pub fn enter_remote_subshell_command(shell: &str) -> TestStep {
     let ssh_command = ssh_command(shell, false);
@@ -52,6 +57,15 @@ pub fn enter_remote_subshell_command(shell: &str) -> TestStep {
 /// Waits for a password prompt.
 pub fn wait_for_password_prompt(tab_index: usize, shell: &str) -> TestStep {
     let user_host = user_host(shell);
+    wait_for_password_prompt_for_user_host(tab_index, user_host)
+}
+
+pub fn wait_for_remote_server_password_prompt(tab_index: usize, shell: &str) -> TestStep {
+    let user_host = remote_server_user_host(shell);
+    wait_for_password_prompt_for_user_host(tab_index, user_host)
+}
+
+fn wait_for_password_prompt_for_user_host(tab_index: usize, user_host: String) -> TestStep {
     let regex = Regex::new(&format!("{user_host}'s password:[\\s]*$"))
         .expect("regex should not fail to compile");
     TestStep::new("Wait for password prompt")

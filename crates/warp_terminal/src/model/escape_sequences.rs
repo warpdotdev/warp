@@ -4,10 +4,8 @@ use lazy_static::lazy_static;
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 
-use super::{
-    mouse::{MouseAction, MouseButton, MouseState},
-    TermMode,
-};
+use super::mouse::{MouseAction, MouseButton, MouseState};
+use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -550,6 +548,9 @@ fn cursor_movement_keystroke_to_escape_sequence(
 /// further than a HashMap.
 fn map_special_key_to_bytes(key: &str) -> Option<&[u8]> {
     match key {
+        "enter" | "numpadenter" => Some("\r".as_bytes()),
+        "tab" => Some("\t".as_bytes()),
+        "escape" => Some("\x1b".as_bytes()),
         "backspace" => Some("\x7f".as_bytes()),
         "insert" => Some("\x1b[2~".as_bytes()),
         "delete" => Some("\x1b[3~".as_bytes()),
@@ -593,5 +594,5 @@ fn meta_keystroke_to_escape_sequence(
 }
 
 #[cfg(test)]
-#[path = "escape_sequences_test.rs"]
+#[path = "escape_sequences_tests.rs"]
 mod tests;

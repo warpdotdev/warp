@@ -68,7 +68,7 @@ pub fn parse_iterm_image_metadata(params: &[&[u8]]) -> ITermImageMetadata {
 
         // Because the format of arguments is (MultipartFile | File) = [optional arguments],
         // The first optional argument will have "MultipartFile=" or "File=" prefixed to it.
-        // For example, params[1] will be "File=inline=0". So the key-value seperation done before
+        // For example, params[1] will be "File=inline=0". So the key-value separation done before
         // will yield a value of "inline=0", which we need to further split.
         if key == b"File" || key == b"MultipartFile" {
             (key, value) = match value.iter().position(|&byte| byte == b'=') {
@@ -123,5 +123,5 @@ pub fn parse_iterm_image_metadata(params: &[&[u8]]) -> ITermImageMetadata {
 }
 
 #[cfg(test)]
-#[path = "iterm_image_test.rs"]
+#[path = "iterm_image_tests.rs"]
 mod tests;

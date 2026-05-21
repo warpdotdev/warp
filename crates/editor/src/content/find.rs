@@ -11,30 +11,23 @@
 //!   optimizations rely on fast substring searches (like highly-optimized platform-specific
 //!   `memchr` implementations) that we can't use with a non-contiguous buffer.
 
-use std::{borrow::Cow, future::Future};
+use std::borrow::Cow;
+use std::future::Future;
 
 use anyhow::{Context, bail};
 use rangemap::RangeSet;
-use regex_automata::{
-    Anchored, Input, MatchError, MatchKind,
-    hybrid::{
-        BuildError, LazyStateID,
-        dfa::{Cache, DFA},
-    },
-    nfa::thompson,
-    util::syntax::Config,
-};
+use regex_automata::hybrid::dfa::{Cache, DFA};
+use regex_automata::hybrid::{BuildError, LazyStateID};
+use regex_automata::nfa::thompson;
+use regex_automata::util::syntax::Config;
+use regex_automata::{Anchored, Input, MatchError, MatchKind};
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 
-use string_offset::CharOffset;
-
+use super::buffer::Buffer;
+use super::cursor::BufferCursor;
+use super::text::{BufferSummary, BufferText};
 use crate::search::RestorableSearchResults;
-
-use super::{
-    buffer::Buffer,
-    cursor::BufferCursor,
-    text::{BufferSummary, BufferText},
-};
 
 #[cfg(test)]
 #[path = "find_tests.rs"]
@@ -253,7 +246,7 @@ impl Engine {
                 log::warn!("Forward DFA found a match end, but reverse DFA did not find a start");
             }
 
-            // Because we seeked to the left of the match end, move to the next item after the
+            // Because we sought to the left of the match end, move to the next item after the
             // match to prevent an infinite loop.
             buffer_cursor.next_char_position();
 

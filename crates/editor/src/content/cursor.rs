@@ -455,5 +455,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "cursor_test.rs"]
+#[path = "cursor_tests.rs"]
 mod tests;

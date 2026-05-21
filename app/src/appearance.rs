@@ -1,8 +1,6 @@
 use settings::Setting as _;
-use warpui::{
-    fonts::FamilyId, AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext,
-    SingletonEntity,
-};
+use warpui::fonts::FamilyId;
+use warpui::{AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext, SingletonEntity};
 
 #[cfg(target_os = "macos")]
 mod macos_app_icon {
@@ -17,21 +15,17 @@ mod macos_app_icon {
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
 }
+use anyhow::anyhow;
 #[cfg(target_os = "macos")]
 use macos_app_icon::*;
-
-use crate::{
-    settings::{
-        active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
-        ThemeSettings,
-    },
-    themes::theme::{ThemeKind, WarpTheme},
-    ASSETS,
-};
-
-use anyhow::anyhow;
-
 pub use warp_core::ui::appearance::{Appearance, AppearanceEvent};
+
+use crate::settings::{
+    active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
+    ThemeSettings,
+};
+use crate::themes::theme::{ThemeKind, WarpTheme};
+use crate::ASSETS;
 
 /// Manages the state of the app-wide Appearance settings, it is responsible
 /// for 1) listening to settings changes and update the underlying Appearance
@@ -211,7 +205,7 @@ impl AppearanceManager {
             // icons do not adapt to the preferred style.
             //
             // Local channel is not bundled, so don't attempt this for that case. This method only
-            // works if the dock tile plugin hasn't overriden the default icon already, so skip
+            // works if the dock tile plugin hasn't overridden the default icon already, so skip
             // this method if the app started up with a non-default icon, as setting to "nil" would
             // revert to the icon we started up with. We therefore need to use an in-memory
             // override to display the default icon. This has the drawback of _not_ inheriting the

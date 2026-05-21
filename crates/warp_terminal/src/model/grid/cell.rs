@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 use std::boxed::Box;
 
 use bitflags::bitflags;
@@ -384,5 +387,5 @@ impl From<char> for Cell {
 }
 
 #[cfg(test)]
-#[path = "cell_test.rs"]
+#[path = "cell_tests.rs"]
 mod tests;

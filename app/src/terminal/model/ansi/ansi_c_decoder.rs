@@ -193,5 +193,5 @@ pub(super) fn parse_ansi_c_quoted_string(quoted_string: String) -> String {
 }
 
 #[cfg(test)]
-#[path = "ansi_c_decoder_test.rs"]
+#[path = "ansi_c_decoder_tests.rs"]
 mod tests;

@@ -2,15 +2,12 @@ use itertools::Itertools;
 use string_offset::ByteOffset;
 use warpui::platform::OperatingSystem;
 
-use crate::{
-    completer::suggest::MatchRequirement,
-    meta::{HasSpan, Span, Spanned},
-};
-use crate::{meta::SpannedItem, parsers::simple::command_at_cursor_position};
-
+use super::context::CompletionContext;
 use super::suggest::{suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionType};
-use super::{context::CompletionContext, get_path_separators};
-use super::{Match, MatchStrategy};
+use super::{get_path_separators, Match, MatchStrategy};
+use crate::completer::suggest::MatchRequirement;
+use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
+use crate::parsers::simple::command_at_cursor_position;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Description {
@@ -258,5 +255,5 @@ fn floor_char_boundary(original_string: &str, idx: usize) -> usize {
 }
 
 #[cfg(all(test, not(feature = "v2")))]
-#[path = "describe_test.rs"]
+#[path = "describe_tests.rs"]
 mod tests;

@@ -1,10 +1,11 @@
-use anyhow::{Context, Result};
-use regex::Regex;
-use serde_yaml::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::ops::Range;
 use std::path::Path;
+
+use anyhow::{Context, Result};
+use regex::Regex;
+use serde_yaml::Value;
 
 /// Represents a parsed markdown file with YAML front matter
 #[derive(Debug)]
@@ -97,5 +98,5 @@ pub(crate) fn parse_markdown_content(content: &str) -> Result<ParsedMarkdown> {
 }
 
 #[cfg(test)]
-#[path = "parser_test.rs"]
+#[path = "parser_tests.rs"]
 mod parser_test;

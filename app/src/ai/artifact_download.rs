@@ -17,7 +17,7 @@ pub(crate) fn sanitized_basename(path_or_filename: &str) -> Option<String> {
 pub(crate) fn extension_for_content_type(content_type: &str) -> Option<&'static str> {
     match content_type {
         "image/gif" => Some("gif"),
-        "image/jpeg" => Some("jpg"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
         "image/png" => Some("png"),
         "image/webp" => Some("webp"),
         "application/json" => Some("json"),
@@ -108,13 +108,14 @@ pub(crate) async fn download_artifact_bytes(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "local_fs")]
+    use chrono::{TimeZone, Utc};
+
     use super::*;
     #[cfg(feature = "local_fs")]
     use crate::server::server_api::ai::{
         ArtifactDownloadCommonFields, FileArtifactResponseData, ScreenshotArtifactResponseData,
     };
-    #[cfg(feature = "local_fs")]
-    use chrono::{TimeZone, Utc};
 
     #[cfg(feature = "local_fs")]
     fn sample_file_download_response(filename: &str, filepath: &str) -> ArtifactDownloadResponse {
@@ -149,6 +150,13 @@ mod tests {
             sanitized_basename("outputs/report.txt"),
             Some("report.txt".to_string())
         );
+    }
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn extension_for_content_type_recognizes_image_jpg_alias() {
+        assert_eq!(extension_for_content_type("image/jpg"), Some("jpg"));
+        assert_eq!(extension_for_content_type("image/jpeg"), Some("jpg"));
     }
 
     #[test]

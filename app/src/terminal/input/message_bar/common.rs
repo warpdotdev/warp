@@ -1,17 +1,18 @@
-use crate::ai::blocklist::agent_view::agent_view_bg_color;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, CacheOption, Clipped, Container, CornerRadius, Element, Hoverable, Image,
-    ParentElement, Radius,
+    Border, CacheOption, Clipped, Container, CornerRadius, Element, FormattedTextElement,
+    Hoverable, Image, ParentElement, Radius, Wrap, WrapFill, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::platform::Cursor;
-use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, Text};
+use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisSize, Text};
 use warpui::ui_components::keyboard_shortcut::keystroke_to_keys;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::blocklist::agent_view::agent_view_bg_color;
 use crate::ai::blocklist::agent_view::shortcuts::render_keystroke_with_color_overrides;
 use crate::terminal;
 use crate::terminal::input::message_bar::{ChipHorizontalAlignment, Message, MessageItem};
@@ -29,7 +30,7 @@ pub fn render_standard_message_bar(
     right_element: Option<Box<dyn Element>>,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    use warpui::prelude::{MainAxisAlignment, MainAxisSize};
+    use warpui::prelude::MainAxisAlignment;
 
     let (left_items, right_chips): (Vec<_>, Vec<_>) = message.items.into_iter().partition(|item| {
         !matches!(
@@ -81,6 +82,51 @@ pub fn render_standard_message_bar(
     .with_height(standard_message_bar_height(app))
     .finish()
 }
+/// Renders a standard message bar variant for inline text and hyperlinks that need to soft-wrap.
+/// `render_standard_message_bar` intentionally remains fixed-height and single-line for existing
+/// hint/status bars.
+pub fn render_wrapping_standard_message_bar(
+    icon: Icon,
+    icon_color: ColorU,
+    text_color: ColorU,
+    fragments: Vec<FormattedTextFragment>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let font_size = styles::font_size(app);
+    let icon = ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
+        .with_height(font_size)
+        .with_width(font_size)
+        .finish();
+    let text = FormattedTextElement::new(
+        FormattedText::new([FormattedTextLine::Line(fragments)]),
+        font_size,
+        appearance.ui_font_family(),
+        appearance.monospace_font_family(),
+        text_color,
+        Default::default(),
+    )
+    .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
+    .with_hyperlink_font_color(theme.accent().into())
+    .register_default_click_handlers(|url, _ctx, app| {
+        app.open_url(&url.url);
+    })
+    .finish();
+
+    Container::new(
+        Wrap::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(4.)
+            .with_child(icon)
+            .with_child(WrapFill::new(0., text).finish())
+            .finish(),
+    )
+    .with_horizontal_padding(*terminal::view::PADDING_LEFT)
+    .with_vertical_padding(styles::VERTICAL_PADDING)
+    .finish()
+}
 
 pub fn render_standard_message(message: Message, app: &AppContext) -> Box<dyn Element> {
     render_message_bar_items(&message.items, app)
@@ -92,7 +138,9 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
     let appearance = Appearance::as_ref(app);
     let default_font_color = styles::default_font_color(app);
 
-    let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    let mut row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_constrain_horizontal_bounds_to_parent(true);
 
     for (i, item) in items.iter().enumerate() {
         let mut child: Box<dyn Element> = match item {

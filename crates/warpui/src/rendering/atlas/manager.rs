@@ -1,7 +1,8 @@
-use crate::rendering::atlas::allocator::Allocator;
-use crate::rendering::atlas::{AllocatedRegion, AllocationError};
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2I;
+
+use crate::rendering::atlas::allocator::Allocator;
+use crate::rendering::atlas::{AllocatedRegion, AllocationError};
 
 /// Manager that is responsible for allocating areas into a series of textures atlases.
 pub(crate) struct Manager {

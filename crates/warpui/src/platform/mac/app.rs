@@ -1,45 +1,29 @@
+use std::borrow::Cow;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_void};
+use std::path::PathBuf;
+
 use cocoa::appkit::NSApp;
-use cocoa::foundation::{NSUInteger, NSURL};
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSArray, NSAutoreleasePool, NSData, NSString},
-};
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSArray, NSAutoreleasePool, NSData, NSString, NSUInteger, NSURL};
 use futures_util::future::LocalBoxFuture;
-use objc::{
-    class, msg_send,
-    runtime::{Object, Sel, BOOL, NO, YES},
-    sel, sel_impl,
-};
+use objc::runtime::{Object, Sel, BOOL, NO, YES};
+use objc::{class, msg_send, sel, sel_impl};
+use warpui_core::assets::AssetProvider;
+use warpui_core::integration::TestDriver;
+use warpui_core::keymap::{Keystroke, Trigger};
+use warpui_core::modals::{AlertDialog, ModalId};
+use warpui_core::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use warpui_core::platform::menu::{Menu, MenuBar};
+use warpui_core::platform::{self, FilePickerCallback, SaveFilePickerCallback};
+use warpui_core::{AppContext, Event};
 
-use std::{
-    borrow::Cow,
-    ffi::CStr,
-    os::raw::{c_char, c_void},
-    path::PathBuf,
-};
-
-use crate::platform::{
-    app::{AppBackend, AppBuilder},
-    AsInnerMut,
-};
-use warpui_core::{
-    assets::AssetProvider,
-    integration::TestDriver,
-    keymap::{Keystroke, Trigger},
-    modals::{AlertDialog, ModalId},
-    platform::app::{AppCallbackDispatcher, ApproveTerminateResult},
-    platform::menu::{Menu, MenuBar},
-    platform::SaveFilePickerCallback,
-    platform::{self, FilePickerCallback},
-    AppContext, Event,
-};
-
-use super::{
-    keycode::{Keycode, CMD_KEY, CONTROL_KEY, OPTION_KEY, SHIFT_KEY},
-    make_nsstring,
-    menus::{make_dock_menu, make_main_menu},
-    window::{get_window_state, IntegrationTestWindowManager, Window, WindowManager},
-};
+use super::keycode::{Keycode, CMD_KEY, CONTROL_KEY, OPTION_KEY, SHIFT_KEY};
+use super::make_nsstring;
+use super::menus::{make_dock_menu, make_main_menu};
+use super::window::{get_window_state, IntegrationTestWindowManager, Window, WindowManager};
+use crate::platform::app::{AppBackend, AppBuilder};
+use crate::platform::AsInnerMut;
 
 pub trait NSAlert: Sized {
     unsafe fn alloc(_: Self) -> id {

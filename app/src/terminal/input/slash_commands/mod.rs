@@ -1,20 +1,39 @@
+mod cloud_mode_v2_view;
 mod data_source;
 mod search_item;
-mod view;
+pub(super) mod view;
 
-pub use data_source::*;
-pub use view::*;
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
 
 use ai::skills::SkillReference;
+pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
+pub use data_source::*;
+pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::AnsiColorIdentifier;
+#[cfg(feature = "local_fs")]
+use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
-use warpui::{SingletonEntity, ViewContext};
+use warpui::{AppContext, SingletonEntity, ViewContext};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIConversationId;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -24,6 +43,7 @@ use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::SlashCommandAcceptedDetails;
 use crate::settings::AISettings;
+use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::message_bar::Message;
@@ -31,9 +51,12 @@ use crate::terminal::input::slash_command_model::{
     SlashCommandEntryState, UpdatedSlashCommandModel,
 };
 use crate::terminal::input::{
-    CompletionsTrigger, Event, Input, InputSuggestionsMode, UserQueryMenuAction,
+    CompletionsTrigger, Event, Input, InputAction, InputSuggestionsMode, UserQueryMenuAction,
 };
+#[cfg(feature = "local_fs")]
+use crate::terminal::model::session::Session;
 use crate::terminal::view::TerminalAction;
+use crate::ui_components::color_dot;
 use crate::view_components::DismissibleToast;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
@@ -94,13 +117,58 @@ impl SlashCommandTrigger {
     }
 }
 
+#[cfg(feature = "local_fs")]
+fn open_file_command_path(
+    session: &Session,
+    current_dir: &str,
+    raw_arg: &str,
+) -> (PathBuf, Option<LineAndColumnArg>) {
+    let parsed_path = CleanPathResult::with_line_and_column_number(raw_arg.trim());
+    // The argument may contain shell-escaped characters (e.g. `\ ` for spaces) from auto-suggest.
+    // Unescape them so the path matches the actual filesystem entry.
+    let unescaped_path = session.shell_family().unescape(&parsed_path.path);
+    // Expand `~` to the user's home directory.
+    let expanded_path = shellexpand::tilde(&unescaped_path);
+
+    let shell_path = session
+        .convert_directory_to_typed_path_buf(current_dir.to_owned())
+        .join(session.convert_directory_to_typed_path_buf(expanded_path.into_owned()))
+        .normalize();
+    let file_path = session
+        .maybe_convert_to_native_path(&shell_path.to_path())
+        .unwrap_or_else(|err| {
+            log::warn!("unable to convert /open-file path to native path: {err:?}");
+            PathBuf::from(shell_path.to_string_lossy().into_owned())
+        });
+
+    (file_path, parsed_path.line_and_column_num)
+}
+
 impl Input {
+    fn is_slash_command_available(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
+        let slash_command_data_source = if self.is_cloud_mode_input_v2_composing(ctx) {
+            let Some(data_source) = self.cloud_mode_composer_slash_command_data_source.as_ref()
+            else {
+                return false;
+            };
+            data_source
+        } else {
+            &self.slash_command_data_source
+        };
+        slash_command_data_source
+            .as_ref(ctx)
+            .command_is_active(command, ctx)
+    }
+
     pub(super) fn select_slash_command(
         &mut self,
         command: &StaticCommand,
         trigger: SlashCommandTrigger,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.is_slash_command_available(command, ctx) {
+            return;
+        }
         if command.argument.as_ref().is_none() {
             self.execute_slash_command(
                 command, None, trigger, /*is_queued_prompt*/ false, ctx,
@@ -400,7 +468,19 @@ impl Input {
                 ctx.emit(Event::CreateDockerSandbox);
             }
             conversations if command.name == commands::CONVERSATIONS.name => {
-                if FeatureFlag::AgentView.is_enabled() {
+                if self.is_cloud_mode_input_v2_composing(ctx) {
+                    self.suggestions_mode_model.update(ctx, |model, ctx| {
+                        model.set_mode(InputSuggestionsMode::Closed, ctx);
+                    });
+                    self.clear_buffer_and_reset_undo_stack(ctx);
+                    if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                        view.update(ctx, |v, ctx| {
+                            v.arm_initial_buffer_sync(ctx);
+                        });
+                    }
+                    ctx.dispatch_typed_action_deferred(InputAction::OpenInlineHistoryMenu);
+                    return true;
+                } else if FeatureFlag::AgentView.is_enabled() {
                     self.open_conversation_menu(ctx);
                 } else {
                     ctx.dispatch_typed_action(&TerminalAction::OpenConversationsPalette);
@@ -419,6 +499,54 @@ impl Input {
                 };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
+            }
+            set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
+                let supported_options = || {
+                    color_dot::TAB_COLOR_OPTIONS
+                        .iter()
+                        .map(|c| c.to_string().to_ascii_lowercase())
+                        .chain(std::iter::once("none".to_owned()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+
+                let Some(arg) = argument
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                else {
+                    show_error_toast(
+                        format!(
+                            "Please provide a color after /set-tab-color ({})",
+                            supported_options()
+                        ),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                let color = if arg.eq_ignore_ascii_case("none") {
+                    SelectedTabColor::Cleared
+                } else {
+                    let parsed = arg
+                        .parse::<AnsiColorIdentifier>()
+                        .ok()
+                        .filter(|c| color_dot::TAB_COLOR_OPTIONS.contains(c));
+                    match parsed {
+                        Some(c) => SelectedTabColor::Color(c),
+                        None => {
+                            show_error_toast(
+                                format!(
+                                    "Unknown tab color '{arg}'. Use one of: {}.",
+                                    supported_options()
+                                ),
+                                ctx,
+                            );
+                            return true;
+                        }
+                    }
+                };
+
+                ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabColor(color));
             }
             create_env if command.name == commands::CREATE_ENVIRONMENT.name => {
                 // If the user included args after the slash command, treat them as repo paths/URLs.
@@ -450,9 +578,6 @@ impl Input {
                 #[cfg(feature = "local_fs")]
                 match argument {
                     Some(args) if !args.is_empty() => {
-                        use shellexpand::tilde;
-                        use warp_util::path::CleanPathResult;
-
                         let Some(session_id) = self.active_block_session_id() else {
                             return false;
                         };
@@ -480,20 +605,14 @@ impl Input {
                             .active_block_metadata
                             .as_ref()
                             .and_then(|metadata| metadata.current_working_directory())
-                            .map(std::path::PathBuf::from);
+                            .map(str::to_owned);
 
                         let Some(current_dir) = current_dir else {
                             return false;
                         };
 
-                        let parsed_path = CleanPathResult::with_line_and_column_number(args.trim());
-                        // The argument may contain shell-escaped characters (e.g. `\ ` for
-                        // spaces) from auto-suggest. Unescape them so the path matches the
-                        // actual filesystem entry.
-                        let unescaped_path = session.shell_family().unescape(&parsed_path.path);
-                        // Expand `~` to the user's home directory.
-                        let expanded_path = tilde(&unescaped_path);
-                        let file_path = current_dir.join(&*expanded_path);
+                        let (file_path, line_col) =
+                            open_file_command_path(&session, &current_dir, args);
 
                         match std::fs::metadata(&file_path) {
                             Ok(metadata) if metadata.is_file() => {
@@ -502,7 +621,7 @@ impl Input {
                                 ctx.dispatch_typed_action(&TerminalAction::OpenCodeInWarp {
                                     path: file_path,
                                     layout: external_editor::settings::EditorLayout::SplitPane,
-                                    line_col: parsed_path.line_and_column_num,
+                                    line_col,
                                 });
                             }
                             Ok(_) => {
@@ -627,11 +746,68 @@ impl Input {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
+                if self.is_cloud_mode_input_v2_composing(ctx) {
+                    self.apply_v2_slash_section_filter(CloudModeV2Section::Skills, ctx);
+                    return true;
+                }
                 // Open the skill selector menu for invocation - skill command will be inserted into buffer
                 self.open_invoke_skill_selector(ctx);
             }
+            host if command.name == commands::HOST.name => {
+                if !self.is_cloud_mode_input_v2_composing(ctx) {
+                    return false;
+                }
+                // Only open the host selector when a default host is configured.
+                if self
+                    .host_selector()
+                    .is_none_or(|h| !h.as_ref(ctx).has_default_host())
+                {
+                    return false;
+                }
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(InputSuggestionsMode::Closed, ctx);
+                });
+                self.clear_buffer_and_reset_undo_stack(ctx);
+                self.open_v2_host_selector(ctx);
+                return true;
+            }
+            harness if command.name == commands::HARNESS.name => {
+                if !self.is_cloud_mode_input_v2_composing(ctx) {
+                    // Defensive: the command is registered only when the V2 flag is on and its
+                    // availability requires CLOUD_AGENT_V2, so this branch should be unreachable.
+                    return false;
+                }
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(InputSuggestionsMode::Closed, ctx);
+                });
+                self.clear_buffer_and_reset_undo_stack(ctx);
+                self.open_v2_harness_selector(ctx);
+                return true;
+            }
+            environment if command.name == commands::ENVIRONMENT.name => {
+                if !self.is_cloud_mode_input_v2_composing(ctx) {
+                    return false;
+                }
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(InputSuggestionsMode::Closed, ctx);
+                });
+                self.clear_buffer_and_reset_undo_stack(ctx);
+                self.open_v2_environment_selector(ctx);
+                return true;
+            }
             models if command.name == commands::MODEL.name => {
-                self.open_model_selector(ctx);
+                if self.is_cloud_mode_input_v2_composing(ctx) {
+                    self.suggestions_mode_model.update(ctx, |model, ctx| {
+                        model.set_mode(InputSuggestionsMode::Closed, ctx);
+                    });
+                    self.clear_buffer_and_reset_undo_stack(ctx);
+                    self.agent_input_footer.update(ctx, |footer, ctx| {
+                        footer.open_v2_model_selector(ctx);
+                    });
+                    return true;
+                } else {
+                    self.open_model_selector(ctx);
+                }
             }
             profiles if command.name == commands::PROFILE.name => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {
@@ -641,6 +817,10 @@ impl Input {
                 self.open_profile_selector(ctx);
             }
             prompts if command.name == commands::PROMPTS.name => {
+                if self.is_cloud_mode_input_v2_composing(ctx) {
+                    self.apply_v2_slash_section_filter(CloudModeV2Section::Prompts, ctx);
+                    return true;
+                }
                 if FeatureFlag::AgentView.is_enabled() {
                     self.open_prompts_menu(ctx);
                 } else {
@@ -715,6 +895,37 @@ impl Input {
                     ctx.dispatch_typed_action(&TerminalAction::ToggleUsageFooter);
                 }
             }
+            #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+            move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
+                if !AISettings::as_ref(ctx)
+                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
+                {
+                    return false;
+                }
+                let prompt = argument
+                    .map(|argument| argument.trim())
+                    .filter(|argument| !argument.is_empty())
+                    .map(str::to_owned);
+                if let Some(prompt) = prompt {
+                    // `/handoff query` auto-submits, same as `& query`.
+                    let attachments = self.collect_cloud_launch_attachments(ctx);
+                    let launch = PendingCloudLaunch {
+                        prompt,
+                        attachments,
+                    };
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: Some(launch),
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
+                } else {
+                    // `/handoff` with no query enters `&` compose mode,
+                    // same as the footer chip.
+                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                }
+            }
             fork if command.name == commands::FORK.name => {
                 let Some(conversation_id) = self
                     .ai_context_model
@@ -743,6 +954,48 @@ impl Input {
             fork_from if command.name == commands::FORK_FROM.name => {
                 self.open_user_query_menu(UserQueryMenuAction::ForkFrom, ctx);
                 return true;
+            }
+            #[cfg(not(target_family = "wasm"))]
+            continue_locally if command.name == commands::CONTINUE_LOCALLY.name => {
+                let Some(conversation_id) = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                else {
+                    show_error_toast(
+                        "/continue-locally requires an active conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                if !conversation_is_cloud_oz_for_slash_command(conversation_id, ctx) {
+                    show_error_toast(
+                        "/continue-locally is only available for cloud Oz conversations".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                }
+
+                let destination = if trigger.is_cmd_or_ctrl_enter() {
+                    ForkedConversationDestination::NewTab
+                } else {
+                    ForkedConversationDestination::SplitPane
+                };
+
+                send_telemetry_from_ctx!(
+                    AgentManagementTelemetryEvent::SlashCommandContinueLocally,
+                    ctx
+                );
+
+                ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
+                    conversation_id,
+                    fork_from_exchange: None,
+                    summarize_after_fork: false,
+                    summarization_prompt: None,
+                    initial_prompt: argument.cloned(),
+                    destination,
+                });
             }
             fork_and_compact if command.name == commands::FORK_AND_COMPACT.name => {
                 let Some(conversation_id) = self
@@ -897,9 +1150,17 @@ impl Input {
             self.suggestions_mode_model.as_ref(ctx).mode(),
             InputSuggestionsMode::SlashCommands
         ) {
-            self.inline_slash_commands_view.update(ctx, |view, ctx| {
-                view.accept_selected_item(true, ctx);
-            });
+            if self.is_cloud_mode_input_v2_composing(ctx) {
+                if let Some(view) = self.cloud_mode_v2_slash_commands_view.clone() {
+                    view.update(ctx, |view, ctx| {
+                        view.accept_selected_item(true, ctx);
+                    });
+                }
+            } else {
+                self.inline_slash_commands_view.update(ctx, |view, ctx| {
+                    view.accept_selected_item(true, ctx);
+                });
+            }
             return true;
         }
 
@@ -908,6 +1169,9 @@ impl Input {
             SlashCommandEntryState::SlashCommand(detected_command) => {
                 let command = detected_command.command.clone();
                 let argument = detected_command.argument.clone();
+                if !self.is_slash_command_available(&command, ctx) {
+                    return false;
+                }
                 self.execute_slash_command(
                     &command,
                     argument.as_ref(),
@@ -915,6 +1179,11 @@ impl Input {
                     /*is_queued_prompt*/ false,
                     ctx,
                 )
+            }
+            SlashCommandEntryState::SkillCommand(_)
+                if self.is_cloud_mode_input_v2_composing(ctx) =>
+            {
+                false
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
@@ -927,6 +1196,41 @@ impl Input {
             | SlashCommandEntryState::Composing { .. }
             | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
         }
+    }
+
+    fn apply_v2_slash_section_filter(
+        &mut self,
+        section: CloudModeV2Section,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text("/", ctx);
+        });
+        if let Some(view) = self.cloud_mode_v2_slash_commands_view.clone() {
+            view.update(ctx, |v, ctx| {
+                v.set_section_filter(Some(section), ctx);
+            });
+        }
+    }
+
+    pub(super) fn maybe_clear_v2_slash_section_filter(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self.is_cloud_mode_input_v2_composing(ctx) {
+            return false;
+        }
+        let Some(view) = self.cloud_mode_v2_slash_commands_view.clone() else {
+            return false;
+        };
+        let has_filter = view.as_ref(ctx).has_section_filter();
+        if !has_filter {
+            return false;
+        }
+        view.update(ctx, |v, ctx| {
+            v.set_section_filter(None, ctx);
+        });
+        true
     }
 
     /// Executes a slash command on `enter` keypress.
@@ -948,9 +1252,17 @@ impl Input {
             self.suggestions_mode_model.as_ref(ctx).mode(),
             InputSuggestionsMode::SlashCommands
         ) {
-            self.inline_slash_commands_view.update(ctx, |view, ctx| {
-                view.accept_selected_item(false, ctx);
-            });
+            if self.is_cloud_mode_input_v2_composing(ctx) {
+                if let Some(view) = self.cloud_mode_v2_slash_commands_view.clone() {
+                    view.update(ctx, |view, ctx| {
+                        view.accept_selected_item(false, ctx);
+                    });
+                }
+            } else {
+                self.inline_slash_commands_view.update(ctx, |view, ctx| {
+                    view.accept_selected_item(false, ctx);
+                });
+            }
             return true;
         }
 
@@ -958,6 +1270,9 @@ impl Input {
             SlashCommandEntryState::SlashCommand(detected_command) => {
                 let command = detected_command.command.clone();
                 let argument = detected_command.argument.clone();
+                if !self.is_slash_command_available(&command, ctx) {
+                    return false;
+                }
                 self.execute_slash_command(
                     &command,
                     argument.as_ref(),
@@ -965,6 +1280,11 @@ impl Input {
                     /*is_queued_prompt*/ false,
                     ctx,
                 )
+            }
+            SlashCommandEntryState::SkillCommand(_)
+                if self.is_cloud_mode_input_v2_composing(ctx) =>
+            {
+                false
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
@@ -979,3 +1299,40 @@ impl Input {
         }
     }
 }
+
+/// Returns true when the conversation with `conversation_id` is associated with a cloud Oz
+/// `AmbientAgentTask`. Used as the defensive runtime gate for `/continue-locally` so a
+/// keybinding-triggered execution can't fall through onto a non-cloud-Oz conversation after
+/// the menu has been recomputed. Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
+#[cfg(not(target_family = "wasm"))]
+fn conversation_is_cloud_oz_for_slash_command(
+    conversation_id: AIConversationId,
+    ctx: &AppContext,
+) -> bool {
+    let history = BlocklistAIHistoryModel::as_ref(ctx);
+    let Some(conversation) = history.conversation(&conversation_id) else {
+        return false;
+    };
+    let Some(task_id) = conversation.task_id() else {
+        return false;
+    };
+
+    let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
+        // Permissive: not yet fetched. Matches the data-source default so the command isn't
+        // wrongly blocked while the task fetch is in flight.
+        return true;
+    };
+
+    match task
+        .agent_config_snapshot
+        .as_ref()
+        .and_then(|s| s.harness.as_ref())
+    {
+        Some(config) => config.harness_type == Harness::Oz,
+        None => true,
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

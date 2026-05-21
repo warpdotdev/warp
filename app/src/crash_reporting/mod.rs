@@ -7,12 +7,22 @@ mod sentry_minidump;
 mod linux;
 
 use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::DerefMut;
+use std::sync::Arc;
 
 use lazy_static::lazy_static;
+use parking_lot::{Mutex, RwLock};
+use regex::Regex;
 use sentry::{ClientInitGuard, IntoDsn, SessionMode};
+#[cfg(linux_or_windows)]
+pub use sentry_minidump::run_server as run_minidump_server;
 use warp_core::channel::Channel;
-use warpui::{r#async::block_on, AppContext, SingletonEntity};
+use warpui::r#async::block_on;
+use warpui::rendering::GPUDeviceInfo;
+use warpui::windowing::state::ApplicationStage;
+use warpui::windowing::{self, StateEvent, WindowManager};
+use warpui::{AppContext, SingletonEntity};
 
 use crate::antivirus::{AntivirusInfo, AntivirusInfoEvent};
 use crate::auth::anonymous_id::get_or_create_anonymous_id;
@@ -20,16 +30,6 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent};
-use parking_lot::{Mutex, RwLock};
-use regex::Regex;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
-use warpui::rendering::GPUDeviceInfo;
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{self, StateEvent, WindowManager};
-
-#[cfg(linux_or_windows)]
-pub use sentry_minidump::run_server as run_minidump_server;
 
 lazy_static! {
     /// The RAII guard returned by the call to initialize the Rust Sentry client must be kept in
@@ -178,7 +178,7 @@ impl ToSentryTags for CrashRecoveryMetadata {
     }
 }
 
-/// Initializes the crash reporting susbsystem.  Returns whether or not crash
+/// Initializes the crash reporting subsystem.  Returns whether or not crash
 /// reporting is active.
 pub(crate) fn init(ctx: &mut AppContext) -> bool {
     if !FeatureFlag::CrashReporting.is_enabled() {
@@ -408,6 +408,14 @@ fn sentry_client_options() -> sentry::ClientOptions {
         session_mode: SessionMode::Application,
         ..Default::default()
     }
+}
+
+/// Returns whether the Rust Sentry client is currently initialized.
+pub(crate) fn is_initialized() -> bool {
+    matches!(
+        &*RUST_SENTRY_CLIENT_GUARD.lock(),
+        RustSentryClientGuard::Initialized { .. }
+    )
 }
 
 /// Uninitializes sentry, effectively ending reporting on crashes and errors.

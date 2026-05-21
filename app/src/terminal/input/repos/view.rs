@@ -55,7 +55,6 @@ impl InlineReposMenuView {
                 },
                 ctx,
             );
-            mixer.run_query(repos_query(""), ctx);
             mixer
         });
 

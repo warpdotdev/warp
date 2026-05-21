@@ -1,19 +1,21 @@
 mod renderer;
 mod renderer_manager;
 
-use crate::rendering::wgpu::Resources;
-use crate::{platform::mac::rendering::Device, rendering::GPUPowerPreference};
-use anyhow::{anyhow, Result};
-pub use renderer_manager::RendererManager;
-
-use crate::rendering::OnGPUDeviceSelected;
-use cocoa::{appkit::NSView, base::id};
-use pathfinder_geometry::vector::vec2f;
 use std::ptr::NonNull;
+
+use anyhow::{anyhow, Result};
+use cocoa::appkit::NSView;
+use cocoa::base::id;
+use pathfinder_geometry::vector::vec2f;
+pub use renderer_manager::RendererManager;
 use wgpu::rwh::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
     HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
+
+use crate::platform::mac::rendering::Device;
+use crate::rendering::wgpu::Resources;
+use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 
 impl Device {
     /// Constructs a new [`Device`] to render using WGPU.
@@ -61,7 +63,7 @@ impl Device {
 /// guaranteed that the underlying window won't become invalid while the `WindowHandle` is alive.
 /// In the case of Warp this _should_ be safe because we ultimately deallocate the native window
 /// when [`crate::platform::mac::Window`] is deallocated (once a `Window` is deallocated, there
-/// are no pointers to the native window anymore, which cause it to to be deallocated via the
+/// are no pointers to the native window anymore, which cause it to be deallocated via the
 /// `warp_dealloc_window` callback).
 /// See <https://github.com/rust-windowing/raw-window-handle/pull/73> for more information on the
 /// safety requirements of implementing the [`HasRawWindowHandle`] trait.

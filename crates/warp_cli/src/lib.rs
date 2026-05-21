@@ -1,10 +1,10 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use std::{env, fmt, path::Path};
+use std::path::Path;
+use std::{env, fmt};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use url::Url;
-
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
@@ -18,8 +18,10 @@ pub mod scope;
 pub mod skill;
 
 pub mod agent;
+pub mod api_key;
 pub mod completions;
 pub mod config_file;
+mod date_time;
 pub mod environment;
 pub mod federate;
 pub mod harness_support;
@@ -243,6 +245,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::APIKeyManagement.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "api-key" {
+                        eprintln!("error: unrecognized subcommand 'api-key'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -348,6 +359,15 @@ impl Args {
         if !FeatureFlag::ArtifactCommand.is_enabled() {
             command = command.mut_subcommand("artifact", |c| c.hide(true));
         }
+
+        // Hide the api-key subcommand from help text.
+        if !FeatureFlag::APIKeyManagement.is_enabled() {
+            command = command.mut_subcommand("api-key", |c| c.hide(true));
+        }
+
+        // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
+        // app, so the CLI reports the build's release tag.
+        command = command.version(version_string());
 
         // Substitute the actual binary name into help output. Ideally clap would do this for us.
         let bin_name =
@@ -531,6 +551,10 @@ pub enum CliCommand {
     /// Manage artifacts.
     #[command(subcommand)]
     Artifact(crate::artifact::ArtifactCommand),
+
+    /// Manage API keys.
+    #[command(subcommand)]
+    ApiKey(crate::api_key::ApiKeyCommand),
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.
@@ -599,7 +623,7 @@ pub struct TerminalServerArgs {
 
 #[derive(Debug, Copy, Clone, clap::ValueEnum)]
 pub enum RecoveryMechanism {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     #[value(name = "force-x11")]
     X11,
     #[value(name = "force-dedicated-gpu")]
@@ -686,6 +710,15 @@ pub fn binary_name() -> Option<String> {
     // Unfortunately, we can't use Command::get_bin_name because it's not populated until args are parsed.
     let arg0 = env::args().next()?;
     Path::new(&arg0).file_name()?.to_str().map(|s| s.to_owned())
+}
+
+/// The version string shown for `--version` / `-V`.
+///
+/// Sourced from [`ChannelState::app_version`], which is populated from the
+/// `GIT_RELEASE_TAG` env var at compile time. Falls back to a placeholder for
+/// untagged builds (e.g. local `cargo run`).
+pub fn version_string() -> &'static str {
+    ChannelState::app_version().unwrap_or("<unknown>")
 }
 
 #[cfg(test)]

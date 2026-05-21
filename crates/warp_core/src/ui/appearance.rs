@@ -1,9 +1,8 @@
-use warpui::{
-    fonts::{FamilyId, Weight},
-    Entity, ModelContext, SingletonEntity,
-};
+use warpui::fonts::{FamilyId, Weight};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
-use super::{builder::UiBuilder, theme::WarpTheme};
+use super::builder::UiBuilder;
+use super::theme::WarpTheme;
 
 /// The standard font size to use for headers (e.g.: in dialogs).
 const HEADER_FONT_SIZE: f32 = 18.;
@@ -35,7 +34,7 @@ pub struct Appearance {
 /// Defines appearance change events.
 ///
 /// For any properties that are read from appearance (e.g.: theme, font, etc.),
-/// users should listen for these events rather than directly listenting to
+/// users should listen for these events rather than directly listening to
 /// settings change events for the underlying properties.
 ///
 /// NOTE: You do NOT need to set up subscriptions for these events and use them

@@ -10,21 +10,23 @@ use async_trait::async_trait;
 use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
-use crate::{
-    ClassificationResult, Context, InputClassifier, InputType,
-    parser::parse_query_into_tokens,
-    util::{
-        is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
-    },
+use crate::parser::parse_query_into_tokens;
+use crate::util::{
+    is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
 };
+use crate::{ClassificationResult, Context, InputClassifier, InputType};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "models/onnx"]
+#[include = "bert_tiny_tokenizer.json"]
+#[cfg_attr(feature = "nld_classifier_v1", include = "bert_tiny_v1.onnx")]
+#[cfg_attr(feature = "nld_classifier_v2", include = "bert_tiny_v2.onnx")]
 struct Models;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Model {
-    BertTiny,
+    BertTinyV1,
+    BertTinyV2,
 }
 
 impl Model {
@@ -38,13 +40,14 @@ impl Model {
 
     fn model_path(&self) -> &'static str {
         match self {
-            Model::BertTiny => "bert_tiny.onnx",
+            Model::BertTinyV1 => "bert_tiny_v1.onnx",
+            Model::BertTinyV2 => "bert_tiny_v2.onnx",
         }
     }
 
     fn tokenizer_path(&self) -> &'static str {
         match self {
-            Model::BertTiny => "bert_tiny_tokenizer.json",
+            Model::BertTinyV1 | Model::BertTinyV2 => "bert_tiny_tokenizer.json",
         }
     }
 }

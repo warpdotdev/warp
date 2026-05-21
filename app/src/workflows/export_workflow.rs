@@ -1,24 +1,20 @@
-use serde::{
-    de::{self, MapAccess, Visitor},
-    ser::SerializeStruct,
-    Deserialize, Deserializer, Serialize, Serializer,
-};
+use std::collections::HashMap;
+use std::fmt;
+use std::result::Result;
+use std::str::FromStr;
+
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 use strum::VariantNames as _;
 use strum_macros::{Display, EnumString, VariantNames};
 use warpui::{AppContext, SingletonEntity};
 
-use std::{collections::HashMap, fmt, result::Result, str::FromStr};
-
-use crate::{
-    cloud_object::model::persistence::CloudModel,
-    server::ids::{ClientId, SyncId},
-};
-
-use super::{
-    workflow::{Argument, ArgumentType, Workflow},
-    workflow_enum::{EnumVariants, WorkflowEnum},
-};
+use super::workflow::{Argument, ArgumentType, Workflow};
+use super::workflow_enum::{EnumVariants, WorkflowEnum};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::server::ids::{ClientId, SyncId};
 
 /// Separate structure for exporting arguments. This new structure holds explicit enum information,
 /// unlike the `Argument` struct which just holds the enum_id. It is also flatter than the normal `Argument`

@@ -112,7 +112,7 @@ impl SessionContext {
                 if let Ok(command_output) = command_output_result {
                     let Ok(output_string) = command_output.to_string() else {
                         log::warn!(
-                            "Executing `ls` on remote box returned unparseable bytes: `{:?}`",
+                            "Executing `ls` on remote box returned unparsable bytes: `{:?}`",
                             AsciiDebug(command_output.output())
                         );
                         return vec![];
@@ -179,6 +179,10 @@ impl SessionContext {
 impl PathCompletionContext for SessionContext {
     fn home_directory(&self) -> Option<&str> {
         self.session.home_dir()
+    }
+
+    fn cdpath(&self) -> Option<&str> {
+        self.session.cdpath()
     }
 
     fn pwd(&self) -> TypedPath<'_> {

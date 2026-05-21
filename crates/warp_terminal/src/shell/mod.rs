@@ -21,9 +21,8 @@ use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
 
-use crate::model::escape_sequences;
-
 use self::unescape::unescape_quotes;
+use crate::model::escape_sequences;
 
 const ZSH_META: u8 = 0x83;
 
@@ -519,7 +518,7 @@ impl ShellType {
 
             ShellType::Fish => {
                 let history_file_contents = String::from_utf8_lossy(history_file_bytes);
-                // fish has psuedo-yaml.
+                // fish has pseudo-yaml.
                 // The commands start with "- cmd: ".
                 history_lines = history_file_contents
                     .lines()

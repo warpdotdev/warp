@@ -1,27 +1,24 @@
 use std::fmt::Debug;
 
 use pathfinder_color::ColorU;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Element, Fill, Icon,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::fonts::FamilyId;
+use warpui::geometry::vector::vec2f;
+use warpui::scene::DropShadow;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, Element, Icon,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
-    },
-    fonts::FamilyId,
-    geometry::vector::vec2f,
-    scene::DropShadow,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     Action, AppContext, BlurContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant},
-};
+use crate::appearance::Appearance;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 
 pub const TOP_MENU_BAR_HEIGHT: f32 = 30.;
 pub const TOP_MENU_BAR_MAX_WIDTH: f32 = 190.;
@@ -82,8 +79,37 @@ pub struct Dropdown<A: Action + Clone> {
     font_color: Option<ColorU>,
     font_size: Option<f32>,
     padding: Option<Coords>,
+    /// Optional override for the top-bar background fill, applied on top
+    /// of the variant's default style. Used by callers that need a
+    /// per-call appearance distinct from the shared `DropdownStyle`
+    /// variants (e.g. orchestrate confirmation card pickers per Figma
+    /// 4340:117057).
+    background: Option<Fill>,
+    /// Optional override for the top-bar border fill. See `background`.
+    border_color: Option<Fill>,
+    /// Optional override for the top-bar border width.
+    border_width: Option<f32>,
+    /// Optional override for the top-bar corner radius.
+    border_radius: Option<CornerRadius>,
     vertical_margin: f32,
     top_bar_height: f32,
+    /// When true (default), the open menu is attached to the dropdown's
+    /// stack via `add_positioned_overlay_child`, painting it in an
+    /// `Overlay` layer that escapes parent clip bounds. When false, the
+    /// menu is attached via `add_positioned_child` and paints in the
+    /// parent's Normal layer, the same way other AIBlock-internal
+    /// menus (e.g. the accept-and-autoexecute split-button menu in
+    /// `requested_command.rs` / `code_diff_view.rs`) do.
+    ///
+    /// Setting this to `false` is required for dropdowns rendered
+    /// inside a `SelectableArea` whose menu items would otherwise lose
+    /// `LeftMouseDown` / `LeftMouseUp` (hover still works) due to an
+    /// interaction between `Menu`'s `prevent_interaction_with_other_elements`
+    /// full-window hit-recording rect and the surrounding
+    /// `SelectableArea`. Tracked as P1.1 for the orchestrate
+    /// confirmation card pickers.
+    use_overlay_layer: bool,
+    match_menu_width_to_top_bar: bool,
 }
 
 #[derive(Clone)]
@@ -94,6 +120,11 @@ pub struct DropdownItem<A: Action + Clone> {
     action: A,
     /// Custom font for the dropdown item
     family_id: Option<FamilyId>,
+    /// Optional hover tooltip shown over the row.
+    tooltip: Option<String>,
+    /// Optional clip config controlling how `display_text` is clipped when it
+    /// would overflow the row width. Forwarded to [`MenuItemFields`].
+    clip_config: Option<ClipConfig>,
 }
 
 impl<A> DropdownItem<A>
@@ -108,6 +139,8 @@ where
             display_text: display_text.into(),
             action,
             family_id: None,
+            tooltip: None,
+            clip_config: None,
         }
     }
 
@@ -117,6 +150,21 @@ where
         self.family_id = Some(family_id);
         self
     }
+
+    /// Set a hover tooltip for this row. Useful when `display_text` is a
+    /// shortened form of richer underlying data (e.g. a truncated path).
+    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Set a [`ClipConfig`] for this row. When set, the dropdown's text-layout
+    /// layer clips `display_text` at the actual rendered width instead of
+    /// callers having to pre-shrink the string.
+    pub fn with_clip_config(mut self, config: ClipConfig) -> Self {
+        self.clip_config = Some(config);
+        self
+    }
 }
 
 impl<A> From<&DropdownItem<A>> for MenuItem<DropdownAction<A>>
@@ -124,10 +172,16 @@ where
     A: Action + Clone,
 {
     fn from(dropdown_item: &DropdownItem<A>) -> MenuItem<DropdownAction<A>> {
-        let menu_item = MenuItemFields::new(dropdown_item.display_text.clone())
+        let mut menu_item = MenuItemFields::new(dropdown_item.display_text.clone())
             .with_on_select_action(DropdownAction::SelectActionAndClose(
                 dropdown_item.action.clone(),
             ));
+        if let Some(tooltip) = &dropdown_item.tooltip {
+            menu_item = menu_item.with_tooltip(tooltip.clone());
+        }
+        if let Some(clip_config) = dropdown_item.clip_config {
+            menu_item = menu_item.with_clip_config(clip_config);
+        }
         if let Some(family_id) = dropdown_item.family_id {
             menu_item.with_font_override(family_id).into_item()
         } else {
@@ -191,9 +245,39 @@ where
             font_color: None,
             font_size: None,
             padding: None,
+            background: None,
+            border_color: None,
+            border_width: None,
+            border_radius: None,
             vertical_margin: DROPDOWN_PADDING,
             top_bar_height: TOP_MENU_BAR_HEIGHT,
+            use_overlay_layer: true,
+            match_menu_width_to_top_bar: false,
         }
+    }
+
+    /// Controls whether the open menu is rendered in an `Overlay`
+    /// layer (default) or attached as a positioned child in the
+    /// dropdown stack's Normal layer. See the field-level docs on
+    /// `use_overlay_layer` for when each is appropriate.
+    pub fn set_use_overlay_layer(&mut self, use_overlay_layer: bool, ctx: &mut ViewContext<Self>) {
+        self.use_overlay_layer = use_overlay_layer;
+        ctx.notify();
+    }
+
+    pub fn set_background(&mut self, background: Fill, ctx: &mut ViewContext<Self>) {
+        self.background = Some(background);
+        ctx.notify();
+    }
+
+    pub fn set_border_width(&mut self, border_width: f32, ctx: &mut ViewContext<Self>) {
+        self.border_width = Some(border_width);
+        ctx.notify();
+    }
+
+    pub fn set_border_radius(&mut self, border_radius: CornerRadius, ctx: &mut ViewContext<Self>) {
+        self.border_radius = Some(border_radius);
+        ctx.notify();
     }
 
     pub fn with_drop_shadow(mut self) -> Self {
@@ -260,6 +344,22 @@ where
     ) {
         self.element_anchor = element_anchor;
         self.child_anchor = child_anchor;
+        ctx.notify();
+    }
+
+    /// When enabled, the open menu sizes itself to the last rendered width of
+    /// the dropdown's top bar. This is useful for flexible dropdowns whose
+    /// trigger width is determined by parent layout rather than a fixed max.
+    pub fn set_match_menu_width_to_top_bar(
+        &mut self,
+        match_width: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.match_menu_width_to_top_bar = match_width;
+        let top_bar_label = self.top_bar_label();
+        self.dropdown.update(ctx, |menu, _ctx| {
+            menu.set_width_match_position_id(match_width.then_some(top_bar_label));
+        });
         ctx.notify();
     }
 
@@ -404,6 +504,11 @@ where
     pub fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
+            if self.match_menu_width_to_top_bar {
+                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
+                    self.set_menu_width(bounds.width(), ctx);
+                }
+            }
             ctx.focus(&self.dropdown);
             ctx.emit(DropdownEvent::ToggleExpanded);
         }
@@ -458,6 +563,10 @@ where
                 font_color: self.font_color,
                 font_size: self.font_size,
                 padding: self.padding,
+                background: self.background,
+                border_color: self.border_color,
+                border_width: self.border_width,
+                border_radius: self.border_radius,
                 ..Default::default()
             })
             .set_clicked_styles(None);
@@ -547,16 +656,18 @@ where
                     .with_drop_shadow(DropShadow::default())
                     .finish();
             }
-            dropdown_stack.add_positioned_overlay_child(
-                menu,
-                OffsetPositioning::offset_from_save_position_element(
-                    self.top_bar_label(),
-                    vec2f(0., 0.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    self.element_anchor,
-                    self.child_anchor,
-                ),
+            let positioning = OffsetPositioning::offset_from_save_position_element(
+                self.top_bar_label(),
+                vec2f(0., 0.),
+                PositionedElementOffsetBounds::WindowByPosition,
+                self.element_anchor,
+                self.child_anchor,
             );
+            if self.use_overlay_layer {
+                dropdown_stack.add_positioned_overlay_child(menu, positioning);
+            } else {
+                dropdown_stack.add_positioned_child(menu, positioning);
+            }
         }
         Container::new(dropdown_stack.finish())
             .with_margin_top(self.vertical_margin)

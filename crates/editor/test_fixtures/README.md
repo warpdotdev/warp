@@ -14,3 +14,9 @@ The `images/` directory contains sample images and a test markdown file (`image_
 - Empty alt text
 
 To test image rendering, open `images/image_test.md` in Warp.
+
+## ToC Navigation
+
+`toc_anchor_test.md` covers manual validation for Markdown fragment link navigation (case-insensitive heading matching and scrolling).
+
+To test, open `toc_anchor_test.md` in Warp's Markdown viewer and click the table-of-contents links.

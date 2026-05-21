@@ -1,8 +1,6 @@
-use crate::{
-    notebook::{UpdateNotebookEditAccessInput, UpdateNotebookEditAccessResult},
-    request_context::RequestContext,
-    schema,
-};
+use crate::notebook::{UpdateNotebookEditAccessInput, UpdateNotebookEditAccessResult};
+use crate::request_context::RequestContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GiveUpNotebookEditAccessVariables {

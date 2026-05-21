@@ -1,55 +1,65 @@
 mod saved_prompts;
 mod zero_state;
 
-use ai::skills::SkillProvider;
-pub(crate) use saved_prompts::*;
-use warp_core::features::FeatureFlag;
-pub use zero_state::*;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ai::skills::SkillProvider;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+pub(crate) use saved_prompts::*;
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon as WarpIcon;
 use warpui::fonts::FamilyId;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+pub use zero_state::*;
 
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use super::AcceptSlashCommandOrSavedPrompt;
+use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
+use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 use crate::search::slash_command_menu::static_commands::Availability;
+use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+use crate::search::SyncDataSource;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent, PrivacySettings,
+    PrivacySettingsChangedEvent,
+};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
-use warp_core::ui::Icon as WarpIcon;
-
-use super::AcceptSlashCommandOrSavedPrompt;
-use crate::{
-    ai::blocklist::{
-        agent_view::{AgentViewController, AgentViewControllerEvent},
-        block::cli_controller::{CLISubagentController, CLISubagentEvent},
-    },
-    search::{
-        slash_command_menu::{
-            static_commands::commands::{self, COMMAND_REGISTRY},
-            SlashCommandId, StaticCommand,
-        },
-        SyncDataSource,
-    },
-    settings::{AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent},
-    terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent},
-    workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-};
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 pub struct DataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
     pub agent_view_controller: ModelHandle<AgentViewController>,
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
+    pub ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+}
+
+/// Context needed to decide which slash commands are enabled.
+struct ActiveCommandsContext {
+    session_context: Availability,
+    is_orchestration_enabled: bool,
+    is_cloud_handoff_enabled: bool,
+    is_feedback_skill_available: bool,
+    #[cfg(not(target_family = "wasm"))]
+    active_conversation_is_cloud_oz: bool,
+    has_default_host: bool,
+    is_cli_agent_input: bool,
 }
 
 pub struct SlashCommandDataSource {
@@ -59,15 +69,26 @@ pub struct SlashCommandDataSource {
     terminal_view_id: EntityId,
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
     active_repo_root: Option<PathBuf>,
+    ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    is_cloud_mode_v2: bool,
 }
 
 impl SlashCommandDataSource {
     pub fn new(args: DataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
+        Self::build(args, /* is_cloud_mode_v2 */ false, ctx)
+    }
+
+    pub fn for_cloud_mode_v2(args: DataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
+        Self::build(args, /* is_cloud_mode_v2 */ true, ctx)
+    }
+
+    fn build(args: DataSourceArgs, is_cloud_mode_v2: bool, ctx: &mut ModelContext<Self>) -> Self {
         let DataSourceArgs {
             active_session,
             agent_view_controller,
             cli_subagent_controller,
             terminal_view_id,
+            ambient_agent_view_model,
         } = args;
         ctx.subscribe_to_model(&active_session, |me, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
@@ -93,7 +114,15 @@ impl SlashCommandDataSource {
             if matches!(
                 event,
                 AISettingsChangedEvent::IsAnyAIEnabled { .. }
-                    | AISettingsChangedEvent::OrchestrationEnabled { .. }
+                    | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
             ) {
                 me.recompute_active_commands(ctx);
             }
@@ -107,7 +136,11 @@ impl SlashCommandDataSource {
             }
         });
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
-            if matches!(event, UserWorkspacesEvent::CodebaseContextEnablementChanged) {
+            if matches!(
+                event,
+                UserWorkspacesEvent::CodebaseContextEnablementChanged
+                    | UserWorkspacesEvent::TeamsChanged
+            ) {
                 me.recompute_active_commands(ctx);
             }
         });
@@ -125,6 +158,28 @@ impl SlashCommandDataSource {
                 }
             },
         );
+        // Recompute when the active conversation switches so commands gated on the active
+        // conversation's task (e.g. /continue-locally) update on navigation.
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                    | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
+        // Recompute when task data is updated so commands gated on a conversation's task
+        // harness (e.g. /continue-locally) appear once the task fetch resolves.
+        ctx.subscribe_to_model(&AgentConversationsModel::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                AgentConversationsModelEvent::TasksUpdated
+                    | AgentConversationsModelEvent::NewTasksReceived
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
 
         let mut me = Self {
             active_session,
@@ -133,6 +188,8 @@ impl SlashCommandDataSource {
             terminal_view_id,
             active_commands_by_id: Default::default(),
             active_repo_root: None,
+            ambient_agent_view_model,
+            is_cloud_mode_v2,
         };
         me.recompute_active_commands(ctx);
         me
@@ -143,7 +200,38 @@ impl SlashCommandDataSource {
     /// for a running CLI agent (Claude Code, Codex, etc.).
     const CLI_AGENT_INPUT_ALLOWED_COMMANDS: &[&str] = &["/prompts", "/skills"];
 
+    fn is_cloud_mode(&self, ctx: &AppContext) -> bool {
+        self.is_cloud_mode_v2
+            || (FeatureFlag::CloudMode.is_enabled()
+                && self
+                    .ambient_agent_view_model
+                    .as_ref()
+                    .is_some_and(|model| model.as_ref(ctx).is_ambient_agent()))
+    }
+
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
+        let active_commands_context = self.active_commands_context(ctx);
+
+        let old_active_command_count = self.active_commands_by_id.len();
+        self.active_commands_by_id = HashMap::from_iter(
+            COMMAND_REGISTRY
+                .all_commands_by_id()
+                .filter(|(_, command)| {
+                    self.command_is_active_in_context(command, &active_commands_context)
+                })
+                .map(|(id, command)| (id, command.clone())),
+        );
+
+        // This is an imperfect heuristic, but better than re-firing unnecessarily.
+        //
+        // If it actually matters, we can update it.
+        if self.active_commands_by_id.len() != old_active_command_count {
+            ctx.emit(UpdatedActiveCommands);
+        }
+    }
+
+    /// Gather the context needed to check slash command availability.
+    fn active_commands_context(&self, ctx: &AppContext) -> ActiveCommandsContext {
         let is_cli_agent_input = self.is_cli_agent_input_open(ctx);
 
         let mut session_context = Availability::empty();
@@ -201,37 +289,81 @@ impl SlashCommandDataSource {
             session_context |= Availability::AI_ENABLED;
         }
 
-        let is_orchestration_enabled = AISettings::as_ref(ctx).is_orchestration_enabled(ctx);
-
-        let old_active_command_count = self.active_commands_by_id.len();
-        self.active_commands_by_id = HashMap::from_iter(
-            COMMAND_REGISTRY
-                .all_commands_by_id()
-                .filter(|(_, command)| command.is_active(session_context))
-                .filter(|(_, command)| {
-                    command.name != commands::ORCHESTRATE_NAME || is_orchestration_enabled
-                })
-                // The static `/feedback` command is an AI-off fallback for the richer bundled
-                // `feedback` skill. Hide it whenever the bundled skill will actually take over,
-                // matching the precedence used by `Workspace::send_feedback`.
-                .filter(|(_, command)| {
-                    command.name != commands::FEEDBACK.name
-                        || !crate::workspace::is_feedback_skill_available(ctx)
-                })
-                // When CLI agent input is open, restrict to the explicit allowlist.
-                .filter(|(_, command)| {
-                    !is_cli_agent_input
-                        || Self::CLI_AGENT_INPUT_ALLOWED_COMMANDS.contains(&command.name)
-                })
-                .map(|(id, command)| (id, command.clone())),
-        );
-
-        // This is an imperfect heuristic, but better than re-firing unnecessarily.
-        //
-        // If it actually matters, we can update it.
-        if self.active_commands_by_id.len() != old_active_command_count {
-            ctx.emit(UpdatedActiveCommands);
+        if self.is_cloud_mode_v2 && FeatureFlag::CloudModeInputV2.is_enabled() {
+            session_context |= Availability::CLOUD_AGENT_V2;
         }
+
+        if !self.is_cloud_mode(ctx) {
+            session_context |= Availability::NOT_CLOUD_AGENT;
+        }
+
+        // Hide /host when no default host is configured (env var or workspace setting).
+        let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_some()
+            || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
+
+        let ai_settings = AISettings::as_ref(ctx);
+        ActiveCommandsContext {
+            session_context,
+            is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
+            is_cloud_handoff_enabled: ai_settings
+                .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx),
+            is_feedback_skill_available: crate::workspace::is_feedback_skill_available(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
+            has_default_host,
+            is_cli_agent_input,
+        }
+    }
+
+    fn command_is_active_in_context(
+        &self,
+        command: &StaticCommand,
+        context: &ActiveCommandsContext,
+    ) -> bool {
+        if !command.is_active(context.session_context) {
+            return false;
+        }
+        if command.name == commands::ORCHESTRATE_NAME && !context.is_orchestration_enabled {
+            return false;
+        }
+        if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
+            return false;
+        }
+        // The static `/feedback` command is an AI-off fallback for the richer bundled
+        // `feedback` skill. Hide it whenever the bundled skill will actually take over,
+        // matching the precedence used by `Workspace::send_feedback`.
+        if command.name == commands::FEEDBACK.name && context.is_feedback_skill_available {
+            return false;
+        }
+        // /continue-locally only applies to cloud Oz conversations. Local conversations
+        // and non-Oz cloud runs (Claude, Gemini) are filtered out so the slash menu
+        // doesn't surface a no-op command.
+        #[cfg(not(target_family = "wasm"))]
+        if command.name == commands::CONTINUE_LOCALLY.name
+            && !context.active_conversation_is_cloud_oz
+        {
+            return false;
+        }
+        // /host is only useful when a default self-hosted host is configured.
+        if command.name == commands::HOST.name && !context.has_default_host {
+            return false;
+        }
+        // When CLI agent input is open, restrict to the explicit allowlist.
+        if context.is_cli_agent_input
+            && !Self::CLI_AGENT_INPUT_ALLOWED_COMMANDS.contains(&command.name)
+        {
+            return false;
+        }
+
+        true
+    }
+
+    pub(crate) fn command_is_active(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
+        let active_commands_context = self.active_commands_context(ctx);
+        self.command_is_active_in_context(command, &active_commands_context)
     }
 
     /// Update the active repository root for this terminal. Called by the parent when
@@ -255,6 +387,10 @@ impl SlashCommandDataSource {
         self.agent_view_controller.as_ref(ctx).is_active()
     }
 
+    pub fn active_session_for_v2_zero_state(&self) -> &ModelHandle<ActiveSession> {
+        &self.active_session
+    }
+
     /// Returns `true` if the CLI agent rich input is currently open for this terminal.
     pub fn is_cli_agent_input_open(&self, ctx: &AppContext) -> bool {
         CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
@@ -270,6 +406,53 @@ impl SlashCommandDataSource {
             .session(self.terminal_view_id)
             .filter(|s| matches!(s.input_state, CLIAgentInputState::Open { .. }))
             .map(|s| s.agent.supported_skill_providers())
+    }
+
+    /// Returns true when the active conversation is associated with a cloud Oz
+    /// `AmbientAgentTask`. Used to gate `/continue-locally` to runs that can
+    /// actually be forked into a local Warp conversation.
+    ///
+    /// Permissive when the harness is not yet known: we consider an absent task or
+    /// missing `agent_config_snapshot.harness` to be Oz, matching the existing
+    /// tombstone gate (`conversation_ended_tombstone_view::render_action_buttons`).
+    /// Only an explicit non-Oz harness (Claude, Gemini, OpenCode, Unknown) hides the
+    /// command. Conversations without a `task_id` are local and never qualify.
+    #[cfg(not(target_family = "wasm"))]
+    fn active_conversation_is_cloud_oz(&self, ctx: &AppContext) -> bool {
+        let agent_view_state = self.agent_view_controller.as_ref(ctx).agent_view_state();
+        let conversation_id = match agent_view_state.active_conversation_id() {
+            Some(id) => id,
+            None => match BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(self.terminal_view_id)
+            {
+                Some(conv) => conv.id(),
+                None => return false,
+            },
+        };
+
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(conversation) = history.conversation(&conversation_id) else {
+            return false;
+        };
+        let Some(task_id) = conversation.task_id() else {
+            return false;
+        };
+
+        let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
+            // Task data not yet fetched. Permissive default: assume Oz so the command
+            // is reachable while the fetch is in flight; once the fetch resolves,
+            // `TasksUpdated` triggers a recompute and a non-Oz task hides the command.
+            return true;
+        };
+
+        match task
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|s| s.harness.as_ref())
+        {
+            Some(config) => config.harness_type == Harness::Oz,
+            None => true,
+        }
     }
 }
 
@@ -313,6 +496,7 @@ impl SyncDataSource for SlashCommandDataSource {
                     InlineItem::from_slash_command(id, command, app)
                         .with_name_match_result(fuzzy_result.name_match_result)
                         .with_description_match_result(fuzzy_result.description_match_result)
+                        .with_compact_layout(self.is_cloud_mode_v2)
                         .with_score(
                             OrderedFloat(score) * SCORE_MULTIPLIER
                                 + OrderedFloat(prefix_boost) * SCORE_MULTIPLIER
@@ -366,6 +550,7 @@ impl SyncDataSource for SlashCommandDataSource {
                         InlineItem::from_skill(&skill, app)
                             .with_name_match_result(fuzzy_result.name_match_result)
                             .with_description_match_result(fuzzy_result.description_match_result)
+                            .with_compact_layout(self.is_cloud_mode_v2)
                             .with_score(
                                 OrderedFloat(score) * SCORE_MULTIPLIER
                                     + OrderedFloat(prefix_boost) * SCORE_MULTIPLIER
@@ -416,6 +601,7 @@ pub struct InlineItem {
     pub name_match_result: Option<FuzzyMatchResult>,
     pub description_match_result: Option<FuzzyMatchResult>,
     pub score: OrderedFloat<f64>,
+    pub compact_layout: bool,
 }
 
 impl InlineItem {
@@ -434,6 +620,27 @@ impl InlineItem {
             name_match_result: None,
             description_match_result: None,
             score: OrderedFloat(f64::MIN),
+            compact_layout: false,
+        }
+    }
+
+    pub(crate) fn from_saved_prompt(
+        saved_prompt: &crate::workflows::CloudWorkflow,
+        app: &AppContext,
+    ) -> Self {
+        let appearance = Appearance::as_ref(app);
+        Self {
+            action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
+                id: saved_prompt.id,
+            },
+            icon_path: "bundled/svg/prompt.svg",
+            name: saved_prompt.model().data.name().to_owned(),
+            description: None,
+            font_family: appearance.ui_font_family(),
+            name_match_result: None,
+            description_match_result: None,
+            score: OrderedFloat(f64::MIN),
+            compact_layout: false,
         }
     }
 
@@ -466,6 +673,7 @@ impl InlineItem {
             name_match_result: None,
             description_match_result: None,
             score: OrderedFloat(f64::MIN),
+            compact_layout: false,
         }
     }
 
@@ -483,8 +691,13 @@ impl InlineItem {
         self.score = score;
         self
     }
+
+    pub(crate) fn with_compact_layout(mut self, compact: bool) -> Self {
+        self.compact_layout = compact;
+        self
+    }
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

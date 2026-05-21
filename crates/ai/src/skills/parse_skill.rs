@@ -1,13 +1,14 @@
-use anyhow::Result;
-use lazy_static::lazy_static;
-use regex::Regex;
 use std::fmt::Display;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+use lazy_static::lazy_static;
+use regex::Regex;
+use thiserror::Error;
+
 use super::parser::parse_markdown_file;
 use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
-use thiserror::Error;
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
 
@@ -202,5 +203,5 @@ fn truncate_skill_description(description: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "parse_skill_test.rs"]
+#[path = "parse_skill_tests.rs"]
 mod parse_skill_test;

@@ -1,49 +1,39 @@
 use enum_iterator::{all, Sequence};
 use itertools::{Either, Itertools};
-use warpui::elements::CornerRadius;
+use warpui::elements::{
+    Align, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Fill, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, Shrinkable,
+};
+use warpui::keymap::{DescriptionContext, Keystroke};
 use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
-use warpui::FocusContext;
 use warpui::{
-    elements::{
-        Align, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CrossAxisAlignment, Element, Fill, Flex, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, Shrinkable,
-    },
-    keymap::{DescriptionContext, Keystroke},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
+use super::section_views::{
+    DESCRIPTION_FONT_SIZE, ITEM_PADDING_BOTTOM, SCROLLBAR_OFFSET, SCROLLBAR_WIDTH,
+    SECTION_HEADER_FONT_SIZE, SECTION_SPACING,
+};
+use super::utils::{
+    get_additional_keybindings, BLOCKS_KEYBINDINGS, FUNDAMENTALS_KEYBINDINGS,
+    INPUT_EDITOR_KEYBINDINGS, TERMINAL_KEYBINDINGS,
+};
+use crate::appearance::Appearance;
+use crate::command_palette::PRIORITIZED_KEYBINDINGS;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::search_bar::SearchBar;
 use crate::settings_view;
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::util::bindings::{filter_bindings_including_keystroke, CommandBinding};
 use crate::workspace::tab_settings::TabSettings;
-use crate::{
-    appearance::Appearance,
-    command_palette::PRIORITIZED_KEYBINDINGS,
-    search_bar::SearchBar,
-    settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
-    util::bindings::filter_bindings_including_keystroke,
-    workspace::WorkspaceAction,
-};
-use warpui::ModelHandle;
-
-use crate::{
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    util::bindings::CommandBinding,
-};
-
-use super::{
-    section_views::{
-        DESCRIPTION_FONT_SIZE, ITEM_PADDING_BOTTOM, SCROLLBAR_OFFSET, SCROLLBAR_WIDTH,
-        SECTION_HEADER_FONT_SIZE, SECTION_SPACING,
-    },
-    utils::{get_additional_keybindings, FUNDAMENTALS_KEYBINDINGS},
-};
-
-use super::utils::{BLOCKS_KEYBINDINGS, INPUT_EDITOR_KEYBINDINGS, TERMINAL_KEYBINDINGS};
+use crate::workspace::WorkspaceAction;
 
 const KEYBINDINGS_PAGE_SHORTCUT: &str = "workspace:toggle_keybindings_page";
 const LINK_WIDTH: f32 = 30.;
@@ -54,7 +44,7 @@ struct MouseStateHandles {
 }
 
 pub struct KeybindingsView {
-    /// List of all keybidings.
+    /// List of all keybindings.
     bindings: Option<Vec<CommandBinding>>,
     /// List of keybindings based on search query.
     binding_results: Option<Vec<CommandBinding>>,

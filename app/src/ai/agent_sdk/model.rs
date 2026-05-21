@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
-use crate::ai::agent_sdk::output::{self, TableFormat};
-use crate::ai::llms::LLMPreferences;
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::{model::ModelCommand, GlobalOptions};
-use warpui::{platform::TerminationMode, AppContext, ModelContext, SingletonEntity};
+use warp_cli::model::ModelCommand;
+use warp_cli::GlobalOptions;
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, ModelContext, SingletonEntity};
+
+use crate::ai::agent_sdk::output::{self, TableFormat};
+use crate::ai::llms::LLMPreferences;
 
 /// Handle model-related CLI commands.
 pub fn run(
@@ -43,7 +46,7 @@ impl ModelCommandRunner {
 
             let llm_prefs = LLMPreferences::as_ref(ctx);
             let mut ids = BTreeSet::new();
-            for info in llm_prefs.get_base_llm_choices_for_agent_mode() {
+            for info in llm_prefs.get_base_llm_choices_for_agent_mode(ctx) {
                 ids.insert(info.id.to_string());
             }
 

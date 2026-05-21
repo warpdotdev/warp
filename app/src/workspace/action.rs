@@ -2,8 +2,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use session_sharing_protocol::common::SessionId;
+use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
+use warpui::accessibility::AccessibilityVerbosity;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::Vector2F;
+use warpui::platform::Cursor;
+use warpui::{EntityId, WeakViewHandle, WindowId};
 
+use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+    VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
@@ -21,7 +34,7 @@ use crate::server::telemetry::{
     AddTabWithShellSource, AgentModeEntrypoint, PaletteSource, SharingDialogSource,
 };
 use crate::settings_view::{SettingsAction as SettingsTabAction, SettingsSection};
-use crate::tab::NewSessionMenuItem;
+use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
@@ -29,21 +42,6 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
-use session_sharing_protocol::common::SessionId;
-
-use ui_components::lightbox;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::platform::Cursor;
-use warpui::{EntityId, WeakViewHandle, WindowId};
-
-use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
-use super::tab_settings::{
-    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
-    VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use super::view::{OnboardingTutorial, WorkspaceBanner};
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
@@ -95,6 +93,12 @@ impl VerticalTabsPaneContextMenuTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCloudHandoffTrigger {
+    MacOsSleep,
+    Uri,
+}
+
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
     ActivateTab(usize),
@@ -112,7 +116,17 @@ pub enum WorkspaceAction {
     RenamePane(PaneViewLocator),
     ResetPaneName(PaneViewLocator),
     RenameActiveTab,
+    /// Renames the focused pane in the active tab. Mirrors `RenameActiveTab`
+    /// so the action is reachable from the binding registry / Command Palette
+    /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
+    RenameActivePane,
     SetActiveTabName(String),
+    /// Sets the manual color override for the active tab.
+    ///
+    /// - `Color(_)` — apply that color.
+    /// - `Cleared` — explicitly clear (suppresses any directory default).
+    /// - `Unset` — remove the manual override (lets the directory default apply, if any).
+    SetActiveTabColor(SelectedTabColor),
     ToggleTabRightClickMenu {
         tab_index: usize,
         anchor: TabContextMenuAnchor,
@@ -154,7 +168,6 @@ pub enum WorkspaceAction {
     ToggleTabConfigsMenu,
     ToggleNewSessionMenu {
         position: Vector2F,
-        is_vertical_tabs: bool,
     },
     SelectNewSessionMenuItem(NewSessionMenuItem),
     AutoupdateFailureLink,
@@ -240,16 +253,7 @@ pub enum WorkspaceAction {
         tab_index: usize,
         tab_position: RectF,
     },
-    HandoffPendingTransfer {
-        target_window_id: WindowId,
-        insertion_index: usize,
-    },
-    ReverseHandoff {
-        target_window_id: WindowId,
-        target_insertion_index: usize,
-    },
     DropTab,
-    FinalizeDropTab,
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
     /// In Code Mode V2 this toggles the left panel which contains both the project explorer and
     /// Warp Drive. This happens as explicit action from the user.
@@ -332,6 +336,9 @@ pub enum WorkspaceAction {
     },
     CopySharedSessionLinkFromTab {
         tab_index: usize,
+    },
+    OpenSharedSessionQrCode {
+        session_id: SessionId,
     },
     AddWindow,
     AddWindowWithShell {
@@ -481,6 +488,38 @@ pub enum WorkspaceAction {
     },
     /// Insert the /fork slash command into the active terminal's input.
     InsertForkSlashCommand,
+    /// Open a local-to-cloud handoff pane next to the active conversation
+    /// (REMOTE-1486). Triggered by the `/move-to-cloud` slash command
+    /// and the footer chip of the same name. The dispatch site reads the
+    /// active conversation's `server_conversation_token` and gates on
+    /// `FeatureFlag::OzHandoff && FeatureFlag::HandoffLocalCloud`.
+    /// Falls through to splitting a fresh cloud-mode pane when the active
+    /// conversation isn't handoff-able (no synced server token, empty, or no
+    /// active conversation at all).
+    OpenLocalToCloudHandoffPane {
+        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+        launch: Option<crate::ai::blocklist::handoff::PendingCloudLaunch>,
+        #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
+        launch: Option<()>,
+        environment_id: Option<crate::server::ids::SyncId>,
+        entry_point: crate::ai::ambient_agents::telemetry::HandoffEntryPoint,
+    },
+    /// Automatically hand off the active running local agent conversation in the
+    /// given terminal view to Cloud Mode.
+    AutoHandoffActiveAgentToCloud {
+        terminal_view_id: EntityId,
+        conversation_id: AIConversationId,
+        trigger: AutoCloudHandoffTrigger,
+    },
+    /// Show the environment creation modal during `&` handoff compose when no
+    /// environments exist.
+    ShowHandoffEnvironmentCreationModal,
+    ShowCloudModeV2EnvironmentCreationModal,
+    /// Open the workspace modal for creating a new managed auth secret.
+    /// Dispatched by orchestration card pickers' "New API key…" item.
+    OpenCreateAuthSecretModal {
+        harness: warp_cli::agent::Harness,
+    },
     /// Summarize the active AI conversation in the focused pane.
     SummarizeAIConversation {
         prompt: Option<String>,
@@ -554,6 +593,12 @@ pub enum WorkspaceAction {
     /// Reset the OpenWarp launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOpenWarpLaunchModalState,
+    /// Open the Orchestration Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenOrchestrationLaunchModal,
+    /// Reset the orchestration launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetOrchestrationLaunchModalState,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
     #[cfg(debug_assertions)]
     InstallOpenCodeWarpPlugin,
@@ -587,9 +632,8 @@ pub enum WorkspaceAction {
         conversation_id: AIConversationId,
         terminal_view_id: Option<EntityId>,
     },
-    /// Open an ambient agent session by joining its shared session.
-    /// Used when the sandbox is running or when we need to view a live session.
-    OpenAmbientAgentSession {
+    /// Open the canonical ambient agent conversation pane and attach it to a live session.
+    OpenOrAttachAmbientAgentConversation {
         session_id: SessionId,
         task_id: AmbientAgentTaskId,
     },
@@ -696,7 +740,7 @@ impl WorkspaceAction {
     }
 
     /// Matches what actions require the app state to be saved, and which don't. We match all
-    /// actions directly, rather than using _, so we're forced to make a concious decision for each
+    /// actions directly, rather than using _, so we're forced to make a conscious decision for each
     /// of them, rather than following some default.
     pub fn should_save_app_state_on_action(&self) -> bool {
         use WorkspaceAction::*;
@@ -720,7 +764,9 @@ impl WorkspaceAction {
             | RenamePane(_)
             | ResetPaneName(_)
             | RenameActiveTab
+            | RenameActivePane
             | SetActiveTabName(_)
+            | SetActiveTabColor(_)
             | CloseTab(_)
             | CloseActiveTab
             | CloseOtherTabs(_)
@@ -820,10 +866,7 @@ impl WorkspaceAction {
             | CreateTeamAIPrompt
             | OpenInExplorer { .. }
             | DragTab { .. }
-            | HandoffPendingTransfer { .. }
-            | ReverseHandoff { .. }
             | StartTabDrag
-            | FinalizeDropTab
             | ToggleLeftPanel
             | ToggleWarpDrive
             | OpenWarpDrive
@@ -873,6 +916,7 @@ impl WorkspaceAction {
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }
+            | OpenSharedSessionQrCode { .. }
             | ReopenClosedSession
             | FocusLeftPanel
             | FocusRightPanel
@@ -918,7 +962,7 @@ impl WorkspaceAction {
             | ShowRewindConfirmationDialog { .. }
             | ExecuteRewindAIConversation { .. }
             | ExecuteDeleteConversation { .. }
-            | OpenAmbientAgentSession { .. }
+            | OpenOrAttachAmbientAgentConversation { .. }
             | OpenConversationTranscriptViewer { .. }
             | OpenLightbox { .. }
             | UpdateLightboxImage { .. }
@@ -933,6 +977,11 @@ impl WorkspaceAction {
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
             | FixSettingsWithOz { .. }
+            | OpenLocalToCloudHandoffPane { .. }
+            | AutoHandoffActiveAgentToCloud { .. }
+            | ShowHandoffEnvironmentCreationModal
+            | ShowCloudModeV2EnvironmentCreationModal
+            | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
@@ -946,6 +995,8 @@ impl WorkspaceAction {
             | ResetOzLaunchModalState
             | OpenOpenWarpLaunchModal
             | ResetOpenWarpLaunchModalState
+            | OpenOrchestrationLaunchModal
+            | ResetOrchestrationLaunchModalState
             | InstallOpenCodeWarpPlugin
             | UseLocalOpenCodeWarpPlugin => false,
             #[cfg(not(target_family = "wasm"))]

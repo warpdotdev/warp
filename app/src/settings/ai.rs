@@ -6,31 +6,32 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use indexmap::IndexMap;
-
-use crate::ai::request_usage_model::RequestLimitInfo;
-use crate::auth::AuthStateProvider;
-use crate::report_if_error;
-use crate::terminal::CLIAgent;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use lazy_static::lazy_static;
 use regex::Regex;
-use warpui::platform::OperatingSystem;
-use warpui::{
-    platform::keyboard::KeyCode, AppContext, Entity, ModelContext, SingletonEntity, UpdateModel,
-};
-
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
 use settings::{
     define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-
-use serde::{de::Deserializer, Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::OperatingSystem;
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::request_usage_model::RequestLimitInfo;
+use crate::auth::AuthStateProvider;
+use crate::report_if_error;
+use crate::settings::PrivacySettings;
+use crate::terminal::CLIAgent;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -1007,6 +1008,19 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     }
+    // Whether or not we should show the one-shot speedbump on Ask-User-Question cards.
+    //
+    // Not a user-visible setting - we model it as a setting so we can track state.
+    // Intentionally NOT cloud-synced: we want users to see the first-time nudge on
+    // each fresh device, and we avoid a cloud-sync race that would make the flag
+    // silently stay `false` on new devices after being consumed once elsewhere.
+    should_show_agent_mode_ask_user_question_speedbump: ShouldShowAgentModeAskUserQuestionSpeedbump {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    }
     // Whether to use locally loaded AWS credentials for Bedrock-enabled requests.
     aws_bedrock_credentials_enabled: AwsBedrockCredentialsEnabled {
         type: bool,
@@ -1170,6 +1184,19 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // orchestration launch modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_orchestration_launch_modal: DidShowOrchestrationLaunchModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: true,
+    }
+
     // Used to determine whether the "What's new in Oz" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {
@@ -1191,17 +1218,27 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
+    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
+    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
+        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
+    }
 
-    // Whether or not the user has enabled the ability to use Warp credits even when providing
-    // their own LLM provider API key.
-    can_use_warp_credits_with_byok: CanUseWarpCreditsWithByok {
+    // Whether or not the user has enabled fallback to Warp credits for user-provided models.
+    can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
         type: bool,
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
+        storage_key: "CanUseWarpCreditsWithByok",
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
-        description: "Whether Warp credits can be used even when providing your own API key.",
+        description: "Whether Warp credits can be used as a fallback for user-provided models.",
     }
 
     should_render_use_agent_footer_for_user_commands: ShouldRenderUseAgentToolbarForUserCommands {
@@ -1357,20 +1394,6 @@ define_settings_group!(AISettings, settings: [
         description: "Whether computer use is enabled for cloud agent conversations.",
     }
 
-    // Whether multi-agent orchestration is enabled. When enabled, the agent can
-    // spawn and coordinate parallel sub-agents via StartAgent / SendMessageToAgent
-    // tools. This setting is only effective when FeatureFlag::Orchestration is also
-    // enabled.
-    orchestration_enabled: OrchestrationEnabled {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::DESKTOP,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: false,
-        toml_path: "agents.warp_agent.other.orchestration_enabled",
-        description: "Whether multi-agent orchestration is enabled.",
-        feature_flag: FeatureFlag::Orchestration,
-    }
 
     // Whether file-based MCP servers from third-party AI tools (e.g. Claude, Codex) should
     // be automatically detected and spawned. Warp-native config files (.warp/.mcp.json) are
@@ -1459,6 +1482,36 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.warp_agent.other.agent_attribution_enabled",
         description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
+    }
+
+    should_force_disable_cloud_handoff: ShouldForceDisableCloudHandoff {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.should_force_disable_cloud_handoff",
+        description: "Whether to force-disable local-to-cloud handoff.",
+    }
+
+    should_force_disable_ampersand_handoff: ShouldForceDisableAmpersandHandoff {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
+        description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
+    }
+
+    auto_handoff_on_sleep_enabled: AutoHandoffOnSleepEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
+        description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
     }
 ]);
 
@@ -1637,9 +1690,78 @@ impl AISettings {
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {
-        FeatureFlag::Orchestration.is_enabled()
-            && self.is_any_ai_enabled(app)
-            && *self.orchestration_enabled
+        FeatureFlag::OrchestrationV2.is_enabled() && self.is_any_ai_enabled(app)
+    }
+
+    /// Returns true when local-to-cloud handoff is effectively enabled.
+    /// False when the user/org has disabled it, cloud conversations are off,
+    /// or AI is globally off.
+    pub fn is_cloud_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
+        if !self.is_any_ai_enabled(app) || *self.should_force_disable_cloud_handoff {
+            return false;
+        }
+        if !FeatureFlag::OzHandoff.is_enabled()
+            || !FeatureFlag::HandoffLocalCloud.is_enabled()
+            || !cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+        {
+            return false;
+        }
+        let privacy = PrivacySettings::as_ref(app);
+        if !privacy.is_cloud_conversation_storage_enabled {
+            return false;
+        }
+        !matches!(
+            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(),
+            crate::workspaces::workspace::AdminEnablementSetting::Disable
+        )
+    }
+    pub fn is_cloud_handoff_enabled_for_conversation(
+        &self,
+        conversation: Option<&AIConversation>,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && !conversation
+                .is_some_and(|conversation| is_orchestration_conversation(conversation, app))
+    }
+
+    pub fn is_cloud_handoff_enabled_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        app: &warpui::AppContext,
+    ) -> bool {
+        let active_conversation =
+            BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id);
+        self.is_cloud_handoff_enabled_for_conversation(active_conversation, app)
+    }
+
+    pub fn is_ampersand_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app) && !*self.should_force_disable_ampersand_handoff
+    }
+    pub fn is_ampersand_handoff_enabled_for_conversation(
+        &self,
+        conversation: Option<&AIConversation>,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled_for_conversation(conversation, app)
+            && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_ampersand_handoff_enabled_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
+            && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && self
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            && *self.auto_handoff_on_sleep_enabled
     }
 
     /// Determines whether a quota reset banner should be displayed to the user.
@@ -1728,11 +1850,7 @@ impl AISettings {
     }
 
     pub fn is_command_denylist_editable(&self, app: &AppContext) -> bool {
-        let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
-            .has_override_for_execute_commands_denylist();
-
-        self.is_any_ai_enabled(app) && !set_by_workspace
+        self.is_any_ai_enabled(app)
     }
 
     pub fn is_command_allowlist_editable(&self, app: &AppContext) -> bool {
@@ -1796,6 +1914,10 @@ impl AISettings {
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
+    }
+
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
     }
 
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {
@@ -1928,6 +2050,12 @@ impl AISettings {
     }
 }
 
+fn is_orchestration_conversation(conversation: &AIConversation, app: &AppContext) -> bool {
+    conversation.has_parent_agent()
+        || !BlocklistAIHistoryModel::as_ref(app)
+            .child_conversation_ids_of(&conversation.id())
+            .is_empty()
+}
 /// Singleton model that caches compiled regexes for the `cli_agent_footer_enabled_commands`
 /// setting. Each entry pairs a compiled regex with the CLI agent it maps to.
 pub struct CompiledCommandsForCodingAgentToolbar {

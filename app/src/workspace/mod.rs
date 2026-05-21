@@ -1,9 +1,11 @@
 mod action;
 mod active_session;
+pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
 mod cli_install;
 mod close_session_confirmation_dialog;
+pub(crate) mod cross_window_tab_drag;
 pub mod delete_conversation_confirmation_dialog;
 mod global_actions;
 pub mod header_toolbar_editor;
@@ -21,49 +23,39 @@ mod toast_stack;
 pub mod util;
 pub mod view;
 
-use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
-use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
-use crate::channel::Channel;
-use crate::code;
-use crate::features::FeatureFlag;
-use crate::modal;
-use crate::notebooks;
-use crate::pane_group::TabBarHoverIndex;
-use crate::server::telemetry::AgentModeEntrypoint;
-use crate::server::telemetry::PaletteSource;
-use crate::settings::AISettings;
-use crate::settings_view::{self, flags, SettingsSection};
-use crate::tab::uses_vertical_tabs;
-use crate::tab_configs;
-use warpui::SingletonEntity;
-
-use crate::channel::ChannelState;
-
-use crate::util::bindings::{self, cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
-
-use crate::palette::PaletteMode;
-use serde::{Deserialize, Serialize};
-use warp_core::context_flag::ContextFlag;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::elements::DropTargetData;
-use warpui::keymap::FixedBinding;
-use warpui::keymap::{BindingDescription, EditableBinding};
-use warpui::AppContext;
-
 pub use action::{
-    CommandSearchOptions, InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+    AutoCloudHandoffTrigger, CommandSearchOptions, InitContent, RestoreConversationLayout,
+    TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 pub use active_session::ActiveSession;
 pub use global_actions::{
     ForkAIConversationParams, ForkFromExchange, ForkedConversationDestination,
 };
+use serde::{Deserialize, Serialize};
 pub use util::{active_terminal_in_window, PaneViewLocator, TabMovement};
 pub use view::{
     Workspace, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
     PANEL_HEADER_HEIGHT, TAB_BAR_HEIGHT, TOTAL_TAB_BAR_HEIGHT, WORKSPACE_PADDING,
 };
+use warp_core::context_flag::ContextFlag;
+use warpui::accessibility::AccessibilityVerbosity;
+use warpui::elements::DropTargetData;
+use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding};
+use warpui::{AppContext, SingletonEntity};
+
+use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
+use crate::ai::skills::SkillManager;
+use crate::ai::AIRequestUsageModel;
+use crate::channel::{Channel, ChannelState};
+use crate::features::FeatureFlag;
+use crate::palette::PaletteMode;
+use crate::pane_group::TabBarHoverIndex;
+use crate::server::telemetry::{AgentModeEntrypoint, PaletteSource};
+use crate::settings::AISettings;
+use crate::settings_view::{self, flags, SettingsSection};
+use crate::tab::uses_vertical_tabs;
+use crate::util::bindings::{self, cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
+use crate::{code, modal, notebooks, tab_configs};
 
 // Helper function to access panel header corner radius from other modules
 pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
@@ -84,6 +76,10 @@ pub fn is_feedback_skill_available(ctx: &AppContext) -> bool {
             .is_some()
 }
 
+pub use one_time_modal_model::OneTimeModalModel;
+pub use registry::WorkspaceRegistry;
+pub use toast_stack::ToastStack;
+
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
@@ -94,12 +90,10 @@ use crate::workspace::view::{
     TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME,
     TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
-pub use one_time_modal_model::OneTimeModalModel;
-pub use registry::WorkspaceRegistry;
-pub use toast_stack::ToastStack;
 
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
+    app.add_singleton_model(|_| cross_window_tab_drag::CrossWindowTabDrag::new());
     use warpui::keymap::macros::*;
     app.register_binding_validator::<Workspace>(is_binding_pty_compliant);
 
@@ -113,6 +107,7 @@ pub fn init(app: &mut AppContext) {
     tab_configs::session_config_modal::init(app);
     view::launch_modal::oz_launch::init(app);
     view::openwarp_launch_modal::init(app);
+    view::orchestration_launch_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
     view::free_tier_limit_hit_modal::init(app);
@@ -225,6 +220,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:reset_openwarp_launch_modal_state",
                     "[Debug] Reset OpenWarp Launch Modal State",
                     WorkspaceAction::ResetOpenWarpLaunchModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_orchestration_launch_modal",
+                    "[Debug] Open Orchestration Launch Modal",
+                    WorkspaceAction::OpenOrchestrationLaunchModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_orchestration_launch_modal_state",
+                    "[Debug] Reset Orchestration Launch Modal State",
+                    WorkspaceAction::ResetOrchestrationLaunchModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
@@ -910,6 +917,19 @@ pub fn init(app: &mut AppContext) {
     )
     .with_group(bindings::BindingGroup::Settings.as_str())
     .with_custom_action(CustomAction::RenameTab)
+    .with_context_predicate(id!("Workspace"))]);
+
+    // Pane rename — same shape as RenameActiveTab but acts on the focused pane
+    // in the active tab. Ships with no default keybinding so it surfaces in
+    // Settings → Keyboard shortcuts as remappable; resolves issue #9351, where
+    // the action existed only in the right-click context menu and was not
+    // reachable via the binding registry.
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:rename_active_pane",
+        "Rename the current pane",
+        WorkspaceAction::RenameActivePane,
+    )
+    .with_group(bindings::BindingGroup::Settings.as_str())
     .with_context_predicate(id!("Workspace"))]);
 
     app.register_editable_bindings([

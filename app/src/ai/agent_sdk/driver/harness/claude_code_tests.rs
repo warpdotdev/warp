@@ -1,15 +1,19 @@
-use mockall::predicate::eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
+use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
 
 use super::*;
-use crate::ai::agent_events::MessageHydrator;
-use crate::server::server_api::ai::{MockAIClient, ReadAgentMessageResponse};
+use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
+use crate::ai::agent_sdk::driver::harness::claude_transcript::encode_cwd;
+use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
+use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
+use crate::server::server_api::ServerApiProvider;
 
 fn sample_parent_bridge_message(
     sequence: i64,
@@ -52,7 +56,7 @@ fn write_surfaced_parent_bridge_message(state_dir: &Path, record: &MessageBridge
 #[test]
 fn claude_command_uses_session_id_when_not_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, false);
+    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, false);
     assert!(
         cmd.contains(&format!("--session-id {uuid}")),
         "expected --session-id flag in non-resume command, got: {cmd}"
@@ -66,7 +70,7 @@ fn claude_command_uses_session_id_when_not_resuming() {
 #[test]
 fn claude_command_uses_resume_flag_when_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, true);
+    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, true);
     assert!(
         cmd.contains(&format!("--resume {uuid}")),
         "expected --resume flag in resume command, got: {cmd}"
@@ -80,7 +84,14 @@ fn claude_command_uses_resume_flag_when_resuming() {
 #[test]
 fn claude_command_pipes_prompt_path() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt with spaces.txt", None, true);
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        "/tmp/prompt with spaces.txt",
+        None,
+        None,
+        true,
+    );
     assert!(
         cmd.contains("< '/tmp/prompt with spaces.txt'"),
         "expected single-quoted stdin redirect of the prompt path, got: {cmd}"
@@ -89,6 +100,111 @@ fn claude_command_pipes_prompt_path() {
         cmd.contains("--dangerously-skip-permissions"),
         "expected --dangerously-skip-permissions, got: {cmd}"
     );
+}
+
+#[test]
+fn write_session_index_entry_creates_expected_entry() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = Path::new("/my/project");
+    let session_id = Uuid::new_v4();
+
+    write_session_index_entry(session_id, cwd, tmp.path()).unwrap();
+
+    let index_path = tmp.path().join("sessions-index.json");
+    let index: Value = serde_json::from_slice(&fs::read(index_path).unwrap()).unwrap();
+    let session_key = session_id.to_string();
+    let entry = &index[&session_key];
+    let encoded = encode_cwd(cwd);
+
+    assert_eq!(entry["sessionId"], Value::String(session_key.clone()));
+    assert_eq!(
+        entry["cwd"],
+        Value::String(cwd.to_string_lossy().into_owned())
+    );
+    assert_eq!(entry["projectPath"], Value::String(encoded.clone()));
+    assert_eq!(
+        entry["transcriptPath"],
+        Value::String(format!("projects/{encoded}/{session_id}.jsonl"))
+    );
+}
+
+#[test]
+fn serialize_claude_mcp_config_cli_server() {
+    let servers = HashMap::from([(
+        "test-server".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::CLIServer {
+                command: "node".to_string(),
+                args: vec!["server.js".to_string()],
+                env: HashMap::from([("API_KEY".to_string(), "secret".to_string())]),
+                working_directory: None,
+            },
+        },
+    )]);
+    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let server = &parsed["mcpServers"]["test-server"];
+    assert_eq!(server["type"], "stdio");
+    assert_eq!(server["command"], "node");
+    assert_eq!(server["args"][0], "server.js");
+    assert_eq!(server["env"]["API_KEY"], "secret");
+}
+
+#[test]
+fn serialize_claude_mcp_config_cli_server_with_cwd() {
+    let servers = HashMap::from([(
+        "test-server".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::CLIServer {
+                command: "node".to_string(),
+                args: vec!["server.js".to_string()],
+                env: HashMap::new(),
+                working_directory: Some("/opt/mcp".to_string()),
+            },
+        },
+    )]);
+    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let server = &parsed["mcpServers"]["test-server"];
+    assert_eq!(server["cwd"], "/opt/mcp");
+}
+
+#[test]
+fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
+    let servers = HashMap::from([(
+        "test-server".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::CLIServer {
+                command: "node".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+                working_directory: None,
+            },
+        },
+    )]);
+    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let server = &parsed["mcpServers"]["test-server"];
+    assert!(server.get("cwd").is_none());
+}
+
+#[test]
+fn serialize_claude_mcp_config_sse_server() {
+    let servers = HashMap::from([(
+        "remote".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::SSEServer {
+                url: "https://mcp.example.com".to_string(),
+                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+            },
+        },
+    )]);
+    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let server = &parsed["mcpServers"]["remote"];
+    assert_eq!(server["type"], "http");
+    assert_eq!(server["url"], "https://mcp.example.com");
+    assert_eq!(server["headers"]["Authorization"], "Bearer tok");
 }
 
 #[test]
@@ -117,6 +233,77 @@ fn stage_parent_bridge_message_writes_message_record() {
     assert_eq!(staged_record.sequence, 42);
     assert_eq!(staged_record.message_id, "msg-123");
     assert!(staged_record.sender_run_id.is_empty());
+}
+
+#[tokio::test]
+async fn parent_bridge_event_cursor_defaults_to_zero_when_missing() {
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path().join("session-123");
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+
+    assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 0);
+    assert!(!parent_bridge_event_cursor_file(&state_dir).exists());
+}
+
+#[tokio::test]
+async fn parent_bridge_event_cursor_round_trips() {
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path().join("session-123");
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+
+    write_parent_bridge_event_cursor(&state_dir, 42).unwrap();
+
+    assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 42);
+    assert!(parent_bridge_event_cursor_file(&state_dir).exists());
+}
+
+#[test]
+#[serial_test::serial]
+fn message_bridge_cleanup_preserves_state_for_wakeable_runs() {
+    let tmp = TempDir::new().unwrap();
+    std::env::set_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, tmp.path());
+
+    let session_id = Uuid::new_v4();
+    let bridge = MessageBridge::new("run-123".to_string(), session_id).unwrap();
+    let state_dir = tmp.path().join(session_id.to_string());
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+    let record = sample_staged_parent_bridge_message(42, "msg-123");
+    stage_parent_bridge_message(&state_dir, &record).unwrap();
+    write_parent_bridge_event_cursor(&state_dir, 42).unwrap();
+
+    bridge
+        .cleanup(MessageBridgeCleanupDisposition::PreserveState)
+        .unwrap();
+    std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
+
+    assert!(state_dir.exists());
+    assert!(parent_bridge_staged_message_path(&state_dir, 42, "msg-123").exists());
+    assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 42);
+}
+
+#[test]
+#[serial_test::serial]
+fn message_bridge_cleanup_removes_state_for_non_wakeable_runs() {
+    let tmp = TempDir::new().unwrap();
+    std::env::set_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, tmp.path());
+
+    let session_id = Uuid::new_v4();
+    let bridge = MessageBridge::new("run-123".to_string(), session_id).unwrap();
+    let state_dir = tmp.path().join(session_id.to_string());
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+    stage_parent_bridge_message(
+        &state_dir,
+        &sample_staged_parent_bridge_message(42, "msg-123"),
+    )
+    .unwrap();
+    write_parent_bridge_event_cursor(&state_dir, 42).unwrap();
+
+    bridge
+        .cleanup(MessageBridgeCleanupDisposition::RemoveState)
+        .unwrap();
+    std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
+
+    assert!(!state_dir.exists());
 }
 
 #[tokio::test]
@@ -481,75 +668,282 @@ fn prepare_claude_config_none_suffix_preserves_existing_responses() {
 }
 
 #[test]
-fn resolve_suffix_from_raw_value_secret() {
+#[serial_test::serial]
+fn prepare_claude_environment_config_without_config_dir_uses_home_global_config() {
+    let home_dir = TempDir::new().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("HOME", home_dir.path());
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+
+    let working_dir = home_dir.path().join("workspace/project");
+    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+
+    assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
+    assert!(home_dir
+        .path()
+        .join(".claude")
+        .join(CLAUDE_SETTINGS_FILE_NAME)
+        .exists());
+    assert!(!home_dir
+        .path()
+        .join(".claude")
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
+
+    match old_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    match old_config_dir {
+        Some(dir) => std::env::set_var("CLAUDE_CONFIG_DIR", dir),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
+    let home_dir = TempDir::new().unwrap();
+    let claude_config_dir = TempDir::new().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("HOME", home_dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path());
+
+    let working_dir = home_dir.path().join("workspace/project");
+    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_SETTINGS_FILE_NAME)
+        .exists());
+    assert!(!home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
+
+    match old_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    match old_config_dir {
+        Some(dir) => std::env::set_var("CLAUDE_CONFIG_DIR", dir),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+}
+#[test]
+#[serial_test::serial]
+fn resolve_suffix_from_resolved_env_vars() {
+    std::env::remove_var(ANTHROPIC_API_KEY_ENV);
     let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::raw_value(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
+    let resolved = HashMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from(key))]);
+    let suffix = resolve_anthropic_api_key_suffix(&resolved);
     assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
 }
 
 #[test]
-fn resolve_suffix_from_anthropic_api_key_secret() {
-    let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::anthropic_api_key(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
-}
-
-#[test]
-fn resolve_suffix_from_anthropic_api_key_with_different_secret_name() {
-    let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    // Secret name doesn't match the env var, but the AnthropicApiKey variant
-    // should still be found by iterating all secrets.
-    let secrets = HashMap::from([(
-        "my-anthropic-key".to_string(),
-        ManagedSecretValue::anthropic_api_key(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
-}
-
-#[test]
-fn resolve_suffix_prefers_anthropic_api_key_variant_over_raw_value() {
-    let anthropic_key = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-anthropic-suffix";
-    let raw_key = "sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB-raw-suffix";
-    let secrets = HashMap::from([
-        (
-            "my-anthropic-key".to_string(),
-            ManagedSecretValue::anthropic_api_key(anthropic_key),
-        ),
-        (
-            "ANTHROPIC_API_KEY".to_string(),
-            ManagedSecretValue::raw_value(raw_key),
-        ),
-    ]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    // AnthropicApiKey variant should be preferred.
-    assert_eq!(suffix.as_deref(), Some("AAA-anthropic-suffix"));
-}
-
-#[test]
+#[serial_test::serial]
 fn resolve_suffix_returns_none_for_short_key() {
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::raw_value("short"),
-    )]);
-    assert_eq!(resolve_anthropic_api_key_suffix(&secrets), None);
+    std::env::remove_var(ANTHROPIC_API_KEY_ENV);
+    let resolved = HashMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from("short"))]);
+    assert_eq!(resolve_anthropic_api_key_suffix(&resolved), None);
 }
 
 #[test]
-fn resolve_suffix_returns_none_for_short_anthropic_api_key() {
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::anthropic_api_key("short"),
+#[serial_test::serial]
+fn resolve_suffix_returns_none_when_empty() {
+    std::env::remove_var(ANTHROPIC_API_KEY_ENV);
+    assert_eq!(resolve_anthropic_api_key_suffix(&HashMap::new()), None);
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener() {
+    let home_dir = TempDir::new().unwrap();
+    let claude_config_dir = TempDir::new().unwrap();
+    let bridge_state_root = TempDir::new().unwrap();
+    let working_dir = home_dir.path().join("workspace/project");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    std::env::set_var("HOME", home_dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path());
+    std::env::set_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, bridge_state_root.path());
+
+    let session_id = Uuid::new_v4();
+    let remote = ClaudeWakeRemoteContext {
+        session_id,
+        envelope: ClaudeTranscriptEnvelope {
+            cwd: Path::new("/stale/cwd").to_path_buf(),
+            uuid: session_id,
+            claude_version: None,
+            entries: vec![serde_json::json!({"type": "assistant", "text": "done"})],
+            subagents: HashMap::new(),
+            todos: HashMap::new(),
+        },
+        wake_prompt: "resume prompt\n\nwake prompt".to_string(),
+    };
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440010".parse().unwrap();
+    let parent_run_id = "parent-run-456".to_string();
+
+    let command = futures::executor::block_on(ClaudeHarness::prepare_local_wake_command(
+        ServerApiProvider::new_for_test().get(),
+        task_id,
+        Some(parent_run_id.clone()),
+        Some(working_dir.clone()),
+        remote,
+        None,
+    ))
+    .unwrap();
+
+    let state_dir = bridge_state_root.path().join(session_id.to_string());
+    let prompt_path = state_dir.join(CLAUDE_WAKE_PROMPT_FILE_NAME);
+
+    assert!(command.contains("--resume"));
+    assert!(command.starts_with("env "));
+    assert!(command.contains(&session_id.to_string()));
+    assert!(command.contains(CLAUDE_WAKE_PROMPT_FILE_NAME));
+    assert!(command.contains(&format!(
+        "{OZ_RUN_ID_ENV}={}",
+        shell_quote(&task_id.to_string())
+    )));
+    assert!(command.contains(&format!(
+        "{OZ_PARENT_RUN_ID_ENV}={}",
+        shell_quote(&parent_run_id)
+    )));
+    assert!(command.contains(&format!("{OZ_HARNESS_ENV}={}", shell_quote("claude"))));
+    assert!(!command.contains(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV));
+    assert!(!command.contains("OZ_PARENT_LISTENER_MANAGED_EXTERNALLY"));
+    assert_eq!(
+        fs::read_to_string(&prompt_path).unwrap(),
+        "resume prompt\n\nwake prompt"
+    );
+    assert!(!parent_bridge_hook_output_file(&state_dir).exists());
+
+    let restored_envelope =
+        read_envelope(session_id, &working_dir, claude_config_dir.path()).unwrap();
+    assert_eq!(restored_envelope.cwd, working_dir);
+    assert_eq!(
+        restored_envelope.entries,
+        vec![serde_json::json!({"type": "assistant", "text": "done"})]
+    );
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_SETTINGS_FILE_NAME)
+        .exists());
+
+    std::env::remove_var("HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
+}
+
+#[tokio::test]
+async fn prime_parent_bridge_for_wake_clears_acked_output_and_surfaces_new_message() {
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path().join("session-123");
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+
+    let stale = sample_parent_bridge_message(
+        41,
+        "stale-msg",
+        "Old direction",
+        "This message should be acknowledged and cleared.",
+    );
+    write_surfaced_parent_bridge_message(&state_dir, &stale);
+    fs::write(
+        parent_bridge_hook_output_file(&state_dir),
+        serde_json::to_vec(&MessageBridgeHookOutput {
+            additional_context: "stale context".to_string(),
+            remaining_staged_count: 0,
+            surfaced_count: 1,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(parent_bridge_hook_output_ack_file(&state_dir), "").unwrap();
+
+    let wake_message = AgentMessageEventMetadata {
+        sequence: 42,
+        message_id: "msg-123".to_string(),
+        occurred_at: "2026-04-17T15:47:00Z".to_string(),
+    };
+    let expected = sample_parent_bridge_message(
+        42,
+        "msg-123",
+        "Please pivot",
+        "Inspect the failing tests first.",
+    );
+
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_mark_message_delivered()
+        .with(eq("stale-msg"))
+        .times(1)
+        .returning(|_| Ok(()));
+    let expected_message = expected.clone();
+    ai_client
+        .expect_read_agent_message()
+        .with(eq("msg-123"))
+        .times(1)
+        .returning(move |_| {
+            Ok(ReadAgentMessageResponse {
+                message_id: expected_message.message_id.clone(),
+                sender_run_id: expected_message.sender_run_id.clone(),
+                subject: expected_message.subject.clone(),
+                body: expected_message.body.clone(),
+                sent_at: "2026-04-17T15:46:00Z".to_string(),
+                delivered_at: None,
+                read_at: Some("2026-04-17T15:46:02Z".to_string()),
+            })
+        });
+    let hydrator = MessageHydrator::new(Arc::new(ai_client) as Arc<dyn AIClient>);
+    prime_parent_bridge_for_wake(&hydrator, &state_dir, Some(&wake_message))
+        .await
+        .unwrap();
+
+    assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 42);
+    assert!(!parent_bridge_hook_output_ack_file(&state_dir).exists());
+    assert!(!parent_bridge_surfaced_message_path(&state_dir, 41, "stale-msg").exists());
+
+    let surfaced_path = parent_bridge_surfaced_message_path(&state_dir, 42, "msg-123");
+    assert!(surfaced_path.exists());
+    assert!(!parent_bridge_staged_message_path(&state_dir, 42, "msg-123").exists());
+
+    let hook_output: MessageBridgeHookOutput =
+        serde_json::from_slice(&fs::read(parent_bridge_hook_output_file(&state_dir)).unwrap())
+            .unwrap();
+    assert_eq!(hook_output.surfaced_count, 1);
+    assert_eq!(hook_output.remaining_staged_count, 0);
+    assert!(hook_output.additional_context.contains("Please pivot"));
+
+    let surfaced_record: MessageBridgeMessageRecord =
+        serde_json::from_slice(&fs::read(&surfaced_path).unwrap()).unwrap();
+    assert_eq!(surfaced_record.subject, expected.subject);
+    assert_eq!(surfaced_record.body, expected.body);
+    assert_eq!(surfaced_record.occurred_at, wake_message.occurred_at);
+}
+
+#[test]
+#[serial_test::serial]
+fn suffix_uses_worker_injected_env_when_present() {
+    let worker_key = "sk-ant-api03-WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW-worker-suffix!";
+    std::env::set_var(ANTHROPIC_API_KEY_ENV, worker_key);
+    // Even when the resolved map has a different value, the worker env wins.
+    let resolved = HashMap::from([(
+        OsString::from("ANTHROPIC_API_KEY"),
+        OsString::from(
+            "sk-ant-api03-RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR-resolved-val!",
+        ),
     )]);
-    assert_eq!(resolve_anthropic_api_key_suffix(&secrets), None);
+    let suffix = resolve_anthropic_api_key_suffix(&resolved);
+    let expected = &worker_key[worker_key.len() - 20..];
+    assert_eq!(suffix.as_deref(), Some(expected));
+    std::env::remove_var(ANTHROPIC_API_KEY_ENV);
 }
 
 #[test]

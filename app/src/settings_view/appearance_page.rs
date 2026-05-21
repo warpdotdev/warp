@@ -1,39 +1,69 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use ::settings::{Setting, SettingSection, ToggleableSetting};
+use enum_iterator::all;
+use warp_core::ui::theme::color::internal_colors;
+use warp_util::path::user_friendly_path;
+use warpui::elements::{
+    Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Element, Empty, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{FamilyId, FontInfo, Weight};
+use warpui::keymap::{ContextPredicate, FixedBinding};
+use warpui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme};
+use warpui::rendering::ThinStrokes;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{
+    RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
+};
+use warpui::ui_components::slider::SliderStateHandle;
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::units::IntoPixels;
+use warpui::{
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel,
+    View, ViewContext, ViewHandle, WindowId,
+};
+
 use super::directory_color_add_picker::{DirectoryColorAddPicker, DirectoryColorAddPickerEvent};
 use super::settings_page::{
-    AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType, SettingsWidget,
-    CONTENT_FONT_SIZE,
+    build_reset_button, render_body_item, render_body_item_label, render_dropdown_item,
+    AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType, SettingsPageEvent,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, CONTENT_FONT_SIZE,
+    HEADER_PADDING,
 };
-use super::{flags, SettingsSection};
 use super::{
-    settings_page::{
-        build_reset_button, render_body_item, render_body_item_label, render_dropdown_item,
-        SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, ToggleState, HEADER_PADDING,
-    },
-    SettingsAction,
+    flags, SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction,
+    SettingsSection, ToggleSettingActionPair,
 };
-use super::{SettingActionPairContexts, SettingActionPairDescriptions, ToggleSettingActionPair};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
-use crate::context_chips::prompt::PromptEvent;
-use crate::context_chips::renderer::ChipDragState;
-use crate::context_chips::{
-    prompt::Prompt, renderer::Renderer as ContextChipRenderer, ChipAvailability,
-};
+use crate::context_chips::prompt::{Prompt, PromptEvent};
+use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
+use crate::context_chips::ChipAvailability;
 use crate::editor::{
-    EditOrigin, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextOptions,
+    EditOrigin, EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions,
+    TextOptions,
 };
+use crate::features::FeatureFlag;
 use crate::gpu_state::{GPUState, GPUStateEvent};
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
-use crate::server::telemetry::InputUXChangeOrigin;
+use crate::server::telemetry::{InputUXChangeOrigin, TelemetryEvent};
+use crate::settings::app_icon::{AppIcon, AppIconSettings, ShowDockIconState};
 use crate::settings::{
-    active_theme_kind,
-    app_icon::{AppIcon, AppIconSettings, ShowDockIconState},
-    respect_system_theme, AIFontName, AppEditorSettings, CursorBlink, CursorBlinkEnabled,
-    EnforceMinimumContrast, FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, InputBoxType,
-    InputModeSettings, InputModeState, MonospaceFontName, PaneSettings, ShouldDimInactivePanes,
-    ThemeSettings, UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME,
+    active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
+    CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
+    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
+    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
+    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
+    DEFAULT_MONOSPACE_FONT_NAME,
 };
-use crate::settings::{CursorDisplayType, GPUSettings, InputSettings, InputSettingsChangedEvent};
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::ligature_settings::{LigatureRenderingEnabled, LigatureSettings};
@@ -43,11 +73,17 @@ use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::settings::{
     AltScreenPadding, AltScreenPaddingMode, Spacing, SpacingMode, TerminalSettings,
 };
-use crate::terminal::{BlockListSettings, ShowBlockDividers};
-use crate::terminal::{ShowJumpToBottomOfBlockButton, SizeInfo};
+use crate::terminal::{
+    BlockListSettings, ShowBlockDividers, ShowJumpToBottomOfBlockButton, SizeInfo,
+};
 use crate::themes::theme::{self, RespectSystemTheme, SelectedSystemThemes, ThemeKind, WarpTheme};
+use crate::themes::theme_chooser::ThemeChooserMode;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
 use crate::util::bindings;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::window_settings::{
     BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
     OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
@@ -55,61 +91,12 @@ use crate::window_settings::{
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
+    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{editor::EditorView, themes::theme_chooser::ThemeChooserMode};
-use crate::{
-    features::FeatureFlag,
-    view_components::{Dropdown, DropdownItem, FilterableDropdown},
-};
-use crate::{report_error, report_if_error, themes};
-use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
-use ::settings::{Setting, SettingSection, ToggleableSetting};
-use enum_iterator::all;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::rc::Rc;
-use warp_core::ui::theme::color::internal_colors;
-use warp_util::path::user_friendly_path;
-use warpui::elements::{
-    Clipped, Empty, FormattedTextElement, MainAxisAlignment, MainAxisSize, Text, Wrap,
-};
-use warpui::fonts::{FamilyId, FontInfo, Weight};
-use warpui::keymap::{ContextPredicate, FixedBinding};
-use warpui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{
-    RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
-};
-use warpui::ui_components::slider::SliderStateHandle;
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::units::IntoPixels;
-
-use warpui::id;
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Dismiss, Element, Fill, Flex, Hoverable, MouseStateHandle, ParentElement, Radius,
-        Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    rendering::ThinStrokes,
-};
-use warpui::{platform::SystemTheme, Action};
-use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel, View,
-    ViewContext, ViewHandle, WindowId,
-};
-
-use crate::settings::UseThinStrokes;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::{report_error, report_if_error, send_telemetry_from_ctx, themes};
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
 const NOTEBOOK_FONT_SIZE_INPUT_BOX_WIDTH: f32 = 50.;
@@ -381,6 +368,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             context,
             flags::USE_VERTICAL_TABS_FLAG,
         ));
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "show vertical tabs panel in restored windows",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleShowVerticalTabPanelInRestoredWindows,
+            )),
+            context,
+            flags::USE_VERTICAL_TABS_FLAG,
+        ));
     }
 
     if FeatureFlag::Ligatures.is_enabled() {
@@ -453,6 +448,7 @@ pub enum AppearancePageAction {
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
     ToggleVerticalTabs,
+    ToggleShowVerticalTabPanelInRestoredWindows,
     ToggleUseLatestUserPromptAsConversationTitleInTabNames,
     ToggleLigatureRendering,
     ToggleBlurTexture,
@@ -592,6 +588,9 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
+            ToggleShowVerticalTabPanelInRestoredWindows => {
+                self.toggle_show_vertical_tab_panel_in_restored_windows(ctx)
+            }
             ToggleUseLatestUserPromptAsConversationTitleInTabNames => {
                 self.toggle_use_latest_user_prompt_as_conversation_title_in_tab_names(ctx)
             }
@@ -1378,6 +1377,9 @@ impl AppearanceSettingsPageView {
         if FeatureFlag::VerticalTabs.is_enabled() {
             tab_settings_widgets.push(Box::new(VerticalTabsWidget::default()));
             tab_settings_widgets.push(Box::new(
+                ShowVerticalTabPanelInRestoredWindowsWidget::default(),
+            ));
+            tab_settings_widgets.push(Box::new(
                 UseLatestUserPromptAsConversationTitleInTabNamesWidget::default(),
             ));
             if FeatureFlag::ConfigurableToolbar.is_enabled() {
@@ -1494,7 +1496,7 @@ impl AppearanceSettingsPageView {
         // If we're on a non-Linux platform, render the dropdown item in the
         // actual font.  We currently don't do this on Linux because
         // pre-loading all of the fonts is too expensive.
-        if cfg!(not(target_os = "linux")) {
+        if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
             if let Some(family_id) = ctx.font_cache().family_id_for_name(&font_name) {
                 initial_dropdown_item = initial_dropdown_item.with_font_override(family_id);
             }
@@ -1903,7 +1905,7 @@ impl AppearanceSettingsPageView {
                         // If we're on a non-Linux platform, render the dropdown item in the
                         // actual font.  We currently don't do this on Linux because
                         // pre-loading all of the fonts is too expensive.
-                        if cfg!(not(target_os = "linux")) {
+                        if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
                             if let Some(family_id) = family {
                                 dropdown = dropdown.with_font_override(*family_id)
                             }
@@ -1964,7 +1966,7 @@ impl AppearanceSettingsPageView {
                     // If we're on a non-Linux platform, render the dropdown item in the
                     // actual font.  We currently don't do this on Linux because
                     // pre-loading all of the fonts is too expensive.
-                    if cfg!(not(target_os = "linux")) {
+                    if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
                         if let Some(family_id) = family {
                             dropdown = dropdown.with_font_override(*family_id)
                         }
@@ -2310,6 +2312,14 @@ impl AppearanceSettingsPageView {
 
         ctx.update_model(&tab_settings, move |tab_settings, ctx| {
             report_if_error!(tab_settings.use_vertical_tabs.set_value(new_value, ctx));
+        });
+    }
+
+    fn toggle_show_vertical_tab_panel_in_restored_windows(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings
+                .show_vertical_tab_panel_in_restored_windows
+                .toggle_and_save_value(ctx));
         });
     }
 
@@ -4618,6 +4628,56 @@ impl SettingsWidget for VerticalTabsWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ShowVerticalTabPanelInRestoredWindowsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ShowVerticalTabPanelInRestoredWindowsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "vertical tabs panel restore window session snapshot"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Show vertical tabs panel in restored windows".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowVerticalTabPanelInRestoredWindows::storage_key(),
+                ShowVerticalTabPanelInRestoredWindows::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.show_vertical_tab_panel_in_restored_windows)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(
+                        AppearancePageAction::ToggleShowVerticalTabPanelInRestoredWindows,
+                    );
+                })
+                .finish(),
+            Some(
+                "When enabled, reopening or restoring a window opens the vertical tabs panel even if it was closed when the window was last saved."
+                    .to_string(),
+            ),
         )
     }
 }

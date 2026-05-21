@@ -1,6 +1,7 @@
 //! Contains the legacy implementation of argument suggestion generation that depends on the legacy
 //! command signature struct (`warp_command_signatures::Signature`).
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use smol_str::SmolStr;
@@ -11,31 +12,25 @@ use warp_command_signatures::{
 use warp_core::features::FeatureFlag;
 use warp_util::path::ShellFamily;
 
-use crate::completer::{
-    context::CompletionContext,
-    engine::{
-        self,
-        path::{sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType},
-    },
-    matchers::MatchStrategy,
-    suggest::{
-        CompleterOptions, CompletionsFallbackStrategy, MatchedSuggestion, Suggestion,
-        SuggestionType,
-    },
-    CommandExitStatus, GeneratorContext, LocationType,
+use super::add_extra_positional;
+use crate::completer::context::CompletionContext;
+use crate::completer::engine::path::{
+    sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType,
 };
-
+use crate::completer::engine::{self};
+use crate::completer::matchers::MatchStrategy;
+use crate::completer::suggest::{
+    CompleterOptions, CompletionsFallbackStrategy, MatchedSuggestion, Suggestion, SuggestionType,
+};
+use crate::completer::{CommandExitStatus, GeneratorContext, LocationType};
 use crate::meta::{Span, Spanned};
+use crate::parsers::hir::{Command, ShellCommand};
+use crate::parsers::ArgumentError::{
+    MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
+};
 use crate::parsers::{
     ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken, SignatureAtTokenIndex,
 };
-
-use crate::parsers::{
-    hir::{Command, ShellCommand},
-    ArgumentError::{MissingMandatoryPositional, MissingValueForName, UnexpectedArgument},
-};
-
-use super::add_extra_positional;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn complete(
@@ -154,7 +149,7 @@ async fn suggestions_for_parse_error(
                     missing_arg_index,
                 },
         } => {
-            // If there was trailing whitespace in the line, respect the error and try to to complete based
+            // If there was trailing whitespace in the line, respect the error and try to complete based
             // on the missing argument. If there wasn't any trailing whitespace, the user is trying
             // to complete an argument before the one that's missing (such as `git push ori<tab>`) so we
             // treat this as successful parse so that we can parse out the argument correctly.
@@ -213,7 +208,7 @@ async fn suggestions_for_parse_error(
                     positional_index,
                 },
         } => {
-            // If there was ending whitespace in the line respect the error and try to to complete based
+            // If there was ending whitespace in the line respect the error and try to complete based
             // on the missing positional. If there was not an ending whitespace, the user is try trying
             // to complete a positional before the one that's missing such as `git push ori<tab>` so we
             // treat this as successful parse so that we can parse out the positional correctly.
@@ -303,7 +298,7 @@ async fn suggestions_for_last_argument(
         add_extra_positional(shell_command, cursor);
     }
 
-    // Find the last positional and named value within the the command that the user entered.
+    // Find the last positional and named value within the command that the user entered.
     // Whichever ends last is the value we're trying to complete on.
     let last_positional = shell_command.last_positional();
     let last_named_value = shell_command.last_named_argument();
@@ -668,10 +663,19 @@ async fn generate_suggestions_for_argument_type(
             type_name: TemplateType::Folders { .. },
             filter_name,
         }) => {
+            let is_cd = tokens_from_command.first().is_some_and(|t| *t == "cd");
             let path_suggestions = match ctx.path_completion_context() {
                 Some(path_completion_context) => {
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    if is_cd {
+                        sorted_cd_directories(parsed_token, matcher, path_completion_context).await
+                    } else {
+                        sorted_directories_relative_to(
+                            parsed_token,
+                            matcher,
+                            path_completion_context,
+                        )
                         .await
+                    }
                 }
                 None => Vec::new(),
             };

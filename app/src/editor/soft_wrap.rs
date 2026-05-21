@@ -1,10 +1,11 @@
-use anyhow::anyhow;
-use parking_lot::Mutex;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use parking_lot::Mutex;
 use warpui::text_layout;
 
-use crate::editor::{view::DisplayPoint, Point};
+use crate::editor::view::DisplayPoint;
+use crate::editor::Point;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct SoftWrapPoint(Point);
@@ -27,7 +28,7 @@ impl SoftWrapPoint {
     }
 }
 
-/// When a line is soft-wrapped, there can be ambuigity about where the cursor
+/// When a line is soft-wrapped, there can be ambiguity about where the cursor
 /// should be drawn.  For example, if I had the text "hello world" which became
 /// soft wrapped to "hello \nworld", then if the cursor is just before "w",
 /// then the cursor could either be at the end of the first line or the very
@@ -238,5 +239,5 @@ impl<'a> Iterator for FrameLayoutDisplayedLines<'a> {
 }
 
 #[cfg(test)]
-#[path = "soft_wrap_test.rs"]
+#[path = "soft_wrap_tests.rs"]
 mod tests;

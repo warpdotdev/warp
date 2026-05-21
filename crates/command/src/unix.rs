@@ -1,8 +1,9 @@
-use async_process::unix::CommandExt as _;
 use std::ffi::OsStr;
 use std::io;
 use std::io::Error;
 use std::os::unix::process::CommandExt as _;
+
+use async_process::unix::CommandExt as _;
 
 /// Unix-specific extensions to the [`Command`] builder.
 ///

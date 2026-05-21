@@ -1,27 +1,24 @@
 //! Manages how we serialize blocklist AI data for persistence.
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
-use std::{collections::HashMap, sync::Arc};
-use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentActionType, AIAgentAttachment, AIAgentContext,
-            AIAgentExchangeId, AIAgentInput, AIAgentPtyWriteMode, AskUserQuestionItem,
-            FileLocations, PassiveSuggestionResultType, ReadFilesRequest,
-            RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest, UserQueryMode,
-        },
-        llms::LLMId,
-    },
-    terminal::model::block::{BlockId, SerializedBlock},
-};
+use uuid::Uuid;
 
 use super::AIQueryHistoryOutputStatus;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentActionType, AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput,
+    AIAgentPtyWriteMode, AskUserQuestionItem, FileLocations, PassiveSuggestionResultType,
+    ReadFilesRequest, RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest,
+    UserQueryMode,
+};
+use crate::ai::llms::LLMId;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
 /// Data we persist for each [`AIAgentExchange`] for use in history. Does not contain output data.
 #[derive(Debug, Deserialize, Clone)]
 pub struct PersistedAIInput {
@@ -93,7 +90,8 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
             | AIAgentInput::InvokeSkill { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
-            | AIAgentInput::EventsFromAgents { .. } => Err(anyhow::anyhow!(
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => Err(anyhow::anyhow!(
                 "This input type is not persisted. Only Query inputs are persisted for up-arrow history."
             )),
         }
@@ -319,6 +317,9 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             },
             AIAgentActionType::StartAgent { .. } => Self::NotPersisted,
             AIAgentActionType::SendMessageToAgent { .. } => Self::NotPersisted,
+            // Orchestrate is rendered from the in-history tool call message;
+            // there is no per-action state we need to persist locally.
+            AIAgentActionType::RunAgents(_) => Self::NotPersisted,
         }
     }
 }

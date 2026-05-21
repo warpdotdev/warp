@@ -1,12 +1,12 @@
-use crate::external_secrets::ExternalSecret;
-use crate::search::data_source::{Query, QueryResult};
-use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use itertools::Itertools;
 use warpui::AppContext;
 
 use super::external_secret_fuzzy_match::FuzzyMatchExternalSecretResult;
 use super::external_secret_search_item::ExternalSecretSearchItem;
 use super::searcher::ExternalSecretSearchItemAction;
+use crate::external_secrets::ExternalSecret;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 
 pub struct ExternalSecretDataSource {
     secrets: Vec<ExternalSecret>,

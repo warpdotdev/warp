@@ -7,9 +7,7 @@ use prost::Message as _;
 use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
 
-use super::ClassificationResult;
-
-use super::Model;
+use super::{ClassificationResult, Model};
 
 pub struct InferenceRunner {
     model: ModelProto,

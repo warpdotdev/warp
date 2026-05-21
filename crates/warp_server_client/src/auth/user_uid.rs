@@ -1,4 +1,5 @@
-use std::{fmt, sync::LazyLock};
+use std::fmt;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

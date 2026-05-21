@@ -1,54 +1,43 @@
-use super::delegate::DispatchDelegate;
-use super::{
-    app, make_nsstring,
-    rendering::{is_integrated_gpu, Device, RendererManager},
-    RectFExt as _,
-};
-use anyhow::{anyhow, Result};
-use cocoa::appkit::{NSWindowButton, NSWindowStyleMask};
-use cocoa::foundation::{NSArray, NSPoint, NSRange, NSString, NSUInteger};
-use cocoa::{
-    appkit::{NSApp, NSView, NSWindow},
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSInteger, NSRect, NSSize},
-};
-use foreign_types::ForeignType;
-use itertools::Itertools;
-use num_traits::FromPrimitive;
-use objc::class;
-use objc::{
-    msg_send,
-    runtime::{Object, BOOL, NO, YES},
-    sel, sel_impl,
-};
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use warpui_core::event::ModifiersState;
-use warpui_core::platform::{
-    file_picker, FilePickerCallback, FilePickerConfiguration, FullscreenState, GraphicsBackend,
-    TerminationMode, WindowFocusBehavior,
-};
-use warpui_core::r#async::Timer;
-use warpui_core::rendering::GPUPowerPreference;
-use warpui_core::windowing::WindowCallbacks;
-use warpui_core::{
-    accessibility::AccessibilityContent,
-    actions::StandardAction,
-    platform::{self, WindowBounds, WindowOptions, WindowStyle},
-    r#async::executor,
-    Event, OptionalPlatformWindow, Scene, WindowId,
-};
-use warpui_core::{DisplayId, DisplayIdx};
-
-use instant::Instant;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::raw::c_uchar;
+use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cell::Cell, os::raw::c_uchar, panic, path::Path, ptr};
-use std::{cell::RefCell, ffi::c_void, rc::Rc};
-use std::{slice, str};
+use std::{panic, ptr, slice, str};
+
+use anyhow::{anyhow, Result};
+use cocoa::appkit::{NSApp, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
+use cocoa::base::{id, nil};
+use cocoa::foundation::{
+    NSArray, NSAutoreleasePool, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
+};
+use foreign_types::ForeignType;
+use instant::Instant;
+use itertools::Itertools;
+use num_traits::FromPrimitive;
+use objc::runtime::{Object, BOOL, NO, YES};
+use objc::{class, msg_send, sel, sel_impl};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui_core::accessibility::AccessibilityContent;
+use warpui_core::actions::StandardAction;
+use warpui_core::event::ModifiersState;
+use warpui_core::platform::{
+    self, file_picker, FilePickerCallback, FilePickerConfiguration, FullscreenState,
+    GraphicsBackend, TerminationMode, WindowBounds, WindowFocusBehavior, WindowOptions,
+    WindowStyle,
+};
+use warpui_core::r#async::{executor, Timer};
+use warpui_core::rendering::GPUPowerPreference;
+use warpui_core::windowing::WindowCallbacks;
+use warpui_core::{DisplayId, DisplayIdx, Event, OptionalPlatformWindow, Scene, WindowId};
+
+use super::delegate::DispatchDelegate;
+use super::rendering::{is_integrated_gpu, Device, RendererManager};
+use super::{app, make_nsstring, RectFExt as _};
 
 extern "C" {
     fn screenFrame() -> NSRect;
@@ -148,6 +137,10 @@ impl platform::WindowManager for WindowManager {
 
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF) {
         Window::set_window_bounds(window_id, bound)
+    }
+
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        Window::set_window_alpha(window_id, alpha)
     }
 
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
@@ -327,6 +320,10 @@ impl platform::WindowManager for IntegrationTestWindowManager {
         self.window_manager.set_window_bounds(window_id, bound)
     }
 
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.window_manager.set_window_alpha(window_id, alpha)
+    }
+
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
         // no-op for tests
     }
@@ -448,6 +445,7 @@ extern "C" {
     fn activate_app();
     fn show_window_and_focus_app(window: id, bringToFront: BOOL);
     fn hide_window(window: id);
+    fn set_window_alpha(window: id, alpha: f64);
     fn position_and_order_front(window: id);
     fn position_at_given_location(window: id, origin: NSPoint);
     fn order_front_without_focus(window: id, origin: NSPoint);
@@ -841,6 +839,14 @@ impl Window {
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
                 hide_window(window)
+            }
+        }
+    }
+
+    pub fn set_window_alpha(window_id: WindowId, alpha: f32) {
+        unsafe {
+            if let Some(window) = Self::find_window_with_id(window_id) {
+                set_window_alpha(window, alpha as f64)
             }
         }
     }

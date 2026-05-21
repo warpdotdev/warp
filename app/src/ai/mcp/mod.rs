@@ -1,28 +1,8 @@
-#[cfg(not(target_family = "wasm"))]
-use crate::server::datetime_ext::DateTimeExt;
-#[cfg(not(target_family = "wasm"))]
-use chrono::DateTime;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_family = "wasm"))]
-use crate::persistence::model::MCPEnvironmentVariables;
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    drive::{
-        items::{mcp_server::WarpDriveMCPServer, WarpDriveItem},
-        CloudObjectTypeAndId,
-    },
-    server::{ids::SyncId, sync_queue::QueueItem},
-};
+use chrono::DateTime;
 #[cfg(not(target_family = "wasm"))]
 use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use serde::{Deserialize, Serialize};
@@ -30,6 +10,25 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::drive::items::mcp_server::WarpDriveMCPServer;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::CloudObjectTypeAndId;
+#[cfg(not(target_family = "wasm"))]
+use crate::persistence::model::MCPEnvironmentVariables;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::datetime_ext::DateTimeExt;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
 
 pub mod manager;
 pub mod templatable_manager;
@@ -46,13 +45,6 @@ cfg_if::cfg_if! {
     }
 }
 
-pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
-    match provider {
-        MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
-        _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
-    }
-}
-
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         pub mod file_based_manager;
@@ -62,107 +54,11 @@ cfg_if::cfg_if! {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
-pub enum MCPProvider {
-    Warp,
-    Claude,
-    Codex,
-    Agents,
-}
-
-impl MCPProvider {
-    pub fn display_name(&self) -> &str {
-        match self {
-            MCPProvider::Warp => "Warp",
-            MCPProvider::Claude => "Claude",
-            MCPProvider::Codex => "Codex",
-            MCPProvider::Agents => "Other Agents",
-        }
-    }
-
-    pub fn icon(&self) -> Icon {
-        match self {
-            MCPProvider::Warp => Icon::Warp,
-            MCPProvider::Claude => Icon::ClaudeLogo,
-            MCPProvider::Codex => Icon::OpenAILogo,
-            MCPProvider::Agents => Icon::Warp,
-        }
-    }
-
-    /// Returns the path of the provider's config file relative to the home directory.
-    pub fn home_config_path(&self) -> &'static Path {
-        match self {
-            MCPProvider::Warp => Path::new(".warp/.mcp.json"),
-            MCPProvider::Claude => Path::new(".claude.json"),
-            MCPProvider::Codex => Path::new(".codex/config.toml"),
-            MCPProvider::Agents => Path::new(".agents/.mcp.json"),
-        }
-    }
-
-    /// Returns the path of the provider's config file relative to a project root.
-    pub fn project_config_path(&self) -> &'static Path {
-        match self {
-            MCPProvider::Warp => Path::new(".warp/.mcp.json"),
-            MCPProvider::Claude => Path::new(".mcp.json"),
-            MCPProvider::Codex => Path::new(".codex/config.toml"),
-            MCPProvider::Agents => Path::new(".agents/.mcp.json"),
-        }
-    }
-}
-
-/// Returns the [`MCPProvider`] that owns `file_path` as a config file, if any.
-///
-/// Matches against both home-level configs (e.g. `~/.claude.json`) and
-/// project-level configs (e.g. `.mcp.json` anywhere in the path).
-pub fn mcp_provider_from_file_path(file_path: &Path) -> Option<MCPProvider> {
-    // Try exact home-config match first (unambiguous).
-    for provider in MCPProvider::iter() {
-        if home_config_file_path(provider)
-            .as_ref()
-            .is_some_and(|home_config_path| file_path == home_config_path)
-        {
-            return Some(provider);
-        }
-    }
-    // Fall back to project-config suffix match, preferring the longest
-    // (most-specific) suffix.
-    // This avoids `.mcp.json` shadowing `.warp/.mcp.json`, for example.
-    let mut best: Option<(MCPProvider, usize)> = None;
-    for provider in MCPProvider::iter() {
-        let cfg = provider.project_config_path();
-        if file_path.ends_with(cfg) {
-            let len = cfg.as_os_str().len();
-            if best.is_none_or(|(_, best_len)| len > best_len) {
-                best = Some((provider, len));
-            }
-        }
-    }
-    best.map(|(p, _)| p)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{mcp_provider_from_file_path, MCPProvider};
-
-    #[test]
-    fn mcp_provider_from_file_path_recognizes_warp_home_path() {
-        if let Some(warp_home_mcp_config_file_path) =
-            warp_core::paths::warp_home_mcp_config_file_path()
-        {
-            assert_eq!(
-                mcp_provider_from_file_path(&warp_home_mcp_config_file_path),
-                Some(MCPProvider::Warp)
-            );
-        }
-    }
-}
-
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
 use warpui::{AppContext, SingletonEntity as _};
 pub mod templatable;
-pub use templatable::JsonTemplate;
-pub use templatable::{TemplatableMCPServer, TemplateVariable};
+pub use templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
 pub mod logs;
 pub mod templatable_installation;
 pub use templatable_installation::TemplatableMCPServerInstallation;
@@ -326,13 +222,6 @@ impl StringModel for MCPServer {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::MCPServer(server_mcp_server) = server_cloud_object {
-            return Some(server_mcp_server.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
@@ -709,5 +598,91 @@ pub enum MCPServerUpdate {
     },
 }
 
+pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
+    match provider {
+        MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
+        _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
+pub enum MCPProvider {
+    Warp,
+    Claude,
+    Codex,
+    Agents,
+}
+
+impl MCPProvider {
+    pub fn display_name(&self) -> &str {
+        match self {
+            MCPProvider::Warp => "Warp",
+            MCPProvider::Claude => "Claude",
+            MCPProvider::Codex => "Codex",
+            MCPProvider::Agents => "Other Agents",
+        }
+    }
+
+    pub fn icon(&self) -> Icon {
+        match self {
+            MCPProvider::Warp => Icon::Warp,
+            MCPProvider::Claude => Icon::ClaudeLogo,
+            MCPProvider::Codex => Icon::OpenAILogo,
+            MCPProvider::Agents => Icon::Warp,
+        }
+    }
+
+    /// Returns the path of the provider's config file relative to the home directory.
+    pub fn home_config_path(&self) -> &'static Path {
+        match self {
+            MCPProvider::Warp => Path::new(".warp/.mcp.json"),
+            MCPProvider::Claude => Path::new(".claude.json"),
+            MCPProvider::Codex => Path::new(".codex/config.toml"),
+            MCPProvider::Agents => Path::new(".agents/.mcp.json"),
+        }
+    }
+
+    /// Returns the path of the provider's config file relative to a project root.
+    pub fn project_config_path(&self) -> &'static Path {
+        match self {
+            MCPProvider::Warp => Path::new(".warp/.mcp.json"),
+            MCPProvider::Claude => Path::new(".mcp.json"),
+            MCPProvider::Codex => Path::new(".codex/config.toml"),
+            MCPProvider::Agents => Path::new(".agents/.mcp.json"),
+        }
+    }
+}
+
+/// Returns the [`MCPProvider`] that owns `file_path` as a config file, if any.
+///
+/// Matches against both home-level configs (e.g. `~/.claude.json`) and
+/// project-level configs (e.g. `.mcp.json` anywhere in the path).
+pub fn mcp_provider_from_file_path(file_path: &Path) -> Option<MCPProvider> {
+    // Try exact home-config match first (unambiguous).
+    for provider in MCPProvider::iter() {
+        if home_config_file_path(provider)
+            .as_ref()
+            .is_some_and(|home_config_path| file_path == home_config_path)
+        {
+            return Some(provider);
+        }
+    }
+    // Fall back to project-config suffix match, preferring the longest
+    // (most-specific) suffix.
+    // This avoids `.mcp.json` shadowing `.warp/.mcp.json`, for example.
+    let mut best: Option<(MCPProvider, usize)> = None;
+    for provider in MCPProvider::iter() {
+        let cfg = provider.project_config_path();
+        if file_path.ends_with(cfg) {
+            let len = cfg.as_os_str().len();
+            if best.is_none_or(|(_, best_len)| len > best_len) {
+                best = Some((provider, len));
+            }
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
 #[cfg(test)]
-mod mod_test;
+#[path = "mod_tests.rs"]
+mod tests;

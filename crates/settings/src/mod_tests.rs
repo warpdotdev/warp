@@ -1,9 +1,7 @@
 use warpui::SingletonEntity;
 
 use crate::manager::SettingsManager;
-use crate::{Setting, SupportedPlatforms, SyncToCloud};
-
-use crate::*;
+use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
 
 define_settings_group!(TestSettings, settings: [
     never_sync_setting: SimpleSetting {
@@ -158,9 +156,7 @@ mod reload_all_public_settings_tests {
     use warpui::SingletonEntity;
 
     use crate::manager::SettingsManager;
-    use crate::{Setting, SupportedPlatforms, SyncToCloud};
-
-    use crate::*;
+    use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
 
     define_settings_group!(ReloadTestSettings, settings: [
         public_flag: PublicFlag {
@@ -385,7 +381,7 @@ mod reload_all_public_settings_tests {
     #[test]
     fn test_validate_detects_invalid_values() {
         warpui::App::test((), |mut app| async move {
-            crate::set_settings_file_enabled(true);
+            let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -424,7 +420,7 @@ mod reload_all_public_settings_tests {
     #[test]
     fn test_validate_returns_empty_when_all_valid() {
         warpui::App::test((), |mut app| async move {
-            crate::set_settings_file_enabled(true);
+            let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -541,6 +537,7 @@ mod write_to_preferences_tests {
     #[test]
     fn test_no_spurious_write_with_hashmap_and_missing_options() {
         use std::collections::HashMap;
+
         use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
         #[derive(

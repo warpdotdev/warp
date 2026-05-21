@@ -1,9 +1,14 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
-use ignore::gitignore::Gitignore;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "local_fs")]
+use std::sync::Arc;
+
+use ignore::gitignore::Gitignore;
+#[cfg(feature = "local_fs")]
+use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 
@@ -29,7 +34,7 @@ pub enum BuildTreeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IgnoredPathStrategy {
-    /// Do not include any ingored files or folders
+    /// Do not include any ignored files or folders
     Exclude,
 
     /// Lazy-load excluded directories
@@ -426,6 +431,48 @@ pub(crate) fn is_shared_git_ref(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+/// Returns `true` for loose remote-tracking refs under the shared `.git`
+/// directory, e.g. `.git/refs/remotes/origin/main`.
+pub(crate) fn is_remote_tracking_ref(path: &Path) -> bool {
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let components: Vec<_> = path.components().collect();
+    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+        return false;
+    };
+    let after_git = &components[git_index + 1..];
+    after_git.len() >= 4
+        && after_git[0].as_os_str() == "refs"
+        && after_git[1].as_os_str() == "remotes"
+}
+
+/// Returns true for Git files that can change the current branch's tracked
+/// upstream ref.
+pub(crate) fn is_tracking_state_git_file(path: &Path) -> bool {
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    suffix.len() == 1
+        && matches!(
+            suffix[0].as_os_str().to_str(),
+            Some("HEAD" | "config" | "config.worktree")
+        )
+}
+
+/// Returns true for `.git/config` in the shared Git directory.
+pub(crate) fn is_common_git_config(path: &Path) -> bool {
+    if extract_worktree_git_dir(path).is_some() {
+        return false;
+    }
+    let components: Vec<_> = path.components().collect();
+    let Some(git_index) = components.iter().position(|c| c.as_os_str() == ".git") else {
+        return false;
+    };
+    let after_git = &components[git_index + 1..];
+    after_git.len() == 1 && after_git[0].as_os_str() == "config"
+}
+
 /// Returns true for `.git/HEAD` and `.git/refs/heads/*`
 /// (and their worktree equivalents `.git/worktrees/*/HEAD`, etc.).
 pub(crate) fn is_commit_related_git_file(path: &Path) -> bool {
@@ -452,33 +499,96 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
 
 /// Determines if a git-related path should be ignored by the filesystem watcher.
 ///
-/// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*)
-/// and the index lock file are allowed through. Everything else inside `.git/`
-/// is ignored.
+/// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*),
+/// loose remote-tracking refs, tracked-upstream state files, and the index lock
+/// file are allowed through. Everything else inside `.git/` is ignored.
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
     }
     // Ignore everything inside .git/ except the allowlisted patterns.
-    !is_commit_related_git_file(path) && !is_index_lock_file(path)
+    !is_commit_related_git_file(path)
+        && !is_index_lock_file(path)
+        && !is_remote_tracking_ref(path)
+        && !is_tracking_state_git_file(path)
 }
 
-pub fn path_passes_filters(path: &Path, gitignores: &[Gitignore]) -> bool {
-    let to_check_path = if path.exists() {
-        match dunce::canonicalize(path) {
-            Ok(canonical_path) => canonical_path,
-            Err(_) => return false,
-        }
-    } else {
-        path.to_path_buf()
-    };
+/// Returns `true` when the directory at `path` should be registered for watching.
+/// Specifically for prefixes that lead to an allowlisted file and `false` for everything else inside `.git/`.
+pub fn should_watch_directory_in_git_path(path: &Path) -> bool {
+    if !is_git_internal_path(path) {
+        return true;
+    }
 
-    !matches_gitignores(
-        &to_check_path,
-        to_check_path.is_dir(),
-        gitignores,
-        true, /* check_ancestors */
-    ) && !should_ignore_git_path(&to_check_path)
+    // Worktree paths: `.git/worktrees/<name>/...` only descends along the
+    // path needed to reach the allowlisted children (HEAD, index.lock,
+    // config.worktree, refs/heads/*, refs/remotes/<r>/*).
+    if let Some(worktree_dir) = extract_worktree_git_dir(path) {
+        // `path` is either the worktree gitdir itself or something under it.
+        // Anything up to and including `.git/worktrees/<name>` must
+        // be descended into so we can reach children.
+        if path == worktree_dir || worktree_dir.starts_with(path) {
+            return true;
+        }
+        // Inside `.git/worktrees/<name>/...`. Apply the same allowlist logic as for the shared `.git/`.
+        let Some(suffix) = git_suffix_components(path) else {
+            return false;
+        };
+        return descend_allowlist_matches(&suffix);
+    }
+
+    // Common `.git/` directory: allow descending along the path to
+    // `.git/`, `.git/refs/heads/`, `.git/refs/remotes/<remote>/`, and
+    // `.git/worktrees/<name>/`.
+    let Some(suffix) = git_suffix_components(path) else {
+        // Path is `.git/` itself — needed so we can reach allowlisted children.
+        return true;
+    };
+    descend_allowlist_matches(&suffix)
+}
+
+/// Returns `true` for an in-`.git/` directory suffix that lies on the way to an allowlisted file.
+/// `suffix` is the component sequence after the `.git` component (worktree indirection already stripped),
+/// so e.g. `.git/worktrees/<name>/refs/heads` is seen here as just `["refs", "heads"]`.
+///
+/// Only the first two components are inspected:
+/// - `top_level_dir` is the directory immediately under `.git/` (e.g. `refs`, `objects`, `worktrees`)
+///   and decides which subtree we're descending into.
+/// - `refs_subdir` is meaningful only when `top_level_dir == "refs"`, where it distinguishes
+///   the watched ref subtrees (`heads`, `remotes`) from pruned ones (`tags`, etc.).
+fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
+    let top_level_dir = suffix.first().and_then(|c| c.as_os_str().to_str());
+    let refs_subdir = suffix.get(1).and_then(|c| c.as_os_str().to_str());
+    match top_level_dir {
+        // `.git/refs`, `.git/refs/heads[/...]`, `.git/refs/remotes[/<r>[/...]]`.
+        // `.git/refs/tags/*` and other refs subtrees stay pruned.
+        Some("refs") => matches!(refs_subdir, None | Some("heads") | Some("remotes")),
+        // Worktree dispatcher — needed to reach `.git/worktrees/<name>/...`.
+        Some("worktrees") => true,
+        // All other `.git/` subdirectories (objects, hooks, logs, info, lfs, …) are pruned.
+        Some(_) => false,
+        // `.git/` itself — descend so allowlisted children stay reachable.
+        None => true,
+    }
+}
+
+/// Returns the [`WatchFilter`] used by repository file watchers.
+///
+/// Emit predicate: forwards events for everything outside `.git/` plus the
+/// allowlisted files inside `.git/` (HEAD, refs/heads/*, index.lock,
+/// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents).
+///
+/// Descend predicate: prunes `.git/objects/`, `.git/hooks/`, `.git/logs/`,
+/// `.git/info/`, `.git/lfs/`, etc. so the recursive walk does not register
+/// watches on those subtrees, but still descends into `.git/`,
+/// `.git/refs/heads/`, `.git/refs/remotes/<r>/`, and `.git/worktrees/<n>/`
+/// so the allowlisted children remain reachable on Linux.
+#[cfg(feature = "local_fs")]
+pub fn repo_watch_filter() -> WatchFilter {
+    WatchFilter::with_filter(
+        Arc::new(should_watch_directory_in_git_path),
+        Arc::new(|path: &Path| !should_ignore_git_path(path)),
+    )
 }
 
 /// Determines whether a file should be parsed by a treesitter query. For now the main criteria is it shouldn't
@@ -614,5 +724,5 @@ impl DirectoryEntry {
 }
 
 #[cfg(test)]
-#[path = "entry_test.rs"]
+#[path = "entry_tests.rs"]
 mod tests;

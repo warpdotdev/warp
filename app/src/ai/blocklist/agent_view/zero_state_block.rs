@@ -1,57 +1,50 @@
+use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::path::Path;
+use std::sync::Arc;
+
 use itertools::Itertools as _;
 use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
 use parking_lot::FairMutex;
 use settings::Setting;
-use std::{borrow::Cow, cmp::Reverse, path::Path, sync::Arc};
-use warp_core::{features::FeatureFlag, report_if_error, ui::Icon};
+use warp_core::features::FeatureFlag;
+use warp_core::report_if_error;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::prelude::{
+    Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition,
+};
+use warpui::scene::Border;
 use warpui::{
-    elements::{
-        Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
-        Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::Keystroke,
-    prelude::{Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition},
-    scene::Border,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::{
-        active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId},
-        agent::conversation::AIConversationId,
-        blocklist::{
-            agent_view::{
-                agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
-                ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-                ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-            },
-            history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-        },
-        conversation_navigation::ConversationNavigationData,
-    },
-    appearance::Appearance,
-    changelog_model::{self, ChangelogModel},
-    settings::{AISettings, AISettingsChangedEvent},
-    terminal::{
-        self,
-        event::BlockType,
-        input::message_bar::{common::render_standard_message, Message, MessageItem},
-        model::{
-            blocks::BlockHeightItem,
-            session::{BootstrapSessionType, Session, SessionType, Sessions},
-        },
-        model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher},
-        prompt,
-        view::{
-            ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-            TerminalAction,
-        },
-        TerminalModel,
-    },
-    util::time_format::format_approx_duration_from_now_utc,
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::{
+    agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
+    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
+use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::appearance::Appearance;
+use crate::changelog_model::{self, ChangelogModel};
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::terminal::event::BlockType;
+use crate::terminal::input::message_bar::common::render_standard_message;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::model::blocks::BlockHeightItem;
+use crate::terminal::model::session::{BootstrapSessionType, Session, SessionType, Sessions};
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::view::TerminalAction;
+use crate::terminal::{self, prompt, TerminalModel};
+use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
@@ -97,13 +90,14 @@ impl AgentViewZeroStateBlock {
         origin: AgentViewEntryOrigin,
         agent_view_controller: ModelHandle<AgentViewController>,
         sessions: &ModelHandle<Sessions>,
-        cloud_agent_view_model: &ModelHandle<AmbientAgentViewModel>,
+        cloud_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         model_events_dispatcher: &ModelHandle<ModelEventDispatcher>,
         should_show_init_callout: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let cloud_agent_view_model_clone = cloud_agent_view_model.clone();
+        let cloud_agent_view_model_clone = cloud_agent_view_model.cloned();
+
         let model_events_clone = model_events_dispatcher.clone();
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
@@ -116,7 +110,10 @@ impl AgentViewZeroStateBlock {
                         me.should_hide = true;
                         ctx.unsubscribe_to_model(&model_events_clone);
                         ctx.unsubscribe_to_model(&history_model);
-                        ctx.unsubscribe_to_model(&cloud_agent_view_model_clone);
+                        if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref()
+                        {
+                            ctx.unsubscribe_to_model(cloud_agent_view_model);
+                        }
                         ctx.notify();
                         return;
                     }
@@ -140,7 +137,7 @@ impl AgentViewZeroStateBlock {
             ctx.notify();
         });
 
-        let cloud_agent_view_model_clone = cloud_agent_view_model.clone();
+        let cloud_agent_view_model_clone = cloud_agent_view_model.cloned();
         ctx.subscribe_to_model(
             model_events_dispatcher,
             move |me, model_events_dispatcher, event, ctx| {
@@ -152,7 +149,11 @@ impl AgentViewZeroStateBlock {
                             me.should_hide = true;
                             ctx.unsubscribe_to_model(&model_events_dispatcher);
                             ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
-                            ctx.unsubscribe_to_model(&cloud_agent_view_model_clone);
+                            if let Some(cloud_agent_view_model) =
+                                cloud_agent_view_model_clone.as_ref()
+                            {
+                                ctx.unsubscribe_to_model(cloud_agent_view_model);
+                            }
                             ctx.notify();
                         }
                     }
@@ -166,34 +167,46 @@ impl AgentViewZeroStateBlock {
             },
         );
 
-        let model_events_clone = model_events_dispatcher.clone();
-        ctx.subscribe_to_model(cloud_agent_view_model, move |me, model, event, ctx| {
-            if FeatureFlag::CloudModeSetupV2.is_enabled() {
-                match event {
-                    AmbientAgentViewModelEvent::DispatchedAgent
-                    | AmbientAgentViewModelEvent::Cancelled
-                        if !me.should_hide =>
-                    {
-                        me.should_hide = true;
-                        ctx.unsubscribe_to_model(&model);
-                        ctx.unsubscribe_to_model(&model_events_clone);
-                        ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
-                        ctx.notify();
-                    }
-                    _ => (),
+        if let Some(cloud_agent_view_model) = cloud_agent_view_model {
+            let model_events_clone = model_events_dispatcher.clone();
+            ctx.subscribe_to_model(cloud_agent_view_model, move |me, model, event, ctx| {
+                if me.should_hide {
+                    return;
                 }
-            } else if model.as_ref(ctx).should_show_status_footer() {
-                me.should_hide = true;
-                ctx.unsubscribe_to_model(&model);
-                ctx.unsubscribe_to_model(&model_events_clone);
-                ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
-                ctx.notify();
-            }
-        });
 
-        let cloud_agent_view = cloud_agent_view_model.as_ref(ctx);
+                // Hide the zero state when this pane becomes a local-to-cloud handoff
+                // pane (REMOTE-1486). The fresh cloud-mode banner is suppressed because
+                // the pane is actually pre-loaded with a forked source conversation, not
+                // a brand-new one.
+                if matches!(event, AmbientAgentViewModelEvent::PendingHandoffChanged)
+                    && model.as_ref(ctx).is_local_to_cloud_handoff()
+                {
+                    me.should_hide = true;
+                } else if FeatureFlag::CloudModeSetupV2.is_enabled() {
+                    if matches!(
+                        event,
+                        AmbientAgentViewModelEvent::DispatchedAgent
+                            | AmbientAgentViewModelEvent::Cancelled
+                    ) {
+                        me.should_hide = true;
+                    }
+                } else if model.as_ref(ctx).should_show_status_footer() {
+                    me.should_hide = true;
+                }
+
+                if me.should_hide {
+                    ctx.unsubscribe_to_model(&model);
+                    ctx.unsubscribe_to_model(&model_events_clone);
+                    ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
+                    ctx.notify();
+                }
+            });
+        }
+
         let has_parent_terminal =
-            !cloud_agent_view.is_ambient_agent() || cloud_agent_view.has_parent_terminal();
+            cloud_agent_view_model.is_none_or(|model| !model.as_ref(ctx).is_ambient_agent());
+        let is_local_to_cloud_handoff = cloud_agent_view_model
+            .is_some_and(|model| model.as_ref(ctx).is_local_to_cloud_handoff());
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, changelog_model, event, ctx| {
             if let changelog_model::Event::ChangelogRequestComplete { .. } = event {
@@ -250,7 +263,8 @@ impl AgentViewZeroStateBlock {
             terminal_model,
             current_working_directory,
             cached_recent_conversations,
-            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff),
+            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
+                || is_local_to_cloud_handoff,
             should_show_init_callout,
             has_parent_terminal,
             state_handles,

@@ -22,6 +22,12 @@
 #   SKIP_SETTINGS_SCHEMA: Set to "1" to skip generating the JSON settings
 #                         schema. By default the schema is always generated
 #                         so that production bundles never accidentally omit it.
+#   SETTINGS_SCHEMA_CACHE: Path to a cache file for the generated schema.
+#                          When set, the first invocation generates the schema
+#                          and saves a copy to this path; subsequent invocations
+#                          copy from the cache instead of regenerating. This
+#                          avoids redundant compilations when bundling multiple
+#                          package formats for the same channel.
 
 set -e
 
@@ -84,6 +90,7 @@ fi
 # When adding a new third-party component to the bundle, add its license file
 # to the repo alongside the component and add an entry here.
 ADDITIONAL_LICENSES=(
+    "Alacritty (alacritty_terminal)|Apache-2.0|crates/warp_terminal/src/model/LICENSE-ALACRITTY"
     "Hack Font|MIT|app/assets/bundled/fonts/hack/LICENSE.md"
     "Roboto Font|SIL Open Font License|app/assets/bundled/fonts/roboto/LICENSE.txt"
     "bash-preexec|MIT|app/assets/bundled/bootstrap/bash-preexec-LICENSE.md"
@@ -123,19 +130,30 @@ fi
 # Generate settings JSON schema unless explicitly skipped.
 if [ "${SKIP_SETTINGS_SCHEMA:-}" != "1" ]; then
   SCHEMA_OUTPUT="$DEST_DIR/settings_schema.json"
-  echo "Generating settings schema at $SCHEMA_OUTPUT"
 
-  SCHEMA_CMD=(cargo run)
-  if [ -n "$CARGO_PROFILE" ]; then
-    SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
-  fi
-  SCHEMA_CMD+=(--manifest-path "$REPO_ROOT/Cargo.toml" --bin generate_settings_schema --)
-  if [ -n "$CHANNEL" ]; then
-    SCHEMA_CMD+=(--channel "$CHANNEL")
-  fi
-  SCHEMA_CMD+=("$SCHEMA_OUTPUT")
+  if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ] && [ -f "$SETTINGS_SCHEMA_CACHE" ]; then
+    echo "Copying cached settings schema to $SCHEMA_OUTPUT"
+    cp "$SETTINGS_SCHEMA_CACHE" "$SCHEMA_OUTPUT"
+  else
+    echo "Generating settings schema at $SCHEMA_OUTPUT"
 
-  "${SCHEMA_CMD[@]}"
+    SCHEMA_CMD=(cargo run)
+    if [ -n "$CARGO_PROFILE" ]; then
+      SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
+    fi
+    SCHEMA_CMD+=(--manifest-path "$REPO_ROOT/Cargo.toml" --bin generate_settings_schema --)
+    if [ -n "$CHANNEL" ]; then
+      SCHEMA_CMD+=(--channel "$CHANNEL")
+    fi
+    SCHEMA_CMD+=("$SCHEMA_OUTPUT")
+
+    "${SCHEMA_CMD[@]}"
+
+    if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ]; then
+      echo "Caching settings schema at $SETTINGS_SCHEMA_CACHE"
+      cp "$SCHEMA_OUTPUT" "$SETTINGS_SCHEMA_CACHE"
+    fi
+  fi
 fi
 
 echo "Successfully prepared bundled resources in $DEST_DIR"

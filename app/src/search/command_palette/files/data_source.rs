@@ -1,22 +1,24 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-use super::search_item::{CreateFileSearchItem, FileSearchItem};
-use crate::code::opened_files::OpenedFilesModel;
-use crate::search::command_palette::mixer::CommandPaletteItemAction;
-use crate::search::data_source::{Query, QueryResult};
-use crate::search::files::model::FileSearchModel;
-use crate::search::files::search_item::FileSearchResult;
-use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
-use futures_lite::FutureExt;
-use fuzzy_match::FuzzyMatchResult;
-use instant::Instant;
-use itertools::Itertools;
 use std::collections::HashSet;
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use futures_lite::FutureExt;
+use fuzzy_match::FuzzyMatchResult;
+use instant::Instant;
+use itertools::Itertools;
 use warp_util::path::CleanPathResult;
 use warpui::{AppContext, Entity, SingletonEntity};
+
+use super::search_item::{CreateFileSearchItem, FileSearchItem};
+use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};
+use crate::search::command_palette::mixer::CommandPaletteItemAction;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::files::model::FileSearchModel;
+use crate::search::files::search_item::FileSearchResult;
+use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
 
 const MAX_RESULTS: usize = 100;
 
@@ -127,47 +129,54 @@ impl FileDataSource {
 
         let (contents, git_changed_files) = self.contents_with_git_changes(app);
 
-        let mut results = Vec::new();
-
         let opened_files = OpenedFilesModel::as_ref(app);
 
-        let repo_root = file_search_model.repo_root(app);
-        let opened_files =
-            repo_root.and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root));
+        let repo_root = file_search_model.repo_root_location(app);
+        let opened_files = repo_root
+            .and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root))
+            .cloned();
 
-        for item in contents.iter() {
-            let mut file_ranking = if git_changed_files.contains(&item.path) {
-                FileRanking::ChangedInGit
-            } else {
-                FileRanking::None
-            };
+        Box::pin(async move {
+            let mut results = Vec::new();
 
-            if let Some(last_opened_timestamp) =
-                opened_files.and_then(|opened_files| opened_files.get(&PathBuf::from(&item.path)))
-            {
-                file_ranking = FileRanking::OpenedInWarp {
-                    timestamp: *last_opened_timestamp,
-                };
+            for chunk in contents.chunks(50) {
+                for item in chunk {
+                    let mut file_ranking = if git_changed_files.contains(&item.path) {
+                        FileRanking::ChangedInGit
+                    } else {
+                        FileRanking::None
+                    };
+
+                    if let Some(last_opened_timestamp) = opened_files
+                        .as_ref()
+                        .and_then(|of: &OpenedFilesInRepo| of.get(&item.path))
+                    {
+                        file_ranking = FileRanking::OpenedInWarp {
+                            timestamp: *last_opened_timestamp,
+                        };
+                    }
+
+                    let match_result = FuzzyMatchResult {
+                        score: 0,
+                        matched_indices: vec![], // No highlighting needed for zero state
+                    };
+
+                    let search_item = FileSearchItem {
+                        path: PathBuf::from(&item.path),
+                        project_directory: item.project_directory.clone(),
+                        match_result,
+                        line_and_column_arg: None,
+                        is_directory: item.is_directory,
+                    };
+                    results.push((file_ranking, QueryResult::from(search_item)));
+                }
+                futures_lite::future::yield_now().await;
             }
 
-            let match_result = FuzzyMatchResult {
-                score: 0,
-                matched_indices: vec![], // No highlighting needed for zero state
-            };
+            results.sort_by_key(|(ranking, _)| *ranking);
 
-            let search_item = FileSearchItem {
-                path: PathBuf::from(&item.path),
-                project_directory: item.project_directory.clone(),
-                match_result,
-                line_and_column_arg: None,
-                is_directory: item.is_directory,
-            };
-            results.push((file_ranking, QueryResult::from(search_item)));
-        }
-
-        results.sort_by_key(|(ranking, _)| *ranking);
-
-        Box::pin(async move { Ok(results.into_iter().map(|(_, ranking)| ranking).collect()) })
+            Ok(results.into_iter().map(|(_, ranking)| ranking).collect())
+        })
     }
 
     /// Handle non-empty query with fuzzy matching (no git status needed)
@@ -191,7 +200,9 @@ impl FileDataSource {
 
         let opened_files = OpenedFilesModel::as_ref(app);
 
+        #[cfg(feature = "local_fs")]
         let repo_root = file_search_model.repo_root(app);
+        let repo_root_location = file_search_model.repo_root_location(app);
 
         // For the "Create file" fallback, use the expanded (but not repo-root-stripped)
         // path so that absolute paths work correctly with Path::join.
@@ -223,7 +234,7 @@ impl FileDataSource {
         )
         .unwrap_or(query_file_content);
 
-        let opened_files = repo_root
+        let opened_files = repo_root_location
             .and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root))
             .cloned();
 
@@ -249,7 +260,7 @@ impl FileDataSource {
 
                     if opened_files
                         .as_ref()
-                        .and_then(|opened_files| opened_files.get(&PathBuf::from(&item.path)))
+                        .and_then(|of: &OpenedFilesInRepo| of.get(&item.path))
                         .is_some()
                     {
                         // Apply a boost to opened files to rank them above non-opened files.

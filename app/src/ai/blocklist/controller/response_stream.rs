@@ -1,4 +1,5 @@
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local, TimeDelta};
@@ -7,16 +8,12 @@ use uuid::Uuid;
 use warp_multi_agent_api::response_event;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    ai::agent::{
-        api::{self, generate_multi_agent_output, ConvertToAPITypeError},
-        conversation::AIConversationId,
-        AIIdentifiers, CancellationReason,
-    },
-    network::NetworkStatus,
-    report_error, send_telemetry_from_ctx,
-    server::server_api::ServerApiProvider,
-};
+use crate::ai::agent::api::{self, generate_multi_agent_output, ConvertToAPITypeError};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIIdentifiers, CancellationReason};
+use crate::network::NetworkStatus;
+use crate::server::server_api::ServerApiProvider;
+use crate::{report_error, send_telemetry_from_ctx};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResponseStreamId(String);

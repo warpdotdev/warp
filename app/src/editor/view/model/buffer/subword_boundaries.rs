@@ -1,9 +1,11 @@
-use super::{CharOffset, Point};
-use itertools::Either;
 use std::iter::Peekable;
-use warpui::text::{
-    word_boundaries::WordBoundariesApproach, words::is_subword_boundary_char, TextBuffer,
-};
+
+use itertools::Either;
+use warpui::text::word_boundaries::WordBoundariesApproach;
+use warpui::text::words::is_subword_boundary_char;
+use warpui::text::TextBuffer;
+
+use super::{CharOffset, Point};
 
 pub struct SubwordBoundaries<'a, T: TextBuffer + ?Sized> {
     offset: CharOffset,
@@ -266,7 +268,7 @@ impl<T: TextBuffer + ?Sized> Iterator for SubwordBoundaries<'_, T> {
 /// Storage for characters from the buffer, used by the `SubwordBoundaries`
 /// iterator to find the start and end of subwords.
 struct CharWindow {
-    /// A store of characters retreived from the `chars` iterator.
+    /// A store of characters retrieved from the `chars` iterator.
     ///
     /// `char_window[0]`: character at the current offset.
     ///

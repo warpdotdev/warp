@@ -36,6 +36,7 @@ serde_with.workspace = true
 sentry = { workspace = true, optional = true }
 sentry-log = { workspace = true, optional = true }
 strum.workspace = true
+strum_macros.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
 concat-idents.workspace = true
@@ -45,6 +46,7 @@ websocket.workspace = true
 instant.workspace = true
 schemars = "1"
 settings_value = { workspace = true, features = ["derive"] }
+warp_util.workspace = true
 async-broadcast.workspace = true
 futures.workspace = true
 line-ending.workspace = true

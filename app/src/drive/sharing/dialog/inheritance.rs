@@ -1,19 +1,17 @@
 //! Support for displaying inherited ACLs.
 
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{CrossAxisAlignment, Flex, MouseStateHandle, ParentElement as _},
-    ui_components::components::UiComponent as _,
-    AppContext, Element, SingletonEntity as _,
-};
+use warpui::elements::{CrossAxisAlignment, Flex, MouseStateHandle, ParentElement as _};
+use warpui::ui_components::components::UiComponent as _;
+use warpui::{AppContext, Element, SingletonEntity as _};
 
 use super::style;
-use crate::{
-    cloud_object::{model::persistence::CloudModel, ServerObjectContainer},
-    drive::CloudObjectTypeAndId,
-    server::{ids::SyncId, telemetry::SharingDialogSource},
-    workspace::WorkspaceAction,
-};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::ServerObjectContainer;
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::SharingDialogSource;
+use crate::workspace::WorkspaceAction;
 
 /// UI state for inherited permissions.
 pub struct InheritanceState {

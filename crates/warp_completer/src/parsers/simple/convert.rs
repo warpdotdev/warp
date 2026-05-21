@@ -1,7 +1,8 @@
+use std::fmt;
+
 use super::{Command, Part};
 use crate::meta::{Span, Spanned};
 use crate::parsers::{LiteCommand, LiteGroup, LitePipeline, LiteRootNode};
-use std::fmt;
 
 impl From<Spanned<Command>> for LiteCommand {
     fn from(command: Spanned<Command>) -> Self {

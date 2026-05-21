@@ -6,6 +6,77 @@ mod snapshot;
 #[cfg(feature = "voice_input")]
 mod voice;
 
+use core::f32;
+use std::borrow::Cow;
+use std::cmp::{self, Ordering};
+use std::collections::HashMap;
+use std::fmt;
+use std::ops::Range;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Result;
+use async_fs;
+use base64::engine::general_purpose;
+use base64::Engine as _;
+use element::CommandXRayMouseStateHandle;
+use figma_utils::is_figma_png;
+use itertools::{Either, Itertools};
+use mime_guess::from_path;
+use model::{
+    Anchor, AnchorBias, Bias, DisplayMap, DrawableSelection, EditorModel, EditorModelEvent, Edits,
+    LocalPendingSelection, LocalSelection, MarkedTextState, MovementResult, SelectionMode,
+    SubwordBoundaries, ToBufferOffset, ToCharOffset, ToDisplayPoint, ToPoint,
+};
+use num_traits::SaturatingSub;
+use parking_lot::Mutex;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::Vector2F;
+use settings::Setting as _;
+use snapshot::{EditorHeightShrinkDelay, ViewSnapshot};
+use string_offset::{ByteOffset, CharOffset};
+use vec1::{vec1, Vec1};
+use vim::vim::{
+    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
+    InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectInclusion, TextObjectType,
+    VimHandler, VimMode, VimModel, VimMotion, VimOperand, VimOperator, VimState, VimSubscriber,
+    VimTextObject, WordBound, WordMotion, WordType,
+};
+use vim::{
+    vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_inner_block, vim_inner_paragraph,
+    vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+};
+use warp_completer::completer::Description;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_core::{safe_error, send_telemetry_from_ctx};
+use warp_editor::editor::NavigationKey;
+use warp_util::path::ShellFamily;
+use warp_util::user_input::UserInput;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::actions::StandardAction;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{Cache as FontCache, FamilyId, Properties, Weight};
+use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::text::TextBuffer;
+use warpui::text_layout::TextStyle;
+use warpui::ui_components::button::ButtonTooltipPosition;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::windowing::WindowManager;
+use warpui::{
+    elements, windowing, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
+    FocusContext, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WindowId,
+};
 /// The editor interfaces that we publicly expose to consumers.
 /// This should be a very limited set; if you need to add something here,
 /// you should carefully consider if it leaks the internal details of the editor.
@@ -21,124 +92,45 @@ pub use {
 use self::model::{LocalSelections, Selection, UpdateBufferOption};
 use super::soft_wrap::{ClampDirection, DisplayPointAndClampDirection};
 use super::Point;
-#[cfg(feature = "voice_input")]
-use crate::view_components::FeaturePopup;
-use base64::{engine::general_purpose, Engine as _};
-use element::CommandXRayMouseStateHandle;
-use figma_utils::is_figma_png;
-use itertools::{Either, Itertools};
-use mime_guess::from_path;
-use model::{
-    Anchor, AnchorBias, Bias, DisplayMap, DrawableSelection, LocalPendingSelection, LocalSelection,
-    MarkedTextState, MovementResult, SelectionMode, SubwordBoundaries, ToBufferOffset,
-    ToCharOffset, ToDisplayPoint, ToPoint,
-};
-use model::{EditorModel, EditorModelEvent, Edits};
-use pathfinder_color::ColorU;
-use settings::Setting as _;
-use snapshot::{EditorHeightShrinkDelay, ViewSnapshot};
-use vec1::{vec1, Vec1};
-use warp_core::{safe_error, send_telemetry_from_ctx};
-use warp_util::{path::ShellFamily, user_input::UserInput};
-use warpui::platform::keyboard::KeyCode;
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{elements, ViewHandle};
-
 use crate::ai::agent::ImageContext;
-use crate::ai::blocklist::{BlocklistAIContextModel, PendingAttachment, PendingFile};
+use crate::ai::blocklist::{BlocklistAIContextModel, InputType, PendingAttachment, PendingFile};
 use crate::ai::predict::next_command_model::{NextCommandModel, NextCommandSuggestionState};
 use crate::appearance::Appearance;
 use crate::channel::{Channel, ChannelState};
 use crate::editor::accept_autosuggestion_keybinding_view::AcceptAutosuggestionKeybinding;
 use crate::editor::autosuggestion_ignore_view::{AutosuggestionIgnore, AutosuggestionIgnoreEvent};
+use crate::editor::RangeExt;
+use crate::features::FeatureFlag;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::view::{
     AIContextMenu, AIContextMenuCategory, AIContextMenuEvent,
 };
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings_view::flags;
-use crate::suggestions::ignored_suggestions_model::{IgnoredSuggestionsModel, SuggestionType};
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::icons;
-use crate::view_components::DismissibleToast;
-use crate::vim_registers::{RegisterContent, VimRegisters};
-use crate::workspace::ToastStack;
-use crate::{ai::blocklist::InputType, settings::AISettings};
-
-use crate::editor::RangeExt;
-use crate::features::FeatureFlag;
 #[cfg(feature = "voice_input")]
 use crate::settings::AISettingsChangedEvent;
-use crate::settings::{AppEditorSettings, CursorBlink};
 use crate::settings::{
-    AppEditorSettingsChangedEvent, CursorDisplayType, InputSettings, SelectionSettings,
+    AISettings, AppEditorSettings, AppEditorSettingsChangedEvent, CursorBlink, CursorDisplayType,
+    InputSettings, SelectionSettings,
 };
+use crate::settings_view::flags;
+use crate::suggestions::ignored_suggestions_model::{IgnoredSuggestionsModel, SuggestionType};
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::model::block::BlockId;
 use crate::themes::theme::Fill;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons;
 use crate::util::bindings::{cmd_or_ctrl_shift, keybinding_name_to_keystroke, CustomAction};
 use crate::util::clipboard::clipboard_content_with_escaped_paths;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use crate::util::image::{resize_image, MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES};
 use crate::util::merge_ranges;
-use crate::{workspace::Workspace, BlocklistAIHistoryModel};
-use anyhow::Result;
-use core::f32;
-use std::path::Path;
-use vim::vim::{
-    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-    InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectInclusion, TextObjectType,
-    VimHandler, VimMode, VimModel, VimMotion, VimOperand, VimOperator, VimState, VimSubscriber,
-    VimTextObject, WordBound, WordMotion, WordType,
-};
-use vim::{
-    vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_inner_block, vim_inner_paragraph,
-    vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
-};
-use warp_core::semantic_selection::SemanticSelection;
-
-use num_traits::SaturatingSub;
-use parking_lot::Mutex;
-use pathfinder_geometry::vector::Vector2F;
-
-use async_fs;
-use std::collections::HashMap;
-use std::{borrow::Cow, rc::Rc};
-use std::{
-    cmp::{self, Ordering},
-    fmt,
-    ops::Range,
-    sync::Arc,
-    time::Duration,
-};
-use string_offset::{ByteOffset, CharOffset};
-use warp_completer::completer::Description;
-use warp_editor::editor::NavigationKey;
-use warpui::actions::StandardAction;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
-    ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-    ParentElement, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
-};
-use warpui::elements::{MouseStateHandle, Radius};
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::keymap::{Keystroke, PerPlatformKeystroke};
-use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::TextBuffer;
-use warpui::text_layout::TextStyle;
-use warpui::windowing::WindowManager;
-use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    fonts::Cache as FontCache,
-    keymap::{EditableBinding, FixedBinding},
-    AppContext, Element, Entity, ModelAsRef, ModelHandle, View, ViewContext, WindowId,
-};
-use warpui::{windowing, BlurContext, EntityId, FocusContext};
-use warpui::{CursorInfo, ModelContext, SingletonEntity, TypedActionView};
+use crate::view_components::DismissibleToast;
+#[cfg(feature = "voice_input")]
+use crate::view_components::FeaturePopup;
+use crate::vim_registers::{RegisterContent, VimRegisters};
+use crate::workspace::{ToastStack, Workspace};
+use crate::BlocklistAIHistoryModel;
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_TAB_SIZE: usize = 4;
@@ -371,12 +363,16 @@ pub fn init(ctx: &mut AppContext) {
         FixedBinding::new(
             "pageup",
             EditorAction::PageUp,
-            id!("EditorView") & !id!("IMEOpen"),
+            id!("EditorView")
+                & !id!("IMEOpen")
+                & !id!(flags::TERMINAL_INPUT_PAGE_KEYS_HANDLED_BY_INPUT),
         ),
         FixedBinding::new(
             "pagedown",
             EditorAction::PageDown,
-            id!("EditorView") & !id!("IMEOpen"),
+            id!("EditorView")
+                & !id!("IMEOpen")
+                & !id!(flags::TERMINAL_INPUT_PAGE_KEYS_HANDLED_BY_INPUT),
         ),
         // Some editable bindings currently have more than 1 action.
         // Below's the list of those.
@@ -4073,7 +4069,7 @@ impl EditorView {
 
     /// This method is triggered by the initial double-click selection (not a drag). The way the
     /// selection range expands depends on user settings stored in SemanticSelection. Smart-select may
-    /// be enabled, and if not, the word-breaking characters may have been overriden.
+    /// be enabled, and if not, the word-breaking characters may have been overridden.
     pub fn select_word(&mut self, position: &DisplayPoint, ctx: &mut ViewContext<Self>) {
         let position = *position;
 
@@ -4236,7 +4232,7 @@ impl EditorView {
             .first_selection(ctx)
             .head()
             .to_byte_offset(buffer)
-            .expect("Selection must be convertable to byte offset")
+            .expect("Selection must be convertible to byte offset")
     }
 
     /// Finds the start byte of the token under the given point (the offset at
@@ -6346,12 +6342,12 @@ impl EditorView {
                         selection
                             .head()
                             .to_point(buffer)
-                            .expect("Selection head must be convertable to a Point")
+                            .expect("Selection head must be convertible to a Point")
                     } else {
                         selection
                             .end()
                             .to_point(buffer)
-                            .expect("Selection end must be convertable to a Point")
+                            .expect("Selection end must be convertible to a Point")
                     };
                     if let Ok(mut boundaries) =
                         buffer.subword_ends_from_offset_exclusive(end_position)
@@ -6361,7 +6357,7 @@ impl EditorView {
                             .anchor_before(
                                 subword_start
                                     .to_display_point(map, ctx)
-                                    .expect("Subword start must be convertable to a DisplayPoint"),
+                                    .expect("Subword start must be convertible to a DisplayPoint"),
                                 Bias::Right,
                                 ctx,
                             )
@@ -6394,12 +6390,12 @@ impl EditorView {
                     selection
                         .head()
                         .to_point(buffer)
-                        .expect("Selection head must be convertable to a Point")
+                        .expect("Selection head must be convertible to a Point")
                 } else {
                     selection
                         .start()
                         .to_point(buffer)
-                        .expect("Selection start must be convertable to a Point")
+                        .expect("Selection start must be convertible to a Point")
                 };
                 if let Ok(mut boundaries) =
                     buffer.subword_backward_starts_from_offset_exclusive(start_position)
@@ -6409,7 +6405,7 @@ impl EditorView {
                         .anchor_before(
                             subword_start
                                 .to_display_point(map, ctx)
-                                .expect("Subword start must be convertable to a DisplayPoint"),
+                                .expect("Subword start must be convertible to a DisplayPoint"),
                             Bias::Left,
                             ctx,
                         )
@@ -8767,5 +8763,5 @@ pub fn position_id_for_first_cursor(editor_view_id: EntityId) -> String {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

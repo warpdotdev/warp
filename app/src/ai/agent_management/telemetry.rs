@@ -108,9 +108,14 @@ pub enum AgentManagementTelemetryEvent {
     /// User clicked "Continue locally" in the tombstone
     #[cfg(not(target_family = "wasm"))]
     TombstoneContinueLocally,
+    /// User clicked "Continue" in the tombstone to start a cloud follow-up.
+    TombstoneContinueInCloud { task_id: String },
     /// User clicked "Continue locally" in the details panel
     #[cfg(not(target_family = "wasm"))]
     DetailsPanelContinueLocally,
+    /// User invoked the /continue-locally slash command
+    #[cfg(not(target_family = "wasm"))]
+    SlashCommandContinueLocally,
     /// User clicked "Open in Warp" in the tombstone (wasm)
     #[cfg(target_family = "wasm")]
     TombstoneOpenInWarp,
@@ -190,8 +195,13 @@ impl TelemetryEvent for AgentManagementTelemetryEvent {
             }
             #[cfg(not(target_family = "wasm"))]
             AgentManagementTelemetryEvent::TombstoneContinueLocally => None,
+            AgentManagementTelemetryEvent::TombstoneContinueInCloud { task_id } => Some(json!({
+                "task_id": task_id,
+            })),
             #[cfg(not(target_family = "wasm"))]
             AgentManagementTelemetryEvent::DetailsPanelContinueLocally => None,
+            #[cfg(not(target_family = "wasm"))]
+            AgentManagementTelemetryEvent::SlashCommandContinueLocally => None,
             #[cfg(target_family = "wasm")]
             AgentManagementTelemetryEvent::TombstoneOpenInWarp => None,
             AgentManagementTelemetryEvent::CloudRunCancelled { task_id } => {
@@ -242,8 +252,11 @@ impl TelemetryEventDesc for AgentManagementTelemetryEventDiscriminants {
             Self::TombstoneArtifactClicked => "AgentManagement.TombstoneArtifactClicked",
             #[cfg(not(target_family = "wasm"))]
             Self::TombstoneContinueLocally => "AgentManagement.TombstoneContinueLocally",
+            Self::TombstoneContinueInCloud => "AgentManagement.TombstoneContinueInCloud",
             #[cfg(not(target_family = "wasm"))]
             Self::DetailsPanelContinueLocally => "AgentManagement.DetailsPanelContinueLocally",
+            #[cfg(not(target_family = "wasm"))]
+            Self::SlashCommandContinueLocally => "AgentManagement.SlashCommandContinueLocally",
             #[cfg(target_family = "wasm")]
             Self::TombstoneOpenInWarp => "AgentManagement.TombstoneOpenInWarp",
             Self::CloudRunCancelled => "AgentManagement.CloudRunCancelled",
@@ -274,9 +287,16 @@ impl TelemetryEventDesc for AgentManagementTelemetryEventDiscriminants {
             Self::TombstoneArtifactClicked => "User clicked an artifact in the tombstone view",
             #[cfg(not(target_family = "wasm"))]
             Self::TombstoneContinueLocally => "User clicked Continue locally in the tombstone",
+            Self::TombstoneContinueInCloud => {
+                "User clicked Continue in the tombstone to start a cloud follow-up"
+            }
             #[cfg(not(target_family = "wasm"))]
             Self::DetailsPanelContinueLocally => {
                 "User clicked Continue locally in the details panel"
+            }
+            #[cfg(not(target_family = "wasm"))]
+            Self::SlashCommandContinueLocally => {
+                "User invoked /continue-locally to fork a cloud conversation locally"
             }
             #[cfg(target_family = "wasm")]
             Self::TombstoneOpenInWarp => "User clicked Open in Warp in the tombstone",

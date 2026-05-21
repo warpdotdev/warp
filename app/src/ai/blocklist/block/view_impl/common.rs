@@ -10,116 +10,95 @@ use std::iter;
 use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextInline, TableAlignment};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::Arc;
-use warp_core::{
-    features::FeatureFlag,
-    ui::{appearance::Appearance, color::blend::Blend, theme::color::internal_colors},
-};
-use warpui::{
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    elements::{
-        new_scrollable::{ScrollableAppearance, SingleAxisConfig},
-        Align, Axis, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
-        Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers, Hoverable,
-        Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
-        TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    image_cache::{CacheOption, ImageType},
-    keymap::Keystroke,
-    platform::Cursor,
-    text_layout::{ClipConfig, TextAlignment, TextStyle},
-    ui_components::{
-        button::Button,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, Element, EventContext, SingletonEntity, View, ViewHandle,
-};
-
-use super::{add_highlights_to_rich_text, add_highlights_to_text, output::LinkActionConstructors};
-use crate::ai::agent::MessageId;
-use crate::terminal::find::BlockListMatch;
-use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
-use crate::{
-    ai::{
-        agent::{conversation::AIConversation, icons, ShellCommandDelay},
-        blocklist::{
-            block::status_bar::BlocklistAIStatusBarAction, history_model::BlocklistAIHistoryModel,
-            BlocklistAIActionModel, ShellCommandExecutor,
-        },
-        loading::shimmering_warp_loading_text,
-    },
-    terminal::{self, TerminalModel},
-    util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState},
-    workspaces::{user_workspaces::UserWorkspaces, workspace::CustomerType},
-};
-use crate::{
-    ai::{
-        agent::{
-            icons::red_stop_icon, AIAgentAction, AIAgentActionType, AIAgentInput,
-            AIAgentOutputMessageType, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
-            AgentOutputMermaidDiagram, AgentOutputTable, AgentOutputTableRendering,
-            ProgrammingLanguage, RenderableAIError, SummarizationType, WebSearchStatus,
-        },
-        blocklist::{
-            block::{
-                find::FindState, view_impl::CONTENT_HORIZONTAL_PADDING, AIBlockAction,
-                CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView,
-                TableSectionHandles,
-            },
-            code_block::{
-                render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
-                CodeSnippetButtonHandles,
-            },
-            inline_action::{
-                aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView,
-                inline_action_header::{
-                    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::{self, icon_size},
-                requested_action::RenderableAction,
-            },
-            model::{AIBlockModel, AIBlockModelHelper},
-            secret_redaction::{redact_secrets_in_element, SecretRedactionState},
-            view_util::error_color,
-            TextLocation,
-        },
-        AIRequestUsageModel,
-    },
-    code::{editor::view::CodeEditorView, editor_management::CodeSource},
-    notebooks::editor::{markdown_table_appearance, rich_text_styles},
-    settings_view::SettingsSection,
-    terminal::{
-        find::TerminalFindModel, safe_mode_settings::get_secret_obfuscation_mode,
-        view::TerminalAction, ShellLaunchData,
-    },
-    ui_components::{
-        avatar::{Avatar, AvatarContent},
-        blended_colors,
-        buttons::icon_button,
-        icons::Icon,
-    },
-    workspace::WorkspaceAction,
-};
-use crate::{
-    search::slash_command_menu::static_commands::commands,
-    settings::{FontSettings, InputSettings},
-};
 use warp_core::channel::ChannelState;
-use warp_editor::content::{
-    edit::resolve_asset_source_relative_to_directory, mermaid_diagram::mermaid_asset_source,
-};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
+use warp_editor::content::mermaid_diagram::mermaid_asset_source;
 use warp_util::path::to_relative_path;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
-use warpui::elements::{Highlight, HighlightedRange};
+use warpui::elements::{
+    Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
+    Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers, Highlight,
+    HighlightedRange, Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Stack, Table, TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing,
+    Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::image_cache::{CacheOption, ImageType};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::text_layout::{ClipConfig, TextAlignment, TextStyle};
+use warpui::ui_components::button::Button;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{Action, AppContext, Element, EventContext, SingletonEntity, View, ViewHandle};
+
+use super::output::LinkActionConstructors;
+use super::{add_highlights_to_rich_text, add_highlights_to_text};
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::icons::red_stop_icon;
+use crate::ai::agent::{
+    icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
+    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
+    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+};
+use crate::ai::blocklist::block::find::FindState;
+use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
+use crate::ai::blocklist::block::view_impl::CONTENT_HORIZONTAL_PADDING;
+use crate::ai::blocklist::block::{
+    AIBlockAction, CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView,
+    TableSectionHandles,
+};
+use crate::ai::blocklist::code_block::{
+    render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
+    CodeSnippetButtonHandles,
+};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
+use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
+use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
+use crate::ai::blocklist::secret_redaction::{redact_secrets_in_element, SecretRedactionState};
+use crate::ai::blocklist::view_util::error_color;
+use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
+use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::AIRequestUsageModel;
+use crate::code::editor::view::CodeEditorView;
+use crate::code::editor_management::CodeSource;
+use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::settings::{FontSettings, InputSettings};
+use crate::settings_view::SettingsSection;
+use crate::terminal::find::{BlockListMatch, TerminalFindModel};
+use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::TerminalAction;
+use crate::terminal::{self, ShellLaunchData, TerminalModel};
+use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
 
 pub const STATUS_ICON_SIZE_DELTA: f32 = 4.;
 pub const STATUS_FOOTER_VERTICAL_PADDING: f32 = 4.;
@@ -565,19 +544,6 @@ pub fn render_warping_indicator_base(
 
     let text = render_output_status_text(warping_indicator_text, appearance, app);
 
-    let mut row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_spacing(6.);
-
-    if let Some(icon) = icon {
-        row = row.with_child(
-            ConstrainedBox::new(icon)
-                .with_width(icon_size(app) - STATUS_ICON_SIZE_DELTA)
-                .with_height(icon_size(app) - STATUS_ICON_SIZE_DELTA)
-                .finish(),
-        );
-    }
-
     let text_content = {
         let mut row = Flex::row().with_child(Shrinkable::new(1., text).finish());
 
@@ -636,14 +602,29 @@ pub fn render_warping_indicator_base(
         );
     }
 
+    let mut row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(6.);
+
+    if let Some(icon) = icon {
+        row = row.with_child(
+            ConstrainedBox::new(icon)
+                .with_width(icon_size(app) - STATUS_ICON_SIZE_DELTA)
+                .with_height(icon_size(app) - STATUS_ICON_SIZE_DELTA)
+                .finish(),
+        );
+    }
+
     row = row.with_child(Expanded::new(1., text_col.finish()).finish());
 
     if let Some(buttons) = buttons {
         row = row.with_child(buttons);
     }
 
+    let content = Clipped::new(row.finish()).finish();
+
     if is_passive_code_diff {
-        Container::new(row.finish())
+        Container::new(content)
             // Use custom padding for the passive code diff block
             .with_padding_top(8.)
             .with_padding_bottom(4.)
@@ -651,7 +632,7 @@ pub fn render_warping_indicator_base(
             .finish()
     } else {
         let mut container = Container::new(
-            ConstrainedBox::new(row.finish())
+            ConstrainedBox::new(content)
                 .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
                 .finish(),
         )
@@ -1239,6 +1220,7 @@ pub fn render_text_sections<V: View, A: Action>(
                         working_directory: props.current_working_directory,
                         open_code_block_action_factory: props.open_code_block_action_factory,
                         copy_code_action_factory: props.copy_code_action_factory,
+                        selectable: props.selectable,
                         #[cfg(feature = "local_fs")]
                         resolved_code_block_paths: props.resolved_code_block_paths,
                     },
@@ -2310,7 +2292,7 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
         .map(|ext| {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg"
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "ico" | "svg"
             )
         })
         .unwrap_or(false)
@@ -2650,6 +2632,8 @@ pub struct CodeSectionProps<'a, A: 'static> {
     pub working_directory: Option<&'a String>,
     pub open_code_block_action_factory: Option<OpenCodeBlockActionFactory<A>>,
     pub copy_code_action_factory: Option<CopyCodeActionFactory<A>>,
+    /// Whether the code block text should be selectable within the parent SelectableArea.
+    pub selectable: bool,
     /// Pre-resolved code block file paths from the background detection task.
     /// Keyed by original path; value is the resolved absolute path (or None if unresolvable).
     #[cfg(feature = "local_fs")]
@@ -2851,6 +2835,7 @@ pub fn render_code_output_section<A: Action>(
                     footer_element: language_text,
                     mouse_handles: props.button_handles.cloned(),
                 },
+                props.selectable,
                 app,
                 source,
             )
@@ -2946,16 +2931,22 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     let appearance = Appearance::as_ref(app);
 
     let error_text = match props.error {
-        RenderableAIError::QuotaLimit => {
-            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-            let formatted_next_refresh_time = ai_request_usage_model
-                .next_refresh_time()
-                .format("%B %d")
-                .to_string();
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => {
+            if let Some(message) = user_display_message {
+                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else {
+                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
+                let formatted_next_refresh_time = ai_request_usage_model
+                    .next_refresh_time()
+                    .format("%B %d")
+                    .to_string();
 
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-            )
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
+                )
+            }
         }
         RenderableAIError::ServerOverloaded => {
             "Warp is currently overloaded. Please try again later.".to_string()
@@ -3398,13 +3389,28 @@ pub struct UserQueryProps<'a> {
     pub find_context: Option<FindContext<'a>>,
     pub font_properties: &'a Properties,
 }
+pub(crate) fn user_query_mode_prefix_highlight_len(mode: UserQueryMode) -> Option<usize> {
+    match mode {
+        UserQueryMode::Normal => None,
+        UserQueryMode::Plan => Some(commands::PLAN.name.len()),
+        UserQueryMode::Orchestrate => Some(commands::ORCHESTRATE.name.len()),
+    }
+}
+
 pub(super) fn query_prefix_highlight_len(
     input: &AIAgentInput,
     displayed_query: &str,
 ) -> Option<usize> {
-    if displayed_query.starts_with(commands::PLAN.name) {
-        Some(commands::PLAN.name.len())
-    } else if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
+    if let AIAgentInput::UserQuery {
+        user_query_mode, ..
+    } = input
+    {
+        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
+            return Some(prefix_len);
+        }
+    }
+
+    if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
         Some(commands::CREATE_ENVIRONMENT.name.len())
     } else if displayed_query.starts_with(commands::AGENT.name) {
         Some(commands::AGENT.name.len())
@@ -3428,7 +3434,8 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::ActionResult { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::PassiveSuggestionResult { .. } => None,
+            | AIAgentInput::PassiveSuggestionResult { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
         }
     }
 }

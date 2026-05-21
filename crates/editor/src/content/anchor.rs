@@ -1,16 +1,13 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
-
-use sum_tree::SumTree;
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use string_offset::CharOffset;
+use sum_tree::SumTree;
 
 use super::text::BufferText;
 
 #[cfg(test)]
-#[path = "anchor_test.rs"]
+#[path = "anchor_tests.rs"]
 mod test;
 
 /// Handle to a particular anchor. As long as there is an active handle, the

@@ -1,6 +1,7 @@
-use command::blocking::Command;
 use std::env;
 use std::process::Stdio;
+
+use command::blocking::Command;
 use warpui::integration::RERUN_EXIT_CODE;
 
 const MAX_TEST_RUNS: usize = 10;
@@ -36,7 +37,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
                 // as they tend to encode the home directory, which we override
                 // in tests to point to a per-test temporary directory.
                 || k == "XDG_RUNTIME_DIR"
-                // Propogate XAUTHORITY so we can run headless tests using xvfb.
+                // Propagate XAUTHORITY so we can run headless tests using xvfb.
                 || k == "XAUTHORITY"
         });
         keep_going = match Command::new(env!("CARGO_BIN_EXE_integration"))

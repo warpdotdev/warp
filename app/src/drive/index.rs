@@ -1,109 +1,101 @@
-#[cfg(target_family = "wasm")]
-use crate::uri::web_intent_parser::open_url_on_desktop;
-use crate::{
-    ai::{
-        document::ai_document_model::AIDocumentId,
-        facts::{AIFact, AIMemory},
-    },
-    appearance::Appearance,
-    auth::{
-        auth_manager::{AuthManager, LoginGatedFeature},
-        auth_state::AuthState,
-        auth_view_modal::AuthViewVariant,
-        AuthStateProvider,
-    },
-    cloud_object::{
-        model::{
-            persistence::{CloudModel, CloudModelEvent},
-            view::{CloudViewModel, CloudViewModelEvent, UpdateTimestamp},
-        },
-        CloudObject, CloudObjectEventEntrypoint, CloudObjectLocation, CloudObjectSyncStatus,
-        GenericCloudObject, GenericStringObjectFormat, JsonObjectType, NumInFlightRequests,
-        ObjectType, Space,
-    },
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions},
-    env_vars::CloudEnvVarCollection,
-    features::FeatureFlag,
-    menu::{Event, Menu, MenuItem, MenuItemFields},
-    network::NetworkStatus,
-    notebooks::CloudNotebookModel,
-    report_if_error, send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::{FetchSingleObjectOption, UpdateManager},
-        ids::{ClientId, ObjectUid, ServerId, SyncId},
-        sync_queue::SyncQueue,
-        telemetry::{AnonymousUserSignupEntrypoint, SharingDialogSource, TelemetryEvent},
-    },
-    settings::app_installation_detection::{UserAppInstallDetectionSettings, UserAppInstallStatus},
-    ui_components::{
-        blended_colors,
-        buttons::{highlight, icon_button},
-        icons::{Icon, ICON_DIMENSIONS},
-        menu_button::{icon_button_with_context_menu, MenuDirection},
-    },
-    util::{color::coloru_with_opacity, sync::Condition},
-    view_components::{Dropdown, DropdownItem},
-    workflows::{CloudWorkflow, WorkflowViewMode},
-    workspace::active_terminal_in_window,
-    workspaces::{
-        update_manager::TeamUpdateManager, user_workspaces::UserWorkspaces, workspace::WorkspaceUid,
-    },
-    ObjectActions,
-};
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::{
-    cloud_object_naming_dialog::CloudObjectNamingDialog,
-    drive_helpers::{
-        has_feature_gated_anonymous_user_reached_env_var_limit,
-        has_feature_gated_anonymous_user_reached_notebook_limit,
-        has_feature_gated_anonymous_user_reached_workflow_limit,
-    },
-    empty_trash_confirmation_dialog::{EmptyTrashConfirmationDialog, EmptyTrashConfirmationEvent},
-    folders::CloudFolder,
-    items::{
-        ai_fact_collection::WarpDriveAIFactCollection,
-        item::{tools_panel_menu_direction, ItemStates, WarpDriveRow},
-        mcp_server_collection::WarpDriveMCPServerCollection,
-        WarpDriveItemId,
-    },
-    settings::WarpDriveSettings,
-    sharing::{
-        dialog::{SharingDialog, SharingDialogEvent},
-        ContentEditability, ShareableObject,
-    },
-    CloudObjectTypeAndId, DriveObjectType, DriveSortOrder,
-};
-use crate::drive::panel::DrivePanelAction;
-use crate::server::cloud_objects::update_manager::InitiatedBy;
 use futures::Future;
 use itertools::Itertools;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::{any::Any, collections::HashMap, sync::Arc};
 use url::Url;
-use warp_core::{context_flag::ContextFlag, settings::Setting, ui::theme::color::internal_colors};
+use warp_core::context_flag::ContextFlag;
+use warp_core::settings::Setting;
+use warp_core::ui::theme::color::internal_colors;
+use warp_util::sync::Condition;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, AnchorPair, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dash, DropTarget, DropTargetData,
+    Empty, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, OffsetType, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text, XAxisAnchor,
+    YAxisAnchor,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::IntoPixels;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, AnchorPair, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dash,
-        DropTarget, DropTargetData, Empty, Flex, Highlight, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor, ParentElement,
-        ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
-        PositioningAxis, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-        Shrinkable, Stack, Text, XAxisAnchor, YAxisAnchor,
-    },
-    fonts::{Properties, Weight},
-    keymap::FixedBinding,
-    platform::{Cursor, OperatingSystem},
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    units::IntoPixels,
     AppContext, BlurContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
     UpdateView, View, ViewContext, ViewHandle, WindowId,
 };
+
+use super::cloud_object_naming_dialog::CloudObjectNamingDialog;
+use super::drive_helpers::{
+    has_feature_gated_anonymous_user_reached_env_var_limit,
+    has_feature_gated_anonymous_user_reached_notebook_limit,
+    has_feature_gated_anonymous_user_reached_workflow_limit,
+};
+use super::empty_trash_confirmation_dialog::{
+    EmptyTrashConfirmationDialog, EmptyTrashConfirmationEvent,
+};
+use super::folders::CloudFolder;
+use super::items::ai_fact_collection::WarpDriveAIFactCollection;
+use super::items::item::{tools_panel_menu_direction, ItemStates, WarpDriveRow};
+use super::items::mcp_server_collection::WarpDriveMCPServerCollection;
+use super::items::WarpDriveItemId;
+use super::settings::WarpDriveSettings;
+use super::sharing::dialog::{SharingDialog, SharingDialogEvent};
+use super::sharing::{ContentEditability, ShareableObject};
+use super::{CloudObjectTypeAndId, DriveObjectType, DriveSortOrder};
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::ai::facts::{AIFact, AIMemory};
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::model::view::{CloudViewModel, CloudViewModelEvent, UpdateTimestamp};
+use crate::cloud_object::{
+    CloudObject, CloudObjectEventEntrypoint, CloudObjectLocation, CloudObjectSyncStatus,
+    GenericCloudObject, GenericStringObjectFormat, JsonObjectType, NumInFlightRequests, ObjectType,
+    Space,
+};
+use crate::drive::panel::DrivePanelAction;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
+use crate::env_vars::CloudEnvVarCollection;
+use crate::features::FeatureFlag;
+use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
+use crate::network::NetworkStatus;
+use crate::notebooks::CloudNotebookModel;
+use crate::server::cloud_objects::update_manager::{
+    FetchSingleObjectOption, InitiatedBy, UpdateManager,
+};
+use crate::server::ids::{ClientId, ObjectUid, ServerId, SyncId};
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::{
+    AnonymousUserSignupEntrypoint, SharingDialogSource, TelemetryEvent,
+};
+use crate::settings::app_installation_detection::{
+    UserAppInstallDetectionSettings, UserAppInstallStatus,
+};
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::{highlight, icon_button};
+use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+#[cfg(target_family = "wasm")]
+use crate::uri::web_intent_parser::open_url_on_desktop;
+use crate::util::color::coloru_with_opacity;
+use crate::view_components::{Dropdown, DropdownItem};
+use crate::workflows::{CloudWorkflow, WorkflowViewMode};
+use crate::workspace::active_terminal_in_window;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::WorkspaceUid;
+use crate::{report_if_error, send_telemetry_from_ctx, ObjectActions};
 
 const WARP_DRIVE_TITLE: &str = "Warp Drive";
 
@@ -5642,5 +5634,5 @@ impl TypedActionView for DriveIndex {
 }
 
 #[cfg(test)]
-#[path = "index_test.rs"]
+#[path = "index_tests.rs"]
 mod tests;

@@ -3,6 +3,9 @@ use std::iter::FromIterator;
 
 use typed_path::TypedPathBuf;
 
+use super::{
+    suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionResults, SuggestionType,
+};
 use crate::completer::context::CompletionContext;
 use crate::completer::engine::EngineDirEntry;
 use crate::completer::matchers::MatchStrategy;
@@ -15,9 +18,6 @@ use crate::signatures::testing::{
     ls_signature, npm_signature, signature_with_empty_positional, test_signature,
 };
 use crate::signatures::CommandRegistry;
-
-use super::CompleterOptions;
-use super::{suggestions, CompletionsFallbackStrategy, SuggestionResults, SuggestionType};
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "v2"))] {
@@ -354,7 +354,7 @@ pub fn test_completes_dotfiles() {
         vec!["./", "../", ".bar/"],
     );
 
-    // Dotfiles should not be included if the the path does not start with a dot.
+    // Dotfiles should not be included if the path does not start with a dot.
     assert_eq!(
         complete_at_end_of_line("cat ", &ctx),
         vec!["foo/", "foobar"],
@@ -1682,7 +1682,7 @@ fn test_hidden_suggestion_only_appears_on_exact_match() {
         .with_entries_in_pwd([EngineDirEntry::test_dir("app")]);
     let ctx = FakeCompletionContext::new(registry).with_path_completion_context(path_ctx);
 
-    // Need to use filter_by_query here to incorporate the the exact match logic.
+    // Need to use filter_by_query here to incorporate the exact match logic.
     let suggestion_results =
         complete_at_end_of_line_with_query("cd ", "", MatchStrategy::CaseInsensitive, &ctx);
     assert_eq!(suggestion_results, vec!["app/"]);
@@ -2089,7 +2089,7 @@ fn test_exact_match_completions() {
     );
 
     // Exact match suggestion should be the first suggestion even if others have more priority.
-    // Need to use filter_by_query here to incorporate the the exact match logic.
+    // Need to use filter_by_query here to incorporate the exact match logic.
     let suggestions = complete_at_end_of_line_with_query(
         "test six six-arg",
         "six-arg",

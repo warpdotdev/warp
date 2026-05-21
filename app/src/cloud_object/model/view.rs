@@ -1,27 +1,21 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    auth::{AuthStateProvider, UserUid},
-    cloud_object::{CloudObject, CloudObjectLocation, Space},
-    drive::{
-        folders::CloudFolder,
-        sharing::{ContentEditability, SharingAccessLevel},
-    },
-    safe_info,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ObjectUid, SyncId},
-    },
-    workspaces::user_profiles::UserProfiles,
-};
-
 use super::persistence::{CloudModel, CloudModelEvent};
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::cloud_object::{CloudObject, CloudObjectLocation, Space};
+use crate::drive::folders::CloudFolder;
+use crate::drive::sharing::{ContentEditability, SharingAccessLevel};
+use crate::safe_info;
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ObjectUid, SyncId};
+use crate::workspaces::user_profiles::UserProfiles;
 
 pub const EDITOR_TIMEOUT_DURATION_MINUTES: i64 = 15;
 
@@ -55,7 +49,7 @@ impl Editor {
 }
 
 /// Singleton model for storing and querying the data and logic logic needed by various view, based on the information
-/// stored in [CloudModel]. As a general, rule, any new API that requires logic beyond just retriving the raw value
+/// stored in [CloudModel]. As a general, rule, any new API that requires logic beyond just retrieving the raw value
 /// in [CloudModel], should be stored here. This includes logic such as object trashed status, the object current editor,
 /// and object location.
 ///

@@ -1,27 +1,20 @@
 //! Grid tooltips for the terminal view
 
 use pathfinder_geometry::vector::vec2f;
-
-use warpui::{
-    elements::{
-        ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Stack,
-    },
-    AppContext, Element, EventContext,
+use warpui::elements::{
+    ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Stack,
 };
+use warpui::{AppContext, Element, EventContext};
 
 use super::{TerminalAction, TerminalView};
+use crate::appearance::Appearance;
+use crate::terminal::links::directly_open_link_keybinding_string;
+use crate::terminal::model::{ObfuscateSecrets, Secret};
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::SecretTooltip;
+use crate::terminal::TerminalModel;
 use crate::util::tooltips::{TooltipLink, TooltipRedaction};
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        links::directly_open_link_keybinding_string,
-        model::{ObfuscateSecrets, Secret},
-        safe_mode_settings::get_secret_obfuscation_mode,
-        view::SecretTooltip,
-        TerminalModel,
-    },
-};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -49,12 +42,12 @@ fn open_in_warp_tooltip(
     mouse_state: MouseStateHandle,
     app: &AppContext,
 ) -> Option<GridTooltipLink> {
-    use crate::{
-        settings::CodeSettings, util::file::external_editor::EditorSettings,
-        util::tooltips::should_show_open_in_warp_link,
-    };
     use settings::Setting as _;
     use warpui::SingletonEntity;
+
+    use crate::settings::CodeSettings;
+    use crate::util::file::external_editor::EditorSettings;
+    use crate::util::tooltips::should_show_open_in_warp_link;
 
     if !should_show_open_in_warp_link(&path, app) {
         return None;
@@ -75,6 +68,27 @@ fn open_in_warp_tooltip(
         mouse_state,
         detail,
     })
+}
+
+/// Returns a GridTooltipLink for revealing the file in the platform's file explorer
+/// (Finder on macOS, file manager on Linux/Windows).
+#[cfg(feature = "local_fs")]
+fn show_in_file_explorer_tooltip(
+    path: std::path::PathBuf,
+    mouse_state: MouseStateHandle,
+) -> GridTooltipLink {
+    let text = if cfg!(target_os = "macos") {
+        "Show in Finder"
+    } else {
+        "Show containing folder"
+    }
+    .to_string();
+    GridTooltipLink {
+        text,
+        action: TerminalAction::ShowInFileExplorer(path),
+        mouse_state,
+        detail: None,
+    }
 }
 
 impl TerminalView {
@@ -192,6 +206,7 @@ impl TerminalView {
         #[cfg_attr(not(feature = "local_fs"), allow(unused_mut))]
         if let Some(link) = &self.open_grid_link_tool_tip {
             let mut open_in_warp = None;
+            let mut show_in_file_explorer = None;
             let modifier = directly_open_link_keybinding_string();
             let mut detail = Some(format!("[{modifier} Click]"));
             #[cfg(feature = "local_fs")]
@@ -199,12 +214,16 @@ impl TerminalView {
                 if let GridHighlightedLink::File(file_link) = link {
                     if let Some(path) = file_link.get_inner().absolute_path() {
                         open_in_warp = open_in_warp_tooltip(
-                            path,
+                            path.clone(),
                             file_link.get_inner().line_and_column_num,
                             &mut detail,
                             self.mouse_states.open_in_warp_tooltip.clone(),
                             app,
                         );
+                        show_in_file_explorer = Some(show_in_file_explorer_tooltip(
+                            path,
+                            self.mouse_states.show_in_file_explorer_tooltip.clone(),
+                        ));
                     }
                 }
             }
@@ -217,12 +236,14 @@ impl TerminalView {
             });
 
             links.extend(open_in_warp);
+            links.extend(show_in_file_explorer);
         }
 
         #[cfg_attr(not(feature = "local_fs"), allow(unused_mut))]
         if let Some(tooltip_info) = &self.open_rich_content_link_tool_tip {
             element_id = tooltip_info.position_id.to_owned();
             let mut open_in_warp = None;
+            let mut show_in_file_explorer = None;
             let modifier_string = directly_open_link_keybinding_string();
             let mut detail = Some(format!("[{modifier_string} Click]"));
 
@@ -241,6 +262,10 @@ impl TerminalView {
                         self.mouse_states.open_in_warp_tooltip.clone(),
                         app,
                     );
+                    show_in_file_explorer = Some(show_in_file_explorer_tooltip(
+                        absolute_path.clone(),
+                        self.mouse_states.show_in_file_explorer_tooltip.clone(),
+                    ));
                 }
             }
 
@@ -252,6 +277,7 @@ impl TerminalView {
             });
 
             links.extend(open_in_warp);
+            links.extend(show_in_file_explorer);
         }
 
         let secret_redaction = get_secret_obfuscation_mode(app);

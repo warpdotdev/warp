@@ -1,7 +1,5 @@
-use std::{
-    sync::{LazyLock, Once, mpsc},
-    thread::JoinHandle,
-};
+use std::sync::{LazyLock, Once, mpsc};
+use std::thread::JoinHandle;
 
 use itertools::Itertools as _;
 use parking_lot::Mutex;

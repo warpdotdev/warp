@@ -1,18 +1,20 @@
-use parking_lot::Mutex;
 use std::sync::Arc;
 
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
+use parking_lot::Mutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 
+use super::new_scrollable::util::scroll_delta_for_axis;
+use super::{
+    Axis, F32Ext, Fill, Point, ScrollData, ScrollStateHandle, Scrollable, ScrollableElement,
+    ScrollbarWidth, Selection, Vector2FExt,
+};
+use crate::event::DispatchedEvent;
 use crate::scene::ClipBounds;
 use crate::units::{IntoPixels, Pixels};
 use crate::{
-    event::DispatchedEvent, AfterLayoutContext, AppContext, Element, EventContext, LayoutContext,
-    PaintContext, SizeConstraint,
-};
-
-use super::{
-    new_scrollable::util::scroll_delta_for_axis, Axis, F32Ext, Fill, Point, ScrollData,
-    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Selection, Vector2FExt,
+    AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -465,5 +467,5 @@ impl ScrollableElement for ClippedScrollable {
 }
 
 #[cfg(test)]
-#[path = "clipped_scrollable_test.rs"]
+#[path = "clipped_scrollable_tests.rs"]
 mod tests;

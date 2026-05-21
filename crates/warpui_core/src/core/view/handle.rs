@@ -1,15 +1,14 @@
-use std::{
-    any::TypeId,
-    fmt::{self, Debug},
-    marker::PhantomData,
-    sync::{Arc, Weak},
-};
+use std::any::TypeId;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
-use crate::{core::RefCounts, AppContext, EntityId, WindowId};
-
-use super::{context::ViewContext, View};
+use super::context::ViewContext;
+use super::View;
+use crate::core::RefCounts;
+use crate::{AppContext, EntityId, WindowId};
 
 /// A strong reference to a particular [`View`] instance within the application.
 ///

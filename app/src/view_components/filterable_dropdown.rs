@@ -1,32 +1,29 @@
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+};
+use warpui::geometry::vector::vec2f;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
 use super::dropdown::{
     DropdownAction, DropdownItem, MenuHeaderTextFormatter, DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT,
     TOP_MENU_BAR_MAX_WIDTH,
 };
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant},
-    ui_components::icons,
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
 };
-use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
-    },
-    geometry::vector::vec2f,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant};
+use crate::ui_components::icons;
 
 const EMPTY_DROPDOWN_HEIGHT: f32 = 50.0;
 
@@ -68,6 +65,12 @@ pub struct FilterableDropdown<A: Action + Clone> {
     menu_width: Option<f32>,
     vertical_margin: f32,
     top_bar_height: f32,
+    /// See `Dropdown::use_overlay_layer`. Mirrors the same opt-out for
+    /// `FilterableDropdown` callers (the orchestrate environment
+    /// picker) that need to render in the parent's Normal layer
+    /// instead of an overlay.
+    use_overlay_layer: bool,
+    match_menu_width_to_top_bar: bool,
 }
 
 impl<A> FilterableDropdown<A>
@@ -125,7 +128,24 @@ where
             menu_width: None,
             vertical_margin: DROPDOWN_PADDING,
             top_bar_height: TOP_MENU_BAR_HEIGHT,
+            use_overlay_layer: true,
+            match_menu_width_to_top_bar: false,
         }
+    }
+
+    /// See `Dropdown::set_use_overlay_layer`.
+    pub fn set_use_overlay_layer(&mut self, use_overlay_layer: bool, ctx: &mut ViewContext<Self>) {
+        self.use_overlay_layer = use_overlay_layer;
+        ctx.notify();
+    }
+
+    /// Override the top-bar height.
+    /// so callers (e.g. the orchestrate environment picker) that mix
+    /// `Dropdown` and `FilterableDropdown` in the same row can size them
+    /// identically.
+    pub fn set_top_bar_height(&mut self, height: f32, ctx: &mut ViewContext<Self>) {
+        self.top_bar_height = height;
+        ctx.notify();
     }
 
     pub fn set_menu_header_text_override<F>(&mut self, formatter: F)
@@ -308,6 +328,22 @@ where
         })
     }
 
+    /// When enabled, the open menu sizes itself to the last rendered width of
+    /// the dropdown's top bar. This is useful for flexible dropdowns whose
+    /// trigger width is determined by parent layout rather than a fixed max.
+    pub fn set_match_menu_width_to_top_bar(
+        &mut self,
+        match_width: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.match_menu_width_to_top_bar = match_width;
+        let top_bar_label = self.top_bar_label();
+        self.dropdown.update(ctx, |menu, _ctx| {
+            menu.set_width_match_position_id(match_width.then_some(top_bar_label));
+        });
+        ctx.notify();
+    }
+
     pub fn set_disabled(&mut self, ctx: &mut ViewContext<Self>) {
         self.disabled = true;
         ctx.notify();
@@ -376,6 +412,11 @@ where
     pub(crate) fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
+            if self.match_menu_width_to_top_bar {
+                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
+                    self.set_menu_width(bounds.width(), ctx);
+                }
+            }
             ctx.focus(&self.filter_editor);
             ctx.emit(FilterableDropdownEvent::ToggleExpanded);
         }
@@ -533,7 +574,7 @@ where
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .finish(),
         )
-        .with_max_width(self.top_bar_max_width)
+        .with_max_width(self.menu_width.unwrap_or(self.top_bar_max_width))
         .with_height(EMPTY_DROPDOWN_HEIGHT)
         .finish();
 
@@ -712,26 +753,28 @@ where
 
         let mut dropdown_stack = Stack::new().with_child(self.render_top_bar(appearance));
         if self.is_expanded {
-            dropdown_stack.add_positioned_overlay_child(
-                dropdown_menu,
-                if self.orientation == FilterableDropdownOrientation::Down {
-                    OffsetPositioning::offset_from_save_position_element(
-                        self.top_bar_label(),
-                        vec2f(0., 0.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    )
-                } else {
-                    OffsetPositioning::offset_from_save_position_element(
-                        self.top_bar_label(),
-                        vec2f(0., 0.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::TopLeft,
-                        ChildAnchor::BottomLeft,
-                    )
-                },
-            );
+            let positioning = if self.orientation == FilterableDropdownOrientation::Down {
+                OffsetPositioning::offset_from_save_position_element(
+                    self.top_bar_label(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                )
+            } else {
+                OffsetPositioning::offset_from_save_position_element(
+                    self.top_bar_label(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::TopLeft,
+                    ChildAnchor::BottomLeft,
+                )
+            };
+            if self.use_overlay_layer {
+                dropdown_stack.add_positioned_overlay_child(dropdown_menu, positioning);
+            } else {
+                dropdown_stack.add_positioned_child(dropdown_menu, positioning);
+            }
         }
         Container::new(dropdown_stack.finish())
             .with_margin_top(self.vertical_margin)

@@ -9,14 +9,16 @@ mod snapshot;
 pub mod store_client;
 mod sync_client;
 
-use std::{ops::Range, path::PathBuf, time::Duration};
-pub use sync_client::SyncTask;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub use codebase_index::{CodebaseIndex, RetrievalID, SyncProgress};
+pub use fragment_metadata::FragmentMetadata;
 pub use merkle_tree::{ContentHash, NodeHash};
-
-use fragment_metadata::FragmentMetadata;
+pub use snapshot::SnapshotStorage;
 use string_offset::ByteOffset;
+pub use sync_client::SyncTask;
 use thiserror::Error;
 use warp_graphql::queries::rerank_fragments::FragmentLocationInput;
 
@@ -87,6 +89,7 @@ pub enum EmbeddingConfig {
     Voyage3_5_Lite_512,
     #[default]
     Voyage3_5_512,
+    Voyage4_512,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +118,9 @@ impl From<EmbeddingConfig> for warp_graphql::full_source_code_embedding::Embeddi
             EmbeddingConfig::Voyage3_5_Lite_512 => {
                 warp_graphql::full_source_code_embedding::EmbeddingConfig::Voyage35Lite512
             }
+            EmbeddingConfig::Voyage4_512 => {
+                warp_graphql::full_source_code_embedding::EmbeddingConfig::Voyage4512
+            }
         }
     }
 }
@@ -138,6 +144,9 @@ impl TryFrom<warp_graphql::full_source_code_embedding::EmbeddingConfig> for Embe
             warp_graphql::full_source_code_embedding::EmbeddingConfig::Voyage35512 => {
                 Ok(Self::Voyage3_5_512)
             }
+            warp_graphql::full_source_code_embedding::EmbeddingConfig::Voyage4512 => {
+                Ok(Self::Voyage4_512)
+            }
         }
     }
 }
@@ -159,6 +168,36 @@ pub struct Fragment {
     content: String,
     content_hash: ContentHash,
     location: FragmentLocation,
+}
+
+impl Fragment {
+    pub fn from_byte_range(
+        content: String,
+        content_hash: ContentHash,
+        absolute_path: PathBuf,
+        byte_range: Range<ByteOffset>,
+    ) -> Self {
+        Self {
+            content,
+            content_hash,
+            location: FragmentLocation {
+                absolute_path,
+                byte_range,
+            },
+        }
+    }
+
+    pub fn content_hash(&self) -> &ContentHash {
+        &self.content_hash
+    }
+
+    pub fn absolute_path(&self) -> &Path {
+        &self.location.absolute_path
+    }
+
+    pub fn byte_range(&self) -> Range<ByteOffset> {
+        self.location.byte_range.clone()
+    }
 }
 
 impl From<Fragment> for warp_graphql::full_source_code_embedding::Fragment {

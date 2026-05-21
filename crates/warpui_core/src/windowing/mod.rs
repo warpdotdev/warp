@@ -8,10 +8,9 @@ use pathfinder_geometry::rect::RectF;
 pub use state::{State, StateEvent, WindowManager};
 pub use system::{CreateWindowingSystemError, System};
 
-use crate::{
-    actions::StandardAction, platform::WindowContext, AppContext, AppContextRefMut, CursorInfo,
-    Event, Scene,
-};
+use crate::actions::StandardAction;
+use crate::platform::WindowContext;
+use crate::{AppContext, AppContextRefMut, CursorInfo, Event, Scene};
 
 /// Result of dispatching an event through the UI framework.
 #[derive(Debug, Clone, Copy, Default)]
@@ -100,7 +99,12 @@ impl<'a> WindowCallbackDispatcher<'a> {
 // support application menus, so these never get called.
 // TODO(CORE-2691): implement native Windows OS app menus
 #[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_family = "wasm"
+    ),
     allow(dead_code)
 )]
 impl WindowCallbackDispatcher<'_> {

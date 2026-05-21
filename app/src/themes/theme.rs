@@ -1,24 +1,22 @@
-use super::default_themes::*;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::path::PathBuf;
-use warp_core::ui::color::pick_foreground_color;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::{
-    color::ColorU,
-    elements::{
-        Align, Border, ConstrainedBox, Container, Element, Empty, Flex, ParentElement, Rect,
-        Shrinkable, Stack, Text,
-    },
-    fonts::FamilyId,
-};
 
-use super::theme_creator::{pick_accent_color_from_options, top_colors_for_image};
-
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 pub use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::pick_foreground_color;
 pub use warp_core::ui::theme::*;
+use warpui::assets::asset_cache::AssetSource;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, Element, Empty, Flex, ParentElement, Rect,
+    Shrinkable, Stack, Text,
+};
+use warpui::fonts::FamilyId;
+
+use super::default_themes::*;
+use super::theme_creator::{pick_accent_color_from_options, top_colors_for_image};
 
 const THUMBNAIL_MARGIN: f32 = 10.;
 
@@ -563,5 +561,5 @@ pub fn render_preview(
 }
 
 #[cfg(test)]
-#[path = "theme_test.rs"]
+#[path = "theme_tests.rs"]
 mod tests;

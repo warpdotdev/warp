@@ -100,17 +100,19 @@
 mod tracked;
 
 #[cfg(test)]
-#[path = "autotracking_test.rs"]
+#[path = "autotracking_tests.rs"]
 mod tests;
+
+use std::cell::UnsafeCell;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::mem;
 
 use itertools::Itertools as _;
 pub use tracked::Tracked;
+use tracked::TrackedId;
 
 use super::{EntityId, WindowId};
-use std::cell::UnsafeCell;
-use std::collections::{hash_map::Entry, HashMap, HashSet};
-use std::mem;
-use tracked::TrackedId;
 
 /// Internal state cache used for autotracking changes
 ///

@@ -95,5 +95,5 @@ impl From<Priority> for warp_command_signatures::Priority {
 }
 
 #[cfg(test)]
-#[path = "priority_test.rs"]
+#[path = "priority_tests.rs"]
 mod tests;

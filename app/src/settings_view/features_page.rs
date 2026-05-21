@@ -1,15 +1,32 @@
-use crate::default_terminal::DefaultTerminal;
-use crate::gpu_state::{GPUState, GPUStateEvent};
-use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
-#[cfg(feature = "local_tty")]
-use crate::terminal::session_settings::WorkingDirectoryConfig;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
+use strum::IntoEnumIterator;
+use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
-use warpui::platform::GraphicsBackend;
+use warp_core::semantic_selection::{
+    SemanticSelection, SemanticSelectionChangedEvent, SmartSelectEnabled,
+};
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    DispatchEventResult, Element, Empty, EventHandler, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::keymap::{ContextPredicate, FixedBinding, Keystroke};
+use warpui::platform::{Cursor, GraphicsBackend};
 use warpui::rendering::GPUPowerPreference;
-use warpui::{elements::DispatchEventResult, platform::Cursor};
-#[cfg(target_os = "linux")]
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{
+    Action, AppContext, DisplayIdx, Entity, EventContext, ModelHandle, SingletonEntity, Tracked,
+    TypedActionView, View, ViewContext, ViewHandle, WindowId,
+};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use {
     crate::settings::ForceX11, crate::settings::LinuxAppConfiguration,
     warpui::platform::linux::windowing_system_is_customizable,
@@ -19,40 +36,41 @@ use super::keybindings::KeyBindingModifyingState;
 #[cfg(feature = "local_tty")]
 use super::settings_page::render_sub_sub_header;
 use super::settings_page::{
-    add_setting, build_reset_button, render_body_item_label, render_dropdown_item_label,
-    render_local_only_icon, Category, LocalOnlyIconState, MatchData, PageType, SettingsWidget,
-    TOGGLE_BUTTON_RIGHT_PADDING,
+    add_setting, build_reset_button, render_body_item, render_body_item_label,
+    render_dropdown_item, render_dropdown_item_label, render_local_only_icon, AdditionalInfo,
+    Category, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, ToggleState, CONTENT_FONT_SIZE, HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
-use super::settings_page::{
-    render_body_item, render_dropdown_item, AdditionalInfo, SettingsPageMeta,
-    SettingsPageViewHandle, ToggleState, CONTENT_FONT_SIZE, HEADER_PADDING,
+use super::{
+    features, flags, DisplayCount, SettingsAction, SettingsSection, ToggleSettingActionPair,
 };
-use super::{features, SettingsAction};
-use super::{flags, DisplayCount};
-use super::{SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::default_terminal::DefaultTerminal;
 use crate::editor::{
-    Event as EditorEvent, SingleLineEditorOptions, TextOptions,
+    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
     ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME,
 };
+use crate::features::FeatureFlag;
+use crate::gpu_state::{GPUState, GPUStateEvent};
+use crate::root_view::QuakeModePinPosition;
 use crate::search::command_search::settings::{
     CommandSearchSettings, ShowGlobalWorkflowsInUniversalSearch,
 };
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::ai::AISettings;
+use crate::settings::native_preference::{NativePreferenceSettings, UserNativePreference};
 use crate::settings::{
-    AISettingsChangedEvent, ScrollSettingsChangedEvent, ShowChangelogAfterUpdate,
-    UserNativeRedirectPreference,
-};
-use crate::settings::{
-    AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings, AtContextMenuInTerminalMode,
-    AutocompleteSymbols, AutosuggestionKeybindingHint, ChangelogSettings, CloudPreferencesSettings,
-    CodeSettings, CommandCorrections, CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior,
-    DefaultSessionMode, EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled,
-    ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
+    AISettingsChangedEvent, AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings,
+    AtContextMenuInTerminalMode, AutocompleteSymbols, AutosuggestionKeybindingHint,
+    ChangelogSettings, CloudPreferencesSettings, CodeSettings, CommandCorrections,
+    CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DefaultSessionMode,
+    EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys,
+    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
     LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
     OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
-    QuakeModeSettings, ScrollSettings, SelectionSettings, ShowAutosuggestionIgnoreButton,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior, VimModeEnabled,
+    QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
+    ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
+    SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
     VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
     QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
@@ -63,17 +81,21 @@ use crate::terminal::general_settings::{
     AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
     QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
 };
+use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
     ActivationHotkeyEnabled, CtrlTabBehaviorSetting, KeysSettings, KeysSettingsChangedEvent,
 };
 #[cfg(feature = "local_tty")]
 use crate::terminal::session_settings::StartupShellOverride;
+#[cfg(feature = "local_tty")]
+use crate::terminal::session_settings::WorkingDirectoryConfig;
 use crate::terminal::session_settings::{
     Notifications, NotificationsMode, NotificationsSettings, SessionSettings,
     SessionSettingsChangedEvent, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
-    MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings, UseAudibleBell,
+    MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings, TerminalSettingsChangedEvent,
+    UseAudibleBell,
 };
 use crate::terminal::{BlockListSettings, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
@@ -82,36 +104,9 @@ use crate::util::bindings::{
     keybinding_name_to_display_string, reset_keybinding_to_default, set_custom_keybinding,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspace::tab_settings::{NewTabPlacement, TabSettings};
+use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
 use crate::workspace::WorkspaceAction;
-use crate::{appearance::Appearance, settings::native_preference::NativePreferenceSettings};
-use crate::{editor::EditorView, settings::native_preference::UserNativePreference};
-use crate::{features::FeatureFlag, terminal::settings::TerminalSettingsChangedEvent};
 use crate::{report_if_error, send_telemetry_from_ctx, themes, GlobalResourceHandles};
-use crate::{root_view::QuakeModePinPosition, workspace::tab_settings::TabSettingsChangedEvent};
-use ::settings::{Setting, ToggleableSetting};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use strum::IntoEnumIterator;
-use warp_core::channel::ChannelState;
-use warp_core::semantic_selection::{
-    SemanticSelection, SemanticSelectionChangedEvent, SmartSelectEnabled,
-};
-use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
-    Element, Empty, EventHandler, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-};
-use warpui::keymap::{ContextPredicate, FixedBinding, Keystroke};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{
-    Action, AppContext, DisplayIdx, Entity, EventContext, ModelHandle, SingletonEntity, Tracked,
-    TypedActionView, View, ViewContext, ViewHandle, WindowId,
-};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
@@ -519,7 +514,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         if windowing_system_is_customizable(app) {
             toggle_binding_pairs.push(
@@ -531,7 +526,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     context,
                     flags::ALLOW_NATIVE_WAYLAND,
                 )
-                .is_supported_on_current_platform(cfg!(target_os = "linux")),
+                .is_supported_on_current_platform(cfg!(any(
+                    target_os = "linux",
+                    target_os = "freebsd"
+                ))),
             );
         }
     }
@@ -631,7 +629,7 @@ pub enum FeaturesPageAction {
     ToggleAutosuggestions,
     ToggleConfirmCloseSession,
     ToggleShowChangelogAfterUpdate,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     ToggleForceX11,
     ToggleAutosuggestionKeybindingHint,
     ToggleShowAutosuggestionIgnoreButton,
@@ -1097,7 +1095,7 @@ impl FeaturesPageAction {
                     value: to_string(selection_setting),
                 }
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             Self::ToggleForceX11 => {
                 let setting = *LinuxAppConfiguration::as_ref(ctx).force_x11.value();
                 TelemetryEvent::FeaturesPageAction {
@@ -1237,7 +1235,7 @@ pub struct FeaturesPageView {
 
     window_id: WindowId,
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     force_x11_changed: bool,
     gpu_power_preference_changed: bool,
     graphics_backend_preference_changed: bool,
@@ -1834,7 +1832,7 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 });
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             ToggleForceX11 => {
                 LinuxAppConfiguration::handle(ctx).update(ctx, |linux_app_configuration, ctx| {
                     report_if_error!(linux_app_configuration.force_x11.toggle_and_save_value(ctx));
@@ -2415,7 +2413,7 @@ impl FeaturesPageView {
             mouse_scroll_input_editor,
             valid_mouse_scroll_multiplier: true,
 
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11_changed: false,
             gpu_power_preference_changed: false,
             graphics_backend_preference_changed: false,
@@ -2740,7 +2738,7 @@ impl FeaturesPageView {
             system_widgets.push(Box::new(GraphicsBackendWidget::default()));
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             if windowing_system_is_customizable(ctx) {
                 system_widgets.push(Box::new(WindowSystemWidget::default()));
@@ -2773,6 +2771,7 @@ impl FeaturesPageView {
             let values = vec![
                 CtrlTabBehavior::ActivatePrevNextTab,
                 CtrlTabBehavior::CycleMostRecentSession,
+                CtrlTabBehavior::CycleMostRecentTab,
             ];
 
             let current_value = *KeysSettings::as_ref(ctx).ctrl_tab_behavior;
@@ -4041,7 +4040,7 @@ impl SettingsPageMeta for FeaturesPageView {
         // notify on the [`DisplayCount`] model. However, no mechanism exists on Linux to trigger
         // that callback. As a workaround, we check for updates here where quake mode is
         // configured.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         DisplayCount::handle(ctx).update(ctx, |display_count, ctx| {
             display_count.0 = ctx.windows().display_count();
             ctx.notify();
@@ -7107,14 +7106,14 @@ impl SettingsWidget for GPUWidget {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Default)]
 struct WindowSystemWidget {
     additional_info_link: MouseStateHandle,
     switch_state: SwitchStateHandle,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl SettingsWidget for WindowSystemWidget {
     type View = FeaturesPageView;
 

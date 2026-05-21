@@ -7,13 +7,14 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::index::{Entry, FileId};
-use ignore::gitignore::Gitignore;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
+use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+
+use crate::index::{Entry, FileId};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileSymbols {
@@ -43,7 +44,7 @@ impl Outline {
         let mut queue = VecDeque::from([&self.root]);
         let mut repo_map = Vec::new();
 
-        // Iteratively print the files while perserving their traversal order.
+        // Iteratively print the files while preserving their traversal order.
         while let Some(entry) = queue.pop_front() {
             match entry {
                 Entry::Directory(directory) => {
@@ -91,7 +92,7 @@ impl Outline {
         let mut queue = VecDeque::from([&self.root]);
         let mut file_to_symbols = HashMap::new();
 
-        // Iteratively print the files while perserving their traversal order.
+        // Iteratively print the files while preserving their traversal order.
         while let Some(entry) = queue.pop_front() {
             match entry {
                 Entry::Directory(directory) => {

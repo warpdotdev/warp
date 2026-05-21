@@ -7,7 +7,7 @@ Type=Application
 Name=WarpOss
 GenericName=TerminalEmulator
 
-Exec=warp-oss %U
+Exec=warp-terminal-oss %U
 StartupWMClass=dev.warp.WarpOss
 
 Keywords=shell;prompt;command;commandline;cmd;

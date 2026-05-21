@@ -1,47 +1,34 @@
 mod gutter_button;
+use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 pub use gutter_button::{AddAsContextButton, CommentButton, RevertHunkButton};
-
-use std::{
-    ops::Range,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_editor::editor::EditorView;
+use warp_editor::render::element::lens_element::RichTextElementLens;
+use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
+use warp_editor::render::model::{
+    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
 };
-use warp_core::ui::{
-    appearance::Appearance,
-    theme::{color::internal_colors, Fill},
+use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use warpui::elements::{
+    Align, Axis, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Empty, F32Ext, Flex,
+    Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Point, Radius, ScrollData, Stack, Text, ZIndex,
 };
-use warp_editor::{
-    editor::EditorView,
-    render::{
-        element::{
-            lens_element::RichTextElementLens, RenderableBlock, RichTextElement,
-            VerticalExpansionBehavior,
-        },
-        model::{
-            gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
-        },
-    },
-};
+use warpui::event::DispatchedEvent;
+use warpui::fonts::FamilyId;
+use warpui::ui_components::components::UiComponent;
+use warpui::units::{IntoPixels, Pixels};
 use warpui::{
-    elements::{
-        new_scrollable::{NewScrollableElement, ScrollableAxis},
-        Align, Axis, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Empty, F32Ext,
-        Flex, MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Point, Radius, ScrollData, Stack, Text, ZIndex,
-    },
-    event::DispatchedEvent,
-    fonts::FamilyId,
-    ui_components::components::UiComponent,
-    units::{IntoPixels, Pixels},
     AfterLayoutContext, AppContext, ClipBounds, Element, Event, EventContext, LayoutContext,
     ModelHandle, PaintContext, SingletonEntity, SizeConstraint,
 };
@@ -49,15 +36,9 @@ use warpui::{
 use super::diff::{DiffHunkDisplay, DiffStatus};
 use super::model::DiffNavigationState;
 use crate::code::editor::element::gutter_button::GutterButton;
-use crate::{
-    code::editor::{
-        line::EditorLineLocation,
-        view::{CodeEditorViewAction, SavedComment},
-    },
-    view_components::action_button::{ActionButtonTheme, SecondaryTheme},
-};
-use warp_core::features::FeatureFlag;
-use warpui::elements::{Hoverable, MouseStateHandle};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::view::{CodeEditorViewAction, SavedComment};
+use crate::view_components::action_button::{ActionButtonTheme, SecondaryTheme};
 
 pub const GUTTER_WIDTH: f32 = 94.;
 const VERTICAL_DIFF_HUNK_INDICATOR_WIDTH: f32 = 3.;
@@ -351,7 +332,7 @@ impl GutterRange {
 
 #[derive(Debug, Clone, Copy)]
 pub enum GutterHoverTarget {
-    // The entire line covered by the gutter is cosidered the hover target.
+    // The entire line covered by the gutter is considered the hover target.
     Line,
     // Only the gutter element itself is considered the hover target.
     GutterElement,

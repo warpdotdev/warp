@@ -1,19 +1,18 @@
+use std::env;
+use std::fs::{self, File};
+use std::io::{IsTerminal, Write, copy};
 use std::path::{Path, PathBuf};
-use std::{
-    env,
-    fs::{self, File},
-    io::{IsTerminal, Write, copy},
-};
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use chrono::Local;
 use log::LevelFilter;
-use std::sync::OnceLock;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::{LogConfig, LogDestination};
-use warp_core::channel::ChannelState;
 
 const MAX_FILES_IN_GUI_ROTATION: usize = 5;
 const MAX_FILES_IN_CLI_ROTATION: usize = 10;
@@ -480,7 +479,7 @@ fn init_log_directory() -> Result<std::path::PathBuf> {
                     anyhow::anyhow!("could not locate home directory in order to create a log file")
                 })?
                 .join("Library/Logs/"))
-        } else if #[cfg(target_os = "linux")] {
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             Ok(warp_core::paths::state_dir())
         } else if #[cfg(windows)] {
             Ok(warp_core::paths::state_dir().join(warp_core::paths::WARP_LOGS_DIR))

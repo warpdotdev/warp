@@ -1,16 +1,17 @@
 #![cfg(not(target_family = "wasm"))] // Tantivy is not supported for wasm target as of now.
 
+use std::collections::{HashMap, HashSet};
+use std::iter::Peekable;
+use std::sync::Arc;
+use std::thread::available_parallelism;
+use std::time::Duration;
+
 use anyhow::Context;
 use futures::FutureExt as _;
 use instant::Instant;
 use itertools::Itertools;
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::iter::Peekable;
-use std::sync::Arc;
-use std::thread::available_parallelism;
-use std::time::Duration;
 use string_offset::ByteOffset;
 use strum_macros::Display;
 use tantivy::collector::TopDocs;
@@ -21,11 +22,11 @@ use tantivy::schema::{
     BytesOptions, Field, FieldEntry, IndexRecordOption, OwnedValue, Schema, TextFieldIndexing,
     STORED, TEXT,
 };
+use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
-use tantivy::{
-    snippet::SnippetGenerator, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term,
-};
-use warpui::r#async::{block_on, executor::Background, Timer};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+use warpui::r#async::executor::Background;
+use warpui::r#async::{block_on, Timer};
 
 pub type FullTextSearchDocumentEntry = HashMap<String, FullTextSearchFieldValue>;
 
@@ -1311,5 +1312,5 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
 }
 
 #[cfg(test)]
-#[path = "searcher_test.rs"]
+#[path = "searcher_tests.rs"]
 mod test;

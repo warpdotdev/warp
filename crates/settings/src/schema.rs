@@ -1,7 +1,6 @@
 //! Schema metadata for settings, used by the JSON Schema generator.
 
-use schemars::Schema;
-use schemars::SchemaGenerator;
+use schemars::{Schema, SchemaGenerator};
 
 use crate::SupportedPlatforms;
 

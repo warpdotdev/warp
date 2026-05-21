@@ -1,15 +1,12 @@
-use warp::integration_testing::{
-    self,
-    assertions::{
-        assert_websocket_has_not_started, assert_websocket_has_started, create_a_personal_workflow,
-        join_a_workspace,
-    },
-    terminal::wait_until_bootstrapped_single_pane_for_tab,
+use warp::integration_testing::assertions::{
+    assert_websocket_has_not_started, assert_websocket_has_started, create_a_personal_workflow,
+    join_a_workspace,
 };
-
-use crate::Builder;
+use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use warp::integration_testing::{self};
 
 use super::{new_builder, TEST_ONLY_ASSETS};
+use crate::Builder;
 
 /// With no objects and no teams, the websocket should not begin
 pub fn test_websocket_does_not_begin_on_startup() -> Builder {
@@ -25,7 +22,9 @@ pub fn test_websocket_begins_on_startup() -> Builder {
             integration_testing::create_file_from_assets(
                 TEST_ONLY_ASSETS,
                 "cloud_objects.sqlite",
-                &integration_testing::persistence::database_file_path(),
+                &integration_testing::persistence::database_file_path_for_scope(
+                    &integration_testing::persistence::PersistenceScope::App,
+                ),
             );
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))

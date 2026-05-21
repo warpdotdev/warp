@@ -1,16 +1,11 @@
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    model::{
-        ansi::{self, Handler},
-        blocks::BlockList,
-        session::SessionInfo,
-        test_utils::TestBlockListBuilder,
-    },
-    shell::ShellType,
-};
-
 use super::TypeaheadMode;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Handler};
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::shell::ShellType;
 
 /// Create a new bootstrapped block list that will use the set typeahead mode.
 fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> BlockList {

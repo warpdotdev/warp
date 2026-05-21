@@ -1,30 +1,29 @@
-use super::app::create_native_platform_modal;
-use super::keycode::{modifier_code, Keycode};
-use super::utils::nsstring_as_str;
-use super::{app, make_nsstring, Clipboard, Window};
-use anyhow::Result;
-use cocoa::base::{BOOL, NO, YES};
-use cocoa::foundation::NSUInteger;
-use cocoa::{
-    appkit::{NSApp, NSRequestUserAttentionType},
-    base::{id, nil},
-};
-use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::Arc;
+
+use anyhow::Result;
+use cocoa::appkit::{NSApp, NSRequestUserAttentionType};
+use cocoa::base::{id, nil, BOOL, NO, YES};
+use cocoa::foundation::NSUInteger;
+use objc::{class, msg_send, sel, sel_impl};
+use warpui_core::accessibility::AccessibilityContent;
 use warpui_core::clipboard::InMemoryClipboard;
 use warpui_core::keymap::Keystroke;
 use warpui_core::modals::{AlertDialog, ModalId};
-use warpui_core::notification::{NotificationSendError, RequestPermissionsOutcome};
+use warpui_core::notification::{
+    NotificationSendError, RequestPermissionsOutcome, UserNotification,
+};
 use warpui_core::platform::{
     Cursor, FilePickerCallback, FilePickerConfiguration, MicrophoneAccessState,
     SendNotificationErrorCallback, TerminationMode,
 };
-use warpui_core::ApplicationBundleInfo;
-use warpui_core::{
-    accessibility::AccessibilityContent, notification::UserNotification, platform, WindowId,
-};
+use warpui_core::{platform, ApplicationBundleInfo, WindowId};
+
+use super::app::create_native_platform_modal;
+use super::keycode::{modifier_code, Keycode};
+use super::utils::nsstring_as_str;
+use super::{app, make_nsstring, Clipboard, Window};
 
 // Functions implemented in objC files.
 extern "C" {

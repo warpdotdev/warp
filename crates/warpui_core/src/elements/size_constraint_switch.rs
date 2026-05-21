@@ -1,9 +1,11 @@
-use super::Point;
-use crate::{
-    event::DispatchedEvent, AfterLayoutContext, AppContext, Element, EventContext, LayoutContext,
-    PaintContext, SizeConstraint,
-};
 use pathfinder_geometry::vector::Vector2F;
+
+use super::Point;
+use crate::event::DispatchedEvent;
+use crate::{
+    AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
@@ -147,5 +149,5 @@ impl Element for SizeConstraintSwitch {
 }
 
 #[cfg(test)]
-#[path = "size_constraint_switch_test.rs"]
+#[path = "size_constraint_switch_tests.rs"]
 mod tests;

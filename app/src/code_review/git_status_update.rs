@@ -1,10 +1,9 @@
-use warpui::{Entity, SingletonEntity};
-
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
+
 #[cfg(feature = "local_fs")]
 use warpui::ModelContext;
-
+use warpui::{Entity, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use {
     crate::throttle::throttle,
@@ -20,7 +19,7 @@ use {
 };
 
 #[cfg(feature = "local_fs")]
-use super::diff_state::DiffStats;
+use super::diff_state::{diff_metadata_against_head, DiffStats};
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
@@ -89,7 +88,7 @@ impl GitStatusUpdateModel {
 
         // Create a new sub-model.
         let Some(repository_model) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
         else {
             anyhow::bail!(
                 "No watched repository found for path: {}",
@@ -260,7 +259,7 @@ impl GitRepoStatusModel {
         if update.is_empty() {
             return false;
         }
-        if update.commit_updated || update.index_lock_detected {
+        if update.commit_updated || update.index_lock_detected || update.remote_ref_updated {
             return true;
         }
         // Check if any non-ignored file was touched.
@@ -288,8 +287,7 @@ impl GitRepoStatusModel {
         // shows the short SHA instead of the literal "HEAD").
         let current_branch_name = detect_current_branch_display(&repo_path).await?;
         // Diff stats against HEAD.
-        let stats_against_head =
-            super::diff_state::DiffStateModel::diff_metadata_against_head(&repo_path).await?;
+        let stats_against_head = diff_metadata_against_head(&repo_path).await?;
 
         Ok(GitStatusMetadata {
             current_branch_name,

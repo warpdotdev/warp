@@ -1,5 +1,6 @@
-use crate::ui::theme::Fill;
 use warpui::elements::Icon as WarpUiIcon;
+
+use crate::ui::theme::Fill;
 
 /// Default icon dimensions that apply to all icons used within the ui system.
 pub const ICON_DIMENSIONS: f32 = 24.;
@@ -75,6 +76,7 @@ pub enum Icon {
     LinkExternal,
     CheckCircleBroken,
     Link,
+    QrCode,
     Refresh,
     RefreshCcw,
     RefreshCw04,
@@ -263,6 +265,7 @@ pub enum Icon {
     FolderClosed,
     FileCopy,
     Credits,
+    CreditCard,
     AddressedComment,
     ClockSnooze,
     Hand,
@@ -279,6 +282,7 @@ pub enum Icon {
     PiLogo,
     AuggieLogo,
     CursorLogo,
+    GooseLogo,
     NLD,
     Oz,
     OzCloud,
@@ -309,12 +313,30 @@ pub enum Icon {
     SwitchHorizontal01,
     HeartHand,
     MessageChatSquare,
+    Pin,
+    PinFilled,
+    Atom,
+    Cognition,
+    Dataflow04,
+    // Language-specific icons for the code block dropdown
+    MermaidLang,
+    GoLang,
+    CppLang,
+    JavaScriptLang,
+    PythonLang,
+    RustLang,
+    SqlLang,
+    JsonLang,
+    PhpLang,
+    KotlinLang,
 }
 
 impl From<Icon> for &'static str {
     fn from(icon: Icon) -> &'static str {
         match icon {
             Icon::Menu => "bundled/svg/layout-left.svg",
+            Icon::Pin => "bundled/svg/pin-01.svg",
+            Icon::PinFilled => "bundled/svg/pin-filled.svg",
             Icon::AtSign => "bundled/svg/at-sign.svg",
             Icon::Plus => "bundled/svg/plus.svg",
             Icon::Copy => "bundled/svg/copy.svg",
@@ -385,6 +407,7 @@ impl From<Icon> for &'static str {
             Icon::CheckCircleBroken => "bundled/svg/check-circle-broken.svg",
             Icon::LinkExternal => "bundled/svg/link-external-02.svg",
             Icon::Link => "bundled/svg/link-03.svg",
+            Icon::QrCode => "bundled/svg/qr-code-02.svg",
             Icon::Refresh => "bundled/svg/refresh.svg",
             Icon::RefreshCcw => "bundled/svg/refresh-ccw-01.svg",
             Icon::RefreshCw04 => "bundled/svg/refresh-cw-04.svg",
@@ -570,6 +593,7 @@ impl From<Icon> for &'static str {
             Icon::FolderClosed => "bundled/svg/folder-closed.svg",
             Icon::FileCopy => "bundled/svg/file_copy.svg",
             Icon::Credits => "bundled/svg/credits.svg",
+            Icon::CreditCard => "bundled/svg/credit-card.svg",
             Icon::AddressedComment => "bundled/svg/addressed-comment.svg",
             Icon::ClockSnooze => "bundled/svg/clock-snooze.svg",
             Icon::Hand => "bundled/svg/hand.svg",
@@ -586,6 +610,7 @@ impl From<Icon> for &'static str {
             Icon::PiLogo => "bundled/svg/pi.svg",
             Icon::AuggieLogo => "bundled/svg/auggie.svg",
             Icon::CursorLogo => "bundled/svg/cursor.svg",
+            Icon::GooseLogo => "bundled/svg/goose.svg",
             Icon::NLD => "bundled/svg/nld.svg",
             Icon::Oz => "bundled/svg/oz.svg",
             Icon::OzCloud => "bundled/svg/oz-cloud.svg",
@@ -615,6 +640,19 @@ impl From<Icon> for &'static str {
             Icon::ClockPlus => "bundled/svg/clock-plus.svg",
             Icon::HeartHand => "bundled/svg/heart-hand.svg",
             Icon::MessageChatSquare => "bundled/svg/message-chat-square.svg",
+            Icon::Atom => "bundled/svg/atom-02.svg",
+            Icon::Cognition => "bundled/svg/cognition.svg",
+            Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
+            Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
+            Icon::GoLang => "bundled/svg/file_type/go.svg",
+            Icon::CppLang => "bundled/svg/file_type/cpp.svg",
+            Icon::JavaScriptLang => "bundled/svg/file_type/javascript.svg",
+            Icon::PythonLang => "bundled/svg/file_type/python.svg",
+            Icon::RustLang => "bundled/svg/file_type/rust.svg",
+            Icon::SqlLang => "bundled/svg/file_type/sql.svg",
+            Icon::JsonLang => "bundled/svg/file_type/json.svg",
+            Icon::PhpLang => "bundled/svg/file_type/php.svg",
+            Icon::KotlinLang => "bundled/svg/file_type/kotlin.svg",
         }
     }
 }

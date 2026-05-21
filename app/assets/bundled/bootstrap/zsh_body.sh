@@ -21,8 +21,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   # Appended to $DCS_START to signal that the following message is JSON-encoded.
   DCS_JSON_MARKER="d"
 
-  # Byte used to signal the end of a DCS.
-  DCS_END="$(printf '\x9c')"
+  # Byte sequence used to signal the end of a DCS (7-bit ST: ESC \).
+  DCS_END="$(printf '\x1b\x5c')"
 
   # OSC used to mark the start of in-band command output.
   #
@@ -168,14 +168,14 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     local -a command
     command=("${@:2}")
     # Declare raw_output prior to actually assigning it, because `local` is a command itself, which
-    # inteferes with capturing the exit code via $? (it overwrites $? with the 0, because the
+    # interferes with capturing the exit code via $? (it overwrites $? with the 0, because the
     # 'local' command always succeeds).
     local raw_output
     # Command substitution only captures stdout, so redirect stderr to stdout.
     # Note that we use `eval` here to actually execute the command, because some shell syntax
     # that may be used in the command might not be valid in a command substitution (e.g. the
     # '$(<command>)' syntax).
-    # Also note that zsh variables can contain null charcters, so this doesn't require any special
+    # Also note that zsh variables can contain null characters, so this doesn't require any special
     # handling.
     raw_output=$(eval "$command" 2>&1)
     local exit_code=$?
@@ -277,7 +277,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
         # If the array is not empty, kill the ongoing pids.
         if [[ ! -z $pids ]]; then
-          # Surpress stderr output; kill writes to stderr if any of the given
+          # Suppress stderr output; kill writes to stderr if any of the given
           # PIDS are not running (which might rarely be the case due to race
           # conditions in checking which PIDS to cancel and this kill command.
           (kill -9 $pids 2>&1) >/dev/null
@@ -712,7 +712,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # markers. If they exist, we remove the first occurrence of the prefix
       # and the last occurrence of the suffix, which should be the ones that
       # Warp has added, to avoid duplicating the prefix and suffix. Shell
-      # parameter expansion is used to remove the first and last occurences.
+      # parameter expansion is used to remove the first and last occurrences.
       # Specifically note that virtualenvs can add content to the prompt, so we need to 
       # remove the markers before re-adding them.
       # https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html
@@ -1395,7 +1395,8 @@ esac
 
     local escaped_editor="$(warp_escape_json "$EDITOR")"
     local escaped_shell_path="$(warp_escape_json "${commands[zsh]}")"
-    local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"shell\": \"zsh\", \"home_dir\": \"$HOME\", \"path\": \"$escaped_path\", \"editor\": \"$escaped_editor\", \"env_var_names\":  \"$env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\",  \"builtins\": \"$escaped_builtins\",  \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$ZSH_VERSION\", \"shell_options\": \"$shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"shell_plugins\": \"$escaped_shell_plugins\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"${WSL_DISTRO_NAME:-}\", \"shell_path\": \"$escaped_shell_path\"}}"
+    local escaped_cdpath="$(warp_escape_json "$CDPATH")"
+    local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"shell\": \"zsh\", \"home_dir\": \"$HOME\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\":  \"$env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\",  \"builtins\": \"$escaped_builtins\",  \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$ZSH_VERSION\", \"shell_options\": \"$shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"shell_plugins\": \"$escaped_shell_plugins\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"${WSL_DISTRO_NAME:-}\", \"shell_path\": \"$escaped_shell_path\"}}"
     warp_send_json_message "$escaped_json"
   }
   warp_bootstrapped

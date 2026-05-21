@@ -1,4 +1,5 @@
-use crate::{request_context::RequestContext, schema};
+use crate::request_context::RequestContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetFeatureModelChoicesVariables {
@@ -69,6 +70,7 @@ pub enum DisableReason {
 #[derive(cynic::Enum, Clone, Debug)]
 pub enum LlmModelHost {
     AwsBedrock,
+    CustomEndpoint,
     DirectApi,
     #[cynic(fallback)]
     Other(String),
@@ -78,6 +80,14 @@ pub enum LlmModelHost {
 pub struct RoutingHostConfig {
     pub enabled: bool,
     pub model_routing_host: LlmModelHost,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct LlmContextWindow {
+    pub is_configurable: bool,
+    pub min: crate::scalars::Uint32,
+    pub max: crate::scalars::Uint32,
+    pub default: crate::scalars::Uint32,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -94,6 +104,7 @@ pub struct LlmInfo {
     pub provider: LlmProvider,
     pub host_configs: Vec<RoutingHostConfig>,
     pub pricing: LlmPricing,
+    pub context_window: LlmContextWindow,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

@@ -1,48 +1,37 @@
 //! This module contains state management logic for pending context, where "pending context"
 //! is defined as additional context to be attached to the next AI query.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 
-use crate::ai::{
-    agent::{AnyFileContent, FileContext},
-    block_context::BlockContext,
-};
-
-use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, ConversationStatus};
-use crate::{
-    ai::{
-        agent::todos::AIAgentTodoList,
-        agent::{
-            conversation::{AIConversation, AIConversationId},
-            AIAgentAttachment, AIAgentContext, ImageContext,
-        },
-        document::ai_document_model::AIDocumentId,
-        llms::{LLMPreferences, LLMPreferencesEvent},
-        outline::RepoOutlines,
-    },
-    terminal::{
-        event::{BlockCompletedEvent, BlockType},
-        model::{block::BlockId, session::Sessions},
-        model_events::{ModelEvent, ModelEventDispatcher},
-        TerminalModel,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
+use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
+use super::block::DirectoryContext;
+use super::history_model::BlocklistAIHistoryModel;
+use super::BlocklistAIHistoryEvent;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
 };
-
-use super::{
-    block::DirectoryContext, history_model::BlocklistAIHistoryModel, BlocklistAIHistoryEvent,
+use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, AnyFileContent, FileContext, ImageContext,
 };
+use crate::ai::block_context::BlockContext;
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::outline::RepoOutlines;
+use crate::terminal::event::{BlockCompletedEvent, BlockType};
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::TerminalModel;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,6 +307,34 @@ impl BlocklistAIContextModel {
         }
     }
 
+    /// Test-only constructor that skips every subscription and singleton lookup performed by
+    /// [`Self::new`], so unit tests can build a [`BlocklistAIContextModel`] without registering
+    /// `BlocklistAIHistoryModel`, `LLMPreferences`, `ModelEventDispatcher`, `Sessions`, or
+    /// `AppExecutionMode`. Callers still pass real [`TerminalModel`] and [`AgentViewController`]
+    /// handles to populate the struct fields, but neither needs to be functional for the
+    /// methods exercised by these tests.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        terminal_model: Arc<FairMutex<TerminalModel>>,
+        terminal_view_id: EntityId,
+        agent_view_controller: ModelHandle<AgentViewController>,
+    ) -> Self {
+        Self {
+            terminal_model,
+            directory_context: Default::default(),
+            pending_context_block_ids: HashSet::new(),
+            pending_context_selected_text: None,
+            pending_attachments: Default::default(),
+            pending_query_state: PendingQueryState::default(),
+            terminal_view_id,
+            agent_view_controller,
+            pending_inline_diff_hunk_attachments: Default::default(),
+            pending_document_id: None,
+            auto_attached_agent_view_user_block_ids: Vec::new(),
+            queue_next_prompt_enabled: false,
+        }
+    }
+
     /// Resets the set of blocks to be included as context to an empty list.
     /// Also removes any selected text that was to be included as context.
     pub fn reset_context_to_default(&mut self, ctx: &mut ModelContext<Self>) {
@@ -327,6 +344,12 @@ impl BlocklistAIContextModel {
         self.clear_diff_hunk_attachments();
         self.set_pending_document(None, ctx);
         self.auto_attached_agent_view_user_block_ids.clear();
+    }
+
+    /// Returns `true` if the next AI query has any context that should force the input to be
+    /// locked in AI mode (skipping NLD): a pending image or file attachment.
+    pub fn has_locking_attachment(&self) -> bool {
+        !self.pending_attachments.is_empty()
     }
 
     /// Returns the set `BlockId`s corresponding to blocks to be included as context with the next
@@ -991,3 +1014,7 @@ pub enum BlocklistAIContextEvent {
 impl Entity for BlocklistAIContextModel {
     type Event = BlocklistAIContextEvent;
 }
+
+#[cfg(test)]
+#[path = "context_model_tests.rs"]
+mod tests;

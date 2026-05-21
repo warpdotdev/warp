@@ -1,13 +1,12 @@
-use crate::{appearance::Appearance, editor::EditorView};
-use warpui::SingletonEntity;
-use warpui::{
-    elements::{
-        Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, EventHandler, Flex, Icon, ParentElement, Radius, Shrinkable,
-    },
-    ui_components::components::{Coords, UiComponentStyles},
-    Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
+use warpui::elements::{
+    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, EventHandler, Flex, Icon, ParentElement, Radius, Shrinkable,
 };
+use warpui::ui_components::components::{Coords, UiComponentStyles};
+use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use crate::appearance::Appearance;
+use crate::editor::EditorView;
 
 const SEARCH_ICON_PATH: &str = "bundled/svg/search.svg";
 const ICON_SIZE: f32 = 12.;
