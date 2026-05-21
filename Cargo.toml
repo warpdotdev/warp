@@ -186,13 +186,7 @@ mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
-# TODO: After the dual-predicate `WatchFilter` PR (CODE-XXXX) lands on
-# `warpdotdev/notify-8.0.0`, bump this `rev` to the new commit and remove the
-# `[patch]` override at the bottom of this file. The split into separate
-# emit/descend predicates is required by `repo_metadata::entry::repo_watch_filter`
-# and `ai::index::full_source_code_embedding::manager::CodebaseIndexManager::watch_path`,
-# so the warp-public callers won't compile against the old rev.
-notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
+notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
@@ -384,17 +378,6 @@ streaming-iterator = "0.1.0"
 derivative = "2.2.0"
 parquet = { version = "55.0.0", features = ["arrow"] }
 rmcp = { version = "1.6" }
-
-# Local development override: routes the workspace's `notify-debouncer-full`
-# (and transitive `notify`) to the working copy of `warpdotdev/notify` at
-# `/Users/maggieshan/Warp/notify`, which carries the dual-predicate
-# `WatchFilter` changes that are referenced by `repo_metadata::entry` and the
-# code-indexing manager. Remove this `[patch]` block once the notify PR lands
-# and the `rev` in `[workspace.dependencies]` above has been bumped to the new
-# commit. Do not commit this `[patch]` to the PR.
-[patch."https://github.com/warpdotdev/notify"]
-notify-debouncer-full = { path = "/Users/maggieshan/Warp/notify/notify-debouncer-full" }
-notify = { path = "/Users/maggieshan/Warp/notify/notify" }
 
 [profile.release]
 # Use line-tables-only (debug = 1) rather than full debuginfo (debug = 2 /
