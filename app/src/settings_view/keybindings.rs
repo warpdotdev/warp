@@ -301,7 +301,10 @@ impl KeybindingRow {
         };
         let element = render_columns(
             render_text(
-                &i18n::tr_text(app, binding.description.in_context(DescriptionContext::Default)),
+                &i18n::tr_text(
+                    app,
+                    binding.description.in_context(DescriptionContext::Default),
+                ),
                 None,
                 appearance,
             ),

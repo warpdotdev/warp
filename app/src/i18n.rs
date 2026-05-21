@@ -1,6 +1,6 @@
 use crate::settings::{DisplayLanguage, LanguageSettings};
-use std::borrow::Cow;
 use settings::Setting as _;
+use std::borrow::Cow;
 use strum_macros::EnumIter;
 use warpui::{AppContext, SingletonEntity};
 
@@ -51,6 +51,11 @@ pub enum I18nKey {
     TeamsPlanUsageLimits,
     TeamsSharedNotebooks,
     TeamsSharedWorkflows,
+    TeamsNeedMoreSeatsPrefix,
+    TeamsUpgradeToEnterprise,
+    TeamsUpgradeToBusiness,
+    TeamsUnlimitedTeamMemberLimitSuffix,
+    TeamsHigherTeamMemberLimitSuffix,
     MenuWhatsNew,
     MenuSettings,
     MenuKeyboardShortcuts,
@@ -766,6 +771,7 @@ pub enum I18nKey {
     AiExecuteCommandsColon,
     AiInteractWithRunningCommandsColon,
     AiAskQuestionsColon,
+    AiRunAgentsColon,
     AiCallMcpServersColon,
     AiCallWebToolsColon,
     AiAutoSyncPlansColon,
@@ -820,6 +826,10 @@ pub enum I18nKey {
     AiComputerUseAlwaysAllowDescription,
     AiUnknownSettingDescription,
     AiAskQuestions,
+    AiRunOrchestratedAgents,
+    AiRunAgentsNeverDescription,
+    AiRunAgentsAlwaysAllowDescription,
+    AiRunAgentsAlwaysAskDescription,
     AiAskQuestionAskUnlessAutoApproveDescription,
     AiAskQuestionNeverDescription,
     AiAskQuestionAlwaysAskDescription,
@@ -1004,6 +1014,9 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "All" => "全部",
         "Ambient agent conversations cannot be deleted" => "无法删除环境智能体对话",
         "This conversation cannot be deleted" => "此对话无法删除",
+        "This API key is tied to an agent and can make requests on behalf of the agent." => {
+            "此 API 密钥绑定到智能体，可代表该智能体发起请求。"
+        }
         "Anyone with the link" => "拥有链接的任何人",
         "Arguments" => "参数",
         "Apply link" => "应用链接",
@@ -1019,6 +1032,8 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Ask the Warp agent to resume" => "让 Warp 智能体恢复",
         "alias name" => "别名名称",
         "Bad response" => "不好的回复",
+        "Base" => "基础",
+        "By discovery" => "通过发现",
         "Buy more" => "购买更多",
         "Cancel" => "取消",
         "Cancel summarization" => "取消总结",
@@ -1030,6 +1045,9 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Choose an AI execution profile" => "选择 AI 执行配置",
         "Choose an agent model" => "选择智能体模型",
         "Choose an environment" => "选择环境",
+        "Cloud child agents using this harness require an API key before they can run." => {
+            "使用此运行框架的云端子智能体需要 API Key 才能运行。"
+        }
         "Clear all" => "全部清除",
         "Clear filters" => "清除筛选",
         "Clear upload" => "清除上传",
@@ -1038,13 +1056,23 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Close session" => "关闭会话",
         "Close Welcome Tips" => "关闭欢迎提示",
         "Cloud agent run" => "云端智能体运行",
+        "Cloud-only" => "仅云端",
         "Collapse" => "折叠",
         "Comment" => "评论",
         "Complete!" => "已完成！",
+        "Combined" => "合计",
         "Commit" => "提交",
         "Commit and create PR" => "提交并创建 PR",
         "Configure" => "配置",
         "Contact Admin to request access" => "联系管理员请求访问权限",
+        "Contact support" => "联系支持",
+        "Contact your team admin to resolve billing issues." => "请联系团队管理员解决账单问题。",
+        "Contact your Account Executive for more add-on credits." => {
+            "请联系你的客户经理获取更多附加点数。"
+        }
+        "Contact a team admin to enable add-on credits." => {
+            "请联系团队管理员启用附加点数。"
+        }
         "Context window usage" => "上下文窗口用量",
         "Confirm" => "确认",
         "Continue conversation" => "继续对话",
@@ -1065,6 +1093,64 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Create New Tab" => "新建标签页",
         "Create New Window" => "新建窗口",
         "Create or Edit Link" => "创建或编辑链接",
+        "1 team member" => "1 位团队成员",
+        "{count} team members" => "{count} 位团队成员",
+        "Add-ons" => "附加额度",
+        "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed." => {
+            "附加点数以预付包购买，会在每个计费周期结转，并在一年后过期。购买越多，每点数价格越优惠。基础方案点数用完后，将消耗附加点数。"
+        }
+        "Purchased add-on credits are added to your personal balance." => {
+            "购买的附加点数会添加到你的个人余额。"
+        }
+        "Auto-reload is enabled" => "自动补充已启用",
+        "Auto reload is disabled due to recent failed reload. Please update your payment method and try again." => {
+            "由于最近一次补充失败，自动补充已禁用。请更新付款方式后重试。"
+        }
+        "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method." => {
+            "由于最近一次补充失败，自动补充已禁用。请联系团队管理员更新付款方式。"
+        }
+        "Auto-reload is paused because the next reload would exceed your monthly spend limit. Increase your limit to continue using auto-reload." => {
+            "自动补充已暂停，因为下一次补充会超出你的月度消费限额。提高限额后即可继续使用自动补充。"
+        }
+        "Auto-reload is paused because the next reload would exceed your team’s monthly spend limit. Contact a team admin to increase it." => {
+            "自动补充已暂停，因为下一次补充会超出团队月度消费限额。请联系团队管理员提高限额。"
+        }
+        "Auto-reload enabled. We'll refill with {credits} credits when your balance runs low." => {
+            "自动补充已启用。当余额较低时，我们会补充 {credits} 点数。"
+        }
+        "Auto-reload disabled." => "自动补充已禁用。",
+        "Buying…" => "购买中…",
+        "Additional members are billed at your plan's per-user rate. {prorated_message}" => {
+            "新增成员会按你当前方案的每用户价格计费。{prorated_message}"
+        }
+        "Additional members are billed at your plan's per-user rate: ${monthly_cost}/month or ${yearly_cost}/year, depending on your billing interval. {prorated_message}" => {
+            "新增成员会按你当前方案的每用户价格计费：${monthly_cost}/月或 ${yearly_cost}/年，取决于你的计费周期。{prorated_message}"
+        }
+        "{credits} credits / {dollars}" => "{credits} 点数 / {dollars}",
+        "{credits} credits" => "{credits} 点数",
+        "Allow Warp users with an @{domain} email to find and join the team." => {
+            "允许使用 @{domain} 邮箱的 Warp 用户查找并加入团队。"
+        }
+        "When any member on your team’s credit balance reaches 100 credits remaining, automatically purchase {auto_reload_credit_amount}." => {
+            "当团队中任一成员的点数余额降至 100 点时，自动购买 {auto_reload_credit_amount}。"
+        }
+        "selected credit amount" => "所选点数数量",
+        "your selected" => "你所选的",
+        "Your plan ({plan_display}) has a maximum capacity of {cap} members." => {
+            "你的方案（{plan_display}）最多支持 {cap} 位成员。"
+        }
+        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance." => {
+            "你的管理员已为附加点数启用自动补充。当你的个人附加点数余额较低时，Warp 会自动购买 {credits} 点数（{price}）并添加到你的余额。"
+        }
+        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance." => {
+            "你的管理员已为附加点数启用自动补充。当你的个人附加点数余额较低时，Warp 会自动购买附加点数并添加到你的余额。"
+        }
+        "You'll be charged for a portion of the team member's usage of Warp." => {
+            "你将为该团队成员使用 Warp 的部分用量付费。"
+        }
+        "Your admin will be charged for a portion of the team member's usage of Warp." => {
+            "你的管理员将为该团队成员使用 Warp 的部分用量付费。"
+        }
         "Diff stats" => "Diff 统计",
         "Create environment" => "创建环境",
         "Create team" => "创建团队",
@@ -1179,9 +1265,12 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Open on Desktop" => "在桌面应用中打开",
         "Open repository" => "打开仓库",
         "Open Rich Input" => "打开富输入",
+        "Open the admin panel" => "打开管理面板",
         "Open coding agent settings" => "打开编码智能体设置",
         "Open this conversation in the Warp desktop app" => "在 Warp 桌面应用中打开此对话",
+        "Orchestration config was disapproved" => "编排配置已被拒绝",
         "Out of credits" => "点数已用完",
+        "Pay-as-you-go" => "按量付费",
         "Past 3 days" => "过去 3 天",
         "Diffs only work for git repositories." => "差异比较仅适用于 Git 仓库。",
         "Diffs only work for local workspaces." => "差异比较仅适用于本地工作区。",
@@ -1204,6 +1293,8 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Refresh AWS Credentials" => "刷新 AWS 凭证",
         "Refresh file" => "刷新文件",
         "Remove" => "移除",
+        "Remove domain" => "移除域名",
+        "Remove Member" => "移除成员",
         "Remove from team" => "从团队中移除",
         "Remove queued prompt" => "移除排队提示",
         "Replace all" => "全部替换",
@@ -1211,12 +1302,23 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Reset to Warp defaults" => "重置为 Warp 默认值",
         "Reset to default" => "重置为默认值",
         "Restore" => "恢复",
+        "Remote host" => "远程主机",
         "Resume conversation" => "恢复对话",
         "Review changes" => "审查更改",
+        "Restricted due to billing issue" => "由于账单问题受限",
+        "Restricted due to billing issue. Update your payment method to purchase add-on credits." => {
+            "由于账单问题受限。请更新付款方式以购买附加点数。"
+        }
+        "Restricted due to billing issue. Contact your team admin to update their payment method." => {
+            "由于账单问题受限。请联系团队管理员更新付款方式。"
+        }
         "Rewind" => "回退",
         "Rewind to before this block" => "回退到此块之前",
         "Rich Input" => "富输入",
         "Rule" => "规则",
+        "Running child agents is disabled by the active execution profile." => {
+            "当前执行配置已禁用运行子智能体。"
+        }
         "Same line prompt" => "同行提示符",
         "Save" => "保存",
         "Save as markdown file" => "另存为 Markdown 文件",
@@ -1263,6 +1365,8 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Stop sharing session" => "停止共享会话",
         "Summary" => "摘要",
         "Split Pane Right" => "向右拆分窗格",
+        "Switch to Business" => "切换到 Business",
+        "Switch to the Build plan" => "切换到 Build 方案",
         "Teammates with the link" => "拥有链接的团队成员",
         "Agent conversations" => "智能体对话",
         "Tab configs" => "标签页配置",
@@ -1280,11 +1384,26 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Show details on hover" => "悬停时显示详情",
         "Type your answer and press Enter" => "输入答案并按 Enter",
         "Unshare" => "取消共享",
+        "This purchase would exceed your monthly limit. Increase your limit to continue." => {
+            "此次购买会超出你的月度限额。提高限额后即可继续。"
+        }
+        "This purchase would exceed your team’s monthly spend limit. Contact a team admin to increase it." => {
+            "此次购买会超出团队月度消费限额。请联系团队管理员提高限额。"
+        }
         "Update" => "更新",
         "Update Agent" => "更新智能体",
         "Update Warp manually" => "手动更新 Warp",
         "Update Warp plugin" => "更新 Warp 插件",
+        "Upgrade" => "升级",
+        "Upgrade to Build" => "升级到 Build",
+        "Upgrade to Business" => "升级到 Business",
+        "Upgrade to Enterprise" => "升级到 Enterprise",
+        "Upgrade to Lightspeed plan" => "升级到 Lightspeed 方案",
+        "Upgrade to Max" => "升级到 Max",
+        "Upgrade to the Build plan" => "升级到 Build 方案",
+        "Upgrade to Turbo plan" => "升级到 Turbo 方案",
         "Upgrade plan" => "升级套餐",
+        "bring your own key" => "自带密钥",
         "Use latest codex model" => "使用最新 Codex 模型",
         "Use agent" => "使用智能体",
         "Value (optional)" => "值（可选）",
@@ -1307,6 +1426,25 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "View your agent tasks plus all shared team tasks" => {
             "查看你的智能体任务和所有共享团队任务"
         }
+        " for a more flexible pricing model." => "以使用更灵活的计费模式。",
+        " for custom limits and dedicated support." => "以获得自定义限制和专属支持。",
+        " for increased access to AI features." => "以获得更多 AI 功能访问权限。",
+        " for more AI credits." => "以获得更多 AI 点数。",
+        " for more AI usage." => "以获得更多 AI 用量。",
+        " for more credits and access to more models." => "以获得更多点数并访问更多模型。",
+        " for security features like SSO and automatically applied zero data retention." => {
+            "以获得 SSO、自动应用零数据保留等安全功能。"
+        }
+        " or " => " 或 ",
+        " to get more AI usage." => "以获得更多 AI 用量。",
+        " to purchase add-on credits." => "以购买附加点数。",
+        " to regain access to AI features." => "以恢复 AI 功能访问权限。",
+        "to see fine-grained credit attribution and set per-user spend limits." => {
+            "以查看细粒度点数归因并设置每用户消费限制。"
+        }
+        "to see per-user credit attribution." => "以查看每用户点数归因。",
+        "to see team-level credit usage." => "以查看团队级点数用量。",
+        "to set per-user spend limits." => "以设置每用户消费限制。",
         "Voice input" => "语音输入",
         "Warp Essentials" => "Warp 精要",
         "Warp is the intelligent terminal with AI and your dev team's knowledge built-in." => {
@@ -1327,6 +1465,52 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Input Editor" => "输入编辑器",
         "Fundamentals" => "基础",
         "Open AI Command Suggestions" => "打开 AI 命令建议",
+        "A little gift" => "一点小礼物",
+        "Break out of your laptop with cloud agents" => "用云端智能体突破本机限制",
+        "Buy credits" => "购买点数",
+        "Cloud agents" => "云端智能体",
+        "Compare plans" => "比较方案",
+        "Introducing Oz" => "Oz 介绍",
+        "Infinitely scalable coding agent — run in local sessions or in the cloud." => {
+            "可无限扩展的编码智能体，可以在本地会话或云端运行。"
+        }
+        "Launch credits" => "启动点数",
+        "Next: Agent automations" => "下一步：智能体自动化",
+        "Next: Agent management" => "下一步：智能体管理",
+        "Next: Launch credits" => "下一步：启动点数",
+        "No agent harnesses are available. Contact your team admin." => {
+            "没有可用的智能体运行框架。请联系团队管理员。"
+        }
+        "1,000 free cloud agent credits when you upgrade to Warp Build" => {
+            "升级到 Warp Build 即可获得 1,000 个免费云端智能体点数"
+        }
+        "Orchestrate agents, turning Skills into automations" => {
+            "编排智能体，将技能转化为自动化"
+        }
+        "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits." => {
+            "其他团队成员在附加额度、按量付费和仅云端点数中的用量。"
+        }
+        "Sync conversations to cloud" => "将对话同步到云端",
+        "Track local and cloud agents seamlessly" => "无缝跟踪本地与云端智能体",
+        "Try it out" => "试试看",
+        "use your own API keys" => "使用你自己的 API 密钥",
+        "Agent automations" => "智能体自动化",
+        "Agent management" => "智能体管理",
+        "Agent conversations stored in the cloud can be shared with anyone with one click, and allow conversations to be continued across devices and on logout." => {
+            "存储在云端的智能体对话可以一键分享给任何人，并支持跨设备和退出登录后继续对话。"
+        }
+        "Oz agents can be defined using the standard Skills format. You can use the built in scheduler to setup agents to run autonomously at set intervals, or use the Oz SDK or API to programmatically start and manage Oz agents." => {
+            "Oz 智能体可以使用标准 Skills 格式定义。你可以使用内置调度器让智能体按固定间隔自主运行，也可以使用 Oz SDK 或 API 以编程方式启动和管理 Oz 智能体。"
+        }
+        "Use cloud agents to run many agents in parallel, keep agents working when you close your laptop, or start agents programmatically. Plus, you can check on their work through the web." => {
+            "使用云端智能体并行运行多个智能体，在合上笔记本后继续工作，或以编程方式启动智能体。你还可以通过网页查看它们的工作进展。"
+        }
+        "Upgrade to Build this month and receive 1,000 extra credits to try using Oz. Credits are only eligible for Oz runs in Warp-hosted cloud environments." => {
+            "本月升级到 Build 即可获得 1,000 个额外点数来试用 Oz。点数仅适用于 Warp 托管云环境中的 Oz 运行。"
+        }
+        "View all of your agents across local and cloud sessions in the Warp app or at [oz.warp.dev](https://oz.warp.dev). Join live agent sessions, continue tasks locally, and steer agents with one click." => {
+            "在 Warp 应用或 [oz.warp.dev](https://oz.warp.dev) 查看你的所有本地和云端智能体。加入实时智能体会话，在本地继续任务，并一键引导智能体。"
+        }
         "Accept Prompt Suggestion" => "接受提示建议",
         "Accept autosuggestion" => "接受自动建议",
         "Activate next tab" => "激活下一个标签页",
@@ -1975,6 +2159,22 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings." => {
             "此 MCP 服务器包含敏感信息。请前往“设置 > 隐私”修改敏感信息脱敏设置。"
         }
+        "Are you sure you want to delete this team?" => "确定要删除此团队吗？",
+        "Are you sure you want to leave this team?" => "确定要离开此团队吗？",
+        "Are you sure you want to remove this member?" => "确定要移除此成员吗？",
+        "Deleting this team will permanently delete it and all of its related content, including billing information or credits. You will not be able to restore them." => {
+            "删除此团队会永久删除团队及其所有相关内容，包括账单信息或点数。删除后无法恢复。"
+        }
+        "You will need to be reinvited in order to rejoin." => "如需重新加入，你需要再次收到邀请。",
+        "If you leave this team, you’ll lose access to any remaining reload credits tied to it. You’ll regain access to any unused, non-expired credits if you rejoin the same team later." => {
+            "如果你离开此团队，将无法继续使用与该团队关联的剩余补充点数。之后重新加入同一团队时，可重新获得未使用且未过期的点数。"
+        }
+        "This member will lose access to any remaining reload credits tied to this team. If they rejoin later, they’ll regain access to any unused, non-expired credits." => {
+            "此成员将无法继续使用与该团队关联的剩余补充点数。如果之后重新加入，可重新获得未使用且未过期的点数。"
+        }
+        "Yes, delete" => "是，删除",
+        "Yes, leave" => "是，离开",
+        "Leave Team" => "离开团队",
         _ => return None,
     })
 }
@@ -2022,6 +2222,13 @@ fn en_us(key: I18nKey) -> &'static str {
         I18nKey::TeamsPlanUsageLimits => "Plan usage limits",
         I18nKey::TeamsSharedNotebooks => "Shared Notebooks",
         I18nKey::TeamsSharedWorkflows => "Shared Workflows",
+        I18nKey::TeamsNeedMoreSeatsPrefix => "Need more seats? ",
+        I18nKey::TeamsUpgradeToEnterprise => "Upgrade to Enterprise",
+        I18nKey::TeamsUpgradeToBusiness => "Upgrade to Business",
+        I18nKey::TeamsUnlimitedTeamMemberLimitSuffix => {
+            " for an unlimited team member limit."
+        }
+        I18nKey::TeamsHigherTeamMemberLimitSuffix => " for a higher team member limit.",
         I18nKey::MenuWhatsNew => "What's new",
         I18nKey::MenuSettings => "Settings",
         I18nKey::MenuKeyboardShortcuts => "Keyboard shortcuts",
@@ -2969,6 +3176,7 @@ fn en_us(key: I18nKey) -> &'static str {
         I18nKey::AiExecuteCommandsColon => "Execute commands:",
         I18nKey::AiInteractWithRunningCommandsColon => "Interact with running commands:",
         I18nKey::AiAskQuestionsColon => "Ask questions:",
+        I18nKey::AiRunAgentsColon => "Run agents:",
         I18nKey::AiCallMcpServersColon => "Call MCP servers:",
         I18nKey::AiCallWebToolsColon => "Call web tools:",
         I18nKey::AiAutoSyncPlansColon => "Auto-sync plans to Warp Drive:",
@@ -3047,6 +3255,16 @@ fn en_us(key: I18nKey) -> &'static str {
         }
         I18nKey::AiUnknownSettingDescription => "Unknown setting.",
         I18nKey::AiAskQuestions => "Ask questions",
+        I18nKey::AiRunOrchestratedAgents => "Run orchestrated agents",
+        I18nKey::AiRunAgentsNeverDescription => {
+            "The Agent cannot run child agents and the run_agents tool will not be available."
+        }
+        I18nKey::AiRunAgentsAlwaysAllowDescription => {
+            "Give the Agent full autonomy to run child agents without approval."
+        }
+        I18nKey::AiRunAgentsAlwaysAskDescription => {
+            "Require explicit approval before the Agent runs child agents."
+        }
         I18nKey::AiAskQuestionAskUnlessAutoApproveDescription => {
             "The Agent may ask a question and pause for your response, but will continue automatically when auto-approve is on."
         }
@@ -3244,6 +3462,11 @@ fn zh_cn(key: I18nKey) -> &'static str {
         I18nKey::TeamsPlanUsageLimits => "计划用量限制",
         I18nKey::TeamsSharedNotebooks => "共享笔记本",
         I18nKey::TeamsSharedWorkflows => "共享工作流",
+        I18nKey::TeamsNeedMoreSeatsPrefix => "需要更多席位？",
+        I18nKey::TeamsUpgradeToEnterprise => "升级到 Enterprise",
+        I18nKey::TeamsUpgradeToBusiness => "升级到 Business",
+        I18nKey::TeamsUnlimitedTeamMemberLimitSuffix => "以获得无限团队成员上限。",
+        I18nKey::TeamsHigherTeamMemberLimitSuffix => "以获得更高的团队成员上限。",
         I18nKey::MenuWhatsNew => "新功能",
         I18nKey::MenuSettings => "设置",
         I18nKey::MenuKeyboardShortcuts => "键盘快捷键",
@@ -4105,6 +4328,7 @@ fn zh_cn(key: I18nKey) -> &'static str {
         I18nKey::AiExecuteCommandsColon => "执行命令：",
         I18nKey::AiInteractWithRunningCommandsColon => "与正在运行的命令交互：",
         I18nKey::AiAskQuestionsColon => "提问：",
+        I18nKey::AiRunAgentsColon => "运行智能体：",
         I18nKey::AiCallMcpServersColon => "调用 MCP 服务器：",
         I18nKey::AiCallWebToolsColon => "调用 Web 工具：",
         I18nKey::AiAutoSyncPlansColon => "自动同步计划到 Warp Drive：",
@@ -4175,6 +4399,16 @@ fn zh_cn(key: I18nKey) -> &'static str {
         }
         I18nKey::AiUnknownSettingDescription => "未知设置。",
         I18nKey::AiAskQuestions => "提问",
+        I18nKey::AiRunOrchestratedAgents => "运行编排智能体",
+        I18nKey::AiRunAgentsNeverDescription => {
+            "智能体无法运行子智能体，run_agents 工具也不可用。"
+        }
+        I18nKey::AiRunAgentsAlwaysAllowDescription => {
+            "允许智能体无需批准即可自主运行子智能体。"
+        }
+        I18nKey::AiRunAgentsAlwaysAskDescription => {
+            "智能体运行子智能体前需要明确批准。"
+        }
         I18nKey::AiAskQuestionAskUnlessAutoApproveDescription => {
             "智能体可以提问并等待你的回答；但在自动批准开启时会自动继续。"
         }

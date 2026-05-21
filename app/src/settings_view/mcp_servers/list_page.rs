@@ -1153,7 +1153,9 @@ impl MCPServersListPageView {
         ];
 
         let description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(file_based_mcp_description_fragments)]),
+            FormattedText::new([FormattedTextLine::Line(
+                file_based_mcp_description_fragments,
+            )]),
             style::CONTENT_FONT_SIZE,
             appearance.ui_font_family(),
             appearance.ui_font_family(),
@@ -1282,8 +1284,10 @@ impl MCPServersListPageView {
                             "{} {name}",
                             crate::i18n::tr_static(app, "Shared by Warp and")
                         ),
-                        None => crate::i18n::tr_static(app, "Shared by Warp and from other devices")
-                            .to_string(),
+                        None => {
+                            crate::i18n::tr_static(app, "Shared by Warp and from other devices")
+                                .to_string()
+                        }
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1534,7 +1538,10 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(crate::i18n::tr_static(app, NO_SEARCH_RESULTS_TEXT), true)
+                                .wrappable_text(
+                                    crate::i18n::tr_static(app, NO_SEARCH_RESULTS_TEXT),
+                                    true,
+                                )
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),

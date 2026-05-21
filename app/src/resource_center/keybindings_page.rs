@@ -397,15 +397,17 @@ impl KeybindingsView {
 
         Container::new(
             column
-                .with_child(self.render_text(
-                    i18n::tr_static(
-                        app,
-                        "Go to settings > keyboard shortcuts to configure custom keybindings",
-                    )
-                    .into(),
-                    None,
-                    appearance,
-                ))
+                .with_child(
+                    self.render_text(
+                        i18n::tr_static(
+                            app,
+                            "Go to settings > keyboard shortcuts to configure custom keybindings",
+                        )
+                        .into(),
+                        None,
+                        appearance,
+                    ),
+                )
                 .with_child(settings_link)
                 .finish(),
         )
@@ -465,8 +467,11 @@ impl KeybindingsView {
             let mut binding_row = Flex::row();
 
             let label = self.render_text(
-                i18n::tr_text(app, binding.description.in_context(DescriptionContext::Default))
-                    .to_string(),
+                i18n::tr_text(
+                    app,
+                    binding.description.in_context(DescriptionContext::Default),
+                )
+                .to_string(),
                 None,
                 appearance,
             );

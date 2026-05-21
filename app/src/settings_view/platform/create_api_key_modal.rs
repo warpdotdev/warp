@@ -47,9 +47,10 @@ impl ApiKeyType {
         match self {
             ApiKeyType::Personal => i18n::tr(app, I18nKey::PlatformApiKeyTypePersonalDescription),
             ApiKeyType::Team => i18n::tr(app, I18nKey::PlatformApiKeyTypeTeamDescription),
-            ApiKeyType::Agent => {
-                crate::i18n::tr_static(app, "This API key is tied to an agent and can make requests on behalf of the agent.")
-            }
+            ApiKeyType::Agent => crate::i18n::tr_static(
+                app,
+                "This API key is tied to an agent and can make requests on behalf of the agent.",
+            ),
         }
     }
 }

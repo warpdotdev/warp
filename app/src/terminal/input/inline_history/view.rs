@@ -263,10 +263,7 @@ impl InlineHistoryMenuView {
 
         let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
             let configure_button = ctx.add_view(|ctx| {
-                ActionButton::new(
-                    i18n::tr_static(ctx, "Configure"),
-                    ConfigureButtonTheme,
-                )
+                ActionButton::new(i18n::tr_static(ctx, "Configure"), ConfigureButtonTheme)
                     .with_icon(Icon::Settings)
                     .with_size(ButtonSize::Small)
                     .on_click(|ctx| {

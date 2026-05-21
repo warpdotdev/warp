@@ -428,7 +428,11 @@ impl SectionView for FeatureSectionView {
         }
     }
 
-    fn section_link(&self, _appearance: &Appearance, _app: &AppContext) -> Option<Box<dyn Element>> {
+    fn section_link(
+        &self,
+        _appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         None
     }
 }

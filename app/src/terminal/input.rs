@@ -12676,8 +12676,11 @@ impl Input {
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                             ts.add_ephemeral_toast(
                                 DismissibleToast::error(
-                                    "No agent harnesses are available. Contact your team admin."
-                                        .to_string(),
+                                    crate::i18n::tr_static(
+                                        ctx,
+                                        "No agent harnesses are available. Contact your team admin.",
+                                    )
+                                    .to_string(),
                                 ),
                                 window_id,
                                 ctx,

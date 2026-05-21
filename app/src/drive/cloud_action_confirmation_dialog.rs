@@ -85,48 +85,58 @@ impl CloudActionConfirmationDialog {
         self.confirmation_button_enabled = enabled;
     }
 
-    fn title_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam
-            | CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
-                LEAVE_TEAM_TITLE_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_TITLE_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                REMOVE_TEAM_MEMBER_TITLE_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::None => String::new(),
-        }
+    fn title_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam
+                | CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_TITLE_TEXT
+                }
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_TITLE_TEXT,
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_TITLE_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 
-    fn body_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_BODY_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_BODY_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
-                LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::None => String::new(),
-        }
+    fn body_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_BODY_TEXT,
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_BODY_TEXT,
+                CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT
+                }
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 
-    fn confirm_button_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_CONFIRM_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::DeleteTeam => {
-                DELETE_TEAM_CONFIRM_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
-                LEAVE_TEAM_RELOAD_CREDITS_CONFIRM_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
-                REMOVE_TEAM_MEMBER_RELOAD_CREDITS_CONFIRM_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::None => String::new(),
-        }
+    fn confirm_button_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_CONFIRM_TEXT,
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_CONFIRM_TEXT,
+                CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_RELOAD_CREDITS_CONFIRM_TEXT
+                }
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_RELOAD_CREDITS_CONFIRM_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 }
 
@@ -181,7 +191,7 @@ impl View for CloudActionConfirmationDialog {
                 padding: Some(Coords::uniform(BUTTON_PADDING)),
                 ..Default::default()
             })
-            .with_text_label(CANCEL_TEXT.into())
+            .with_text_label(crate::i18n::tr_static(app, CANCEL_TEXT).into())
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -199,7 +209,7 @@ impl View for CloudActionConfirmationDialog {
                 Some(primary_hovered_and_clicked_styles),
                 Some(primary_hovered_and_clicked_styles),
             )
-            .with_text_label(self.confirm_button_text())
+            .with_text_label(self.confirm_button_text(app))
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -213,8 +223,8 @@ impl View for CloudActionConfirmationDialog {
         };
 
         let dialog = Dialog::new(
-            self.title_text(),
-            Some(self.body_text()),
+            self.title_text(app),
+            Some(self.body_text(app)),
             dialog_styles(appearance),
         )
         .with_bottom_row_child(cancel_button)

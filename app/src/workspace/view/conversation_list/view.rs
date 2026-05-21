@@ -928,11 +928,13 @@ impl TypedActionView for ConversationListView {
 
                     let mut delete_item =
                         MenuItemFields::new(crate::i18n::tr_static(ctx, "Delete"))
-                        .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
-                        .with_on_select_action(ConversationListViewAction::DeleteFromOverflowMenu {
-                            conversation_id,
-                        })
-                        .with_disabled(!entry.capabilities.can_delete);
+                            .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
+                            .with_on_select_action(
+                                ConversationListViewAction::DeleteFromOverflowMenu {
+                                    conversation_id,
+                                },
+                            )
+                            .with_disabled(!entry.capabilities.can_delete);
                     if !entry.capabilities.can_delete {
                         delete_item = delete_item.with_tooltip(crate::i18n::tr_static(
                             ctx,

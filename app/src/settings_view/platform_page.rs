@@ -585,10 +585,9 @@ impl PlatformPageWidget {
             table_width_chrome,
         ));
         header_row.add_child(
-            ConstrainedBox::new(self.render_header_cell(
-                appearance,
-                i18n::tr(app, I18nKey::PlatformHeaderKey),
-            ))
+            ConstrainedBox::new(
+                self.render_header_cell(appearance, i18n::tr(app, I18nKey::PlatformHeaderKey)),
+            )
             .with_width(API_KEY_KEY_COLUMN_WIDTH)
             .finish(),
         );
@@ -596,7 +595,10 @@ impl PlatformPageWidget {
             header_row.add_child(
                 Expanded::new(
                     1.,
-                    self.render_header_cell(appearance, i18n::tr(app, I18nKey::PlatformHeaderScope)),
+                    self.render_header_cell(
+                        appearance,
+                        i18n::tr(app, I18nKey::PlatformHeaderScope),
+                    ),
                 )
                 .finish(),
             );
@@ -618,7 +620,10 @@ impl PlatformPageWidget {
         header_row.add_child(
             Expanded::new(
                 1.,
-                self.render_header_cell(appearance, i18n::tr(app, I18nKey::PlatformHeaderExpiresAt)),
+                self.render_header_cell(
+                    appearance,
+                    i18n::tr(app, I18nKey::PlatformHeaderExpiresAt),
+                ),
             )
             .finish(),
         );

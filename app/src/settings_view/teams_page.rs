@@ -2136,14 +2136,18 @@ impl TeamsWidget {
 
     fn outgrow_upgrade_line_copy(
         billing_metadata: &BillingMetadata,
+        app: &AppContext,
     ) -> (&'static str, &'static str) {
         if billing_metadata.customer_type == CustomerType::Business {
             (
-                "Upgrade to Enterprise",
-                " for an unlimited team member limit.",
+                i18n::tr(app, I18nKey::TeamsUpgradeToEnterprise),
+                i18n::tr(app, I18nKey::TeamsUnlimitedTeamMemberLimitSuffix),
             )
         } else {
-            ("Upgrade to Business", " for a higher team member limit.")
+            (
+                i18n::tr(app, I18nKey::TeamsUpgradeToBusiness),
+                i18n::tr(app, I18nKey::TeamsHigherTeamMemberLimitSuffix),
+            )
         }
     }
 
@@ -2156,21 +2160,33 @@ impl TeamsWidget {
         has_admin_permissions: bool,
     ) -> Box<dyn Element> {
         let prorated_message = if has_admin_permissions {
-            "You'll be charged for a portion of the team member's usage of Warp."
+            i18n::tr_static(
+                app,
+                "You'll be charged for a portion of the team member's usage of Warp.",
+            )
         } else {
-            "Your admin will be charged for a portion of the team member's usage of Warp."
+            i18n::tr_static(
+                app,
+                "Your admin will be charged for a portion of the team member's usage of Warp.",
+            )
         };
 
         let additional_members_cost_money_msg = if let Some((monthly_cost, yearly_cost)) =
             self.get_per_seat_costs(team_metadata, pricing_info_model)
         {
-            format!(
-                "Additional members are billed at your plan's per-user rate: ${monthly_cost:.0}/month or ${yearly_cost:.0}/year, depending on your billing interval. {prorated_message}"
+            i18n::tr_static(
+                app,
+                "Additional members are billed at your plan's per-user rate: ${monthly_cost}/month or ${yearly_cost}/year, depending on your billing interval. {prorated_message}",
             )
+            .replace("{monthly_cost}", &format!("{monthly_cost:.0}"))
+            .replace("{yearly_cost}", &format!("{yearly_cost:.0}"))
+            .replace("{prorated_message}", prorated_message)
         } else {
-            format!(
-                "Additional members are billed at your plan's per-user rate. {prorated_message}"
+            i18n::tr_static(
+                app,
+                "Additional members are billed at your plan's per-user rate. {prorated_message}",
             )
+            .replace("{prorated_message}", prorated_message)
         };
 
         let horizontal_padding = 16.;
@@ -2233,6 +2249,7 @@ impl TeamsWidget {
             team_metadata,
             view,
             appearance,
+            app,
         ));
 
         // has_plan_limit will be true if the team has any shared object policy that
@@ -2301,6 +2318,7 @@ impl TeamsWidget {
             has_admin_permissions,
             pricing_info_model,
             appearance,
+            app,
         ) {
             main_content.add_child(
                 Container::new(cta)
@@ -2353,6 +2371,7 @@ impl TeamsWidget {
         team: &Team,
         view: &TeamsPageView,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut team_name_header = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -2417,7 +2436,7 @@ impl TeamsWidget {
 
         // Upgrade / billing links
         if has_admin_permissions {
-            team_name_header.add_child(self.render_billing_links(team, appearance));
+            team_name_header.add_child(self.render_billing_links(team, appearance, app));
         }
 
         team_name_header.finish()
@@ -2508,7 +2527,12 @@ impl TeamsWidget {
             .finish()
     }
 
-    fn render_billing_links(&self, team: &Team, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_billing_links(
+        &self,
+        team: &Team,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let mut billing_links = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2527,12 +2551,12 @@ impl TeamsWidget {
             // If the team is upgradeable to self-serve tier, show them the upgrade link.
             if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                 let description = if team.billing_metadata.can_upgrade_to_build_plan() {
-                    "Upgrade to Build"
+                    i18n::tr_static(app, "Upgrade to Build")
                 } else {
                     match team.billing_metadata.customer_type {
-                        CustomerType::Prosumer => "Upgrade to Turbo plan",
-                        CustomerType::Turbo => "Upgrade to Lightspeed plan",
-                        _ => "Compare plans",
+                        CustomerType::Prosumer => i18n::tr_static(app, "Upgrade to Turbo plan"),
+                        CustomerType::Turbo => i18n::tr_static(app, "Upgrade to Lightspeed plan"),
+                        _ => i18n::tr_static(app, "Compare plans"),
                     }
                 };
                 billing_links.add_child(
@@ -2922,8 +2946,11 @@ impl TeamsWidget {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(self.render_subsection_header("Team members".to_owned(), appearance))
-            .with_child(self.render_team_members_count(team, appearance))
+            .with_child(self.render_subsection_header(
+                i18n::tr(app, I18nKey::TeamsTeamMembers).to_owned(),
+                appearance,
+            ))
+            .with_child(self.render_team_members_count(team, appearance, app))
             .finish();
         section.add_child(
             SavePosition::new(
@@ -2946,12 +2973,17 @@ impl TeamsWidget {
 
     /// Right-aligned "{N} team members" label next to the section header.
     /// On finite-cap plans, appends an info icon with a capacity tooltip.
-    fn render_team_members_count(&self, team: &Team, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_team_members_count(
+        &self,
+        team: &Team,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let count = team.members.len();
         let count_label = if count == 1 {
-            "1 team member".to_string()
+            i18n::tr_static(app, "1 team member").to_string()
         } else {
-            format!("{count} team members")
+            i18n::tr_static(app, "{count} team members").replace("{count}", &count.to_string())
         };
 
         // No capacity tooltip when the plan is unlimited (or workspace size
@@ -2994,8 +3026,12 @@ impl TeamsWidget {
         };
 
         let plan_display = team.billing_metadata.customer_type.to_display_string();
-        let tooltip_text =
-            format!("Your plan ({plan_display}) has a maximum capacity of {cap} members.");
+        let tooltip_text = i18n::tr_static(
+            app,
+            "Your plan ({plan_display}) has a maximum capacity of {cap} members.",
+        )
+        .replace("{plan_display}", &plan_display)
+        .replace("{cap}", &cap.to_string());
 
         let info_icon = Container::new(
             ConstrainedBox::new(Icon::Info.to_warpui_icon(muted_color).finish())
@@ -3030,6 +3066,7 @@ impl TeamsWidget {
         has_admin_permissions: bool,
         pricing_info: &PricingInfoModel,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if team.billing_metadata.is_delinquent_due_to_payment_issue() {
             return None;
@@ -3047,8 +3084,12 @@ impl TeamsWidget {
         }
 
         let team_uid = team.uid;
-        let (link_text, suffix) = Self::outgrow_upgrade_line_copy(&team.billing_metadata);
-        let prefix = self.render_sub_text("Need more seats? ".to_string(), appearance, None);
+        let (link_text, suffix) = Self::outgrow_upgrade_line_copy(&team.billing_metadata, app);
+        let prefix = self.render_sub_text(
+            i18n::tr(app, I18nKey::TeamsNeedMoreSeatsPrefix).to_string(),
+            appearance,
+            None,
+        );
         let link = appearance
             .ui_builder()
             .link(
@@ -3143,7 +3184,7 @@ impl TeamsWidget {
                 let actions = if has_admin_permissions {
                     vec![ItemAction {
                         icon: Icon::X,
-                        label: "Remove domain".to_string(),
+                        label: i18n::tr_static(app, "Remove domain").to_string(),
                         action: TeamsPageAction::DeleteDomainRestriction {
                             domain_uid: domain_restriction.uid,
                             team_uid: team.uid,
@@ -3258,11 +3299,17 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         // Same layout as the "By link" header row: text column on the left,
         // toggle on the right.
-        let header = self.render_subsubsection_header("By discovery".to_owned(), appearance);
+        let header = self.render_subsubsection_header(
+            i18n::tr_static(app, "By discovery").to_owned(),
+            appearance,
+        );
 
         let domain = current_user_email.split('@').nth(1).unwrap_or("");
-        let team_discoverability_instructions =
-            format!("Allow Warp users with an @{domain} email to find and join the team.");
+        let team_discoverability_instructions = i18n::tr_static(
+            app,
+            "Allow Warp users with an @{domain} email to find and join the team.",
+        )
+        .replace("{domain}", domain);
         let subtext = self.render_sub_text(
             team_discoverability_instructions,
             appearance,

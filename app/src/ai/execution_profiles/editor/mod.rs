@@ -529,19 +529,19 @@ impl ExecutionProfileEditorView {
             dropdown.set_items(
                 vec![
                     DropdownItem::new(
-                        "Never",
+                        i18n::tr(ctx, I18nKey::AiNever),
                         ExecutionProfileEditorViewAction::SetRunAgents {
                             permission: RunAgentsPermission::NeverAllow,
                         },
                     ),
                     DropdownItem::new(
-                        "Always allow",
+                        i18n::tr(ctx, I18nKey::AiAlwaysAllow),
                         ExecutionProfileEditorViewAction::SetRunAgents {
                             permission: RunAgentsPermission::AlwaysAllow,
                         },
                     ),
                     DropdownItem::new(
-                        "Always ask",
+                        i18n::tr(ctx, I18nKey::AiAlwaysAsk),
                         ExecutionProfileEditorViewAction::SetRunAgents {
                             permission: RunAgentsPermission::AlwaysAsk,
                         },
