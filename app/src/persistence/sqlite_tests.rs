@@ -1,32 +1,32 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
 use diesel::connection::SimpleConnection;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
-
-use crate::{
-    app_state::{
-        AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot,
-        PaneNodeSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
-    },
-    cloud_object::{CloudObjectPermissions, Owner},
-    code::editor_management::CodeSource,
-    notebooks::{CloudNotebook, CloudNotebookModel},
-    persistence::{model::ObjectPermissions, BlockCompleted, ModelEvent, PersistenceScope},
-    server::ids::ClientId,
-    tab::SelectedTabColor,
-    terminal::model::block::SerializedBlock,
-    terminal::ShellLaunchData,
-};
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
     encode_path, get_all_codebase_index_metadata, read_sqlite_data, save_app_state,
     save_codebase_index_metadata, setup_database, start_writer,
 };
+use crate::app_state::{
+    AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
+    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+};
+use crate::cloud_object::{CloudObjectPermissions, Owner};
+use crate::code::editor_management::CodeSource;
+use crate::notebooks::{CloudNotebook, CloudNotebookModel};
+use crate::persistence::model::ObjectPermissions;
+use crate::persistence::{BlockCompleted, ModelEvent, PersistenceScope};
+use crate::server::ids::ClientId;
+use crate::tab::SelectedTabColor;
+use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::ShellLaunchData;
 
 #[test]
 fn app_scope_database_path_matches_app_database_path() {

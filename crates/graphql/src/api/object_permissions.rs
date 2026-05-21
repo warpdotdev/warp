@@ -1,7 +1,8 @@
+use std::fmt;
+
 use super::object::{Container, Space};
 use crate::scalars::Time;
 use crate::schema;
-use std::fmt;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ObjectPermissions {

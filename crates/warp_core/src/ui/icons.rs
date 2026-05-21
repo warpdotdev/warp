@@ -1,5 +1,6 @@
-use crate::ui::theme::Fill;
 use warpui::elements::Icon as WarpUiIcon;
+
+use crate::ui::theme::Fill;
 
 /// Default icon dimensions that apply to all icons used within the ui system.
 pub const ICON_DIMENSIONS: f32 = 24.;
@@ -75,6 +76,7 @@ pub enum Icon {
     LinkExternal,
     CheckCircleBroken,
     Link,
+    QrCode,
     Refresh,
     RefreshCcw,
     RefreshCw04,
@@ -405,6 +407,7 @@ impl From<Icon> for &'static str {
             Icon::CheckCircleBroken => "bundled/svg/check-circle-broken.svg",
             Icon::LinkExternal => "bundled/svg/link-external-02.svg",
             Icon::Link => "bundled/svg/link-03.svg",
+            Icon::QrCode => "bundled/svg/qr-code-02.svg",
             Icon::Refresh => "bundled/svg/refresh.svg",
             Icon::RefreshCcw => "bundled/svg/refresh-ccw-01.svg",
             Icon::RefreshCw04 => "bundled/svg/refresh-cw-04.svg",

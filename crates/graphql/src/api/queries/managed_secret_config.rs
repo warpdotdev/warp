@@ -1,7 +1,7 @@
-use crate::{
-    error::UserFacingError, managed_secrets::ManagedSecretConfig, request_context::RequestContext,
-    schema,
-};
+use crate::error::UserFacingError;
+use crate::managed_secrets::ManagedSecretConfig;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 /// A GraphQL query to fetch all managed secret configuration for a user.
 ///

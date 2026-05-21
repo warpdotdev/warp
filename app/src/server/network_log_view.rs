@@ -11,10 +11,10 @@
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
+use warpui::elements::{ChildView, MouseStateHandle};
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{ChildView, MouseStateHandle},
-    text_layout::ClipConfig,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -24,14 +24,11 @@ use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger};
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::editor::InteractionState;
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::{
-    pane::view::{self, HeaderContent, StandardHeader, StandardHeaderOptions},
-    BackingView, PaneConfiguration, PaneEvent, PaneHeaderAction,
-};
+use crate::pane_group::pane::view::{self, HeaderContent, StandardHeader, StandardHeaderOptions};
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent, PaneHeaderAction};
 use crate::server::network_logging::NetworkLogModel;
-use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button_with_color;
-use crate::ui_components::icons;
+use crate::ui_components::{blended_colors, icons};
 
 /// Header text for the network log pane.
 pub const NETWORK_LOG_HEADER_TEXT: &str = "Network log";

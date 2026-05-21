@@ -1,37 +1,30 @@
-use crate::server::telemetry::ImageProtocol;
-use crate::terminal::model::session::Sessions;
+use std::sync::Arc;
 
+use async_channel::Receiver;
+use instant::Instant;
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use super::event::{BootstrappedEvent, SshLoginStatus};
+use super::model::ansi;
+use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
+use super::model::block::BlockId;
+use super::model::completions::ShellCompletion;
+use super::model::session::{IsLegacySSHSession, SessionId, SessionInfo};
+use super::model::terminal_model::{
+    CommandType, ExitReason, HandlerEvent, TmuxControlModeContext, TmuxInstallationState,
+};
+use super::model::tmux::commands::TmuxCommand;
+use crate::features::FeatureFlag;
+use crate::remote_server::manager::RemoteServerManager;
+use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::{
     AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent, Event,
     ExecutedExecutorCommandEvent, InitSshEvent, InitSubshellEvent, SourcedRcFileInSubshellEvent,
     TerminalMode,
 };
-
-use crate::terminal::ClipboardType;
-use async_channel::Receiver;
-use instant::Instant;
-use std::sync::Arc;
-
-use crate::remote_server::manager::RemoteServerManager;
-use warpui::SingletonEntity;
-use warpui::{Entity, ModelContext, ModelHandle};
-
-use super::event::SshLoginStatus;
-use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
-use super::model::block::BlockId;
-use super::model::completions::ShellCompletion;
-use super::model::terminal_model::{ExitReason, TmuxControlModeContext, TmuxInstallationState};
-use super::model::tmux::commands::TmuxCommand;
-use super::{
-    event::BootstrappedEvent,
-    model::{
-        ansi,
-        session::{IsLegacySSHSession, SessionId, SessionInfo},
-        terminal_model::{CommandType, HandlerEvent},
-    },
-};
-use crate::features::FeatureFlag;
+use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::ShellType;
+use crate::terminal::ClipboardType;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Model that dispatches events that have been emitted by the [`crate::terminal::TerminalModel`],

@@ -1,25 +1,21 @@
-use std::{
-    collections::{HashMap, HashSet},
-    future::Future,
-    path::{Path, PathBuf},
-    sync::mpsc::{self, channel},
-    thread,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, channel};
+use std::thread;
+use std::time::Duration;
 
 pub mod home_watcher;
-pub use home_watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
-
 use anyhow::Result;
 use futures::channel::oneshot;
+pub use home_watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+use notify_debouncer_full::notify::event::{ModifyKind, RenameMode};
+use notify_debouncer_full::notify::{
+    self, EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
+};
 use notify_debouncer_full::{
-    new_debouncer_opt,
-    notify::{
-        self,
-        event::{ModifyKind, RenameMode},
-        EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
-    },
-    DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
+    new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
+    NoCache,
 };
 use warpui::{Entity, ModelContext};
 

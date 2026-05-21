@@ -1,5 +1,6 @@
-use super::CursorThemeCrawler;
 use ::virtual_fs::{Stub, VirtualFS};
+
+use super::CursorThemeCrawler;
 
 #[test]
 fn test_no_themes_found() {

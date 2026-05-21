@@ -1,19 +1,17 @@
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+
 use super::{
     AfterLayoutContext, AppContext, DropShadow, Element, EventContext, Fill, LayoutContext, Margin,
     Overdraw, Padding, PaintContext, Point, SelectableElement, Selection, SelectionFragment,
     SizeConstraint,
 };
+use crate::event::DispatchedEvent;
 pub use crate::scene::{Border, CornerRadius, Radius};
-use crate::{
-    event::DispatchedEvent,
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-    ClipBounds, Gradient,
-};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
+use crate::{ClipBounds, Gradient};
 
 pub struct Container {
     margin: Margin,

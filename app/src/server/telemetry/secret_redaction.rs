@@ -16,13 +16,15 @@
 //! This module is intentionally lightweight: it does byte-range matching only and does
 //! not track `SecretLevel`s or character ranges, since the telemetry path doesn't need
 //! either.
-use crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES;
+use std::collections::HashSet;
+use std::ops::Range;
+
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use regex_automata::meta::Regex;
 use serde_json::Value;
-use std::collections::HashSet;
-use std::ops::Range;
+
+use crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES;
 const REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 lazy_static! {
     /// Regex used to redact secrets from telemetry payloads. Initialized with the

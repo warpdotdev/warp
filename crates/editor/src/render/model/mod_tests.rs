@@ -1,40 +1,35 @@
+use std::cell::Cell;
+use std::sync::Arc;
+
+use markdown_parser::{FormattedTextStyles, Hyperlink};
 use rangemap::RangeSet;
-use std::{cell::Cell, sync::Arc};
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use vec1::{Vec1, vec1};
 use warpui::assets::asset_cache::AssetSource;
-use warpui::{
-    color::ColorU,
-    fonts::FamilyId,
-    geometry::{rect::RectF, vector::vec2f},
-    text_layout::TextFrame,
-    units::{IntoPixels, Pixels},
-};
+use warpui::color::ColorU;
+use warpui::elements::ListIndentLevel;
+use warpui::fonts::FamilyId;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::TextFrame;
+use warpui::units::{IntoPixels, Pixels};
 
+use super::debug::Describe;
+use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
     HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle,
-    debug::Describe,
-    table_offset_map,
-    test_utils::{layout_paragraph, layout_paragraphs},
+    TableBlockConfig, TableStyle, table_offset_map,
 };
-use crate::{
-    content::{
-        edit::ParsedUrl,
-        text::{
-            BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment,
-            table_cell_offset_maps,
-        },
-    },
-    render::model::{
-        Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
-        test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph},
-    },
+use crate::content::edit::ParsedUrl;
+use crate::content::text::{
+    BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
-use markdown_parser::{FormattedTextStyles, Hyperlink};
-use string_offset::CharOffset;
-use warpui::elements::ListIndentLevel;
+use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
+use crate::render::model::{
+    Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+};
 
 #[test]
 fn test_height() {

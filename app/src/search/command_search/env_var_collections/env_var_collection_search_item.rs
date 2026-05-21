@@ -1,24 +1,19 @@
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, MainAxisAlignment,
-        MainAxisSize, ParentElement, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, MainAxisAlignment,
+    MainAxisSize, ParentElement, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
-use crate::{
-    appearance::Appearance,
-    env_vars::CloudEnvVarCollection,
-    search::{
-        command_search::searcher::CommandSearchItemAction,
-        env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult, item::SearchItem,
-        result_renderer::ItemHighlightState,
-    },
-};
+use crate::appearance::Appearance;
+use crate::env_vars::CloudEnvVarCollection;
+use crate::search::command_search::searcher::CommandSearchItemAction;
+use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;
+use crate::search::item::SearchItem;
+use crate::search::result_renderer::ItemHighlightState;
 
 const ENV_VAR_COLLECTION_ICON_PATH: &str = "bundled/svg/env-var-collection.svg";
 

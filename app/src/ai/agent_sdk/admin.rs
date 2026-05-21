@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use warp_cli::agent::OutputFormat;
-use warpui::{platform::TerminationMode, AppContext, SingletonEntity};
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::user::PrincipalType;

@@ -1,3 +1,13 @@
+use std::path::Path;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use markdown_parser::FormattedTextFragment;
+use warpui::keymap::Keystroke;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::palette::PaletteMode;
 use crate::server::telemetry::PaletteSource;
@@ -13,14 +23,6 @@ use crate::workspace::view::{
 };
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-use markdown_parser::FormattedTextFragment;
-use std::path::Path;
-use std::sync::LazyLock;
-use std::time::Duration;
-use warpui::keymap::Keystroke;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 /// Trait for tip implementations that can be displayed to users.
 /// Tips provide helpful information with optional links and keybindings.

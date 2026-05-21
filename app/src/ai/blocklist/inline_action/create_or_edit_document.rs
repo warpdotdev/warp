@@ -1,16 +1,12 @@
-use warpui::SingletonEntity;
-use warpui::{
-    elements::{
-        Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
-        Hoverable, Icon, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    platform::Cursor,
-    AppContext, Element,
-};
-
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon as CoreIcon;
 use warp_core::ui::theme::color::internal_colors::neutral_2;
+use warpui::elements::{
+    Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
+    Hoverable, Icon, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::inline_action_header::{

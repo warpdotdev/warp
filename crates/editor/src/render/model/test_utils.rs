@@ -1,26 +1,24 @@
 //! Test helpers for all render model tests.
 
-use parking_lot::Once;
-use std::{mem, sync::Arc};
-use vec1::{Vec1, vec1};
+use std::mem;
+use std::sync::Arc;
 
-use crate::content::text::BufferBlockStyle;
 use ordered_float::OrderedFloat;
-use warpui::elements::ListIndentLevel;
-use warpui::{
-    color::ColorU,
-    elements::{Border, Fill},
-    fonts::{FamilyId, Weight},
-    geometry::vector::vec2f,
-    text_layout::{CaretPosition, Glyph, Line, Run, TextFrame},
-    units::{IntoPixels, Pixels},
-};
+use parking_lot::Once;
+use vec1::{Vec1, vec1};
+use warpui::color::ColorU;
+use warpui::elements::{Border, Fill, ListIndentLevel};
+use warpui::fonts::{FamilyId, Weight};
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::{CaretPosition, Glyph, Line, Run, TextFrame};
+use warpui::units::{IntoPixels, Pixels};
 
 use super::{
     BlockItem, BrokenLinkStyle, CheckBoxStyle, DEFAULT_BLOCK_SPACINGS, HorizontalRuleStyle,
     InlineCodeStyle, OffsetMap, PARAGRAPH_MIN_HEIGHT, Paragraph, ParagraphStyles, RichTextStyles,
     TEXT_SPACING, TableStyle,
 };
+use crate::content::text::BufferBlockStyle;
 
 pub const TEST_BASELINE_OFFSET: f32 = 0.7;
 

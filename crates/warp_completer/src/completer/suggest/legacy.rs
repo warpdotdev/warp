@@ -2,11 +2,9 @@
 //! legacy command signature struct (`crate::signatures::CommandSignature`).
 use std::collections::HashMap;
 
-use crate::completer::{
-    engine::{self, CompletionLocation},
-    suggest::SuggestionTypeName,
-    CompleterOptions, CompletionContext, LocationType, MatchedSuggestion,
-};
+use crate::completer::engine::{self, CompletionLocation};
+use crate::completer::suggest::SuggestionTypeName;
+use crate::completer::{CompleterOptions, CompletionContext, LocationType, MatchedSuggestion};
 use crate::parsers::{ClassifiedCommand, SignatureAtTokenIndex};
 
 /// Returns a map of `SuggestionType` to vectors of `MatchedSuggestion`s for `line`.

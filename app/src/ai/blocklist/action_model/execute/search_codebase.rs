@@ -1,35 +1,29 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use futures::{channel::oneshot, future::BoxFuture, FutureExt};
+use futures::channel::oneshot;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use itertools::Itertools;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
-
-use crate::{
-    ai::{
-        agent::{
-            AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-            SearchCodebaseFailureReason, SearchCodebaseRequest, SearchCodebaseResult,
-        },
-        blocklist::SessionContext,
-        blocklist::{action_model::execute::get_server_output_id, BlocklistAIPermissions},
-        get_relevant_files::controller::{
-            GetRelevantFilesController, GetRelevantFilesControllerEvent,
-            GetRelevantFilesControllerResult, GetRelevantFilesError, GetRelevantFilesRequestTarget,
-        },
-    },
-    features::FeatureFlag,
-    send_telemetry_from_ctx,
-    terminal::model::session::active_session::ActiveSession,
-    TelemetryEvent,
-};
 
 use super::{
     read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
     PreprocessActionInput,
 };
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    SearchCodebaseFailureReason, SearchCodebaseRequest, SearchCodebaseResult,
+};
+use crate::ai::blocklist::action_model::execute::get_server_output_id;
+use crate::ai::blocklist::{BlocklistAIPermissions, SessionContext};
+use crate::ai::get_relevant_files::controller::{
+    GetRelevantFilesController, GetRelevantFilesControllerEvent, GetRelevantFilesControllerResult,
+    GetRelevantFilesError, GetRelevantFilesRequestTarget,
+};
+use crate::features::FeatureFlag;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 pub struct SearchCodebaseExecutor {
     active_session: ModelHandle<ActiveSession>,

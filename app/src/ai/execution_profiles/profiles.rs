@@ -9,26 +9,21 @@ use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use crate::ai::llms::LLMId;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
-use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
-use crate::{send_telemetry_from_ctx, LaunchMode, TelemetryEvent};
-
-use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
-use crate::drive::CloudObjectTypeAndId;
-use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
-use crate::settings::AgentModeCommandExecutionPredicate;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::CloudModel;
-use crate::{
-    cloud_object::model::generic_string_model::GenericStringObjectId, server::ids::ClientId,
-};
-
 use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
+use crate::ai::llms::LLMId;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ClientId, SyncId};
+use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.

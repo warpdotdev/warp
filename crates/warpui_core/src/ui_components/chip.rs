@@ -1,16 +1,11 @@
-use crate::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
-        ParentElement,
-    },
-    scene::Border,
-    Element,
+use super::components::{UiComponent, UiComponentStyles};
+use super::text::Span;
+use crate::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
+    ParentElement,
 };
-
-use super::{
-    components::{UiComponent, UiComponentStyles},
-    text::Span,
-};
+use crate::scene::Border;
+use crate::Element;
 
 pub struct Chip {
     label: String,

@@ -1,20 +1,17 @@
 //! WASM-only view functions for the Workspace.
 
+use warp_core::channel::ChannelState;
 use warpui::elements::{ChildView, Element};
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
-use warp_core::channel::ChannelState;
-
-use crate::uri::browser_url_handler::parse_current_url;
-
 use super::PanelPosition;
-
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
 use crate::terminal::TerminalView;
 use crate::ui_components::icons;
+use crate::uri::browser_url_handler::parse_current_url;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
 };

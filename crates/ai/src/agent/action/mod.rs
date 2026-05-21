@@ -1,33 +1,31 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, path::PathBuf, time::Duration};
+use std::fmt::Display;
+use std::ops::Range;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumDiscriminants;
 use uuid::Uuid;
+pub use warp_multi_agent_api::LifecycleEventType;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::{
-        action_result::{
-            AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult,
-            CreateDocumentsResult, EditDocumentsResult, FetchConversationResult, FileGlobResult,
-            FileGlobV2Result, GrepResult, InsertReviewCommentsResult, ReadDocumentsResult,
-            ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult, ReadSkillResult,
-            RequestCommandOutputResult, RequestComputerUseResult, RequestFileEditsResult,
-            RunAgentsResult, SearchCodebaseResult, SendMessageToAgentResult, StartAgentResult,
-            StartAgentVersion, SuggestNewConversationResult, SuggestPromptResult,
-            TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        AIAgentCitation, FileLocations,
-    },
-    diff_validation::ParsedDiff,
-    document::AIDocumentId,
-    skills::SkillReference,
+use crate::agent::action_result::{
+    AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult, CreateDocumentsResult,
+    EditDocumentsResult, FetchConversationResult, FileGlobResult, FileGlobV2Result, GrepResult,
+    InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
+    ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
+    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
+    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
+    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
+    UseComputerResult, WriteToLongRunningShellCommandResult,
 };
-pub use warp_multi_agent_api::LifecycleEventType;
+use crate::agent::{AIAgentCitation, FileLocations};
+use crate::diff_validation::ParsedDiff;
+use crate::document::AIDocumentId;
+use crate::skills::SkillReference;
 
 #[derive(Debug, Clone, Eq, PartialEq, EnumDiscriminants)]
 pub enum AIAgentActionType {

@@ -1,8 +1,9 @@
+use warpui::{App, EntityId};
+
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
-use warpui::{App, EntityId};
 
 fn set_credits(
     app: &mut App,

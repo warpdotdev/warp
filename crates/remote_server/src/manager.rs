@@ -6,6 +6,17 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
+use repo_metadata::RepoMetadataUpdate;
+use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
+use warp_core::channel::ChannelState;
+use warp_core::SessionId;
+use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
+use warp_util::standardized_path::StandardizedPath;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::FutureExt as _;
+use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+
 use crate::auth::RemoteServerAuthContext;
 #[cfg(not(target_family = "wasm"))]
 use crate::client::ClientEvent;
@@ -19,29 +30,17 @@ use crate::proto::{
     FileStatusInfo, GetDiffStateResponse, TextEdit,
 };
 use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
-use crate::setup::PreinstallCheckResult;
 #[cfg(not(target_family = "wasm"))]
 use crate::setup::PreinstallStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::setup::RemoteOs;
-use crate::setup::RemotePlatform;
-use crate::setup::RemoteServerSetupState;
 #[cfg(not(target_family = "wasm"))]
 use crate::setup::UnsupportedReason;
+use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState};
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::Connection;
 use crate::transport::{Error, InstallSource, RemoteTransport};
 use crate::HostId;
-use repo_metadata::RepoMetadataUpdate;
-use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
-use warp_core::channel::ChannelState;
-use warp_core::SessionId;
-use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
-use warp_util::standardized_path::StandardizedPath;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt as _;
-use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;

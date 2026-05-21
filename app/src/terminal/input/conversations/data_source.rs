@@ -4,9 +4,9 @@ use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use warpui::{AppContext, Entity, ModelHandle, SingletonEntity};
 
-use crate::ai::agent_conversations_model::AgentConversationEntry;
-use crate::ai::agent_conversations_model::AgentConversationEntryId;
-use crate::ai::agent_conversations_model::AgentManagementFilters;
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationEntryId, AgentManagementFilters,
+};
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;

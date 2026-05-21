@@ -1,12 +1,12 @@
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 
-use crate::elements::Selection;
-use crate::EntityId;
+use crate::elements::{Point, SelectableElement, Selection, SelectionFragment};
+use crate::event::DispatchedEvent;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
 use crate::{
-    elements::{Point, SelectableElement, SelectionFragment},
-    event::DispatchedEvent,
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-    AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
+    AfterLayoutContext, AppContext, Element, EntityId, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
 };
 

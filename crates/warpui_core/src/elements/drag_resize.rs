@@ -1,11 +1,13 @@
-use super::Point;
-use super::ZIndex;
-use pathfinder_geometry::vector::Vector2F;
 use std::sync::{Arc, Mutex};
 
+use pathfinder_geometry::vector::Vector2F;
+
+use super::{Point, ZIndex};
+use crate::event::DispatchedEvent;
+use crate::platform::Cursor;
 use crate::{
-    event::DispatchedEvent, platform::Cursor, AfterLayoutContext, AppContext, Element, Event,
-    EventContext, LayoutContext, PaintContext, SizeConstraint,
+    AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
 };
 
 /// Shared handle for drag-to-resize state, following the same `Arc<Mutex<_>>`

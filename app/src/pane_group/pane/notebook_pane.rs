@@ -1,29 +1,25 @@
-use anyhow::Context;
 use std::sync::Arc;
-use url::Url;
 
+use anyhow::Context;
+use url::Url;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::{
-    app_state::{LeafContents, NotebookPaneSnapshot},
-    cloud_object::Space,
-    drive::{items::WarpDriveItemId, CloudObjectTypeAndId, OpenWarpDriveObjectSettings},
-    notebooks::{
-        link::{LinkEvent, NotebookLinks},
-        manager::{NotebookManager, NotebookSource},
-        notebook::{NotebookEvent, NotebookView},
-    },
-    server::ids::SyncId,
-    workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType},
-    workspaces::user_workspaces::UserWorkspaces,
-};
-
+use super::super::{DefaultSessionModeBehavior, Direction};
+use super::view::PaneView;
 use super::{
-    super::{DefaultSessionModeBehavior, Direction},
-    view::PaneView,
     DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
+use crate::app_state::{LeafContents, NotebookPaneSnapshot};
+use crate::cloud_object::Space;
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectSettings};
+use crate::notebooks::link::{LinkEvent, NotebookLinks};
+use crate::notebooks::manager::{NotebookManager, NotebookSource};
+use crate::notebooks::notebook::{NotebookEvent, NotebookView};
+use crate::server::ids::SyncId;
+use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub struct NotebookPane {
     view: ViewHandle<PaneView<NotebookView>>,
@@ -179,7 +175,7 @@ pub(super) fn subscribe_to_link_model(
         LinkEvent::OpenFileNotebook { path, session } => {
             // Opening local files is delegated to the parent workspace.
             ctx.emit(crate::pane_group::Event::OpenFileInWarp {
-                path: path.clone(),
+                path: crate::code::buffer_location::LocalOrRemotePath::Local(path.clone()),
                 session: session.clone(),
             })
         }

@@ -1,29 +1,27 @@
 #[path = "file_watchers/mod.rs"]
 mod file_watchers;
-use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
-pub use file_watchers::{
-    extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
-
-use crate::keyboard::keybinding_file_path;
-use crate::settings::{user_preferences_toml_file_path, AISettings};
-
-use super::SkillDescriptor;
-use crate::ai::skills::skill_utils::unique_skills;
 use ai::skills::{
     get_provider_for_path, parse_bundled_skill, provider_rank, ParsedSkill, SkillProvider,
     SkillReference,
 };
-use warp_core::{
-    channel::ChannelState, features::FeatureFlag, report_error, safe_warn, ui::icons::Icon,
+pub use file_watchers::{
+    extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::Icon;
+use warp_core::{report_error, safe_warn};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use super::SkillDescriptor;
+use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
+use crate::ai::skills::skill_utils::unique_skills;
+use crate::keyboard::keybinding_file_path;
+use crate::settings::{user_preferences_toml_file_path, AISettings};
 
 /// Activation condition for a bundled skill.
 #[derive(Debug, Clone)]

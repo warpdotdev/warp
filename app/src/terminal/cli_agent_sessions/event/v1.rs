@@ -1,8 +1,7 @@
 use serde::Deserialize;
 
-use crate::terminal::CLIAgent;
-
 use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
+use crate::terminal::CLIAgent;
 
 /// Resolves a CLI agent from the `"agent"` string in a CLI agent event.
 /// Returns `None` if the string doesn't match any known agent.

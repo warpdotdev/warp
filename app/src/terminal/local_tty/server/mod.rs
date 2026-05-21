@@ -24,16 +24,17 @@ mod event_loop;
 mod logging;
 mod protocol;
 
-use command::blocking::Command;
-use std::{collections::HashSet, os::unix::prelude::*, sync::Arc};
+use std::collections::HashSet;
+use std::os::unix::prelude::*;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use command::blocking::Command;
 use cvt::cvt;
 use nix::sys::socket;
 use parking_lot::Mutex;
 
 pub use self::client::TerminalServerClient;
-
 use super::spawner::PtyHandle;
 
 /// The file descriptor of the Unix domain socket where the terminal server will

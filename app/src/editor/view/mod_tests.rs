@@ -1,3 +1,14 @@
+use anyhow::Error;
+use itertools::Itertools;
+use pathfinder_geometry::vector::vec2f;
+use settings::ToggleableSetting;
+use unindent::Unindent;
+use warpui::color::ColorU;
+use warpui::platform::WindowStyle;
+use warpui::text_layout::TextFrame;
+use warpui::windowing::WindowManager;
+use warpui::{AddSingletonModel, App, UpdateModel, UpdateView};
+
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::editor::soft_wrap::FrameLayouts;
@@ -11,16 +22,6 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use anyhow::Error;
-use itertools::Itertools;
-use pathfinder_geometry::vector::vec2f;
-use settings::ToggleableSetting;
-use unindent::Unindent;
-use warpui::color::ColorU;
-use warpui::platform::WindowStyle;
-use warpui::text_layout::TextFrame;
-use warpui::windowing::WindowManager;
-use warpui::{AddSingletonModel, App, UpdateModel, UpdateView};
 
 impl EditorView {
     fn selected_ranges(&self, app: &AppContext) -> Vec<Range<DisplayPoint>> {

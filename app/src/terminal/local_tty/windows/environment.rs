@@ -1,21 +1,20 @@
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::{collections::BTreeMap, ffi::OsString};
 
-use crate::terminal::cli_agent_sessions::event::current_protocol_version;
-use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir};
 use itertools::Itertools;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use winreg::types::FromRegValue;
-use winreg::{
-    enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
-    RegKey, RegValue,
-};
+use winreg::{RegKey, RegValue};
 
 use crate::safe_info;
-use crate::terminal::local_tty::{shell::ShellStarter, PtyOptions};
+use crate::terminal::cli_agent_sessions::event::current_protocol_version;
+use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
+use crate::terminal::local_tty::PtyOptions;
 
 const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
 const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";

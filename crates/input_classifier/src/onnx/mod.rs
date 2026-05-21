@@ -10,13 +10,11 @@ use async_trait::async_trait;
 use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
-use crate::{
-    ClassificationResult, Context, InputClassifier, InputType,
-    parser::parse_query_into_tokens,
-    util::{
-        is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
-    },
+use crate::parser::parse_query_into_tokens;
+use crate::util::{
+    is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
 };
+use crate::{ClassificationResult, Context, InputClassifier, InputType};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "models/onnx"]

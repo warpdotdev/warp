@@ -1,18 +1,18 @@
-use ai::diff_validation::DiffDelta;
-use futures::{future::BoxFuture, FutureExt};
 use std::collections::HashMap;
+
+use ai::diff_validation::DiffDelta;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::{
-    agent::{
-        AIAgentAction, AIAgentActionType, DocumentContext, EditDocumentsRequest,
-        EditDocumentsResult,
-    },
-    document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentUpdateSource},
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionType, DocumentContext, EditDocumentsRequest, EditDocumentsResult,
+};
+use crate::ai::document::ai_document_model::{
+    AIDocumentId, AIDocumentModel, AIDocumentUpdateSource,
 };
 use crate::notebooks::post_process_notebook;
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 pub struct EditDocumentsExecutor;
 

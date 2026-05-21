@@ -3,17 +3,20 @@
 //! active pane to that agent's conversation.
 
 use std::cell::RefCell;
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_core::channel::ChannelState;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -29,7 +32,7 @@ use warpui::text_layout::{
     ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
 };
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
@@ -63,9 +66,6 @@ use crate::ui_components::icon_with_status::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::EntityId;
 
 const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;

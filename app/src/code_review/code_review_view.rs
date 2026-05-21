@@ -1,95 +1,136 @@
-use std::{
-    collections::{HashMap, HashSet},
-    mem,
-    ops::Range,
-    path::{Path, PathBuf},
-    sync::Arc,
+use std::collections::{HashMap, HashSet};
+use std::mem;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use ai::project_context::model::ProjectContextModel;
+use indexmap::IndexMap;
+use itertools::Itertools;
+#[cfg(feature = "local_fs")]
+use num_traits::SaturatingSub;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use rand::distributions::Alphanumeric;
+use rand::Rng;
+use string_offset::CharOffset;
+use vec1::Vec1;
+use warp_core::channel::{Channel, ChannelState};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::{safe_error, safe_info};
+use warp_editor::content::buffer::{AutoScrollBehavior, InitialBufferState, SelectionOffsets};
+use warp_editor::model::CoreEditorModel;
+use warp_editor::render::element::VerticalExpansionBehavior;
+#[cfg(not(target_family = "wasm"))]
+use warp_editor::render::model::AutoScrollMode;
+use warp_editor::render::model::LineCount;
+use warp_util::content_version::ContentVersion;
+use warp_util::path::LineAndColumnArg;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{
+    NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
+};
+use warpui::elements::{
+    resizable_state_handle, Align, Border, ChildAnchor, ChildView, Clipped,
+    ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List,
+    ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
+    ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::text_layout::{default_compute_baseline_position, ClipConfig};
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
+use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle, WindowId,
 };
 
-use crate::{
-    ai::{
-        agent::{AgentReviewCommentBatch, DiffSetHunk},
-        blocklist::agent_view::AgentViewEntryOrigin,
-    },
-    code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH,
-    coding_panel_enablement_state::CodingPanelEnablementState,
+use super::code_review_header::CodeReviewHeader;
+use super::comment_list_view::{CommentListDebugState, CommentListEvent, CommentListView};
+use super::comments::{attach_pending_imported_comments, AttachedReviewComment, CommentOrigin};
+use super::diff_size_limits::DiffSize;
+use super::git_dialog::{GitDialog, GitDialogEvent, GitDialogKind};
+use super::{GlobalCodeReviewEvent, GlobalCodeReviewModel};
+use crate::ai::agent::{
+    AIAgentAttachment, AgentReviewCommentBatch, CurrentHead, DiffBase, DiffSetHunk,
 };
-
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::appearance::Appearance;
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
+use crate::code::editor::{
+    add_color, remove_color, CommentEditor, CommentEditorEvent, EditorCommentsModel,
+    EditorReviewComment, GutterHoverTarget,
+};
+use crate::code::editor_management::CodeEditorStatus;
+use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
+use crate::code::global_buffer_model::GlobalBufferModel;
+use crate::code::local_code_editor::{
+    render_unsaved_circle_with_tooltip, LocalCodeEditorEvent, LocalCodeEditorView,
+};
+use crate::code::view::PendingSaveIntent;
+use crate::code::ShowCommentEditorProvider;
+#[cfg(not(target_family = "wasm"))]
+use crate::code::ShowFindReferencesCard;
+use crate::code_review::comments::{
+    AttachedReviewCommentTarget, CommentId, ReviewCommentBatch, ReviewCommentBatchEvent,
+};
+use crate::code_review::context::convert_file_diffs_to_diffset_hunks;
 #[cfg(feature = "local_fs")]
 use crate::code_review::context::{
     create_attachment_reference_and_key, register_diffset_attachment,
 };
-use crate::{
-    ai::agent::CurrentHead,
-    code::editor::view::CodeEditorRenderOptions,
-    code::editor::{CommentEditor, CommentEditorEvent, EditorCommentsModel, EditorReviewComment},
-    code_review::{comments::ReviewCommentBatch, DiffSetScope},
+use crate::code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTarget};
+use crate::code_review::diff_state::{
+    DiffHunk, DiffLineType, DiffMode, DiffState, DiffStateModel, DiffStateModelEvent, DiffStats,
+    FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
 };
-use crate::{
-    ai::agent::{AIAgentAttachment, DiffBase},
-    code::{
-        editor::{
-            view::{CodeEditorEvent, CodeEditorView},
-            GutterHoverTarget,
-        },
-        editor_management::CodeEditorStatus,
-        local_code_editor::{
-            render_unsaved_circle_with_tooltip, LocalCodeEditorEvent, LocalCodeEditorView,
-        },
-        view::PendingSaveIntent,
-    },
-    code_review::{
-        comments::AttachedReviewCommentTarget,
-        context::convert_file_diffs_to_diffset_hunks,
-        diff_state::{
-            DiffHunk, DiffLineType, DiffMode, DiffState, DiffStateModel, DiffStateModelEvent,
-            DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent,
-            GitFileStatus,
-        },
-        editor_state::CodeReviewEditorState,
-        hidden_lines::calculate_hidden_lines,
-        telemetry_event::{
-            AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent,
-            GitButtonKind, PaneStateChange,
-        },
-    },
-};
-
+use crate::code_review::editor_state::CodeReviewEditorState;
+use crate::code_review::find_model::CodeReviewFindModel;
+use crate::code_review::hidden_lines::calculate_hidden_lines;
 #[cfg(feature = "local_fs")]
 use crate::code_review::telemetry_event::DiffSetContextScope;
-
-use crate::{
-    code::editor::line::EditorLineLocation,
-    ui_components::dialog::{dialog_styles, Dialog},
+use crate::code_review::telemetry_event::{
+    AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
+    PaneStateChange,
 };
-use crate::{
-    code::global_buffer_model::GlobalBufferModel, code_review::comments::ReviewCommentBatchEvent,
-};
-use crate::{
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields},
-    pane_group::{
-        focus_state::{PaneFocusHandle, PaneGroupFocusEvent},
-        PaneId,
-    },
-    quit_warning::UnsavedStateSummary,
-    terminal::input::MenuPositioning,
-    terminal::view::{CliAgentRouting, InitProjectModel, TerminalAction, TerminalView},
-    util::bindings::{custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction},
-    view_components::{
-        action_button::{
-            ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, DangerPrimaryTheme,
-            KeystrokeSource, NakedTheme, PaneHeaderTheme, SecondaryTheme,
-        },
-        DismissibleToast,
-    },
-    workspace::{ToastStack, Workspace, WorkspaceAction},
-};
-
-use crate::code_review::find_model::CodeReviewFindModel;
+use crate::code_review::DiffSetScope;
+use crate::coding_panel_enablement_state::CodingPanelEnablementState;
+use crate::editor::InteractionState;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
+use crate::pane_group::pane::{view, BackingView, PaneEvent};
+use crate::pane_group::PaneId;
+use crate::quit_warning::UnsavedStateSummary;
+use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
+use crate::settings::AISettings;
+use crate::settings_view::SettingsSection;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
+};
+use crate::terminal::input::MenuPositioning;
+use crate::terminal::view::{CliAgentRouting, InitProjectModel, TerminalAction, TerminalView};
+use crate::themes::theme::WarpTheme;
+use crate::ui_components::blended_colors::{neutral_2, neutral_3};
+use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons::Icon;
+use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::util::bindings::{
+    custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
@@ -98,107 +139,16 @@ use crate::util::git::BranchEntry;
 use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, DangerPrimaryTheme, KeystrokeSource,
+    NakedTheme, PaneHeaderTheme, SecondaryTheme, TooltipAlignment,
+};
 use crate::view_components::find::{Event as FindViewEvent, Find, FindEvent, FindWithinBlockState};
-use ai::project_context::model::ProjectContextModel;
-#[cfg(feature = "local_fs")]
-use num_traits::SaturatingSub;
-use string_offset::CharOffset;
-
-use indexmap::IndexMap;
-use itertools::Itertools;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use rand::{distributions::Alphanumeric, Rng};
-use warp_core::{
-    channel::{Channel, ChannelState},
-    features::FeatureFlag,
-    safe_error, safe_info,
-    ui::theme::color::internal_colors,
-};
-use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        new_scrollable::{
-            NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
-        },
-        resizable_state_handle, Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
-        DragBarSide, Element, Empty, EventHandler, Flex, List, ListState, MainAxisAlignment,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-        Resizable, ResizableStateHandle, ScrollOffset, ScrollStateHandle, ScrollbarWidth, Stack,
-        Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    keymap::Keystroke,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponentStyles},
-    },
-    units::Pixels,
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
-};
-use warpui::{
-    elements::{Clipped, MainAxisSize, Shrinkable},
-    text_layout::{default_compute_baseline_position, ClipConfig},
-};
-use warpui::{
-    elements::{Hoverable, SavePosition},
-    platform::Cursor,
-    ui_components::components::UiComponent,
-};
-use warpui::{
-    fonts::{Properties, Weight},
-    ModelHandle, WeakViewHandle,
-};
-
-use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
-use crate::settings::AISettings;
-use crate::settings_view::SettingsSection;
-use crate::ui_components::{
-    blended_colors::{neutral_2, neutral_3},
-    buttons::icon_button_with_color,
-    icons::Icon,
-};
-use crate::view_components::action_button::TooltipAlignment;
+use crate::view_components::DismissibleToast;
+use crate::workspace::view::right_panel::{ReviewDestination, ReviewSubmissionResult};
+use crate::workspace::{ToastStack, Workspace, WorkspaceAction};
 #[cfg(feature = "local_fs")]
 use crate::TelemetryEvent;
-use crate::{
-    appearance::Appearance,
-    code::editor::{add_color, remove_color},
-    code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTarget},
-    editor::InteractionState,
-    pane_group::pane::{view, BackingView, PaneEvent},
-    send_telemetry_from_ctx,
-    themes::theme::WarpTheme,
-};
-
-use vec1::Vec1;
-
-use super::{
-    code_review_header::CodeReviewHeader,
-    comment_list_view::{CommentListDebugState, CommentListEvent, CommentListView},
-    comments::{attach_pending_imported_comments, AttachedReviewComment, CommentOrigin},
-    diff_size_limits::DiffSize,
-    git_dialog::{GitDialog, GitDialogEvent, GitDialogKind},
-    GlobalCodeReviewEvent, GlobalCodeReviewModel,
-};
-use crate::code::buffer_location::LocalOrRemotePath;
-use crate::code::ShowCommentEditorProvider;
-#[cfg(not(target_family = "wasm"))]
-use crate::code::ShowFindReferencesCard;
-use crate::code_review::comments::CommentId;
-use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
-use crate::workspace::view::right_panel::{ReviewDestination, ReviewSubmissionResult};
-use warp_editor::model::CoreEditorModel;
-#[cfg(not(target_family = "wasm"))]
-use warp_editor::render::model::AutoScrollMode;
-use warp_editor::{
-    content::buffer::{AutoScrollBehavior, InitialBufferState, SelectionOffsets},
-    render::{element::VerticalExpansionBehavior, model::LineCount},
-};
-use warp_util::{
-    content_version::ContentVersion, path::LineAndColumnArg, standardized_path::StandardizedPath,
-};
 
 pub struct CodeReviewHeaderFields {
     pub is_in_split_pane: bool,

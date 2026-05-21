@@ -24,10 +24,9 @@ pub mod slash_command_menu;
 pub mod welcome_palette;
 mod workflows;
 
+pub use data_source::QueryFilter;
+use filter_chip_renderer::FilterChipRenderer;
 pub use item::SearchItem;
 pub use mixer::SyncDataSource;
 pub use result_renderer::ItemHighlightState;
-
-pub use data_source::QueryFilter;
-use filter_chip_renderer::FilterChipRenderer;
 pub use workflows::fuzzy_match::FuzzyMatchWorkflowResult;

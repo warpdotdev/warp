@@ -1,19 +1,13 @@
-use warpui::{
-    AppContext, Element, SizeConstraint,
-    elements::{Border, CornerRadius, Empty, Radius},
-    geometry::vector::vec2f,
-};
-
-use crate::{
-    editor::RunnableCommandModel,
-    extract_block,
-    render::{
-        BLOCK_FOOTER_HEIGHT,
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
+use warpui::elements::{Border, CornerRadius, Empty, Radius};
+use warpui::geometry::vector::vec2f;
+use warpui::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
+use crate::editor::RunnableCommandModel;
+use crate::extract_block;
+use crate::render::BLOCK_FOOTER_HEIGHT;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 /// [`RenderableBlock`] implementation for runnable command blocks.
 pub struct RenderableRunnableCommand {

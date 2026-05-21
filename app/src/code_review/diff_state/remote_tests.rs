@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 
+use super::InternalRemoteDiffState;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
@@ -10,8 +11,6 @@ use crate::code_review::diff_state::{
     GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
 };
 use crate::util::git::{Commit, PrInfo};
-
-use super::InternalRemoteDiffState;
 
 impl RemoteDiffStateModel {
     fn new_for_test(

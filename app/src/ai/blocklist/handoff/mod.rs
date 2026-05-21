@@ -14,9 +14,8 @@
 //! `AmbientAgentViewModel::submit_handoff`, which reads the cached
 //! `forked_conversation_id` and `snapshot_upload` off `PendingHandoff`.
 
-use crate::server::server_api::ai::AttachmentInput;
-
 use super::PendingAttachment;
+use crate::server::server_api::ai::AttachmentInput;
 
 #[cfg(feature = "local_fs")]
 pub(crate) mod touched_repos;

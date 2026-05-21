@@ -1,12 +1,11 @@
+use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use chrono::Utc;
 #[cfg(feature = "local_fs")]
 use repo_metadata::Repository;
-use std::{
-    collections::HashSet,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::{Path, PathBuf},
-    time::Duration,
-};
 #[cfg(feature = "local_fs")]
 use warpui::ModelHandle;
 

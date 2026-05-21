@@ -1,9 +1,7 @@
 use warpui::SingletonEntity;
 
 use crate::manager::SettingsManager;
-use crate::{Setting, SupportedPlatforms, SyncToCloud};
-
-use crate::*;
+use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
 
 define_settings_group!(TestSettings, settings: [
     never_sync_setting: SimpleSetting {
@@ -158,9 +156,7 @@ mod reload_all_public_settings_tests {
     use warpui::SingletonEntity;
 
     use crate::manager::SettingsManager;
-    use crate::{Setting, SupportedPlatforms, SyncToCloud};
-
-    use crate::*;
+    use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
 
     define_settings_group!(ReloadTestSettings, settings: [
         public_flag: PublicFlag {
@@ -541,6 +537,7 @@ mod write_to_preferences_tests {
     #[test]
     fn test_no_spurious_write_with_hashmap_and_missing_options() {
         use std::collections::HashMap;
+
         use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
         #[derive(

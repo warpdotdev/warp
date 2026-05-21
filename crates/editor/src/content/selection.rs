@@ -1,6 +1,5 @@
-use vec1::Vec1;
-
 use string_offset::CharOffset;
+use vec1::Vec1;
 
 use super::anchor::{Anchor, AnchorSide, Anchors};
 

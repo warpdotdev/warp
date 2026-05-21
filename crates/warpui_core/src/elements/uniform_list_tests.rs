@@ -1,18 +1,16 @@
-use super::*;
-use crate::{
-    elements::{
-        ChildAnchor, ConstrainedBox, DispatchEventResult, EventHandler, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Stack,
-    },
-    platform::WindowStyle,
-    App, AppContext, Entity, Presenter, TypedActionView, ViewContext, WindowInvalidation,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
 use pathfinder_geometry::vector::vec2f;
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
+
+use super::*;
+use crate::elements::{
+    ChildAnchor, ConstrainedBox, DispatchEventResult, EventHandler, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Stack,
 };
+use crate::platform::WindowStyle;
+use crate::{App, AppContext, Entity, Presenter, TypedActionView, ViewContext, WindowInvalidation};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum ElementIdentifier {

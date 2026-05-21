@@ -5,18 +5,18 @@
 //! operations to whichever is active.
 //! All consumers should use `DiffStateModel` rather than accessing sub-models directly.
 
-use crate::util::git::{BranchEntry, Commit, PrInfo};
-use warp_core::SessionId;
-use warp_util::remote_path::RemotePath;
-use warpui::{AppContext, ModelContext, ModelHandle};
-
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use warp_core::SessionId;
+use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::{AppContext, ModelContext, ModelHandle};
 
 use crate::code_review::diff_size_limits::DiffSize;
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
 #[cfg(feature = "local_fs")]

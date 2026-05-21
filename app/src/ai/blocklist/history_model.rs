@@ -1,58 +1,50 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "local_fs")]
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local, NaiveDateTime};
+#[cfg(feature = "local_fs")]
+use diesel::SqliteConnection;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event::stream_finished::ConversationUsageMetadata;
-use warp_multi_agent_api::{
-    client_action::{Action, StartNewConversation},
-    response_event::stream_finished::TokenUsage,
+use warp_multi_agent_api::client_action::{Action, StartNewConversation};
+use warp_multi_agent_api::response_event::stream_finished::{
+    ConversationUsageMetadata, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
-
-#[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
-
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
-
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::conversation::{ServerAIConversationMetadata, UpdateConversationError};
-use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::CancellationReason;
-use crate::ai::artifacts::Artifact;
-use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::AgentConversationData;
-use crate::persistence::ModelEvent;
-use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::view::blocklist_filter;
-use crate::GlobalResourceHandlesProvider;
-use crate::{
-    ai::agent::{
-        conversation::{AIConversation, AIConversationId},
-        AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
-        MessageId, RenderableAIError, RequestCost, Suggestions,
-    },
-    persistence::model::AgentConversation,
-    ui_components::icons::Icon,
-};
-
-#[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    UpdateConversationError,
+};
+use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost,
+    Suggestions,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::input_suggestions::HistoryOrder;
+use crate::persistence::model::{AgentConversation, AgentConversationData};
+use crate::persistence::ModelEvent;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::view::blocklist_filter;
+use crate::ui_components::icons::Icon;
+use crate::GlobalResourceHandlesProvider;
 
 mod conversation_loader;
 pub use conversation_loader::{

@@ -1,18 +1,12 @@
-use warpui::{
-    Element, SizeConstraint,
-    elements::{CacheOption, Image},
-    geometry::vector::vec2f,
-};
-
-use crate::{
-    extract_block,
-    render::{
-        element::paint::{CursorData, CursorDisplayType},
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
+use warpui::elements::{CacheOption, Image};
+use warpui::geometry::vector::vec2f;
+use warpui::{Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
+use crate::extract_block;
+use crate::render::element::paint::{CursorData, CursorDisplayType};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 pub struct RenderableImage {
     viewport_item: ViewportItem,

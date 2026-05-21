@@ -1,21 +1,22 @@
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::shared_session::tests::terminal_model_for_viewer;
-use crate::terminal::TerminalView;
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    shared_session::viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-};
-use crate::test_util::add_window_with_terminal;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, ScrollbackBlock, WindowSize,
 };
-use std::sync::Arc;
 use warpui::units::Lines;
 use warpui::{App, ViewHandle};
+
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::shared_session::tests::terminal_model_for_viewer;
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
+};
+use crate::terminal::TerminalView;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn ordered_terminal_event_from_bytes(
     bytes: impl Into<Vec<u8>>,

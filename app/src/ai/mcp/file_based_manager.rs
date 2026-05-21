@@ -1,22 +1,20 @@
-use super::MCPProvider;
-use super::{FileMCPWatcher, FileMCPWatcherEvent};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
 use itertools::Itertools as _;
 use repo_metadata::repositories::DetectedRepositories;
-use std::collections::{hash_map::Entry, HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    ai::mcp::{
-        templatable_installation::TemplatableMCPServerInstallation,
-        ParsedTemplatableMCPServerResult,
-    },
-    settings::{ai::AISettings, AISettingsChangedEvent},
-    warp_managed_paths_watcher::warp_managed_mcp_config_path,
-};
+use super::{FileMCPWatcher, FileMCPWatcherEvent, MCPProvider};
+use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
+use crate::ai::mcp::ParsedTemplatableMCPServerResult;
+use crate::settings::ai::AISettings;
+use crate::settings::AISettingsChangedEvent;
+use crate::warp_managed_paths_watcher::warp_managed_mcp_config_path;
 
 /// Singleton model to manage file-based MCP servers.
 #[derive(Default)]

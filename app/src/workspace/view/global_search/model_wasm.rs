@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use warpui::{Entity, ModelContext};
+
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
 use crate::workspace::view::global_search::SearchConfig;
-use warpui::{Entity, ModelContext};
 
 pub struct GlobalSearch {}
 

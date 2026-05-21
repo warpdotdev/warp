@@ -4,27 +4,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::codebase_index_proto::{
-    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
-    RemoteCodebaseIndexStatus,
-};
-use crate::proto::CodebaseIndexLimits;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
+use crate::codebase_index_proto::{
+    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
+    RemoteCodebaseIndexStatus,
+};
 use crate::proto::{
     client_message, get_branches_response, get_fragment_metadata_from_hash_response,
     server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate,
-    DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
-    FragmentMetadataLookupErrorCode, GetBranches, GetDiffState, GetDiffStateResponse,
-    GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
-    OpenBuffer, OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse,
-    ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage,
-    SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
+    CodebaseIndexLimits, CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode,
+    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
+    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
+    IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -32,11 +31,11 @@ use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadat
 mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
-
-use crate::protocol::{self, ProtocolError, RequestId};
 use warp_core::{safe_error, safe_warn, SessionId};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::TransportStream;
+
+use crate::protocol::{self, ProtocolError, RequestId};
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);

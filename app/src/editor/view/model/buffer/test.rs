@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
+use rand::Rng;
+
 /// Test utilities for testing the buffer.
 use super::time::ReplicaId;
-use rand::Rng;
-use std::collections::BTreeMap;
 
 #[cfg(test)]
 pub(crate) struct Network<T: Clone> {
