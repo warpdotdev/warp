@@ -9,6 +9,7 @@ use crate::{
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{ConstrainedBox, CrossAxisAlignment, Expanded, MainAxisSize};
 use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         Border, ChildView, Container, CornerRadius, Empty, Flex, MouseStateHandle, ParentElement,
         Radius, Text,
@@ -18,7 +19,6 @@ use warpui::{
         button::ButtonVariant,
         components::{Coords, UiComponent, UiComponentStyles},
     },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use ::ai::api_keys::CustomEndpoint;
