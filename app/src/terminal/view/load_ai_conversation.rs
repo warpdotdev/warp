@@ -536,10 +536,6 @@ impl TerminalView {
                     .any(|conversation| conversation.id() == conversation_id)
         };
         if already_exists_in_this_view {
-            log::info!(
-                "Conversation {conversation_id} already exists in terminal view {}; entering agent view instead of restoring duplicate blocks.",
-                self.view_id
-            );
             self.enter_agent_view_for_conversation(
                 None,
                 AgentViewEntryOrigin::RestoreExistingConversation,
