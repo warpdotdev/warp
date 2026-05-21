@@ -12683,6 +12683,7 @@ impl Input {
             return;
         } else if self.maybe_launch_cloud_handoff_request(ctx)
             || self.maybe_queue_input_for_in_progress_conversation(ctx)
+            || self.maybe_queue_input_during_cloud_setup(ctx)
             || self.maybe_handle_enter_for_slash_command(ctx)
         {
             return;
@@ -13233,6 +13234,32 @@ impl Input {
         ctx.emit(Event::ExecuteAIQuery);
     }
 
+    pub(crate) fn submit_queued_prompt_for_active_pane(
+        &mut self,
+        prompt: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.model.lock().shared_session_status().is_viewer() {
+            self.replace_buffer_content(&prompt, ctx);
+            let _ = self.submit_viewer_ai_query(ctx);
+            return;
+        }
+
+        if self
+            .ambient_agent_view_model()
+            .is_some_and(|ambient_agent_model| {
+                ambient_agent_model
+                    .as_ref(ctx)
+                    .is_ready_for_cloud_followup_prompt()
+            })
+        {
+            ctx.emit(Event::SubmitCloudFollowup { prompt });
+            return;
+        }
+
+        self.submit_queued_prompt(prompt, ctx);
+    }
+
     /// Checks whether the current input should be queued instead of executed.
     /// Returns true (and queues the prompt) when the queue-next-prompt toggle is
     /// on and the active conversation is still in progress.
@@ -13306,6 +13333,54 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                ctx,
+            );
+        });
+
+        true
+    }
+
+    fn maybe_queue_input_during_cloud_setup(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if !FeatureFlag::QueuedPromptsV2.is_enabled() {
+            return false;
+        }
+
+        let should_queue = self
+            .ambient_agent_view_model()
+            .is_some_and(|ambient_agent_model| {
+                let ambient_agent_model = ambient_agent_model.as_ref(ctx);
+                ambient_agent_model.is_ambient_agent()
+                    && !ambient_agent_model.is_configuring_ambient_agent()
+                    && !ambient_agent_model.is_agent_running()
+            });
+        if !should_queue {
+            return false;
+        }
+
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return false;
+        };
+
+        let prompt = self.editor.as_ref(ctx).buffer_text(ctx);
+        let prompt = prompt.trim().to_owned();
+        if prompt.is_empty() {
+            return false;
+        }
+
+        self.editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer(ctx);
+        });
+        self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.clear_pending_attachments(ctx);
+        });
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,

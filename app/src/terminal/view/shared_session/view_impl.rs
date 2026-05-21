@@ -1790,15 +1790,13 @@ impl TerminalView {
                     .unpin_rich_content_from_bottom(pending_query_view_id);
             }
         }
-        self.insert_rich_content(
-            None,
-            tombstone_view_handle,
-            None,
-            RichContentInsertionPosition::Append {
+        let insertion_position = self
+            .pending_user_query_view_id
+            .map(RichContentInsertionPosition::AfterRichContent)
+            .unwrap_or(RichContentInsertionPosition::Append {
                 insert_below_long_running_block: true,
-            },
-            ctx,
-        );
+            });
+        self.insert_rich_content(None, tombstone_view_handle, None, insertion_position, ctx);
         self.conversation_ended_tombstone_view_id = Some(tombstone_view_id);
     }
 

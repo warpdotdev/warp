@@ -122,6 +122,17 @@ impl TerminalView {
         if should_remove_pending_user_query {
             self.remove_pending_user_query_block(ctx);
         }
+        let should_remove_cloud_mode_queue_row = matches!(
+            event,
+            AmbientAgentViewModelEvent::Failed { .. }
+                | AmbientAgentViewModelEvent::NeedsGithubAuth
+                | AmbientAgentViewModelEvent::Cancelled
+                | AmbientAgentViewModelEvent::HarnessCommandStarted { .. }
+                | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
+        );
+        if should_remove_cloud_mode_queue_row {
+            self.remove_cloud_mode_queue_row(ctx);
+        }
 
         match event {
             AmbientAgentViewModelEvent::EnteredSetupState => {
@@ -167,7 +178,13 @@ impl TerminalView {
                         })
                         .unwrap_or_default();
                     if !prompt.is_empty() {
-                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        let queued_prompt_id = FeatureFlag::QueuedPromptsV2
+                            .is_enabled()
+                            .then(|| self.enqueue_initial_cloud_mode_prompt(prompt.clone(), ctx))
+                            .flatten();
+                        if queued_prompt_id.is_none() {
+                            self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        }
                     }
                 } else {
                     // Reset tip cooldown so the first tip shows for 60 seconds
@@ -200,7 +217,13 @@ impl TerminalView {
                     .pending_followup_prompt()
                     .map(str::to_owned);
                 if let Some(prompt) = pending_prompt {
-                    self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                    let queued_prompt_id = FeatureFlag::QueuedPromptsV2
+                        .is_enabled()
+                        .then(|| self.enqueue_initial_cloud_mode_prompt(prompt.clone(), ctx))
+                        .flatten();
+                    if queued_prompt_id.is_none() {
+                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                    }
                 }
                 ctx.notify();
             }
