@@ -125,10 +125,6 @@ struct GroupedSubjectUsage {
 }
 
 impl MemberUsageRow {
-    /// Viewer row aggregated from billing-cycle entries — full segment
-    /// and cost fidelity. The viewer's identity and per-user
-    /// `base_limit` are passed in by callers that already have
-    /// workspace/app context.
     fn for_viewer(
         entries: &[BillingCycleUsageEntry],
         viewer_uid: Option<&str>,
@@ -157,13 +153,13 @@ impl MemberUsageRow {
             total_cost_cents,
             base_limit: viewer_base_limit,
             segments,
-            bar_max_credits: 0,
+            bar_max_credits: total_credits.max(1),
         }
     }
 
     /// Viewer row built from a raw used-credits count, with no segment
     /// breakdown. For callers that only have `AIRequestUsageModel`-style
-    /// data (no `billing_cycle_usage` entries).
+    /// data (no `billing_cycle_usage` entries / no workspace data).
     fn for_viewer_from_total(
         viewer_uid: Option<String>,
         viewer_display_name: String,
@@ -210,7 +206,7 @@ impl MemberUsageRow {
             total_cost_cents,
             base_limit: None,
             segments,
-            bar_max_credits: 0,
+            bar_max_credits: total_credits.max(1),
         }
     }
 
@@ -358,22 +354,18 @@ fn build_rows(
         }
     };
 
-    match visibility.granularity {
-        UsageVisibilityGranularity::OwnOnly | UsageVisibilityGranularity::TeamAggregate => {
-            for row in &mut rows {
-                row.bar_max_credits = row.total_credits.max(1);
-            }
-        }
-        UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            let top = rows
-                .iter()
-                .map(|r| r.total_credits)
-                .max()
-                .unwrap_or(0)
-                .max(1);
-            for row in &mut rows {
-                row.bar_max_credits = top;
-            }
+    if matches!(
+        visibility.granularity,
+        UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown
+    ) {
+        let top = rows
+            .iter()
+            .map(|r| r.total_credits)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        for row in &mut rows {
+            row.bar_max_credits = top;
         }
     }
 
