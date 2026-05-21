@@ -436,6 +436,7 @@ pub mod flags {
         "Jump_To_Bottom_Of_Block_Button_Enabled";
     pub const RESPECT_SYSTEM_THEME_CONTEXT_FLAG: &str = "Respect_System_Theme";
     pub const COMPLETIONS_OPEN_WHILE_TYPING_CONTEXT_FLAG: &str = "Completions_Open_While_Typing";
+    pub const HIDE_CURSOR_WHILE_TYPING_CONTEXT_FLAG: &str = "Hide_Cursor_While_Typing";
     pub const COMMAND_CORRECTIONS_CONTEXT_FLAG: &str = "Command_Corrections";
     pub const ERROR_UNDERLINING_FLAG: &str = "error_underlining";
     pub const SYNTAX_HIGHLIGHTING_FLAG: &str = "syntax_highlighting";

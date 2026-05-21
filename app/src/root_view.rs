@@ -24,7 +24,7 @@ use crate::settings::apply_onboarding_settings;
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
-use crate::settings::AISettings;
+use crate::settings::{AISettings, InputSettings, InputSettingsChangedEvent};
 use crate::workspace::tab_settings::TabSettings;
 use onboarding::{
     AgentOnboardingEvent, AgentOnboardingView, OnboardingIntention, SelectedSettings,
@@ -623,6 +623,7 @@ pub fn create_transferred_window(
             title: Some(WINDOW_TITLE.to_owned()),
             background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
             background_blur_texture: *window_settings.background_blur_texture,
+            hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
             on_gpu_driver_selected: on_gpu_driver_selected_callback(),
             ..Default::default()
         },
@@ -718,6 +719,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                             fullscreen_state: window.fullscreen_state,
                             background_blur_radius_pixels,
                             background_blur_texture,
+                            hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
                             // Don't use the quake window for positioning new windows.
                             anchor_new_windows_from_closed_position:
                                 NextNewWindowsHasThisWindowsBoundsUponClose::No,
@@ -761,6 +763,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                                 fullscreen_state: window.fullscreen_state,
                                 background_blur_radius_pixels,
                                 background_blur_texture,
+                                hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
                                 on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                                 ..Default::default()
                             },
@@ -813,6 +816,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         fullscreen_state: window.fullscreen_state,
                         background_blur_radius_pixels,
                         background_blur_texture,
+                        hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
                         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                         ..Default::default()
                     },
@@ -855,6 +859,17 @@ pub(crate) fn open_new_with_workspace_source(
         view.focus(ctx);
         view
     })
+}
+
+fn hide_cursor_while_typing_enabled(ctx: &AppContext) -> bool {
+    *InputSettings::as_ref(ctx).hide_cursor_while_typing.value()
+}
+
+fn apply_hide_cursor_while_typing_setting_to_window(window_id: WindowId, ctx: &AppContext) {
+    let enabled = hide_cursor_while_typing_enabled(ctx);
+    if let Some(window) = ctx.windows().platform_window(window_id) {
+        window.set_hide_cursor_while_typing(enabled);
+    }
 }
 
 pub(crate) fn open_new_from_path(
@@ -1184,6 +1199,7 @@ fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) ->
         title: Some("Warp".to_owned()),
         background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
         background_blur_texture: *window_settings.background_blur_texture,
+        hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
         ..Default::default()
     }
@@ -1369,6 +1385,7 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
                     title: Some("Warp".to_owned()),
                     background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
                     background_blur_texture: *window_settings.background_blur_texture,
+                    hide_cursor_while_typing: hide_cursor_while_typing_enabled(ctx),
                     // Ignore the quake window for positioning the next window
                     anchor_new_windows_from_closed_position:
                         warpui::NextNewWindowsHasThisWindowsBoundsUponClose::No,
@@ -1654,6 +1671,15 @@ impl RootView {
         ctx.subscribe_to_model(&CloudPreferencesSyncer::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_preferences_syncer_event(event, ctx);
         });
+        ctx.subscribe_to_model(&InputSettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                InputSettingsChangedEvent::HideCursorWhileTyping { .. }
+            ) {
+                apply_hide_cursor_while_typing_setting_to_window(ctx.window_id(), ctx);
+            }
+        });
+        apply_hide_cursor_while_typing_setting_to_window(ctx.window_id(), ctx);
 
         let auth_view =
             ctx.add_typed_action_view(|ctx| AuthView::new(AuthViewVariant::Initial, ctx));
