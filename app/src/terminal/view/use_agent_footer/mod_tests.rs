@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use session_sharing_protocol::sharer::SessionSourceType;
+use session_sharing_protocol::{
+    common::LongRunningCommandAgentInteractionState, sharer::SessionSourceType,
+};
 use warp_core::settings::Setting as _;
 use warpui::{App, AppContext, SingletonEntity, ViewContext};
 
@@ -329,6 +331,50 @@ fn use_agent_footer_hidden_during_cloud_agent_setup_lrc() {
                     .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
                     .is_none(),
                 "footer rich content should not be in the blocklist during cloud setup",
+            );
+        });
+    })
+}
+
+#[test]
+fn cloud_agent_setup_state_updates_do_not_try_to_take_control_from_user_block() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            simulate_user_started_long_running_command(view);
+            view.model
+                .lock()
+                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+
+            let did_take_control = view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.switch_control_to_user(UserTakeOverReason::Manual, ctx)
+            });
+            assert!(
+                !did_take_control,
+                "plain cloud-agent setup LRC should not be treated as an agent takeover",
+            );
+
+            view.apply_long_running_command_agent_interaction_state(
+                LongRunningCommandAgentInteractionState::NotInteracting,
+                ctx,
+            );
+            view.apply_long_running_command_agent_interaction_state(
+                LongRunningCommandAgentInteractionState::NotInteracting,
+                ctx,
+            );
+
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            assert!(
+                active_block.agent_interaction_metadata().is_none(),
+                "cloud-agent setup state updates should leave a user command in user mode",
+            );
+            assert!(
+                active_block.long_running_control_state().is_none(),
+                "cloud-agent setup state updates should not add LRC control metadata",
             );
         });
     })

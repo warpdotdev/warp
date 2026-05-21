@@ -311,7 +311,11 @@ impl CLISubagentController {
         });
     }
 
-    pub fn switch_control_to_user(&self, reason: UserTakeOverReason, ctx: &mut ModelContext<Self>) {
+    pub fn switch_control_to_user(
+        &self,
+        reason: UserTakeOverReason,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
         let should_cancel_conversation = !reason.is_transfer_from_agent();
         let mut terminal_model = self.terminal_model.lock();
 
@@ -319,13 +323,22 @@ impl CLISubagentController {
         let block_id = active_block.id().clone();
         let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
         let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
+        if !active_block.is_agent_in_control() {
+            log::debug!(
+                "Ignoring user take-control request because agent is not in control: \
+                 reason={reason:?}, block_id={block_id:?}, \
+                 interaction_mode={interaction_mode_debug}, lrc_state={lrc_state_debug}"
+            );
+            return false;
+        }
+
         if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
             log::error!(
                 "Failed to take control for user: {e:?}, reason={reason:?}, \
                  block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
                  lrc_state={lrc_state_debug}"
             );
-            return;
+            return false;
         }
 
         let action_id = active_block.requested_command_action_id().cloned();
@@ -363,6 +376,8 @@ impl CLISubagentController {
             },
             ctx
         );
+
+        true
     }
 
     pub fn handoff_active_command_control_to_agent(&self, ctx: &mut ModelContext<Self>) {
