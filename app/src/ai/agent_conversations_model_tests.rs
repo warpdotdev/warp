@@ -55,7 +55,7 @@ fn create_test_task(
         created_at: updated_at,
         started_at: Some(updated_at),
         updated_at,
-        run_time: Some("1 seconds".to_string()),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,
@@ -728,7 +728,7 @@ fn test_get_entries_includes_task_only_entry() {
         let mut model = create_test_model();
         let task = create_test_task(&make_uuid(8100), "user-a", now);
         let mut task = task;
-        task.run_time = Some("server runtime".to_string());
+        task.run_time = Some("PT2M".parse().unwrap());
         model.tasks.insert(task.task_id, task.clone());
 
         app.update(|ctx| {
@@ -740,7 +740,7 @@ fn test_get_entries_includes_task_only_entry() {
             assert_eq!(entry.identity.ambient_agent_task_id, Some(task.task_id));
             assert_eq!(entry.identity.local_conversation_id, None);
             assert_eq!(entry.provenance, AgentConversationProvenance::AmbientRun);
-            assert_eq!(entry.display.run_time.as_deref(), Some("server runtime"));
+            assert_eq!(entry.display.run_time.as_deref(), Some("2.00 min"));
             assert!(entry.backing.has_ambient_run);
             assert!(!entry.backing.has_loaded_conversation);
         });

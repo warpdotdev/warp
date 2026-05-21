@@ -190,7 +190,7 @@ fn make_ambient_task_with_event_seq(
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
         updated_at: Utc::now(),
-        run_time: Some("1 seconds".to_string()),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,

@@ -169,6 +169,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "webp",
 ] }
 instant = { version = "0.1.12", features = ["wasm-bindgen"] }
+iso8601-duration = { version = "0.2.0", features = ["chrono", "serde"] }
 itertools = "0.14.0"
 jaq-json = { version = "2.0", features = ["serde"] }
 # Disabling the default `formats` feature is intended to avoid pulling in

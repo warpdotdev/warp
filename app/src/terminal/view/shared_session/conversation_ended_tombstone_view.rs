@@ -138,8 +138,8 @@ impl TombstoneDisplayData {
         // We update to use the task values when we have them, which includes
         // the full credit cost (inference + compute). This matches what we show in
         // the details panel.
-        if let Some(run_time) = &task.run_time {
-            self.run_time = Some(run_time.clone());
+        if let Some(run_time) = task.run_time() {
+            self.run_time = Some(human_readable_precise_duration(run_time));
         }
         if let Some(credits) = task.credits_used() {
             self.credits = Some(format_credits(credits));

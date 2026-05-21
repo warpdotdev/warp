@@ -1,7 +1,8 @@
 //! Ambient agent task types and utilities.
 
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
@@ -281,7 +282,7 @@ pub struct AmbientAgentTask {
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
-    pub run_time: Option<String>,
+    pub run_time: Option<Iso8601Duration>,
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
@@ -458,6 +459,11 @@ impl AmbientAgentTask {
                 + u.compute_cost.unwrap_or(0.0)
                 + u.platform_cost.unwrap_or(0.0)) as f32
         })
+    }
+
+    /// Server-reported run duration.
+    pub fn run_time(&self) -> Option<ChronoDuration> {
+        self.run_time.and_then(|run_time| run_time.to_chrono())
     }
 
     /// Creator's display name, if available.
