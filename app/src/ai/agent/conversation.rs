@@ -70,7 +70,7 @@ use crate::terminal::model::block::{
     AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
 };
 use crate::ui_components::icons::Icon;
-use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider, LLMPreferences};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
