@@ -57,7 +57,7 @@ impl From<GeneratedFileLocations> for FileLocations {
     fn from(value: GeneratedFileLocations) -> Self {
         Self {
             name: value.file_name,
-            // We are explicitly disgarding the line_numbers right now.
+            // We are explicitly discarding the line_numbers right now.
             // TODO(kevin): Convert them into Range<usize>.
             lines: Vec::new(),
         }

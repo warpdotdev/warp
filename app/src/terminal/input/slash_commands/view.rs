@@ -100,7 +100,8 @@ impl InlineSlashCommandView {
                 });
             },
         );
-        let zero_state_source = ctx.add_model(|_| ZeroStateDataSource::new(&slash_commands_source));
+        let zero_state_source =
+            ctx.add_model(|_| ZeroStateDataSource::new(&slash_commands_source, false));
         let saved_prompts_source = super::saved_prompts_data_source();
 
         let mixer = ctx.add_model(|ctx| {
@@ -273,9 +274,7 @@ impl View for InlineSlashCommandView {
     }
 }
 
-/// Build a Query that includes the StaticSlashCommands filter so both sync and
-/// async sources run.
-fn slash_command_query(text: &str) -> Query {
+pub(super) fn slash_command_query(text: &str) -> Query {
     Query {
         text: text.to_owned(),
         filters: SLASH_COMMAND_FILTERS.clone(),

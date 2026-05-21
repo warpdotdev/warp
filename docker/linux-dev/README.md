@@ -14,7 +14,7 @@ You'll need to install:
 
 ## Setup
 
-You'll run all of these commands from the `warp-internal` repository's root directory.
+You'll run all of these commands from the repository's root directory.
 
 First, build the docker container image:
 
@@ -27,7 +27,7 @@ Next, run the container:
 
 ```
 # The path to the source code directory that you want to mount in the
-# container. This can be the `warp-internal` repository or some parent
+# container. This can be the `warp` repository or some parent
 # directory of your choice.
 LOCAL_PATH="/Users/$USER/src"
 

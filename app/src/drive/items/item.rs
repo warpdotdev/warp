@@ -134,7 +134,7 @@ pub struct WarpDriveRow<'a> {
     space: Space,
     item_states: ItemStates,
     overflow_button: Box<dyn Element>,
-    /// how many levels into a folder hierachy the row is.
+    /// how many levels into a folder hierarchy the row is.
     /// 0 means the object is in the root directory.
     folder_depth: usize,
     sync_icon: Option<Box<dyn Element>>,
@@ -898,7 +898,7 @@ impl UiComponent for WarpDriveRow<'_> {
                                         return;
                                     }
 
-                                    // Otherwize, check to see if we should scroll downwards (revealing more content at the
+                                    // Otherwise, check to see if we should scroll downwards (revealing more content at the
                                     // bottom).
                                     // This computes the distance between the bottom of the *currently-dragging* item
                                     // and the bottom of the drive index view. If distance < 10, emit a scroll event.

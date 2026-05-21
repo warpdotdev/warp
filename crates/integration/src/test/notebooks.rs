@@ -5,8 +5,7 @@ use warp::{
         command_palette::open_command_palette_and_run_action,
         notebook::{
             assert_notebook_contents, assert_notebook_id, assert_notebook_not_open,
-            assert_notebook_open, assert_notebook_renders_mermaid_diagram,
-            assert_open_in_warp_banner_open, create_a_personal_notebook,
+            assert_notebook_open, assert_open_in_warp_banner_open, create_a_personal_notebook,
             enter_notebook_edit_mode_and_set_markdown, move_notebook_cursor_to_offset,
             open_notebook,
         },
@@ -177,14 +176,11 @@ pub fn test_open_in_warp_banner() -> Builder {
         )
 }
 
-pub fn test_backspace_inside_rendered_mermaid_block_is_atomic() -> Builder {
+pub fn test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block() -> Builder {
     FeatureFlag::MarkdownMermaid.set_enabled(true);
     FeatureFlag::EditableMarkdownMermaid.set_enabled(true);
 
     let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
-    let mermaid_block_start = markdown
-        .find("```mermaid")
-        .expect("Mermaid block should exist");
     let cursor_offset = markdown
         .find("graph TD")
         .expect("Mermaid source should exist")
@@ -203,18 +199,20 @@ pub fn test_backspace_inside_rendered_mermaid_block_is_atomic() -> Builder {
                 ),
         )
         .with_step(
+            // Mermaid blocks now default to Raw mode; diagram rendering requires
+            // the user to click the Rendered toggle. This step only verifies the
+            // markdown content was set correctly.
             enter_notebook_edit_mode_and_set_markdown(0, 0, markdown)
-                .add_assertion(assert_notebook_contents(0, 0, markdown))
-                .add_assertion(assert_notebook_renders_mermaid_diagram(
-                    0,
-                    0,
-                    mermaid_block_start,
-                )),
+                .add_assertion(assert_notebook_contents(0, 0, markdown)),
         )
         .with_step(move_notebook_cursor_to_offset(0, 0, cursor_offset))
         .with_step(
-            TestStep::new("Backspace from inside rendered Mermaid")
+            TestStep::new("Backspace from inside raw Mermaid")
                 .with_keystrokes(&["backspace"])
-                .add_assertion(assert_notebook_contents(0, 0, "Before\nAfter")),
+                .add_assertion(assert_notebook_contents(
+                    0,
+                    0,
+                    "Before\n```mermaid\ngraph TD\nA -> B\n```\nAfter",
+                )),
         )
 }

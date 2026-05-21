@@ -227,12 +227,12 @@ impl MCPServersListPageView {
 
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text("Search MCP Servers", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "Search MCP Servers"), ctx);
         });
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
-        let add_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Add", NakedTheme)
+        let add_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Add"), NakedTheme)
                 .with_icon(Icon::Plus)
                 .on_click(|ctx| ctx.dispatch_typed_action(MCPServersListPageViewAction::Add))
         });
@@ -841,7 +841,10 @@ impl MCPServersListPageView {
                 // Show the toast that the server updated, even though we don't update the cloud template in this case
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::success(String::from("MCP server updated"));
+                    let toast = DismissibleToast::success(String::from(crate::i18n::tr_static(
+                        ctx,
+                        "MCP server updated",
+                    )));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1138,23 +1141,20 @@ impl MCPServersListPageView {
 
         let toggle_row = build_toggle_element(label, switch, appearance, None);
 
-        static FILE_BASED_MCP_DESCRIPTION_FRAGMENTS: std::sync::LazyLock<
-            Vec<FormattedTextFragment>,
-        > = std::sync::LazyLock::new(|| {
-            vec![
-                FormattedTextFragment::plain_text(
-                    "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. ",
-                ),
-                FormattedTextFragment::hyperlink(
-                    "See supported providers.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
-                ),
-            ]
-        });
+        let file_based_mcp_description_fragments = vec![
+            FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                app,
+                "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. ",
+            )),
+            FormattedTextFragment::hyperlink(
+                crate::i18n::tr_static(app, "See supported providers."),
+                "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+            ),
+        ];
 
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(
-                (*FILE_BASED_MCP_DESCRIPTION_FRAGMENTS).clone(),
+                file_based_mcp_description_fragments,
             )]),
             style::CONTENT_FONT_SIZE,
             appearance.ui_font_family(),
@@ -1182,9 +1182,9 @@ impl MCPServersListPageView {
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(DESCRIPTION_TEXT),
+            FormattedTextFragment::plain_text(crate::i18n::tr_static(app, DESCRIPTION_TEXT)),
             FormattedTextFragment::hyperlink(
-                "Learn more.",
+                crate::i18n::tr_static(app, "Learn more."),
                 "https://docs.warp.dev/agent-platform/capabilities/mcp",
             ),
         ];
@@ -1261,14 +1261,14 @@ impl MCPServersListPageView {
                 && filtered_gallery_cards.is_empty()
                 && filtered_file_based_cards.is_empty()
             {
-                page.add_child(Self::render_no_search_results(appearance));
+                page.add_child(Self::render_no_search_results(appearance, app));
             } else {
                 let (owned_server_cards, mut shared_server_cards) =
                     Self::separate_server_cards_by_installed(&filtered_server_cards, app);
 
                 if !owned_server_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "My MCPs",
+                        crate::i18n::tr_static(app, "My MCPs"),
                         &owned_server_cards,
                         appearance,
                         app,
@@ -1280,8 +1280,14 @@ impl MCPServersListPageView {
                         .current_team()
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => format!("Shared by Warp and {name}"),
-                        None => "Shared by Warp and from other devices".to_string(),
+                        Some(name) => format!(
+                            "{} {name}",
+                            crate::i18n::tr_static(app, "Shared by Warp and")
+                        ),
+                        None => {
+                            crate::i18n::tr_static(app, "Shared by Warp and from other devices")
+                                .to_string()
+                        }
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1292,7 +1298,7 @@ impl MCPServersListPageView {
                     ));
                 } else if !filtered_gallery_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "Shared from Warp",
+                        crate::i18n::tr_static(app, "Shared from Warp"),
                         &filtered_gallery_cards,
                         appearance,
                         app,
@@ -1301,7 +1307,11 @@ impl MCPServersListPageView {
 
                 // Render one section per provider (e.g. "Detected from Claude").
                 for (provider, cards) in &filtered_file_based_cards {
-                    let section_title = format!("Detected from {}", provider.display_name());
+                    let section_title = format!(
+                        "{} {}",
+                        crate::i18n::tr_static(app, "Detected from"),
+                        provider.display_name()
+                    );
                     page.add_child(self.render_server_cards_section(
                         &section_title,
                         cards,
@@ -1486,7 +1496,7 @@ impl MCPServersListPageView {
             .finish()
     }
 
-    fn render_empty_state(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
+    fn render_empty_state(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(
                 Align::new(
@@ -1497,7 +1507,7 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(EMPTY_STATE_TEXT, true)
+                                .wrappable_text(crate::i18n::tr_static(app, EMPTY_STATE_TEXT), true)
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),
@@ -1517,7 +1527,7 @@ impl MCPServersListPageView {
         .finish()
     }
 
-    fn render_no_search_results(appearance: &Appearance) -> Box<dyn Element> {
+    fn render_no_search_results(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(
                 Align::new(
@@ -1528,7 +1538,10 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(NO_SEARCH_RESULTS_TEXT, true)
+                                .wrappable_text(
+                                    crate::i18n::tr_static(app, NO_SEARCH_RESULTS_TEXT),
+                                    true,
+                                )
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),

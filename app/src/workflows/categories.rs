@@ -516,7 +516,7 @@ impl CategoriesView {
         ctx.notify();
     }
 
-    /// Given an iterator of a Vector workflows, constructs a `Vector` of `Worklow` and
+    /// Given an iterator of a Vector workflows, constructs a `Vector` of `Workflow` and
     /// `WorkflowSource` pairs.
     fn create_workflow_source_pair<'a>(
         workflows: impl IntoIterator<Item = &'a Vec<Arc<WorkflowType>>>,
@@ -1298,5 +1298,5 @@ impl VoltronFeatureViewMeta for CategoriesView {
 }
 
 #[cfg(test)]
-#[path = "categories_test.rs"]
+#[path = "categories_tests.rs"]
 mod tests;

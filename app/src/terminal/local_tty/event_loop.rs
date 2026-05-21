@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! The main event loop which performs I/O on the pseudoterminal.
 
 use std::{
@@ -441,7 +444,7 @@ where
                                     // just loop back round for the inevitable `Exited` event.
                                     // This sucks, but checking the process is either racy or
                                     // blocking.
-                                    #[cfg(target_os = "linux")]
+                                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                                     if err.kind() == ErrorKind::Other {
                                         continue;
                                     }

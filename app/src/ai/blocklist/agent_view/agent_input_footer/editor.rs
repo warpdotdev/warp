@@ -93,6 +93,25 @@ fn open_toolbar_items_from_settings<V: View>(
             )
         }
     };
+
+    // Filter out items that are unavailable due to runtime state (user settings,
+    // workspace config, etc.) on top of the feature-flag checks in all_available().
+    let available: Vec<AgentToolbarItemKind> = available
+        .into_iter()
+        .filter(|item| item.is_available(ctx))
+        .collect();
+
+    // Drop saved items that are no longer available (e.g. their feature flag was disabled
+    // or a setting was turned off).
+    let filter_unavailable = |items: Vec<AgentToolbarItemKind>| -> Vec<AgentToolbarItemKind> {
+        items
+            .into_iter()
+            .filter(|item| available.contains(item))
+            .collect()
+    };
+    let current_left = filter_unavailable(current_left);
+    let current_right = filter_unavailable(current_right);
+
     chip_configurator.open_left_right_zones_with_items(
         current_left,
         current_right,
@@ -108,6 +127,15 @@ fn open_default_toolbar_items<V: View>(
 ) {
     let appearance = Appearance::as_ref(ctx);
     let (left, right, available) = AgentToolbarItemKind::defaults_for_mode(mode);
+    let filter_runtime = |items: Vec<AgentToolbarItemKind>| -> Vec<AgentToolbarItemKind> {
+        items
+            .into_iter()
+            .filter(|item| item.is_available(ctx))
+            .collect()
+    };
+    let left = filter_runtime(left);
+    let right = filter_runtime(right);
+    let available = filter_runtime(available);
     chip_configurator.open_left_right_zones_with_items(left, right, available, appearance);
 }
 

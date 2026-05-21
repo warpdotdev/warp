@@ -21,7 +21,9 @@ use crate::{
     terminal::{
         event::BlockCompletedEvent,
         model_events::{ModelEvent, ModelEventDispatcher},
-        view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
+        view::ambient_agent::{
+            AmbientAgentViewModel, AmbientAgentViewModelEvent, SetupCommandGroupId,
+        },
         TerminalModel,
     },
 };
@@ -32,6 +34,7 @@ enum Status {
 }
 
 pub struct CloudModeSetupCommandBlock {
+    group_id: SetupCommandGroupId,
     block_id: BlockId,
     command: String,
     status: Status,
@@ -43,6 +46,7 @@ pub struct CloudModeSetupCommandBlock {
 
 impl CloudModeSetupCommandBlock {
     pub fn new(
+        group_id: SetupCommandGroupId,
         block_id: BlockId,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         model_events: &ModelHandle<ModelEventDispatcher>,
@@ -51,7 +55,10 @@ impl CloudModeSetupCommandBlock {
     ) -> Self {
         ctx.subscribe_to_model(&ambient_agent_view_model, |me, model, event, ctx| {
             if let AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility = event {
-                if !model.as_ref(ctx).setup_command_state().should_expand()
+                if !model
+                    .as_ref(ctx)
+                    .setup_command_state()
+                    .should_expand(me.group_id)
                     && !me
                         .terminal_model
                         .lock()
@@ -94,6 +101,7 @@ impl CloudModeSetupCommandBlock {
             .map(|block| block.command_to_string())
             .unwrap_or_default();
         Self {
+            group_id,
             block_id,
             command,
             ambient_agent_view_model,
@@ -124,7 +132,7 @@ impl View for CloudModeSetupCommandBlock {
             .ambient_agent_view_model
             .as_ref(app)
             .setup_command_state()
-            .should_expand()
+            .should_expand(self.group_id)
         {
             return Empty::new().finish();
         }

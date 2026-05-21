@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! A specialized 2D grid implementation optimized for use in a terminal.
 
 mod resize;
@@ -593,5 +596,5 @@ impl Dimensions for GridStorage {
 }
 
 #[cfg(test)]
-#[path = "grid_test.rs"]
+#[path = "grid_tests.rs"]
 mod tests;

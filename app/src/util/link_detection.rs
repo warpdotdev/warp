@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Range;
+use string_offset::ByteOffset;
 use urlocator::{UrlLocation, UrlLocator};
 use warpui::elements::PartialClickableElement;
 
@@ -9,7 +10,7 @@ use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, Rea
 use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::links::should_directly_open_link;
-use crate::terminal::model::grid::grid_handler::FILE_LINK_SEPARATORS;
+use crate::terminal::model::grid::grid_handler::is_file_link_separator;
 use crate::terminal::ShellLaunchData;
 use warpui::elements::MouseStateHandle;
 use warpui::text::char_slice;
@@ -213,22 +214,41 @@ fn addr_of(s: &str) -> usize {
     s.as_ptr() as usize
 }
 
-/// Given a word with no whitespace in it, returns all the possible file paths within the word
-/// from longest to shortest. File paths within a word can be split by a list of FILE_LINK_SEPARATORS,
-/// and those separators may be part of file paths themselves.
-/// Possible file paths begin after a separator and end before a separator.
-/// For example, given /path/to/file:16:hello, it will return
-/// ["/path/to/file:16:hello", "/path/to/file:16", "/path/to/file", "16:hello", "hello"]
+/// Maximum byte length of a token to search for file paths in. Used as a guard against scanning huge non-path tokens.
+/// - Linux PATH_MAX: 4096 bytes.
+/// - macOS PATH_MAX: 1024 bytes.
+/// - Windows long-path cap: 32,767 UTF-16 units = 98,301 bytes.
+const MAX_WORD_LEN_FOR_FILE_PATH: usize = 96 * 1024;
+/// Maximum [`is_file_link_separator`] characters per token, to bound candidate substrings.
+/// 256 keeps per-token allocations under ~1 MiB and is far above any real path.
+const MAX_SEPARATORS_PER_WORD: usize = 256;
+
+/// A separator's byte range in the original word.
+///
+/// File path candidates start after one separator and end before another. Using [`ByteOffset`]
+/// keeps the byte-indexing semantics explicit when separators are multi-byte characters like
+/// box-drawing glyphs.
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-fn possible_file_paths_in_word(word: &str) -> impl Iterator<Item = &str> {
+type SeparatorByteRange = Range<ByteOffset>;
+
+/// Returns separator byte ranges in `word`, framed by zero-width virtual separators at
+/// the start and end of the word. Returns empty if either safety cap is exceeded.
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+fn separator_byte_ranges_for_file_path_search(word: &str) -> Vec<SeparatorByteRange> {
+    if word.len() > MAX_WORD_LEN_FOR_FILE_PATH {
+        return Vec::new();
+    }
     // To include any substrings starting at the beginning of the word, we
-    // pretend there's a separator before the first character.
-    let mut separator_byte_indices = vec![-1];
+    // pretend there's a zero-width separator before the first character.
+    let mut separator_byte_ranges = vec![ByteOffset::zero()..ByteOffset::zero()];
     // We use char_indices() to get byte indices of each char which are used to index the string,
     // rather than chars().enumerate() would give char indices.
     for (i, c) in word.char_indices() {
-        if FILE_LINK_SEPARATORS.contains(&c) {
-            separator_byte_indices.push(i as i32);
+        if is_file_link_separator(c) {
+            if separator_byte_ranges.len() > MAX_SEPARATORS_PER_WORD {
+                return Vec::new();
+            }
+            separator_byte_ranges.push(ByteOffset::from(i)..ByteOffset::from(i + c.len_utf8()));
         }
     }
     // Consider trailing periods to be separators. This is because
@@ -237,24 +257,41 @@ fn possible_file_paths_in_word(word: &str) -> impl Iterator<Item = &str> {
     // periods can also be part of a valid file path.
     let word_ends_with_period = word.ends_with('.');
     if word_ends_with_period {
-        separator_byte_indices.push((word.len() - 1) as i32);
+        separator_byte_ranges.push(ByteOffset::from(word.len() - 1)..ByteOffset::from(word.len()));
     }
     // To include any substrings ending at the end of the word, we pretend there's
-    // a separator after the last character.
-    separator_byte_indices.push(word.len() as i32);
+    // a zero-width separator after the last character.
+    separator_byte_ranges.push(ByteOffset::from(word.len())..ByteOffset::from(word.len()));
+    separator_byte_ranges
+}
+
+/// Given a word with no whitespace in it, returns all the possible file paths within the word
+/// from longest to shortest. File paths within a word can be split by [`is_file_link_separator`]
+/// characters, and those separators may be part of file paths themselves.
+/// Possible file paths begin after a separator and end before a separator.
+/// For example, given /path/to/file:16:hello, it will return
+/// ["/path/to/file:16:hello", "/path/to/file:16", "/path/to/file", "16:hello", "hello"]
+///
+/// Tokens exceeding [`MAX_WORD_LEN_FOR_FILE_PATH`] or [`MAX_SEPARATORS_PER_WORD`]
+/// yield no candidates to bound the substring enumeration.
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+fn possible_file_paths_in_word(word: &str) -> impl Iterator<Item = &str> {
+    let separator_byte_ranges = separator_byte_ranges_for_file_path_search(word);
     let mut possible_path_byte_ranges = vec![];
-    for (i, start_index) in separator_byte_indices.iter().cloned().enumerate() {
-        for end_index in separator_byte_indices.iter().skip(i + 1).cloned() {
-            if start_index + 1 < end_index {
-                possible_path_byte_ranges.push(start_index + 1..end_index);
+    for (i, start_separator) in separator_byte_ranges.iter().cloned().enumerate() {
+        for end_separator in separator_byte_ranges.iter().skip(i + 1).cloned() {
+            if start_separator.end < end_separator.start {
+                possible_path_byte_ranges.push(start_separator.end..end_separator.start);
             }
         }
     }
     // Sort by longest to shortest.
-    possible_path_byte_ranges.sort_by(|a, b| (b.end - b.start).cmp(&(a.end - a.start)));
+    possible_path_byte_ranges.sort_by(|a, b| {
+        (b.end.as_usize() - b.start.as_usize()).cmp(&(a.end.as_usize() - a.start.as_usize()))
+    });
     possible_path_byte_ranges
         .into_iter()
-        .map(|range| &word[(range.start as usize)..(range.end as usize)])
+        .map(|range| &word[range.start.as_usize()..range.end.as_usize()])
 }
 
 /// Returns a DetectedLink::FilePath if expanded_path is a valid path that actually exists on the file system.
@@ -474,7 +511,7 @@ fn detect_line_ranges_after_file_path(
         .char_indices()
         .map(|(offs, ch)| (offs + file_path_byte_end, ch));
 
-    // Finds an opening paranthesis, allowing some whitespace after file path, or returns None on failure
+    // Finds an opening parenthesis, allowing some whitespace after file path, or returns None on failure
     let mut paren_start_idx = None;
     for (char_idx, ch) in chars_iter {
         if ch == '(' {
@@ -486,7 +523,7 @@ fn detect_line_ranges_after_file_path(
     }
     let paren_start_idx = paren_start_idx?;
 
-    // Find the matching closing paranthesis, or returns None on failure
+    // Find the matching closing parenthesis, or returns None on failure
     let paren_end_index = paren_start_idx + text[paren_start_idx..].find(')')?;
 
     // Extract the content between parentheses, and parse valid line ranges
@@ -718,5 +755,5 @@ pub(crate) fn detect_links(
 }
 
 #[cfg(test)]
-#[path = "link_detection_test.rs"]
+#[path = "link_detection_tests.rs"]
 mod tests;

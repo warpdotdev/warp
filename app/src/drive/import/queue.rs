@@ -117,7 +117,7 @@ impl ImportQueue {
         }
     }
 
-    // Whether all dependcies of an item has been sync-ed.
+    // Whether all dependencies of an item has been sync-ed.
     fn dependency_synced(&self, item: &ImportQueueArgs) -> bool {
         match &item.parent_id {
             ParentId::FolderToUpload(id) => self

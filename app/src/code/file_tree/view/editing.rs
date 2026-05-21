@@ -1,4 +1,4 @@
-//! Module for utlities related to editing items in the file tree.
+//! Module for utilities related to editing items in the file tree.
 
 #[cfg(test)]
 #[path = "editing_tests.rs"]
@@ -240,7 +240,7 @@ impl FileTreeView {
                 });
 
                 // Rebuild and select the renamed item using its FileTreeIdentifier
-                self.rebuild_flatten_items_and_select_path(Some(&file_tree_id), None);
+                self.rebuild_flatten_items_impl(Some(&file_tree_id), None, None);
                 ctx.notify();
             }
         }

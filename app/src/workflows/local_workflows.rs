@@ -200,7 +200,7 @@ pub fn tail_command_for_shell(shell_family: ShellFamily, path: &PathBuf) -> Stri
         // the format string.
         ShellFamily::Posix => format!("tail -f {path:?}"),
         // We avoid the debug formatting here so that backslashes don't get escaped, which is not
-        // desireable for PowerShell.  Note that this may be lossy conversion if the path is not
+        // desirable for PowerShell.  Note that this may be lossy conversion if the path is not
         // valid UTF-8.
         ShellFamily::PowerShell => {
             format!("Get-Content -Wait -Tail 10 -Path \"{}\"", path.display())
@@ -232,5 +232,5 @@ pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflo
 }
 
 #[cfg(test)]
-#[path = "local_workflows_test.rs"]
+#[path = "local_workflows_tests.rs"]
 mod tests;

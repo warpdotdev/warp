@@ -104,7 +104,11 @@ impl OnboardingPromptBlock {
             .finish()
     }
 
-    fn render_confirm_skip_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_confirm_skip_buttons(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let mut confirm_button = appearance
             .ui_builder()
             .button(
@@ -118,7 +122,7 @@ impl OnboardingPromptBlock {
                 font_size: Some(14.),
                 ..Default::default()
             })
-            .with_centered_text_label("Confirm".to_owned());
+            .with_centered_text_label(crate::i18n::tr_static(app, "Confirm").to_owned());
         if self.selected_prompt.is_none() {
             confirm_button = confirm_button.disabled();
         }
@@ -451,7 +455,7 @@ impl View for OnboardingPromptBlock {
                     .finish(),
             );
         if !self.block_completed {
-            col.add_child(self.render_confirm_skip_buttons(appearance));
+            col.add_child(self.render_confirm_skip_buttons(appearance, ctx));
         }
 
         Container::new(col.finish())

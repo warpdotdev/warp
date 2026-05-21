@@ -19,12 +19,12 @@ use crate::{terminal::shell::ShellType, ui_components::icons::Icon};
 lazy_static! {
     // Used as a delimeter to separate metadata (such as names and references)
     // in cases the cli tool doesn't display secrets in a common format (i.e. json)
-    static ref WARP_SECRET_DELIMETER: &'static str = "/warp-secret-delimeter/";
+    static ref WARP_SECRET_DELIMITER: &'static str = "/warp-secret-delimeter/";
     static ref LASTPASS_LIST_SECRETS_COMMAND: Vec<String> = {
         vec![
             "lpass".to_owned(),
             "ls".to_owned(),
-            format!("--format=%an{}%ai", *WARP_SECRET_DELIMETER),
+            format!("--format=%an{}%ai", *WARP_SECRET_DELIMITER),
         ]
     };
 }
@@ -320,7 +320,7 @@ fn parse_lastpass_secrets(output: &str) -> anyhow::Result<Vec<ExternalSecret>> {
     let parsed_output: Vec<ExternalSecret> = output
         .lines()
         .filter_map(|line| {
-            let parts = line.split(*WARP_SECRET_DELIMETER).collect_vec();
+            let parts = line.split(*WARP_SECRET_DELIMITER).collect_vec();
             if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
                 Some(ExternalSecret::LastPass(LastPassSecret {
                     name: parts[0].to_owned(),

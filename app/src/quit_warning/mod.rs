@@ -468,7 +468,7 @@ impl<'a> QuitWarningDialog<'a> {
             shown = true;
         } else if cfg!(all(
             not(target_family = "wasm"),
-            any(target_os = "linux", windows)
+            any(target_os = "linux", target_os = "freebsd", windows)
         )) {
             // Find a window to show the Warp-native modal in. If there is no active window, use
             // one of the windows with a running process.

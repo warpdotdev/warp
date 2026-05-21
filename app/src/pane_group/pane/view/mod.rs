@@ -252,6 +252,11 @@ impl<P: BackingView> PaneView<P> {
                     header.share_pane_contents(*source, ctx);
                 });
             }
+            PaneConfigurationEvent::OpenSharingQrCode(source) => {
+                self.header.update(ctx, |header, ctx| {
+                    header.open_shared_session_qr_code(*source, ctx);
+                });
+            }
             _ => {}
         }
     }

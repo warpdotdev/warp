@@ -198,6 +198,7 @@ impl BlocklistAIPermissions {
             mcp_denylist: self.get_mcp_denylist_for_profile(ctx, profile_id),
             computer_use: self.get_computer_use_setting_for_profile(ctx, profile_id),
             ask_user_question: self.get_ask_user_question_setting_for_profile(ctx, profile_id),
+            run_agents: self.get_run_agents_setting_for_profile(ctx, profile_id),
 
             // Some fields are read directly from the profile.
             name: profile_data.name.clone(),
@@ -398,18 +399,35 @@ impl BlocklistAIPermissions {
         profile_id: ClientProfileId,
     ) -> Vec<AgentModeCommandExecutionPredicate> {
         let autonomy_settings = Self::workspace_autonomy_settings(ctx);
+        let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
+        let user_denylist = profiles_model
+            .get_profile_by_id(profile_id, ctx)
+            .unwrap_or_else(|| profiles_model.default_profile(ctx))
+            .data()
+            .command_denylist
+            .clone();
 
+        match autonomy_settings.execute_commands_denylist {
+            Some(org_denylist) => {
+                let mut merged = org_denylist;
+                for item in user_denylist {
+                    if !merged.contains(&item) {
+                        merged.push(item);
+                    }
+                }
+                merged
+            }
+            None => user_denylist,
+        }
+    }
+
+    pub fn get_org_execute_commands_denylist(
+        ctx: &AppContext,
+    ) -> Vec<AgentModeCommandExecutionPredicate> {
+        let autonomy_settings = Self::workspace_autonomy_settings(ctx);
         autonomy_settings
             .execute_commands_denylist
-            .unwrap_or_else(|| {
-                let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
-                profiles_model
-                    .get_profile_by_id(profile_id, ctx)
-                    .unwrap_or_else(|| profiles_model.default_profile(ctx))
-                    .data()
-                    .command_denylist
-                    .clone()
-            })
+            .unwrap_or_default()
     }
 
     /// Returns a denylist of command regexes that AM should not auto-execute.
@@ -617,6 +635,29 @@ impl BlocklistAIPermissions {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
         self.get_ask_user_question_setting_for_profile(ctx, *active_profile.id())
+    }
+
+    pub fn get_run_agents_setting_for_profile(
+        &self,
+        ctx: &AppContext,
+        profile_id: ClientProfileId,
+    ) -> crate::ai::execution_profiles::RunAgentsPermission {
+        let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
+        profiles_model
+            .get_profile_by_id(profile_id, ctx)
+            .unwrap_or_else(|| profiles_model.default_profile(ctx))
+            .data()
+            .run_agents
+    }
+
+    pub fn get_run_agents_setting(
+        &self,
+        ctx: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> crate::ai::execution_profiles::RunAgentsPermission {
+        let active_profile =
+            AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
+        self.get_run_agents_setting_for_profile(ctx, *active_profile.id())
     }
 
     /// Returns whether or not Agent Mode can auto-read the given files.
@@ -1192,5 +1233,5 @@ pub fn is_agent_mode_autonomy_allowed(ctx: &AppContext) -> bool {
 }
 
 #[cfg(test)]
-#[path = "permissions_test.rs"]
+#[path = "permissions_tests.rs"]
 mod tests;

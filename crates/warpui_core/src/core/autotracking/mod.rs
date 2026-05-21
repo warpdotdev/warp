@@ -100,7 +100,7 @@
 mod tracked;
 
 #[cfg(test)]
-#[path = "autotracking_test.rs"]
+#[path = "autotracking_tests.rs"]
 mod tests;
 
 use itertools::Itertools as _;

@@ -28,7 +28,7 @@ use crate::{
         sync_queue::SyncQueue,
     },
     settings::cloud_preferences::{CloudPreferenceModel, CloudPreferencesSettings, Platform},
-    Assets,
+    ASSETS,
 };
 
 use warp_core::{
@@ -207,9 +207,21 @@ async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {
         })
         .await
 }
+async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, message: &str) {
+    for _ in 0..50 {
+        let num_spawned_futures =
+            SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len());
+        if num_spawned_futures == expected_num {
+            return;
+        }
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    }
+
+    assert_num_spawned_futures(app, expected_num, message);
+}
 
 async fn await_spawned_futures(app: &mut App, num_futures: usize, message: &str) {
-    assert_num_spawned_futures(app, num_futures, message);
+    wait_for_num_spawned_futures(app, num_futures, message).await;
     for _ in 0..num_futures {
         spawned_sync_queue_future_at_index(app, 0).await;
     }
@@ -281,7 +293,7 @@ fn expect_bulk_create_generic_string_objects(
 
 #[test]
 fn test_sync_local_pref_to_cloud_after_initial_sync_creates_prefs_setting() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -327,19 +339,22 @@ fn test_sync_local_pref_to_cloud_after_initial_sync_creates_prefs_setting() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_after_initial_sync() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
         let is_mac = cfg!(all(not(target_family = "wasm"), target_os = "macos"));
-        let is_linux = cfg!(all(not(target_family = "wasm"), target_os = "linux"));
+        let is_linux = cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", target_os = "freebsd")
+        ));
 
         let mut all_client_ids = expect_sync_preferences_setting(&mut server_api);
         all_client_ids.append(&mut expect_sync_server_stored_privacy_settings(
             &mut server_api,
         ));
 
-        // Expect the creation of one or two cloud settings in seperate requests depending on the platform
+        // Expect the creation of one or two cloud settings in separate requests depending on the platform
         all_client_ids.append(&mut expect_bulk_create_generic_string_objects(
             &mut server_api,
             1,
@@ -429,7 +444,10 @@ fn test_sync_local_pref_to_cloud_after_initial_sync() {
                     .set_value(true, ctx);
                 if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
                     let _ = test_settings.mac_only_cloud_setting.set_value(true, ctx);
-                } else if cfg!(all(not(target_family = "wasm"), target_os = "linux")) {
+                } else if cfg!(all(
+                    not(target_family = "wasm"),
+                    any(target_os = "linux", target_os = "freebsd")
+                )) {
                     let _ = test_settings.linux_only_cloud_setting.set_value(true, ctx);
                 }
                 let _ = test_settings.non_cloud_setting.set_value(true, ctx);
@@ -450,12 +468,15 @@ fn test_sync_local_pref_to_cloud_after_initial_sync() {
 }
 
 fn run_initial_sync_test(is_onboarded: bool) {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
         let is_mac = cfg!(all(not(target_family = "wasm"), target_os = "macos"));
-        let is_linux = cfg!(all(not(target_family = "wasm"), target_os = "linux"));
+        let is_linux = cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", target_os = "freebsd")
+        ));
 
         let mut all_client_ids = expect_sync_preferences_setting(&mut server_api);
 
@@ -589,7 +610,7 @@ fn test_sync_local_pref_to_cloud_on_initial_sync_for_returning_user() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_updates_existing_pref() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -676,7 +697,7 @@ fn test_sync_local_pref_to_cloud_updates_existing_pref() {
 
 #[test]
 fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -748,7 +769,10 @@ fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
         .await;
 
         let is_mac = cfg!(all(not(target_family = "wasm"), target_os = "macos"));
-        let is_linux = cfg!(all(not(target_family = "wasm"), target_os = "linux"));
+        let is_linux = cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", target_os = "freebsd")
+        ));
         app.read(|ctx| {
             let settings = TestSettings::as_ref(ctx);
             assert!(
@@ -788,7 +812,7 @@ fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
 
 #[test]
 fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -856,7 +880,10 @@ fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
         });
 
         let is_mac = cfg!(all(not(target_family = "wasm"), target_os = "macos"));
-        let is_linux = cfg!(all(not(target_family = "wasm"), target_os = "linux"));
+        let is_linux = cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", target_os = "freebsd")
+        ));
         app.read(|ctx| {
             let settings = TestSettings::as_ref(ctx);
             assert!(
@@ -910,7 +937,7 @@ fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
 
 #[test]
 fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1014,7 +1041,7 @@ fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
 
 #[test]
 fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         // Start with cloud prefs disabled
         initialize_settings(&mut app);
 
@@ -1075,7 +1102,7 @@ fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
 
 #[test]
 fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1137,7 +1164,7 @@ fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
 
 #[test]
 fn test_ensure_no_duplicate_cloud_prefs() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         let mut server_api = mock_object_client_with_base_expectations();
@@ -1296,7 +1323,7 @@ fn write_stored_hash(app: &App, value: &str) {
 
 #[test]
 fn test_force_local_wins_on_startup_uploads_local_to_cloud() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Step 1: create a real temp settings.toml. The file's hash is
@@ -1387,7 +1414,7 @@ fn test_force_local_wins_on_startup_uploads_local_to_cloud() {
 
 #[test]
 fn test_no_force_local_when_hashes_match() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Create a file and seed the stored hash with its exact value
@@ -1445,7 +1472,7 @@ fn test_no_force_local_when_hashes_match() {
 
 #[test]
 fn test_force_local_suppressed_when_file_is_broken() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Create a file whose contents happen to hash to something,
@@ -1516,7 +1543,7 @@ fn test_force_local_suppressed_when_file_is_broken() {
 
 #[test]
 fn test_file_missing_with_stored_hash_lets_cloud_win() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Use a path that doesn't exist: the user has deleted their
@@ -1569,7 +1596,7 @@ fn test_file_missing_with_stored_hash_lets_cloud_win() {
 
 #[test]
 fn test_first_launch_with_no_stored_hash_lets_cloud_win() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Fresh install: a settings.toml exists but there is no
@@ -1625,7 +1652,7 @@ fn test_first_launch_with_no_stored_hash_lets_cloud_win() {
 
 #[test]
 fn test_offline_ui_change_does_not_update_hash_until_sync_succeeds() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);
 
         // Phase 1: normal startup. File and stored hash match, cloud

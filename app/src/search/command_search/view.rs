@@ -336,6 +336,9 @@ impl CommandSearchView {
                                     },
                                     ctx,
                                 );
+                                if let Some(query) = mixer.current_query().cloned() {
+                                    mixer.run_query(query, ctx);
+                                }
                                 ctx.notify();
                             }
                         }
@@ -402,10 +405,7 @@ impl CommandSearchView {
 
     fn close(&self, ctx: &mut ViewContext<Self>) {
         let query = self.search_bar.as_ref(ctx).query(ctx);
-        let filter = self
-            .search_bar_state
-            .as_ref(ctx)
-            .active_visible_query_filter();
+        let filter = self.search_bar_state.as_ref(ctx).active_query_filter();
         ctx.emit(CommandSearchEvent::Close { query, filter });
     }
 
@@ -481,15 +481,13 @@ impl CommandSearchView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.search_bar.update(ctx, |search_bar, ctx| {
-            search_bar.set_visible_query_filter(filter_and_atom_text, ctx);
+            search_bar.set_query_filter(filter_and_atom_text, ctx);
         });
     }
 
     /// Returns the active query filters
     fn active_query_filter(&self, app: &AppContext) -> Option<QueryFilter> {
-        self.search_bar_state
-            .as_ref(app)
-            .active_visible_query_filter()
+        self.search_bar_state.as_ref(app).active_query_filter()
     }
 
     /// Emits the `ItemSelected` event containing the passed `CommandSearchEventPayload` and closes
@@ -542,10 +540,7 @@ impl CommandSearchView {
                 TelemetryEvent::CommandSearchResultAccepted {
                     result_index,
                     result_type: (&result_action).into(),
-                    query_filter: self
-                        .search_bar_state
-                        .as_ref(ctx)
-                        .active_visible_query_filter(),
+                    query_filter: self.search_bar_state.as_ref(ctx).active_query_filter(),
                     buffer_length: self.search_bar.as_ref(ctx).query(ctx).len(),
                     was_immediately_executed,
                 },
@@ -575,11 +570,11 @@ impl CommandSearchView {
         self.search_bar_state.as_ref(app).selected_result_renderer()
     }
 
-    fn render_loading_state(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_loading_state(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let muted_color: ColorU = appearance.theme().nonactive_ui_text_color().into();
         let text = appearance
             .ui_builder()
-            .span("Loading...")
+            .span(crate::i18n::tr_static(app, "Loading..."))
             .with_style(UiComponentStyles {
                 font_size: Some(appearance.monospace_font_size()),
                 font_family_id: Some(appearance.ui_font_family()),
@@ -712,7 +707,10 @@ impl CommandSearchView {
         row.add_child(
             appearance
                 .ui_builder()
-                .span("Looks like you're out of credits. ")
+                .span(crate::i18n::tr_static(
+                    app,
+                    "Looks like you're out of credits. ",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.monospace_font_size()),
                     font_family_id: Some(appearance.ui_font_family()),
@@ -761,7 +759,7 @@ impl CommandSearchView {
                 // There are no results to display, so notify the user of that fact.
                 let text = appearance
                     .ui_builder()
-                    .span("No results found.")
+                    .span(crate::i18n::tr_static(app, "No results found."))
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         font_family_id: Some(appearance.ui_font_family()),
@@ -877,7 +875,7 @@ impl CommandSearchView {
                     )
                     .finish()
             }
-            _ => self.render_loading_state(appearance),
+            _ => self.render_loading_state(appearance, app),
         }
     }
 
@@ -1014,11 +1012,11 @@ impl View for CommandSearchView {
         let appearance = Appearance::as_ref(app);
         let mixer = self.mixer.as_ref(app);
 
-        let should_show_zero_state = self.search_bar_state.as_ref(app).should_show_zero_state();
+        let should_show_zero_state = self.search_bar.as_ref(app).should_show_zero_state(app);
         let panel_contents_body = if should_show_zero_state {
             ChildView::new(&self.zero_state_handle).finish()
         } else if mixer.is_loading() && mixer.are_results_empty() {
-            self.render_loading_state(appearance)
+            self.render_loading_state(appearance, app)
         } else {
             self.render_results(appearance, app)
         };
@@ -1117,6 +1115,13 @@ impl CommandSearchView {
     pub fn search_bar(&self) -> &ViewHandle<SearchBar<CommandSearchItemAction>> {
         &self.search_bar
     }
+
+    pub fn has_search_results(&self, app: &AppContext) -> bool {
+        self.search_bar_state
+            .as_ref(app)
+            .query_result_renderers()
+            .is_some_and(|results| !results.is_empty())
+    }
 }
 
 pub mod styles {
@@ -1161,5 +1166,5 @@ pub mod styles {
 }
 
 #[cfg(test)]
-#[path = "view_test.rs"]
+#[path = "view_tests.rs"]
 mod tests;

@@ -87,6 +87,14 @@ integration_tests! {
     test_ssh_into_sh,
     test_ssh_into_ash,
 
+    // Tests of remote server behavior.
+    test_remote_server_connect_bash,
+    test_remote_server_connect_zsh,
+    test_remote_server_navigate_to_repo,
+    test_remote_server_completions,
+    test_remote_server_file_operations,
+    test_remote_server_lazy_load_directory,
+
     // Tests of custom prompt behavior.
     test_copy_prompt_from_block_honor_ps1_enabled,
     test_copy_prompt_from_input_honor_ps1_enabled,

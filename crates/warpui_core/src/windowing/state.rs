@@ -94,6 +94,14 @@ impl WindowManager {
         self.platform.set_window_bounds(window_id, bound)
     }
 
+    /// Sets the per-window opacity, where `1.0` is fully opaque and `0.0` is fully
+    /// transparent. Cheap alternative to `hide_window` for cases where the window
+    /// only needs to disappear visually (e.g. tab drag preview) without changing
+    /// focus, key state, or z-order.
+    pub fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.platform.set_window_alpha(window_id, alpha)
+    }
+
     pub fn cancel_synthetic_drag(&self, window_id: WindowId) {
         self.platform.cancel_synthetic_drag(window_id)
     }

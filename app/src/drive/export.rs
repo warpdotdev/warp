@@ -23,6 +23,7 @@ use warpui::{
 
 use crate::{
     cloud_object::{model::persistence::CloudModel, Space},
+    i18n::{self, I18nKey},
     safe_warn,
     view_components::DismissibleToast,
     workspace::{active_terminal_in_window, ToastStack},
@@ -237,7 +238,7 @@ impl ExportManager {
         if is_bulk && self.exports.is_empty() {
             ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
                 let link_label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
+                    i18n::tr(ctx, I18nKey::CommonShowInFinder)
                 } else {
                     "Open in folder"
                 };
@@ -250,8 +251,10 @@ impl ExportManager {
                         .with_onclick_action(WorkspaceAction::OpenInExplorer { path: root_dir });
                 }
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::success("Finished exporting objects".to_string())
-                        .with_link(toast_link),
+                    DismissibleToast::success(
+                        crate::i18n::tr_static(ctx, "Finished exporting objects").to_string(),
+                    )
+                    .with_link(toast_link),
                     window_id,
                     ctx,
                 );

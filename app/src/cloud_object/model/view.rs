@@ -55,7 +55,7 @@ impl Editor {
 }
 
 /// Singleton model for storing and querying the data and logic logic needed by various view, based on the information
-/// stored in [CloudModel]. As a general, rule, any new API that requires logic beyond just retriving the raw value
+/// stored in [CloudModel]. As a general, rule, any new API that requires logic beyond just retrieving the raw value
 /// in [CloudModel], should be stored here. This includes logic such as object trashed status, the object current editor,
 /// and object location.
 ///

@@ -237,7 +237,7 @@ fn project_dirs_for_app_id(
     data_profile: Option<&str>,
 ) -> Option<directories::ProjectDirs> {
     cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
+        if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             // Adjust the base application name so that we end up with
             // directories like "warp-terminal" and "warp-terminal-dev", to
             // match our Linux package name.
@@ -319,7 +319,7 @@ pub fn bundled_resources_dir() -> Option<PathBuf> {
                         .join("Contents")
                         .join("Resources")
                 })
-        } else if #[cfg(target_os = "linux")] {
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             std::env::current_exe()
                 .ok()
                 .and_then(|executable| std::fs::canonicalize(executable).ok())

@@ -283,6 +283,35 @@ fn unmatched_line_suffix<'a>(search_line: &str, file_line: &'a str) -> Option<&'
     }
 }
 
+/// Preserve the unmatched suffix of the final matched file line when the LLM emitted only a
+/// partial final line.
+///
+/// When search and replace have the same line count, preserve the suffix to maintain the legacy
+/// behavior for simple partial-line replacements. When line counts differ, only preserve it if the
+/// replacement's final line still carries the same partial context as the search's final line.
+fn append_unmatched_line_suffix(search: &str, file_line: &str, insertion: &mut String) {
+    let Some(search_last_line) = lines(search).last() else {
+        return;
+    };
+    let Some(suffix) = unmatched_line_suffix(search_last_line, file_line) else {
+        return;
+    };
+
+    let search_line_count = lines(search).count();
+    let insertion_line_count = lines(insertion).count();
+    let Some(insertion_last_line) = lines(insertion).last() else {
+        return;
+    };
+
+    if search_line_count != insertion_line_count
+        && search_last_line.trim_start() != insertion_last_line.trim_start()
+    {
+        return;
+    }
+
+    let insertion_point = insertion.trim_end_matches('\n').len();
+    insertion.insert_str(insertion_point, suffix);
+}
 /// We told the model not to include line numbers for the replacement content. However, it can
 /// still happen. Try to remove them here.
 /// https://github.com/warpdotdev/warp-server/blob/d9c1b6d1443290f2355979ae552d41af01a63bde/logic/ai/prompt/tools/suggest_diff.yaml#L34-L34
@@ -402,6 +431,14 @@ pub fn fuzzy_match_v4a_diffs(
         }
     }
 
+    // Sort by start line and remove overlapping deltas. When the LLM produces
+    // multiple hunks targeting the same region (e.g. a large deletion whose
+    // matched range subsumes a nearby single-line edit), the overlapping delta
+    // must be dropped — applying both would produce an invalid edit range in
+    // the editor buffer (see WARP-CLIENT-DEV-NYY).
+    deltas.sort_by_key(|d| d.replacement_line_range.start);
+    deltas = deduplicate_overlapping_deltas(deltas);
+
     let update_deltas_empty = deltas.is_empty();
     let failures = if failures.fuzzy_match_failures > 0
         || failures.missing_line_numbers > 0
@@ -418,6 +455,33 @@ pub fn fuzzy_match_v4a_diffs(
         failures,
         original_content: file_content,
     }
+}
+
+/// Given a list of `DiffDelta`s sorted by `replacement_line_range.start`,
+/// drop any delta whose range overlaps with the preceding accepted delta.
+///
+/// "Overlaps" means `B.start < A.end` (strictly inside or partial overlap).
+/// Adjacent ranges (`A.end == B.start`) are kept.
+fn deduplicate_overlapping_deltas(sorted_deltas: Vec<DiffDelta>) -> Vec<DiffDelta> {
+    let mut result: Vec<DiffDelta> = Vec::with_capacity(sorted_deltas.len());
+
+    for delta in sorted_deltas {
+        let dominated = result.last().is_some_and(|prev| {
+            delta.replacement_line_range.start < prev.replacement_line_range.end
+        });
+        if dominated {
+            log::warn!(
+                "Dropping V4A delta with overlapping range {:?} \
+                 (subsumed by preceding delta with range {:?})",
+                delta.replacement_line_range,
+                result.last().unwrap().replacement_line_range,
+            );
+            continue;
+        }
+        result.push(delta);
+    }
+
+    result
 }
 
 fn fuzzy_match_file_diffs(
@@ -547,13 +611,12 @@ fn fuzzy_match_file_diffs(
                 // the delta would replace the entire line and drop the unmatched
                 // suffix. Detect this and preserve the suffix in the insertion.
                 let mut insertion = diff.replace.clone();
-                if range.end >= 2 && lines(&search).count() == lines(&insertion).count() {
-                    if let Some(suffix) = lines(&search)
-                        .last()
-                        .and_then(|last| unmatched_line_suffix(last, target_lines[range.end - 2]))
-                    {
-                        insertion.push_str(suffix);
-                    }
+                if range.end >= 2 {
+                    append_unmatched_line_suffix(
+                        &search,
+                        target_lines[range.end - 2],
+                        &mut insertion,
+                    );
                 }
                 deltas.push(DiffDelta {
                     replacement_line_range: range.start..range.end,
@@ -1208,5 +1271,5 @@ fn find_change_context_start(change_context: &[String], file_lines: &[&str]) -> 
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

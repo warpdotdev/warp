@@ -18,9 +18,10 @@ use warp_editor::{
         ToBufferCharOffset as _, VimInsertPoint,
     },
     model::{CoreEditorModel, PlainTextEditorModel},
+    render::model::AutoScrollMode,
     selection::{TextDirection, TextUnit},
 };
-use warpui::{text::point::Point, SingletonEntity, ViewContext};
+use warpui::{text::point::Point, units::IntoPixels, SingletonEntity, ViewContext};
 
 impl VimHandler for CodeEditorView {
     fn insert_char(&mut self, c: char, ctx: &mut ViewContext<Self>) {
@@ -920,6 +921,62 @@ impl VimHandler for CodeEditorView {
 
     fn show_hover(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(CodeEditorEvent::VimShowHover);
+    }
+
+    fn center_cursor_vertically(&mut self, ctx: &mut ViewContext<Self>) {
+        let cursor_offset = self
+            .model
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .first_selection_head();
+        self.model
+            .as_ref(ctx)
+            .render_state()
+            .clone()
+            .update(ctx, |render_state, _ctx| {
+                render_state.request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(
+                    cursor_offset,
+                ));
+            });
+    }
+
+    fn scroll_half_page_down(&mut self, count: u32, ctx: &mut ViewContext<Self>) {
+        self.scroll_half_page(count, TextDirection::Forwards, ctx);
+    }
+
+    fn scroll_half_page_up(&mut self, count: u32, ctx: &mut ViewContext<Self>) {
+        self.scroll_half_page(count, TextDirection::Backwards, ctx);
+    }
+}
+
+impl CodeEditorView {
+    /// Implements `<C-d>` and `<C-u>`. Without a count, scrolls by half the
+    /// viewport; with a count > 1, scrolls by that many lines (matching vim's
+    /// `n<C-d>` / `n<C-u>` behavior).
+    fn scroll_half_page(
+        &mut self,
+        count: u32,
+        direction: TextDirection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let model = self.model.as_ref(ctx);
+        let lines = if count > 1 {
+            count as usize
+        } else {
+            (model.lines_in_viewport(ctx) / 2).max(1)
+        };
+        let signed_lines = match direction {
+            TextDirection::Forwards => -(lines as f32),
+            TextDirection::Backwards => lines as f32,
+        };
+        let scroll_pixels = (signed_lines * model.line_height(ctx)).into_pixels();
+        self.model.update(ctx, |model, ctx| {
+            model.vim_move_vertical_by_offset(lines as u32, direction, false, ctx);
+            model.render_state().update(ctx, |render_state, ctx| {
+                render_state.scroll(scroll_pixels, ctx);
+            });
+        });
     }
 }
 

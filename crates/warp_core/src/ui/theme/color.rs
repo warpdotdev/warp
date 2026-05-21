@@ -409,8 +409,16 @@ impl WarpTheme {
         self.ansi_fg(AnsiColorIdentifier::Yellow.to_ansi_color(&self.terminal_colors().normal))
     }
 
+    pub fn ansi_bg_magenta(&self) -> ColorU {
+        self.ansi_bg(AnsiColorIdentifier::Magenta.to_ansi_color(&self.terminal_colors().normal))
+    }
+
     pub fn ansi_fg_magenta(&self) -> ColorU {
         self.ansi_fg(AnsiColorIdentifier::Magenta.to_ansi_color(&self.terminal_colors().normal))
+    }
+
+    pub fn ansi_bg_yellow(&self) -> ColorU {
+        self.ansi_bg(AnsiColorIdentifier::Yellow.to_ansi_color(&self.terminal_colors().normal))
     }
 
     pub fn ansi_fg_cyan(&self) -> ColorU {

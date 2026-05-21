@@ -125,7 +125,7 @@ impl Client {
         let request = Request::new(service_id::<S>(), request_bytes);
 
         // Create a channel for the response result. The sending end is sent to the outbound
-        // message task. The outbound meessage task uses it to relay any error that might occur
+        // message task. The outbound message task uses it to relay any error that might occur
         // when sending the message. If the message is sent successfully, the sending end is
         // forwarded to the _inbound_ message task, which will eventually use it to relay the
         // response bytes.

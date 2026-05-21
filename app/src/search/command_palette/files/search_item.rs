@@ -65,6 +65,7 @@ impl SearchItem for FileSearchItem {
             FileSearchRowOptions {
                 match_result: Some(&self.match_result),
                 highlight_state,
+                max_combined_length: None,
                 ..Default::default()
             },
             app,

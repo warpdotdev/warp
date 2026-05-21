@@ -6,8 +6,8 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use crate::{
     ai::{
         agent::{
-            conversation::AIConversationId, AIAgentContext, AIAgentInput, CloneRepositoryURL,
-            EntrypointType, RequestMetadata,
+            conversation::AIConversationId, AIAgentContext, AIAgentInput, CancellationReason,
+            CloneRepositoryURL, EntrypointType, RequestMetadata,
         },
         blocklist::agent_view::AgentViewEntryOrigin,
     },
@@ -90,6 +90,8 @@ impl SlashCommandRequest {
         if inputs.is_empty() {
             return;
         }
+        let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation_id(controller.terminal_view_id);
 
         // If no existing conversation, create a new one.
         // When AgentView is enabled, enter agent view which creates the conversation
@@ -113,6 +115,18 @@ impl SlashCommandRequest {
             log::error!("Failed to get conversation ID for slash command request");
             return;
         };
+
+        let cancellation_reason = CancellationReason::FollowUpSubmitted {
+            is_for_same_conversation: active_conversation_id
+                .is_some_and(|id| id == conversation_id),
+        };
+        if let Some(active_conversation_id) = active_conversation_id {
+            controller.cancel_conversation_progress(
+                active_conversation_id,
+                cancellation_reason,
+                ctx,
+            );
+        }
 
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
@@ -227,7 +241,7 @@ impl SlashCommandRequest {
                 }]
             }
             SlashCommandRequest::Summarize { prompt, .. } => {
-                vec![AIAgentInput::SummarizeConversation { prompt }]
+                vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
             SlashCommandRequest::FetchReviewComments { repo_path } => {
                 vec![AIAgentInput::FetchReviewComments { repo_path, context }]

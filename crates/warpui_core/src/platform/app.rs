@@ -105,7 +105,12 @@ impl AppCallbackDispatcher {
     // click on/interact with a notification.
     // TODO(CORE-2322): implement desktop notifications on Windows
     #[cfg_attr(
-        any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+        any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "windows",
+            target_family = "wasm"
+        ),
         allow(dead_code)
     )]
     pub fn notification_clicked(&mut self, response: notification::NotificationResponse) {
@@ -294,7 +299,12 @@ impl AppCallbackDispatcher {
 // application menus, so these never get called.
 // TODO(CORE-2691): implement native Windows OS app menus
 #[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_family = "wasm"
+    ),
     allow(dead_code)
 )]
 impl AppCallbackDispatcher {
@@ -316,7 +326,12 @@ impl AppCallbackDispatcher {
 // native platform modals on these platforms, so these never get called.
 // TODO(CORE-2323): implement native Windows OS modal
 #[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_family = "wasm"
+    ),
     allow(dead_code)
 )]
 impl AppCallbackDispatcher {

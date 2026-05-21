@@ -91,7 +91,7 @@ impl SelectionSettings {
     /// lack this separate clipboard, and so we map middle-click to the normal clipboard on those
     /// platforms.
     pub fn read_for_middle_click_paste(&self, ctx: &mut AppContext) -> Option<ClipboardContent> {
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             return self.maybe_read_from_linux_selection_clipboard(ctx);
         }
         (self

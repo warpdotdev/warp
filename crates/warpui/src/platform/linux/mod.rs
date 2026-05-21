@@ -56,11 +56,7 @@ pub fn user_windowing_system() -> WindowingSystem {
 }
 
 pub fn is_wsl() -> bool {
-    use std::sync::OnceLock;
-    static IS_WSL: OnceLock<bool> = OnceLock::new();
-    IS_WSL
-        .get_or_init(|| std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists())
-        .to_owned()
+    command::wsl::is_wsl()
 }
 
 pub fn is_wayland_env_var_set() -> bool {

@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! TTY related functionality.
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
@@ -46,6 +49,8 @@ use std::{
 };
 use warp_core::channel::ChannelState;
 use warpui::{AppContext, SingletonEntity};
+
+const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
 /// Get raw fds for leader/follower ends of a new PTY.
 fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
@@ -337,13 +342,14 @@ fn build_host_shell_command(
     builder.env("WARP_PATH_APPEND", path_append);
 
     if matches!(shell_starter.shell_type(), ShellType::Bash) {
-        // Set an initial very large value for HISTFILESIZE so that it
-        // doesn't get truncated on startup.
-        let sentinel_value = "57265949261";
-        builder.env("HISTFILESIZE", sentinel_value);
-        // Set a second environment variable that we can use to know whether
-        // the user rcfiles set HISTFILESIZE or not.
-        builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+        // Set initial very large values so bash imports the user's existing
+        // history without truncating the file or in-memory list on startup.
+        builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+        // Set second environment variables that we can use to know whether
+        // the user rcfiles set these variables or not.
+        builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     }
 
     // Pass the desired initial working directory as an environment variable
@@ -401,7 +407,7 @@ fn spawn_command_in_pty(
     }
 
     // Detect isolation platform outside pre_exec, since detect() is not async-signal-safe.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let is_isolated = warp_isolation_platform::detect().is_some();
 
     unsafe {
@@ -468,7 +474,7 @@ fn spawn_command_in_pty(
                 }
             }
 
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             if is_isolated {
                 // If running in a sandbox on Linux, adjust the OOM score
                 // to make the child process more likely to be killed than the parent process
@@ -805,9 +811,10 @@ fn build_docker_sandbox_command(
     builder.env("WARP_PATH_APPEND", path_append);
     // Sandbox shell is always bash (per the container image convention),
     // matching the host-shell path's behavior for bash shells.
-    let sentinel_value = "57265949261";
-    builder.env("HISTFILESIZE", sentinel_value);
-    builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+    builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     // Intentionally do NOT set `WARP_INITIAL_WORKING_DIR` for sandboxes:
     // the container's init script cds into the sandbox home dir, not
     // the host's startup dir.
@@ -872,6 +879,101 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     mk_owner_only_dir(&starter.workspace_dir())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell_starter(shell_type: ShellType, shell_path: &str) -> DirectShellStarter {
+        DirectShellStarter::new_for_test(shell_type, PathBuf::from(shell_path), Vec::new())
+    }
+
+    fn env_value(command: &Command, key: &str) -> Option<Option<String>> {
+        command
+            .get_envs()
+            .find(|(env_key, _)| *env_key == std::ffi::OsStr::new(key))
+            .map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn host_bash_command_sets_history_size_sentinels() {
+        let command = build_host_shell_command(
+            shell_starter(ShellType::Bash, "/bin/bash"),
+            None,
+            HashMap::new(),
+            None,
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(
+            env_value(&command, "HISTFILESIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "HISTSIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "WARP_INITIAL_HISTSIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+    }
+
+    #[test]
+    fn host_non_bash_command_does_not_set_history_size_sentinels() {
+        let command = build_host_shell_command(
+            shell_starter(ShellType::Zsh, "/bin/zsh"),
+            None,
+            HashMap::new(),
+            None,
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(env_value(&command, "HISTFILESIZE"), None);
+        assert_eq!(env_value(&command, "HISTSIZE"), None);
+        assert_eq!(env_value(&command, "WARP_INITIAL_HISTFILESIZE"), None);
+        assert_eq!(env_value(&command, "WARP_INITIAL_HISTSIZE"), None);
+    }
+
+    #[test]
+    fn docker_sandbox_command_sets_history_size_sentinels() {
+        let docker_starter =
+            DockerSandboxShellStarter::new(shell_starter(ShellType::Bash, "sbx"), None);
+        let command = build_docker_sandbox_command(
+            &docker_starter,
+            None,
+            HashMap::new(),
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(
+            env_value(&command, "HISTFILESIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "HISTSIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+        assert_eq!(
+            env_value(&command, "WARP_INITIAL_HISTSIZE"),
+            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
+        );
+    }
 }
 
 /// A set of platform helper utilities copied directly from std::sys.

@@ -15,7 +15,7 @@ use crate::{
             persistence::CloudModel,
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject, UniquePer,
+        JsonObjectType, Revision, UniquePer,
     },
     drive::items::WarpDriveItem,
     server::{datetime_ext::DateTimeExt, ids::SyncId, sync_queue::QueueItem},
@@ -268,15 +268,6 @@ impl StringModel for TemplatableMCPServer {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::TemplatableMCPServer(server_templatable_mcp_server) =
-            server_cloud_object
-        {
-            return Some(server_templatable_mcp_server.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

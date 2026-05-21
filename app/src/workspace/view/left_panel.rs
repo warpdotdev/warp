@@ -18,6 +18,7 @@ use warpui::{
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
@@ -77,13 +78,14 @@ pub enum LeftPanelAction {
     ConversationListView,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
     WarpDrive(DrivePanelEvent),
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFileWithTarget {
-        path: PathBuf,
+        location: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
@@ -270,27 +272,43 @@ impl LeftPanelView {
                 }
                 let has_terminal_session = directories.iter().any(|dir| dir.terminal_id.is_some());
 
-                // Update GlobalSearchView root directories based on all working directories
-                let roots: Vec<PathBuf> = directories.iter().map(|d| d.path.clone()).collect();
+                // Split directories into local and remote.
+                let local_paths: Vec<PathBuf> = directories
+                    .iter()
+                    .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+                    .collect();
+                #[allow(unused_variables)]
+                let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = directories
+                    .iter()
+                    .filter_map(|d| match &d.path {
+                        LocalOrRemotePath::Remote(remote_path) => {
+                            Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                                remote_path.host_id.clone(),
+                                remote_path.path.clone(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
+                // Update GlobalSearchView root directories (local only).
                 let global_search_view =
                     me.get_or_create_global_search_view_for_pane_group(active_pane_group.id(), ctx);
                 global_search_view.update(ctx, |view, view_ctx| {
-                    view.set_root_directories(roots, view_ctx);
+                    view.set_root_directories(local_paths.clone(), view_ctx);
                 });
 
-                let directories: Vec<PathBuf> =
-                    directories.iter().map(|dir| dir.path.clone()).collect();
-
                 // Directories are already in display order (most recent first) from the model
-                let directories = deduplicate_by_directory_name(directories);
+                let local_directories = deduplicate_by_directory_name(local_paths);
                 let file_tree_view =
                     me.get_or_create_file_tree_view_for_pane_group(active_pane_group.id(), ctx);
 
                 let is_visible =
                     active_pane_group.as_ref(ctx).left_panel_open && me.is_file_tree_active();
                 file_tree_view.update(ctx, |view, ctx| {
-                    view.set_root_directories(directories, ctx);
+                    view.set_root_directories(local_directories, ctx);
+                    #[cfg(feature = "local_fs")]
+                    view.set_remote_root_directories(&remote_repos, ctx);
                     view.set_has_terminal_session(has_terminal_session, ctx);
                     view.set_is_active(is_visible, ctx);
 
@@ -383,7 +401,8 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::FileCopy,
                     active_icon: None,
-                    tooltip_text: "Project explorer".to_string(),
+                    tooltip_text: crate::i18n::tr(ctx, crate::i18n::I18nKey::CodeProjectExplorer)
+                        .to_string(),
                     action: LeftPanelAction::ProjectExplorer,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -399,7 +418,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::Search,
                     active_icon: None,
-                    tooltip_text: "Global search".to_string(),
+                    tooltip_text: crate::i18n::tr_static(ctx, "Global search").to_string(),
                     action: LeftPanelAction::GlobalSearch {
                         entry_focus: GlobalSearchEntryFocus::QueryEditor,
                     },
@@ -591,26 +610,42 @@ impl LeftPanelView {
             .iter()
             .any(|dir| dir.terminal_id.is_some());
 
-        // Update GlobalSearchView root directories based on all working directories
-        let roots: Vec<PathBuf> = active_directories.iter().map(|d| d.path.clone()).collect();
+        // Split directories into local and remote.
+        let local_paths: Vec<PathBuf> = active_directories
+            .iter()
+            .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+            .collect();
+        #[allow(unused_variables)]
+        let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = active_directories
+            .iter()
+            .filter_map(|d| match &d.path {
+                LocalOrRemotePath::Remote(remote_path) => {
+                    Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                        remote_path.host_id.clone(),
+                        remote_path.path.clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Update GlobalSearchView root directories (local only).
         let global_search_view =
             self.get_or_create_global_search_view_for_pane_group(pane_group_id, ctx);
         global_search_view.update(ctx, |view, view_ctx| {
-            view.set_root_directories(roots, view_ctx);
+            view.set_root_directories(local_paths.clone(), view_ctx);
         });
 
-        let directories: Vec<PathBuf> = active_directories
-            .iter()
-            .map(|dir| dir.path.clone())
-            .collect();
-        let directories = deduplicate_by_directory_name(directories);
+        let local_directories = deduplicate_by_directory_name(local_paths);
         let active_file_model = pane_group.as_ref(ctx).active_file_model().clone();
 
         let file_tree_view = self.get_or_create_file_tree_view_for_pane_group(pane_group_id, ctx);
         let left_panel_open = pane_group.as_ref(ctx).left_panel_open;
         let is_visible = left_panel_open && self.is_file_tree_active();
         file_tree_view.update(ctx, |view, ctx| {
-            view.set_root_directories(directories, ctx);
+            view.set_root_directories(local_directories, ctx);
+            #[cfg(feature = "local_fs")]
+            view.set_remote_root_directories(&remote_repos, ctx);
             view.set_has_terminal_session(has_terminal_session, ctx);
             view.set_active_file_model(active_file_model, ctx);
             view.set_is_active(is_visible, ctx);
@@ -728,7 +763,7 @@ impl LeftPanelView {
                 );
 
                 ctx.emit(LeftPanelEvent::OpenFileWithTarget {
-                    path: path.clone(),
+                    location: LocalOrRemotePath::Local(path.clone()),
                     target,
                     line_col: Some(line_col),
                 });
@@ -761,7 +796,7 @@ impl LeftPanelView {
                 line_col,
             } => {
                 ctx.emit(LeftPanelEvent::OpenFileWithTarget {
-                    path: path.clone(),
+                    location: path.clone(),
                     target: target.clone(),
                     line_col: *line_col,
                 });
@@ -792,12 +827,15 @@ impl LeftPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(
+                    crate::i18n::tr_static(app, "Close panel").to_string(),
+                    keybinding,
+                )
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(crate::i18n::tr_static(app, "Close panel").to_string())
                 .build()
                 .finish()
         };

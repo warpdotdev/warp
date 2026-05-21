@@ -16,6 +16,7 @@ use crate::{
     appearance::Appearance,
     auth::AuthStateProvider,
     editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
+    i18n::I18nKey,
     safe_info, send_telemetry_from_ctx,
     server::{
         server_api::referral::{ReferralInfo, ReferralsClient},
@@ -42,7 +43,6 @@ use warpui::{
 
 const HEADER_FONT_SIZE: f32 = 18.;
 const HEADER_MARGIN_BOTTOM: f32 = 32.;
-const HEADER_TEXT: &str = "Invite a friend to Warp";
 const ANONYMOUS_USER_HEADER_TEXT: &str = "Sign up to participate in Warp's referral program";
 
 const INVITE_FIELD_LABEL_BOTTOM_MARGIN: f32 = 8.;
@@ -223,7 +223,11 @@ impl ReferralsPageView {
             me.handle_editor_event(event, ctx);
         });
 
-        let page = PageType::new_monolith(ReferralsWidget::default(), Some(HEADER_TEXT), true);
+        let page = PageType::new_monolith_i18n_title(
+            ReferralsWidget::default(),
+            Some(I18nKey::SettingsPageTitleInviteFriend),
+            true,
+        );
         Self {
             page,
             referrals_client,
@@ -500,7 +504,7 @@ impl ReferralsWidget {
             .is_anonymous_or_logged_out();
 
         let invite_or_signup_section = if is_anonymous {
-            self.render_signup_section(appearance)
+            self.render_signup_section(appearance, app)
         } else {
             self.render_send_invite_section(view, appearance)
         };
@@ -636,7 +640,7 @@ impl ReferralsWidget {
             .finish()
     }
 
-    fn render_signup_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_signup_section(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let button_styles = UiComponentStyles {
             font_size: Some(14.),
             font_weight: Some(Weight::Semibold),
@@ -657,7 +661,7 @@ impl ReferralsWidget {
                 self.sign_up_button_mouse_state.clone(),
             )
             .with_style(button_styles)
-            .with_text_label("Sign up".to_owned())
+            .with_text_label(crate::i18n::tr_static(app, "Sign up").to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(ReferralsPageAction::SignupAnonymousUser);

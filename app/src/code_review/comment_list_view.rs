@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::ai::AIRequestUsageModel;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
 use crate::code_review::comment_rendering::CommentViewCard;
@@ -9,6 +10,7 @@ use crate::code_review::comments::{
     ReviewCommentBatch, ReviewCommentBatchEvent,
 };
 use crate::code_review::CodeReviewTelemetryEvent;
+use crate::i18n::{self, I18nKey};
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::send_telemetry_from_ctx;
@@ -23,7 +25,6 @@ use crate::{
 use indexmap::IndexMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::path::PathBuf;
 use string_offset::CharOffset;
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
@@ -183,7 +184,7 @@ pub struct CommentListView {
 
     /// Set once the user has manually collapsed or expanded the outdated section.
     is_outdated_section_collapsed: Option<bool>,
-    repo_path: PathBuf,
+    repo_path: Option<LocalOrRemotePath>,
     view_state: ViewState,
     /// The best available destination for sending review comments.
     /// Pushed down from RightPanelView.
@@ -196,18 +197,21 @@ pub struct CommentListView {
 
 impl CommentListView {
     pub fn new(
-        initial_repo_path: Option<PathBuf>,
+        initial_repo_path: Option<LocalOrRemotePath>,
         parent: WeakViewHandle<CodeReviewView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let menu = ctx.add_view(|_| Menu::new());
 
-        let comments_button = ctx.add_view(|_| {
-            ActionButton::new("1 Comment", CustomSecondaryActionTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CommentListAction::ToggleCollapsed);
-                })
+        let comments_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                i18n::tr(ctx, I18nKey::CodeReviewOneComment),
+                CustomSecondaryActionTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CommentListAction::ToggleCollapsed);
+            })
         });
 
         ctx.subscribe_to_view(&menu, |me, _, event, ctx| match event {
@@ -224,7 +228,7 @@ impl CommentListView {
             comments_by_id: IndexMap::new(),
             is_collapsed: true,
             is_outdated_section_collapsed: None,
-            repo_path: initial_repo_path.unwrap_or_default(),
+            repo_path: initial_repo_path,
             view_state: ViewState::default(),
             overflow_menu: menu,
             review_destination: ReviewDestination::None,
@@ -246,22 +250,43 @@ impl CommentListView {
 
             if non_outdated_count == 0 && total_count > 0 {
                 format!(
-                    "{} outdated comment{}",
+                    "{} {}",
                     total_count,
-                    if total_count == 1 { "" } else { "s" }
+                    i18n::tr(
+                        ctx,
+                        if total_count == 1 {
+                            I18nKey::CodeReviewOutdatedCommentSingular
+                        } else {
+                            I18nKey::CodeReviewOutdatedCommentPlural
+                        },
+                    )
                 )
             } else {
                 format!(
-                    "{} comment{}",
+                    "{} {}",
                     non_outdated_count,
-                    if non_outdated_count == 1 { "" } else { "s" }
+                    i18n::tr(
+                        ctx,
+                        if non_outdated_count == 1 {
+                            I18nKey::CodeReviewCommentSingular
+                        } else {
+                            I18nKey::CodeReviewCommentPlural
+                        },
+                    )
                 )
             }
         } else {
             format!(
-                "{} comment{}",
+                "{} {}",
                 total_count,
-                if total_count == 1 { "" } else { "s" }
+                i18n::tr(
+                    ctx,
+                    if total_count == 1 {
+                        I18nKey::CodeReviewCommentSingular
+                    } else {
+                        I18nKey::CodeReviewCommentPlural
+                    },
+                )
             )
         };
 
@@ -367,7 +392,7 @@ impl CommentListView {
             let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
                 existing
                     .card
-                    .update_source(comment, Some(&self.repo_path), ctx);
+                    .update_source(comment, self.repo_path.as_ref(), ctx);
                 existing
             } else {
                 let card = CommentViewCard::new(
@@ -375,7 +400,7 @@ impl CommentListView {
                     false, /* always_use_static_diff */
                     false, /* disable_scrolling */
                     Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
-                    Some(&self.repo_path),
+                    self.repo_path.as_ref(),
                     ctx,
                 );
 
@@ -436,14 +461,6 @@ impl CommentListView {
         }
 
         self.recompute_comment_button_label(ctx);
-        ctx.notify();
-    }
-
-    pub fn set_repo_path(&mut self, repo_path: PathBuf, ctx: &mut ViewContext<Self>) {
-        self.repo_path = repo_path;
-        for state in self.comments_by_id.values_mut() {
-            state.card.update_title(Some(&self.repo_path));
-        }
         ctx.notify();
     }
 
@@ -870,12 +887,12 @@ impl CommentListView {
         let mut right_section = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
-        right_section.add_child(self.render_cancel_button(appearance));
+        right_section.add_child(self.render_cancel_button(appearance, ctx));
         right_section.add_child(self.render_send_button(appearance, ctx));
         right_section.finish()
     }
 
-    fn render_cancel_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_cancel_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let cancel_button = EventHandler::new(
             appearance
                 .ui_builder()
@@ -883,7 +900,7 @@ impl CommentListView {
                     ButtonVariant::Text,
                     self.view_state.cancel_button_mouse_state.clone(),
                 )
-                .with_text_label("Cancel".to_string())
+                .with_text_label(i18n::tr(app, I18nKey::CommonCancel).to_string())
                 .build()
                 .finish(),
         )
@@ -960,7 +977,7 @@ impl CommentListView {
                 ButtonVariant::Accent,
                 self.view_state.submit_button_mouse_state.clone(),
             )
-            .with_text_label("Send to Agent".to_string())
+            .with_text_label(i18n::tr(ctx, I18nKey::CodeReviewSendToAgent).to_string())
             .with_tooltip(|| tooltip)
             .with_tooltip_position(ButtonTooltipPosition::AboveLeft);
 
@@ -1068,20 +1085,23 @@ impl CommentListView {
         is_outdated: bool,
         html_url: Option<&str>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Vec<MenuItem<CommentListAction>> {
-        let mut items = vec![MenuItemFields::new("Copy text")
-            .with_icon(Icon::Copy)
-            .with_on_select_action(CommentListAction::CopyCommentText)
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new(i18n::tr(app, I18nKey::CodeReviewCopyText))
+                .with_icon(Icon::Copy)
+                .with_on_select_action(CommentListAction::CopyCommentText)
+                .into_item(),
+        ];
 
-        let mut edit_item = MenuItemFields::new("Edit")
+        let mut edit_item = MenuItemFields::new(i18n::tr(app, I18nKey::CommonEdit))
             .with_icon(Icon::Pencil)
             .with_on_select_action(CommentListAction::EditComment);
         if is_file_level || is_outdated {
             let tooltip_text = if is_file_level {
-                "File-level comments currently can't be edited."
+                i18n::tr(app, I18nKey::CodeReviewFileLevelCommentsCantBeEdited)
             } else {
-                "Outdated comments can't be edited."
+                i18n::tr(app, I18nKey::CodeReviewOutdatedCommentsCantBeEdited)
             };
             edit_item = edit_item.with_disabled(true).with_tooltip(tooltip_text);
         }
@@ -1089,7 +1109,7 @@ impl CommentListView {
 
         if let Some(url) = html_url {
             items.push(
-                MenuItemFields::new("View in GitHub")
+                MenuItemFields::new(i18n::tr(app, I18nKey::CodeReviewViewInGithub))
                     .with_icon(Icon::Github)
                     .with_on_select_action(CommentListAction::ViewInGitHub {
                         url: url.to_string(),
@@ -1099,7 +1119,7 @@ impl CommentListView {
         }
 
         items.push(
-            MenuItemFields::new("Remove")
+            MenuItemFields::new(i18n::tr(app, I18nKey::CommonRemove))
                 .with_icon(Icon::Trash)
                 .with_override_text_color(Fill::Solid(appearance.theme().ansi_fg_red()))
                 .with_override_icon_color(Fill::Solid(appearance.theme().ansi_fg_red()))
@@ -1239,6 +1259,7 @@ impl TypedActionView for CommentListView {
                                 is_outdated,
                                 html_url.as_deref(),
                                 appearance,
+                                ctx,
                             ),
                             ctx,
                         );

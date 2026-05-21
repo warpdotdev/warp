@@ -147,10 +147,17 @@ pub fn shell_git_branch() -> ShellCommandGenerator {
 }
 
 pub fn shell_other_git_branches() -> ShellCommandGenerator {
-    const SH_COMMAND: &str = "git --no-optional-locks branch --no-color --sort=-committerdate";
+    const SH_COMMAND: &str = "git --no-optional-locks branch --no-color --sort=-committerdate; \
+        printf '\\036\\n'; \
+        git --no-optional-locks worktree list --porcelain";
+    let pwsh_command = safe_git_powershell(
+        "git --no-optional-locks branch --no-color --sort=-committerdate; \
+        [char]30; \
+        git --no-optional-locks worktree list --porcelain",
+    );
 
     let command = ShellCommand::shell_specific([
-        (ShellType::PowerShell, SH_COMMAND.to_string()),
+        (ShellType::PowerShell, pwsh_command),
         (ShellType::Bash, SH_COMMAND.to_string()),
         (ShellType::Zsh, SH_COMMAND.to_string()),
         (ShellType::Fish, SH_COMMAND.to_string()),

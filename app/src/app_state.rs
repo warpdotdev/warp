@@ -21,7 +21,8 @@ use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::view::left_panel::ToolPanelView;
-use crate::workspace::Workspace;
+use crate::workspace::WorkspaceRegistry;
+use warpui::SingletonEntity as _;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
@@ -353,13 +354,14 @@ pub fn get_app_state(app: &AppContext) -> AppState {
             }
         }
 
-        if let Some(first_workspace) = app
-            .views_of_type::<Workspace>(window_id)
-            .as_ref()
-            .and_then(|workspaces| workspaces.first())
-        {
-            let ws = first_workspace.as_ref(app);
-            if ws.is_drag_preview_workspace() {
+        if let Some(workspace) = WorkspaceRegistry::as_ref(app).get(window_id, app) {
+            let ws = workspace.as_ref(app);
+            // Transient drag-preview windows are not real user-visible
+            // workspaces; skip them so they never end up in the persisted
+            // session. (Persistence is also short-circuited entirely while a
+            // cross-window drag is active; see `save_app` in
+            // `workspace/global_actions.rs`.)
+            if ws.is_tab_drag_preview() {
                 continue;
             }
             let snapshot = ws.snapshot(

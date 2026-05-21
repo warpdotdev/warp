@@ -2,7 +2,7 @@
 ///
 /// Note: Most image processing functionality is tested in ui/src/clipboard_utils_tests.rs
 /// to avoid duplication. These tests focus on Linux-specific clipboard behavior.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod clipboard_tests {
     use crate::clipboard::{Clipboard, ClipboardContent};
     use crate::windowing::winit::linux::LinuxClipboard;

@@ -167,6 +167,11 @@ pub enum AgentViewEntryOrigin {
     /// Entered agent view because a parent agent started this child agent via StartAgent.
     ChildAgent,
 
+    /// Entered agent view by clicking a pill / breadcrumb in the orchestration
+    /// pill bar (or breadcrumb row) to navigate the current pane to a sibling
+    /// or parent conversation in the same orchestration tree.
+    OrchestrationPillBar,
+
     /// Entered agent view after opening project from OS directory picker.
     ProjectEntry,
 
@@ -255,6 +260,13 @@ impl AgentViewState {
         }
     }
 
+    pub fn origin(&self) -> Option<AgentViewEntryOrigin> {
+        match self {
+            AgentViewState::Active { origin, .. } => Some(*origin),
+            AgentViewState::Inactive => None,
+        }
+    }
+
     /// Returns `true` if in an active agent view state.
     pub fn is_active(&self) -> bool {
         matches!(self, AgentViewState::Active { .. })
@@ -332,7 +344,7 @@ const NEW_CONVERSATION_KEYBINDING_CONFIRMATION_MESSAGE_ID: &str =
 /// Controller responsible for managing and updating agent view state for a given terminal pane.
 ///
 /// `AgentViewState` is stored on the terminal model but should only be updated via the APIs on
-/// this constroller, which ensures the correct events are emitted and downstream effects take
+/// this controller, which ensures the correct events are emitted and downstream effects take
 /// place.
 pub struct AgentViewController {
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -382,6 +394,11 @@ impl AgentViewController {
         self.pane_group_id
     }
 
+    /// Returns the [`EntityId`] of the [`TerminalView`] that owns this controller.
+    pub fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
+    }
+
     pub fn set_pane_group_id(&mut self, pane_group_id: EntityId) {
         self.pane_group_id = Some(pane_group_id);
     }
@@ -414,8 +431,10 @@ impl AgentViewController {
                 .active_block()
                 .is_active_and_long_running();
 
-        // In a non-ambient agent case, users cannot exit the fullscreen agent view with an active long running command.
-        if is_fullscreen_with_long_running {
+        // Cloud agent panes do not have the same underlying terminal ownership
+        // constraint (no local shell process), so long-running third party agent
+        // commands should not trap the user in agent view.
+        if is_fullscreen_with_long_running && !model.is_dummy_cloud_mode_session() {
             return Err(ExitAgentViewError::LongRunningCommand);
         }
 
@@ -761,13 +780,17 @@ impl AgentViewController {
                     self.terminal_view_id,
                     false,
                     matches!(origin, AgentViewEntryOrigin::CloudAgent),
+                    matches!(origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
                     ctx,
                 )
             });
             (id, 0)
         };
+        // Non-transferring: don't rip the conversation out of another terminal
+        // view's live list (e.g. a child agent's hidden pane). Explicit
+        // cross-view ownership transfer is handled by callers elsewhere.
         history_model.update(ctx, |history_model, ctx| {
-            history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx)
+            history_model.mark_active_conversation_id(conversation_id, self.terminal_view_id, ctx)
         });
 
         self.agent_view_state = AgentViewState::Active {

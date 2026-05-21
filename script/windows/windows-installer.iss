@@ -70,13 +70,13 @@ UninstallDisplayIcon="{app}\icon.ico"
 CloseApplications=force
 ; For manual installs: if Warp is running, show a dialog prompting the user to close it
 ; before Setup proceeds. Returned empty for background updates so the check is skipped.
-; TODO(andy) uncomment this after the 4/22 release
-;AppMutex={code:GetAppMutex}
+AppMutex={code:GetAppMutex}
 SetupMutex={#AppMutexName}Setup
 ; Version 1809 / Build 18362 is required for ConPTY. See https://github.com/microsoft/vscode-docs/blob/9d736b662fdde3fed17d8bc2ed70bfea4ae20636/docs/supporting/troubleshoot-terminal-launch.md?plain=1#L66/
 MinVersion=10.0.18362
 ; Tell Windows Explorer to reload the environment so that path changes take effect.
 ChangesEnvironment=true
+RedirectionGuard=no
 ; Sign the setup engine and uninstaller so that the temporary bootstrapper
 ; extracted to %TEMP% is Authenticode-signed.  This prevents Microsoft Defender
 ; ASR rule D4F940AB from blocking the installer in enterprise environments.
@@ -109,6 +109,7 @@ Source: "{#TargetProfileDir}\resources\*"; DestDir: "{app}\resources"; Flags: ig
 
 [Registry]
 Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; ValueType: string; ValueName: "InstallationPath"; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletevalue
 ; cleanup "Open Warp Here" registry entries
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}"; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}"; Flags: deletekey
@@ -212,7 +213,19 @@ begin
         Sleep(1000);
       end
       else
+      begin
         Log('Warp has exited; proceeding with file installation.');
+        { The minidump crash-reporter is a child process (same exe name) that
+          may outlive the main Warp process. It holds the executable file open,
+          which causes the file-copy step to fail with "Access is denied".
+          We identify it by the "minidump-server" argument in its command line. }
+        Exec('powershell.exe',
+          '-NoProfile -NoLogo -Command "$stopError = 0; Get-CimInstance Win32_Process -Filter \"Name=''{#MyAppExeName}'' and CommandLine like ''%minidump-server%''\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorVariable e -ErrorAction SilentlyContinue; if ($e) { $stopError = $e[0].Exception.HResult } }; exit $stopError"',
+          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        if ResultCode <> 0 then
+          Log('minidump-server cleanup failed (exit code: ' + IntToStr(ResultCode) + ')');
+        Sleep(500);
+      end;
     end;
   end;
 

@@ -234,7 +234,7 @@ impl LspManagerModel {
 
     pub fn stop_all(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let Some(servers) = self.servers.get(&path) else {
-            log::warn!("No server resgistered to stop at path: {}", path.display());
+            log::warn!("No server registered to stop at path: {}", path.display());
             return;
         };
 

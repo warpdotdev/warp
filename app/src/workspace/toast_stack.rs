@@ -48,7 +48,11 @@ impl ToastStack {
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let toast: DismissibleToast<WorkspaceAction> = toast_type.into();
+        let toast = match toast_type {
+            ToastType::CloudObjectNotFound => DismissibleToast::error(String::from(
+                crate::i18n::tr_static(ctx, "Resource not found or access denied"),
+            )),
+        };
         ctx.emit(ToastStackEvent::AddEphemeralToast { window_id, toast });
     }
 

@@ -17,7 +17,7 @@ pub(crate) fn sanitized_basename(path_or_filename: &str) -> Option<String> {
 pub(crate) fn extension_for_content_type(content_type: &str) -> Option<&'static str> {
     match content_type {
         "image/gif" => Some("gif"),
-        "image/jpeg" => Some("jpg"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
         "image/png" => Some("png"),
         "image/webp" => Some("webp"),
         "application/json" => Some("json"),
@@ -149,6 +149,13 @@ mod tests {
             sanitized_basename("outputs/report.txt"),
             Some("report.txt".to_string())
         );
+    }
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn extension_for_content_type_recognizes_image_jpg_alias() {
+        assert_eq!(extension_for_content_type("image/jpg"), Some("jpg"));
+        assert_eq!(extension_for_content_type("image/jpeg"), Some("jpg"));
     }
 
     #[test]

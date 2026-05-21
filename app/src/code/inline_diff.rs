@@ -128,9 +128,15 @@ impl InlineDiffView {
         let file_id = match session_type {
             DiffSessionType::Local => {
                 let Some(local_path) = file_path.to_local_path() else {
-                    log::error!(
-                        "Failed to convert StandardizedPath to local path: {file_path}; \
-                         diff will be read-only",
+                    crate::safe_error!(
+                        safe: (
+                            "Failed to convert StandardizedPath to local path; diff will be \
+                            read-only"
+                        ),
+                        full: (
+                            "Failed to convert StandardizedPath to local path: {file_path}; diff \
+                            will be read-only"
+                        )
                     );
                     return;
                 };

@@ -101,7 +101,7 @@ pub fn test_ctrl_d_during_bootstrapping_exits_shell_upon_completion() -> Builder
     // is to exit upon completion.
     // However, this differs on Linux where the common behaviour is to
     // ignore ctrl-d (and the corresponding EOF) while bootstrapping.
-    let final_assertion = if cfg!(target_os = "linux") {
+    let final_assertion = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
         assert_terminal_bootstrapped(0, 0)
     } else {
         // TODO: figure out what the right behaviour is on windows.

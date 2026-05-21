@@ -18,6 +18,7 @@ use crate::render::{
 };
 
 const DEFAULT_MERMAID_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
+const FAILED_MERMAID_HEIGHT_LINE_MULTIPLIER: f32 = 2.0;
 
 struct MermaidDiagramAsset;
 
@@ -50,22 +51,42 @@ pub fn mermaid_diagram_layout(
     app: &AppContext,
 ) -> (AssetSource, ImageBlockConfig) {
     let asset_source = mermaid_asset_source(source);
-    let max_width = layout.max_width() - spacing.x_axis_offset();
-    let default_height = layout.rich_text_styles().base_line_height()
-        * DEFAULT_MERMAID_HEIGHT_LINE_MULTIPLIER.into_pixels();
-    let (width, height) =
-        mermaid_diagram_size(&asset_source, max_width, app).unwrap_or((max_width, default_height));
+    let config = mermaid_diagram_config(&asset_source, layout, spacing, app);
 
-    (
-        asset_source,
-        ImageBlockConfig {
-            width,
-            height,
-            spacing,
-        },
-    )
+    (asset_source, config)
 }
 
+fn mermaid_diagram_config(
+    asset_source: &AssetSource,
+    layout: &TextLayout,
+    spacing: BlockSpacing,
+    app: &AppContext,
+) -> ImageBlockConfig {
+    let max_width = layout.max_width() - spacing.x_axis_offset();
+    let (width, height) = mermaid_diagram_size(asset_source, max_width, app).unwrap_or_else(|| {
+        let height = layout.rich_text_styles().base_line_height()
+            * mermaid_diagram_fallback_height_line_multiplier(asset_source, app).into_pixels();
+        (max_width, height)
+    });
+    ImageBlockConfig {
+        width,
+        height,
+        spacing,
+    }
+}
+
+fn mermaid_diagram_fallback_height_line_multiplier(
+    asset_source: &AssetSource,
+    app: &AppContext,
+) -> f32 {
+    let asset_cache = AssetCache::as_ref(app);
+    match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+        AssetState::FailedToLoad(_) => FAILED_MERMAID_HEIGHT_LINE_MULTIPLIER,
+        AssetState::Loading { .. } | AssetState::Loaded { .. } | AssetState::Evicted => {
+            DEFAULT_MERMAID_HEIGHT_LINE_MULTIPLIER
+        }
+    }
+}
 fn mermaid_diagram_size(
     asset_source: &AssetSource,
     max_width: Pixels,
@@ -85,7 +106,11 @@ fn mermaid_diagram_size(
     if intrinsic_width <= 0. || intrinsic_height <= 0. {
         return None;
     }
-    let width = Pixels::new(max_width.as_f32().min(intrinsic_width));
+    let width = max_width;
     let height = Pixels::new(width.as_f32() * intrinsic_height / intrinsic_width);
     Some((width, height))
 }
+
+#[cfg(test)]
+#[path = "mermaid_diagram_tests.rs"]
+mod tests;

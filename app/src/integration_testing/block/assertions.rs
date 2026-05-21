@@ -21,7 +21,7 @@ use crate::{
     terminal::{heights_approx_eq, model::terminal_model::BlockIndex, TerminalModel, TerminalView},
 };
 
-/// Specfies a block position either directly by index, or by whether it's first or
+/// Specifies a block position either directly by index, or by whether it's first or
 /// last
 #[derive(Debug, Copy, Clone)]
 pub enum BlockPosition {

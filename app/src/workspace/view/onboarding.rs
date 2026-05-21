@@ -10,6 +10,7 @@ use onboarding::{ProjectOnboardingSettings, SelectedSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::{SingletonEntity as _, ViewContext};
 
 /// Configuration for starting the agent onboarding tutorial.
@@ -87,6 +88,12 @@ impl Workspace {
         tutorial: OnboardingTutorial,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Onboarding requires a real user to interact with it; skip when running
+        // in a headless mode like the SDK/CLI.
+        if !AppExecutionMode::as_ref(ctx).can_show_onboarding() {
+            return;
+        }
+
         match tutorial {
             OnboardingTutorial::InitProject {
                 ref path,
@@ -143,6 +150,12 @@ impl Workspace {
         intention: OnboardingIntention,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Onboarding requires a real user to interact with it; skip when running
+        // in a headless mode like the SDK/CLI.
+        if !AppExecutionMode::as_ref(ctx).can_show_onboarding() {
+            return;
+        }
+
         // With new onboarding, skip the guided tour when AI is not enabled
         // (e.g. terminal-intent users or users who disabled AI).
         if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
@@ -237,7 +250,12 @@ impl Workspace {
         );
     }
 
-    pub(crate) fn should_show_agent_onboarding(&self, _ctx: &mut ViewContext<Self>) -> bool {
+    pub(crate) fn should_show_agent_onboarding(&self, ctx: &mut ViewContext<Self>) -> bool {
+        // Onboarding requires a real user to interact with it; suppress when
+        // running in a headless mode like the SDK/CLI.
+        if !AppExecutionMode::as_ref(ctx).can_show_onboarding() {
+            return false;
+        }
         FeatureFlag::AgentOnboarding.is_enabled()
     }
 }

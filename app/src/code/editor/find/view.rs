@@ -173,8 +173,8 @@ impl CodeEditorFind {
         // - 5px: Additional spacing to account for button border width
         let editor_height = line_height + (2. * FIND_EDITOR_PADDING) + 5.;
 
-        let select_all_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Select all", SecondaryTheme)
+        let select_all_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Select all"), SecondaryTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(FindAction::SelectAll);
                 })
@@ -184,13 +184,14 @@ impl CodeEditorFind {
         });
 
         let replace_all_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("Replace all", SecondaryTheme)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(FindAction::ReplaceAll);
-                })
-                .with_width(72.)
-                .with_height(editor_height)
-                .with_disabled_theme(DisabledSecondaryTheme);
+            let mut button =
+                ActionButton::new(crate::i18n::tr_static(ctx, "Replace all"), SecondaryTheme)
+                    .on_click(|ctx| {
+                        ctx.dispatch_typed_action(FindAction::ReplaceAll);
+                    })
+                    .with_width(72.)
+                    .with_height(editor_height)
+                    .with_disabled_theme(DisabledSecondaryTheme);
             button.set_disabled(true, ctx);
             button
         });

@@ -29,7 +29,7 @@ where
         async_assert!(
             revision
                 == Revision::from_unix_timestamp_micros(expected_revision)
-                    .expect("revison should parse"),
+                    .expect("revision should parse"),
             "Expected revision to be:{expected_revision:?}\nBut got:\n{revision:?}"
         )
     })

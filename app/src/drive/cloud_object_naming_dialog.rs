@@ -39,7 +39,7 @@ const CREATE_BUTTON_TEXT: &str = "Create";
 const CANCEL_BUTTON_TEXT: &str = "Cancel";
 const RENAME_BUTTON_TEXT: &str = "Rename";
 
-/// Struct holding necessary infromation and states for the dialog
+/// Struct holding necessary information and states for the dialog
 /// that opens when creating or updating a folder or notebook.
 ///
 /// This dialog can be opened for a folder or a space. If open_for_folder_id = None, it's a space.

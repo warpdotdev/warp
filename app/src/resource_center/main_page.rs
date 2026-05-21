@@ -415,7 +415,12 @@ impl ResourceCenterMainView {
         .finish()
     }
 
-    fn render_skip_tips_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_skip_tips_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mark_all_read_label = crate::i18n::tr_static(app, "Mark all as read").to_string();
         Container::new(
             Align::new(
                 Hoverable::new(self.button_mouse_states.skip_tips.clone(), |state| {
@@ -433,7 +438,7 @@ impl ResourceCenterMainView {
 
                     appearance
                         .ui_builder()
-                        .wrappable_text("Mark all as read", false)
+                        .wrappable_text(mark_all_read_label.clone(), false)
                         .with_style(style)
                         .build()
                         .finish()
@@ -456,12 +461,12 @@ impl ResourceCenterMainView {
 /// A model for tracking where the events from the resource center view should be dispatched
 ///
 /// Similar to command palette - we need a model to cache the information of where
-/// we should send the actions from the resouce center features. When the resource center is opened,
+/// we should send the actions from the resource center features. When the resource center is opened,
 /// we cache the current active window ID as well as the input ID of the active
 /// tab/pane. By sending all the actions to the input view, we ensure that
-/// they propgate correctly. This propogation assumes that each feature action
-/// must be in the reponder chain. If an action is not in the responder chain
-/// (such as a block navigation action) then it won't propogate correctly.
+/// they propagate correctly. This propagation assumes that each feature action
+/// must be in the responder chain. If an action is not in the responder chain
+/// (such as a block navigation action) then it won't propagate correctly.
 pub enum ActionTarget {
     None,
     View {
@@ -508,7 +513,7 @@ impl View for ResourceCenterMainView {
         let appearance = Appearance::as_ref(app);
         let body = self.render_body(appearance);
         let invite_button = self.render_invite_button(appearance);
-        let skip_tips = self.render_skip_tips_button(appearance);
+        let skip_tips = self.render_skip_tips_button(appearance, app);
 
         let mut main_page = Flex::column();
 

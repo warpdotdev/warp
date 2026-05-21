@@ -13,6 +13,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::model::DEBOUNCED_RESIZE_PERIOD;
 use crate::notebooks::editor::notebook_command::NotebookCommand;
 use crate::notebooks::editor::view::{RichTextEditorConfig, RichTextEditorView};
+use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::link::{NotebookLinks, SessionSource};
 use crate::search::files::model::FileSearchModel;
 use crate::server::ids::{ServerId, SyncId};
@@ -499,6 +500,86 @@ fn test_inline_markdown_double_leading_underscore_not_italic() {
 }
 
 #[test]
+fn test_find_matching_header_simple() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("- [Goal](#goal)\n\n## Goal\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            let range = editor
+                .find_matching_header("#goal", ctx)
+                .expect("Fragment should match heading");
+            let heading = editor
+                .content
+                .as_ref(ctx)
+                .text_in_range(range.start + 1..range.end)
+                .into_string();
+
+            assert_eq!(heading, "Goal");
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_case_insensitive() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## My Bold Goal\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#my bold goal", ctx).is_some());
+            assert!(editor.find_matching_header("#MY BOLD GOAL", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_percent_decoded() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Hello World\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#Hello%20World", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_returns_first_match() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Goal\nFirst\n\n## Goal\nSecond", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            let range = editor
+                .find_matching_header("#goal", ctx)
+                .expect("Should match first heading");
+            let heading_text = editor
+                .content
+                .as_ref(ctx)
+                .text_in_range(range.start + 1..range.end)
+                .into_string();
+            assert_eq!(heading_text, "Goal");
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_missing_returns_none() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Goal\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#nonexistent", ctx).is_none());
+            assert!(editor.find_matching_header("#", ctx).is_none());
+            assert!(editor.find_matching_header("", ctx).is_none());
+        });
+    })
+}
+
+#[test]
 fn test_cursor_bias_editing() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
@@ -602,6 +683,101 @@ fn test_plain_text_pasting() {
             editor.insert_formatted_from_paste(markdown, clipboard_content, ctx);
 
             assert_eq!(editor.debug_buffer(ctx), "<text>text\\nSecond line");
+        });
+    });
+}
+
+#[test]
+fn test_delete_inside_raw_mermaid_block_edits_text_without_removing_block() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
+        let markdown = "Text
+```mermaid
+graph TD
+A --> B
+```
+More text";
+        let original_char_count = markdown.chars().count();
+
+        let model_handle = model_from_markdown(markdown, &mut app, true);
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+        let cursor_offset = CharOffset::from(
+            markdown
+                .find("graph TD")
+                .expect("Mermaid source should exist")
+                + 3,
+        );
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.cursor_at(cursor_offset, ctx);
+            assert!(!model.has_command_selection(ctx));
+            model.backspace(ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        model_handle.read(&app, |model, ctx| {
+            let updated_markdown = model.markdown(ctx);
+            let updated_mermaid_command = model
+                .child_models
+                .model_handles::<NotebookCommand>()
+                .exactly_one()
+                .ok()
+                .expect("Mermaid command should still exist after backspace");
+            let updated_mermaid_command = updated_mermaid_command.as_ref(ctx);
+            let updated_mermaid_range = updated_mermaid_command
+                .start_offset(ctx)
+                .expect("Mermaid command should still have a start offset")
+                ..updated_mermaid_command
+                    .end_offset(ctx)
+                    .expect("Mermaid command should still have an end offset");
+            let cursor = model.selection.as_ref(ctx).cursors(ctx)[0];
+
+            assert!(updated_markdown.contains("```mermaid"));
+            assert!(updated_markdown.contains("More text"));
+            assert_eq!(updated_markdown.chars().count(), original_char_count - 1);
+            assert!(model.selection_is_single_cursor(ctx));
+            assert!(cursor > updated_mermaid_range.start && cursor < updated_mermaid_range.end);
+            assert!(!model.has_command_selection(ctx));
+        });
+
+        model_handle.update(&mut app, |model, ctx| model.undo(ctx));
+        layout_model(&mut app, &model_handle).await;
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.cursor_at(cursor_offset, ctx);
+            assert!(!model.has_command_selection(ctx));
+            model.delete(TextDirection::Forwards, TextUnit::Character, false, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        model_handle.read(&app, |model, ctx| {
+            let updated_markdown = model.markdown(ctx);
+            let updated_mermaid_command = model
+                .child_models
+                .model_handles::<NotebookCommand>()
+                .exactly_one()
+                .ok()
+                .expect("Mermaid command should still exist after delete");
+            let updated_mermaid_command = updated_mermaid_command.as_ref(ctx);
+            let updated_mermaid_range = updated_mermaid_command
+                .start_offset(ctx)
+                .expect("Mermaid command should still have a start offset")
+                ..updated_mermaid_command
+                    .end_offset(ctx)
+                    .expect("Mermaid command should still have an end offset");
+            let cursor = model.selection.as_ref(ctx).cursors(ctx)[0];
+
+            assert!(updated_markdown.contains("```mermaid"));
+            assert!(updated_markdown.contains("More text"));
+            assert_eq!(updated_markdown.chars().count(), original_char_count - 1);
+            assert!(model.selection_is_single_cursor(ctx));
+            assert!(cursor > updated_mermaid_range.start && cursor < updated_mermaid_range.end);
+            assert!(!model.has_command_selection(ctx));
         });
     });
 }
@@ -2099,11 +2275,21 @@ fn test_adjacent_delete_with_rendered_mermaid_block_is_atomic() {
         initialize_deps(&mut app);
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
-        let markdown = "Text\n```mermaid\ngraph TD\nA --> B\n```\nMore text";
+        let markdown = "Text
+```mermaid
+graph TD
+A --> B
+```
+More text";
 
         let model_handle = model_from_markdown(markdown, &mut app, true);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(5), MarkdownDisplayMode::Rendered, ctx);
         });
         layout_model(&mut app, &model_handle).await;
 
@@ -2133,6 +2319,16 @@ fn test_adjacent_delete_with_rendered_mermaid_block_is_atomic() {
 
         model_handle.update(&mut app, |model, ctx| model.undo(ctx));
         layout_model(&mut app, &model_handle).await;
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(5), MarkdownDisplayMode::Rendered, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        let mermaid_command = command_models(&model_handle, &mut app)
+            .into_iter()
+            .exactly_one()
+            .expect("Mermaid command should exist after undo");
+        let mermaid_range = command_range(&mermaid_command, &mut app);
 
         model_handle.update(&mut app, |model, ctx| {
             model.cursor_at(mermaid_range.start, ctx);
@@ -2159,11 +2355,21 @@ fn test_backspace_with_cursor_inside_rendered_mermaid_block_is_atomic() {
         initialize_deps(&mut app);
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
-        let markdown = "Text\n```mermaid\ngraph TD\nA --> B\n```\nMore text";
+        let markdown = "Text
+```mermaid
+graph TD
+A --> B
+```
+More text";
 
         let model_handle = model_from_markdown(markdown, &mut app, true);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(5), MarkdownDisplayMode::Rendered, ctx);
         });
         layout_model(&mut app, &model_handle).await;
 
@@ -2212,6 +2418,13 @@ fn test_move_up_from_below_rendered_mermaid_block_lands_on_block_start() {
         });
         layout_model(&mut app, &model_handle).await;
 
+        // Blocks default to Raw; explicitly enable Rendered mode so the navigation
+        // code treats the block as an atomic rendered unit.
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(7), MarkdownDisplayMode::Rendered, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
         let mermaid_command = command_models(&model_handle, &mut app)
             .into_iter()
             .exactly_one()
@@ -2245,6 +2458,13 @@ fn test_shift_select_across_rendered_mermaid_block_is_reversible_from_below() {
         let model_handle = model_from_markdown(markdown, &mut app, true);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode so selection
+        // normalization treats the block as an atomic rendered unit.
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(7), MarkdownDisplayMode::Rendered, ctx);
         });
         layout_model(&mut app, &model_handle).await;
 
@@ -2294,6 +2514,13 @@ fn test_move_down_from_rendered_mermaid_block_start_returns_below_block() {
         let model_handle = model_from_markdown(markdown, &mut app, true);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode so navigation
+        // treats the block as an atomic rendered unit.
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_mermaid_render_mode(CharOffset::from(7), MarkdownDisplayMode::Rendered, ctx);
         });
         layout_model(&mut app, &model_handle).await;
 
@@ -2482,7 +2709,10 @@ fn test_copy_selection_with_markdown_image_omits_image_clipboard_data() {
 }
 
 #[test]
-fn test_mermaid_rendering_respects_feature_flag_when_selectable() {
+fn test_mermaid_feature_flag_disables_rendering_and_toggle() {
+    // With the flag disabled, Mermaid blocks never render as diagrams.
+    // With the flag enabled, blocks default to Raw mode — no auto-rendering.
+    // Diagram rendering only happens when the user explicitly selects Rendered.
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let markdown = "```mermaid\ngraph TD\nA --> B\n```";
@@ -2516,7 +2746,46 @@ fn test_mermaid_rendering_respects_feature_flag_when_selectable() {
         });
         layout_model(&mut app, &model_handle).await;
 
-        let enabled_is_mermaid_diagram = model_handle.read(&app, |model, ctx| {
+        // Even with the flag enabled, blocks default to Raw mode — not auto-rendered.
+        let enabled_defaults_to_raw = model_handle.read(&app, |model, ctx| {
+            !matches!(
+                model
+                    .render_state
+                    .as_ref(ctx)
+                    .content()
+                    .block_at_height(0.)
+                    .map(|item| item.item),
+                Some(BlockItem::MermaidDiagram { .. })
+            )
+        });
+        assert!(enabled_defaults_to_raw);
+    });
+}
+
+#[test]
+fn test_default_mermaid_display_mode_renders_initial_mermaid_blocks() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _enabled = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let markdown = "```mermaid\ngraph TD\nA --> B\n```";
+
+        let model_handle = model_from_markdown(markdown, &mut app, true);
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+            model.set_interaction_state(InteractionState::Selectable, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+        layout_model(&mut app, &model_handle).await;
+
+        let command = command_models(&model_handle, &mut app)
+            .into_iter()
+            .exactly_one()
+            .expect("Mermaid command should exist");
+        command.read(&app, |command, _| {
+            assert_eq!(command.mermaid_display_mode, MarkdownDisplayMode::Rendered);
+        });
+
+        let is_mermaid_diagram = model_handle.read(&app, |model, ctx| {
             matches!(
                 model
                     .render_state
@@ -2527,10 +2796,9 @@ fn test_mermaid_rendering_respects_feature_flag_when_selectable() {
                 Some(BlockItem::MermaidDiagram { .. })
             )
         });
-        assert!(enabled_is_mermaid_diagram);
+        assert!(is_mermaid_diagram);
     });
 }
-
 #[test]
 fn test_dont_invalidate_command_selection() {
     App::test((), |mut app| async move {

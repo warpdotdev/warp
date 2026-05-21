@@ -61,7 +61,7 @@ impl RenderableBlock for RenderableRunnableCommand {
 
     fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
         let content = model.content();
-        let code_block = extract_block!(self.viewport_item, content, (block, BlockItem::RunnableCodeBlock{code_block_type: _, paragraph_block}) => block.code_block(paragraph_block));
+        let code_block = extract_block!(self.viewport_item, content, (block, BlockItem::RunnableCodeBlock{paragraph_block, ..}) => block.code_block(paragraph_block));
 
         let styles = model.styles();
         let code_style = &styles.code_text;

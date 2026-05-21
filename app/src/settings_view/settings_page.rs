@@ -9,7 +9,7 @@ use super::{
     about_page::AboutPageView,
     ai_page::{AISettingsPageAction, AISettingsPageView},
     appearance_page::AppearanceSettingsPageView,
-    billing_and_usage_page::BillingAndUsagePageView,
+    billing_and_usage_dispatch::BillingAndUsageDispatchView,
     code_page::CodeSettingsPageView,
     environments_page::EnvironmentsPageView,
     features_page::FeaturesPageView,
@@ -26,11 +26,13 @@ use super::{
 };
 use crate::{
     appearance::Appearance,
+    i18n::{self, I18nKey},
     settings::CloudPreferencesSettings,
     themes::theme::Fill,
     ui_components::icons::Icon,
     view_components::{Dropdown, SubmittableTextInput},
 };
+use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
 use warp_core::{
     settings::SyncToCloud,
@@ -39,11 +41,12 @@ use warp_core::{
 use warpui::{
     elements::{
         new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, SingleAxisConfig},
-        Align, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
         CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, ParentElement, Radius,
-        SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable, SizeConstraintCondition,
-        SizeConstraintSwitch, Text,
+        MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
+        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
+        ScrollToPositionMode, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack,
+        Text,
     },
     fonts::{Properties, Weight},
     platform::Cursor,
@@ -68,6 +71,7 @@ const ALTERNATING_LIST_ITEM_PADDING: f32 = 8.0;
 const GREY_TEXT_OPACITY: u8 = 60;
 const MIN_PAGE_WIDTH: f32 = 520.;
 const MAX_PAGE_WIDTH: f32 = 800.;
+const INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 
 /// Left margin for top-level sidebar nav items (pages and umbrella labels).
 pub(super) const NAV_ITEM_LEFT_MARGIN: f32 = 12.;
@@ -117,7 +121,7 @@ pub enum SettingsPageViewHandle {
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
-    BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
+    BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
 }
@@ -168,6 +172,7 @@ impl SettingsPage {
 
     pub fn render_page_button(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         match_data: MatchData,
         clicked: bool,
@@ -182,7 +187,7 @@ impl SettingsPage {
                 },
                 self.button_state_handle.clone(),
             )
-            .with_text_label(self.section.to_string() + &match_data.to_string())
+            .with_text_label(self.section.localized_label(app).to_owned() + &match_data.to_string())
             .with_style(
                 UiComponentStyles::default()
                     .set_border_width(0.)
@@ -549,26 +554,54 @@ pub fn render_info_icon<T: Clone + Action>(
     appearance: &Appearance,
     additional_info: AdditionalInfo<T>,
 ) -> Box<dyn Element> {
-    let info_button = appearance
-        .ui_builder()
-        .info_button_with_tooltip(
-            13.,
-            additional_info
-                .tooltip_override_text
-                .unwrap_or("Click to learn more in docs".to_owned()),
-            additional_info.mouse_state.clone(),
+    let tooltip_text = additional_info
+        .tooltip_override_text
+        .unwrap_or("Click to learn more in docs".to_owned());
+    let icon = Container::new(
+        ConstrainedBox::new(
+            Icon::Info
+                .to_warpui_icon(appearance.theme().active_ui_text_color())
+                .finish(),
         )
-        .on_click(move |ctx, _, _| {
-            if let Some(on_click_action) = &additional_info.on_click_action {
-                ctx.dispatch_typed_action(on_click_action.clone());
-            }
-        })
-        .finish();
+        .with_width(13.)
+        .with_height(13.)
+        .finish(),
+    )
+    .finish();
 
-    Container::new(info_button)
+    let mut info_button = Hoverable::new(additional_info.mouse_state.clone(), move |state| {
+        let mut stack = Stack::new().with_child(icon);
+        if state.is_hovered() {
+            let tool_tip = ConstrainedBox::new(
+                appearance
+                    .ui_builder()
+                    .tool_tip(tooltip_text)
+                    .build()
+                    .finish(),
+            )
+            .with_max_width(INFO_TOOLTIP_MAX_WIDTH)
+            .finish();
+            stack.add_positioned_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -3.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+        stack.finish()
+    })
+    .with_cursor(Cursor::PointingHand);
+
+    if let Some(on_click_action) = additional_info.on_click_action {
+        info_button = info_button
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(on_click_action.clone()));
+    }
+
+    Container::new(Box::new(info_button))
         .with_margin_left(4.)
-        // Since the icon is smaller than the font, we need some margin to be in alignment.
-        .with_margin_top(1.5)
         .finish()
 }
 
@@ -586,11 +619,7 @@ pub fn render_local_only_icon(
         )
         .finish();
 
-    Container::new(info_button)
-        .with_margin_left(4.)
-        // Since the icon is smaller than the font, we need some margin to be in alignment.
-        .with_margin_top(1.5)
-        .finish()
+    Container::new(info_button).with_margin_left(4.).finish()
 }
 
 pub fn render_body_item_label<T: Clone + Action>(
@@ -1004,8 +1033,10 @@ pub struct InputListItem<SettingsPageAction: Action + Clone> {
     pub item: String,
     pub mouse_state_handle: MouseStateHandle,
     pub on_remove_action: SettingsPageAction,
+    pub is_disabled: bool,
+    /// Must be pre-created (not inline during render) to preserve mouse tracking.
+    pub tooltip_mouse_state: Option<MouseStateHandle>,
 }
-
 /// Renders a title, an input field to add new items and a list of already
 /// added items.
 ///
@@ -1014,7 +1045,6 @@ pub fn render_input_list<SettingsPageAction: Action + Clone>(
     title: Option<&str>,
     items: impl IntoIterator<Item = InputListItem<SettingsPageAction>>,
     handle: Option<&ViewHandle<SubmittableTextInput>>,
-    disabled: bool,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let mut column = Flex::column();
@@ -1040,15 +1070,20 @@ pub fn render_input_list<SettingsPageAction: Action + Clone>(
     let background = appearance.theme().surface_1();
     let peekable = items.into_iter().peekable();
     for item in peekable {
-        let mut container = Container::new(render_alternating_color_list_item(
+        let row_element = render_alternating_color_list_item(
             background,
             item.item,
             item.mouse_state_handle,
             item.on_remove_action,
-            disabled,
+            item.is_disabled,
             appearance,
-        ));
-        container = container.with_margin_bottom(4.);
+        );
+        let row_element = if let Some(tooltip_mouse_state) = item.tooltip_mouse_state {
+            render_workspace_override_row_tooltip(row_element, tooltip_mouse_state, appearance)
+        } else {
+            row_element
+        };
+        let container = Container::new(row_element).with_margin_bottom(4.);
         column.add_child(container.finish());
     }
 
@@ -1090,6 +1125,36 @@ pub fn render_alternating_color_list<
     }
 }
 
+const WORKSPACE_OVERRIDE_TOOLTIP_TEXT: &str =
+    "This option is enforced by your organization's settings and cannot be customized.";
+fn render_workspace_override_row_tooltip(
+    child: Box<dyn Element>,
+    mouse_state: MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    Hoverable::new(mouse_state, |state| {
+        let mut stack = Stack::new().with_child(child);
+        if state.is_hovered() {
+            let tooltip = appearance
+                .ui_builder()
+                .tool_tip(WORKSPACE_OVERRIDE_TOOLTIP_TEXT.to_string())
+                .build()
+                .finish();
+            stack.add_positioned_child(
+                tooltip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -4.),
+                    ParentOffsetBounds::Unbounded,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::BottomLeft,
+                ),
+            );
+        }
+        stack.finish()
+    })
+    .finish()
+}
+
 fn render_alternating_color_list_item<SettingsPageAction: Action + Clone>(
     background: impl Into<Fill>,
     item_label: String,
@@ -1106,10 +1171,12 @@ fn render_alternating_color_list_item<SettingsPageAction: Action + Clone>(
         remove_button = remove_button.disabled();
     }
 
-    let remove_button = remove_button
-        .build()
-        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-        .finish();
+    let mut remove_button = remove_button.build();
+    if !disabled {
+        remove_button =
+            remove_button.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()));
+    }
+    let remove_button = remove_button.finish();
 
     let background = background.into();
     let font_color = if disabled {
@@ -1151,7 +1218,7 @@ fn render_alternating_color_list_item<SettingsPageAction: Action + Clone>(
     .with_uniform_padding(ALTERNATING_LIST_ITEM_PADDING)
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
     // The bottom has a bit of extra padding b/c lines of text have more space above the text
-    // than below. This visually balances that to make it lok vertically centered.
+    // than below. This visually balances that to make it look vertically centered.
     .with_padding_bottom(ALTERNATING_LIST_ITEM_PADDING + 2.)
     .finish()
 }
@@ -1188,7 +1255,7 @@ pub(super) enum PageType<V: warpui::View> {
     /// handle and render their own scrollable elements.
     Monolith {
         widget: Box<dyn SettingsWidget<View = V>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         filter: bool,
         vertical_scroll_state: Option<ClippedScrollStateHandle>,
         horizontal_scroll_state: Option<ClippedScrollStateHandle>,
@@ -1197,7 +1264,7 @@ pub(super) enum PageType<V: warpui::View> {
     /// A page which is a series of [`SettingsWidget`]s that don't fall under sub-categories.
     Uncategorized {
         widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         filter: Vec<usize>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
@@ -1207,13 +1274,36 @@ pub(super) enum PageType<V: warpui::View> {
     /// A page which is a series of [`SettingsWidget`]s that fall under sub-categories.
     Categorized {
         categories: Vec<Category<V>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         filter: Vec<Vec<usize>>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
         highlighted_widget_id: Option<&'static str>,
         min_page_width: f32,
     },
+}
+
+fn optional_static_title(title: Option<&'static str>) -> Option<CategoryTitle> {
+    title.map(CategoryTitle::Static)
+}
+
+fn optional_i18n_title(title: Option<I18nKey>) -> Option<CategoryTitle> {
+    title.map(CategoryTitle::I18n)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CategoryTitle {
+    Static(&'static str),
+    I18n(I18nKey),
+}
+
+impl CategoryTitle {
+    fn resolve(self, app: &AppContext) -> &'static str {
+        match self {
+            Self::Static(title) => title,
+            Self::I18n(key) => i18n::tr(app, key),
+        }
+    }
 }
 
 /// Some settings pages break down into a collection of smaller widgets while others are
@@ -1259,6 +1349,117 @@ impl From<usize> for MatchData {
     }
 }
 
+const LOCALIZED_SEARCH_ALIASES: &[(&str, &str)] = &[
+    ("account", "账户 账号 登录 登出"),
+    ("active", "活动 启用"),
+    ("agent", "智能体 代理"),
+    ("agents", "智能体 代理"),
+    ("ai", "AI 智能体 人工智能"),
+    ("allowlist", "允许列表 白名单"),
+    ("api", "API 接口"),
+    ("appearance", "外观"),
+    ("attribution", "署名 归因"),
+    ("autosuggestion", "自动建议"),
+    ("autosuggestions", "自动建议"),
+    ("bedrock", "Bedrock AWS"),
+    ("billing", "账单 计费"),
+    ("block", "块"),
+    ("blocks", "块"),
+    ("changelog", "变更日志 更新日志"),
+    ("cloud", "云 云端"),
+    ("code", "代码"),
+    ("color", "颜色"),
+    ("colors", "颜色"),
+    ("command", "命令"),
+    ("commands", "命令"),
+    ("context", "上下文"),
+    ("conversation", "对话"),
+    ("cursor", "光标"),
+    ("denylist", "拒绝列表 黑名单"),
+    ("directory", "目录"),
+    ("directories", "目录"),
+    ("display", "显示"),
+    ("editor", "编辑器"),
+    ("environment", "环境"),
+    ("environments", "环境"),
+    ("feature", "功能"),
+    ("features", "功能"),
+    ("font", "字体"),
+    ("fonts", "字体"),
+    ("history", "历史记录"),
+    ("hotkey", "热键 快捷键"),
+    ("input", "输入"),
+    ("key", "键 密钥"),
+    ("keybinding", "快捷键 键绑定"),
+    ("keybindings", "快捷键 键绑定"),
+    ("keyboard", "键盘"),
+    ("knowledge", "知识库 知识"),
+    ("language", "语言 显示语言"),
+    ("layout", "布局"),
+    ("mcp", "MCP 服务器"),
+    ("memory", "记忆"),
+    ("model", "模型"),
+    ("models", "模型"),
+    ("notification", "通知"),
+    ("notifications", "通知"),
+    ("opacity", "不透明度 透明度"),
+    ("orchestration", "编排"),
+    ("permission", "权限"),
+    ("permissions", "权限"),
+    ("privacy", "隐私"),
+    ("profile", "配置档案 档案"),
+    ("profiles", "配置档案 档案"),
+    ("referral", "推荐 邀请"),
+    ("referrals", "推荐 邀请"),
+    ("regex", "正则 正则表达式"),
+    ("rules", "规则"),
+    ("search", "搜索"),
+    ("secret", "密钥 机密 敏感信息"),
+    ("secrets", "密钥 机密 敏感信息"),
+    ("session", "会话"),
+    ("settings", "设置"),
+    ("shell", "shell 终端"),
+    ("shortcut", "快捷键"),
+    ("shortcuts", "快捷键"),
+    ("tab", "标签页"),
+    ("tabs", "标签页"),
+    ("team", "团队"),
+    ("teams", "团队"),
+    ("terminal", "终端"),
+    ("theme", "主题"),
+    ("themes", "主题"),
+    ("toolbar", "工具栏"),
+    ("usage", "用量 使用量"),
+    ("voice", "语音"),
+    ("warp drive", "Warp Drive 云盘"),
+    ("warpify", "Warpify"),
+    ("window", "窗口"),
+    ("workflow", "工作流"),
+    ("workflows", "工作流"),
+    ("zoom", "缩放"),
+];
+
+/// Returns true if every whitespace-delimited word in `query` appears somewhere
+/// in `terms` or in Chinese aliases for those terms. An empty query matches everything.
+pub(super) fn search_terms_match(terms: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    let mut searchable_terms = terms.to_lowercase();
+    for (term, aliases) in LOCALIZED_SEARCH_ALIASES {
+        if searchable_terms.contains(term) {
+            searchable_terms.push(' ');
+            searchable_terms.push_str(aliases);
+        }
+    }
+
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| searchable_terms.contains(word))
+}
+
 impl<V: warpui::View> PageType<V> {
     /// A page where the contents cannot be separated for showing search results. If any part
     /// matches the search query, the whole page must show. The whole page is one big
@@ -1280,7 +1481,31 @@ impl<V: warpui::View> PageType<V> {
         Self::Monolith {
             filter: true,
             widget: Box::new(widget),
-            title,
+            title: optional_static_title(title),
+            vertical_scroll_state,
+            horizontal_scroll_state,
+            min_page_width: MIN_PAGE_WIDTH,
+        }
+    }
+
+    pub(super) fn new_monolith_i18n_title(
+        widget: impl SettingsWidget<View = V> + 'static,
+        title: Option<I18nKey>,
+        is_dual_scrollable: bool,
+    ) -> Self {
+        let (vertical_scroll_state, horizontal_scroll_state) = if is_dual_scrollable {
+            (
+                Some(ClippedScrollStateHandle::default()),
+                Some(ClippedScrollStateHandle::default()),
+            )
+        } else {
+            (None, None)
+        };
+
+        Self::Monolith {
+            filter: true,
+            widget: Box::new(widget),
+            title: optional_i18n_title(title),
             vertical_scroll_state,
             horizontal_scroll_state,
             min_page_width: MIN_PAGE_WIDTH,
@@ -1295,7 +1520,22 @@ impl<V: warpui::View> PageType<V> {
         Self::Uncategorized {
             filter: widgets.iter().enumerate().map(|(i, _)| i).collect(),
             widgets,
-            title,
+            title: optional_static_title(title),
+            vertical_scroll_state: Default::default(),
+            horizontal_scroll_state: Default::default(),
+            highlighted_widget_id: Default::default(),
+            min_page_width: MIN_PAGE_WIDTH,
+        }
+    }
+
+    pub(super) fn new_uncategorized_i18n_title(
+        widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
+        title: Option<I18nKey>,
+    ) -> Self {
+        Self::Uncategorized {
+            filter: widgets.iter().enumerate().map(|(i, _)| i).collect(),
+            widgets,
+            title: optional_i18n_title(title),
             vertical_scroll_state: Default::default(),
             horizontal_scroll_state: Default::default(),
             highlighted_widget_id: Default::default(),
@@ -1321,7 +1561,7 @@ impl<V: warpui::View> PageType<V> {
                 })
                 .collect(),
             categories,
-            title,
+            title: optional_static_title(title),
             vertical_scroll_state: Default::default(),
             horizontal_scroll_state: Default::default(),
             highlighted_widget_id: Default::default(),
@@ -1333,18 +1573,6 @@ impl<V: warpui::View> PageType<V> {
     /// Uses all-words matching: every word in the query must appear somewhere in the
     /// widget's search terms (but not necessarily contiguously).
     pub(super) fn update_filter(&mut self, query: &str, app: &AppContext) -> MatchData {
-        /// Returns true if every whitespace-delimited word in `query` appears
-        /// somewhere in `terms` (case-insensitive). An empty query matches everything.
-        fn search_terms_match(terms: &str, query: &str) -> bool {
-            if query.is_empty() {
-                return true;
-            }
-            let terms_lower = terms.to_lowercase();
-            query
-                .to_lowercase()
-                .split_whitespace()
-                .all(|word| terms_lower.contains(word))
-        }
         match self {
             Self::Monolith { widget, filter, .. } => {
                 *filter =
@@ -1539,7 +1767,7 @@ impl<V: warpui::View> PageType<V> {
         }
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     pub fn scroll_by(&self, delta: Pixels) {
         match self {
             PageType::Monolith {
@@ -1566,6 +1794,7 @@ impl<V: warpui::View> PageType<V> {
                 if let Some(widget) = widget {
                     if widget.should_render(app) {
                         if let Some(title) = title {
+                            let title = title.resolve(app);
                             let col = Flex::column()
                                 .with_child(render_page_title(title, HEADER_FONT_SIZE, appearance))
                                 .with_child(widget.render_widget(view, false, appearance, app));
@@ -1585,6 +1814,7 @@ impl<V: warpui::View> PageType<V> {
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
+                    let title = title.resolve(app);
                     page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
                 }
                 for widget in widgets {
@@ -1604,19 +1834,20 @@ impl<V: warpui::View> PageType<V> {
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
+                    let title = title.resolve(app);
                     page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
                 }
                 let num_categories = categories.len();
                 for (i, category) in categories.into_iter().enumerate() {
-                    if !category.title.is_empty() {
+                    let title = category.title.resolve(app);
+                    if !title.is_empty() {
                         if let Some(subtitle) = category.subtitle {
+                            let subtitle = subtitle.resolve(app);
                             page.add_child(render_sub_header_with_description(
-                                appearance,
-                                category.title,
-                                subtitle,
+                                appearance, title, subtitle,
                             ));
                         } else {
-                            page.add_child(render_sub_header(appearance, category.title, None));
+                            page.add_child(render_sub_header(appearance, title, None));
                         }
                     }
                     for widget in &category.widgets {
@@ -1734,20 +1965,20 @@ impl<V: warpui::View> PageType<V> {
 pub(super) enum FilteredPageType<'a, V: warpui::View> {
     Monolith {
         widget: Option<&'a dyn SettingsWidget<View = V>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         vertical_scroll_state: Option<ClippedScrollStateHandle>,
         horizontal_scroll_state: Option<ClippedScrollStateHandle>,
     },
     Uncategorized {
         widgets: Vec<&'a dyn SettingsWidget<View = V>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
         highlighted_widget_id: Option<&'static str>,
     },
     Categorized {
         categories: Vec<FilteredCategory<'a, V>>,
-        title: Option<&'static str>,
+        title: Option<CategoryTitle>,
         vertical_scroll_state: ClippedScrollStateHandle,
         horizontal_scroll_state: ClippedScrollStateHandle,
         highlighted_widget_id: Option<&'static str>,
@@ -1756,8 +1987,8 @@ pub(super) enum FilteredPageType<'a, V: warpui::View> {
 
 /// A grouping of related [`SettingsWidget`]s that fall under the same sub-header.
 pub(super) struct Category<V: warpui::View> {
-    title: &'static str,
-    subtitle: Option<&'static str>,
+    title: CategoryTitle,
+    subtitle: Option<CategoryTitle>,
     widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
 }
 
@@ -1767,22 +1998,33 @@ impl<V: warpui::View> Category<V> {
         widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
     ) -> Self {
         Self {
-            title,
+            title: CategoryTitle::Static(title),
             subtitle: None,
             widgets,
         }
     }
 
-    pub(super) fn with_subtitle(mut self, subtitle: &'static str) -> Self {
-        self.subtitle = Some(subtitle);
+    pub(super) fn new_i18n(
+        title: I18nKey,
+        widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
+    ) -> Self {
+        Self {
+            title: CategoryTitle::I18n(title),
+            subtitle: None,
+            widgets,
+        }
+    }
+
+    pub(super) fn with_subtitle_i18n(mut self, subtitle: I18nKey) -> Self {
+        self.subtitle = Some(CategoryTitle::I18n(subtitle));
         self
     }
 }
 
 /// A [`Category`] with only the results which match a search query.
 pub(super) struct FilteredCategory<'a, V: warpui::View> {
-    pub(super) title: &'static str,
-    pub(super) subtitle: Option<&'static str>,
+    pub(super) title: CategoryTitle,
+    pub(super) subtitle: Option<CategoryTitle>,
     pub(super) widgets: Vec<&'a dyn SettingsWidget<View = V>>,
 }
 
@@ -1841,6 +2083,7 @@ pub(super) trait SettingsWidget {
 /// the setting.
 pub(super) fn build_reset_button(
     appearance: &Appearance,
+    app: &AppContext,
     mouse_state: MouseStateHandle,
     changed_from_default: bool,
 ) -> Button {
@@ -1858,5 +2101,5 @@ pub(super) fn build_reset_button(
             font_size: Some(appearance.ui_font_size() * 0.8),
             ..Default::default()
         })
-        .with_text_label("Reset to default".to_owned())
+        .with_text_label(crate::i18n::tr_static(app, "Reset to default").to_owned())
 }

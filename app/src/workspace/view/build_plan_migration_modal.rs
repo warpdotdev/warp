@@ -239,7 +239,11 @@ impl BuildPlanMigrationModal {
         ctx.notify();
     }
 
-    fn render_auto_reload_controls(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_auto_reload_controls(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let check_color = theme.background().into_solid();
 
@@ -265,12 +269,16 @@ impl BuildPlanMigrationModal {
             })
             .finish();
 
-        let label = FormattedTextElement::from_str("Auto-reload", appearance.ui_font_family(), 12.)
-            .with_color(blended_colors::text_sub(
-                theme,
-                blended_colors::neutral_4(theme),
-            ))
-            .finish();
+        let label = FormattedTextElement::from_str(
+            crate::i18n::tr_static(app, "Auto-reload"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(blended_colors::text_sub(
+            theme,
+            blended_colors::neutral_4(theme),
+        ))
+        .finish();
 
         let checkbox_row = Flex::row()
             .with_child(checkbox)
@@ -301,11 +309,15 @@ impl BuildPlanMigrationModal {
             .finish()
     }
 
-    fn render_get_started_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_get_started_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let button_text = if self.is_updating {
-            "Saving...".to_string()
+            crate::i18n::tr_static(app, "Saving...").to_string()
         } else {
-            "Get Started".to_string()
+            crate::i18n::tr_static(app, "Get Started").to_string()
         };
 
         let button_font_color = self.is_updating.then_some(
@@ -349,11 +361,15 @@ impl BuildPlanMigrationModal {
         button.finish()
     }
 
-    fn render_right_panel_content(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_right_panel_content(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let title = Self::create_text(
-            "Use auto-reload to never miss a beat.".to_string(),
+            crate::i18n::tr_static(app, "Use auto-reload to never miss a beat.").to_string(),
             appearance.ui_font_family(),
             16.,
             blended_colors::text_main(theme, blended_colors::neutral_2(theme)),
@@ -361,7 +377,7 @@ impl BuildPlanMigrationModal {
         );
 
         let description = Self::create_text(
-            "Auto-reload will automatically purchase credits at your selected rate when your account balance reaches 100 credits. Your monthly spend limit is set at your legacy plan's monthly cost and can be updated in Settings > Billing & usage.".to_string(),
+            crate::i18n::tr_static(app, "Auto-reload will automatically purchase credits at your selected rate when your account balance reaches 100 credits. Your monthly spend limit is set at your legacy plan's monthly cost and can be updated in Settings > Billing & usage.").to_string(),
             appearance.ui_font_family(),
             14.,
             blended_colors::text_sub(theme, blended_colors::neutral_4(theme)),
@@ -388,8 +404,8 @@ impl BuildPlanMigrationModal {
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_main_axis_size(MainAxisSize::Max)
-                        .with_child(self.render_auto_reload_controls(appearance))
-                        .with_child(self.render_get_started_button(appearance))
+                        .with_child(self.render_auto_reload_controls(appearance, app))
+                        .with_child(self.render_get_started_button(appearance, app))
                         .finish(),
                 )
                 .finish(),
@@ -416,7 +432,7 @@ impl BuildPlanMigrationModal {
 
         let content_panel = Shrinkable::new(
             1.,
-            Container::new(self.render_right_panel_content(appearance))
+            Container::new(self.render_right_panel_content(appearance, app))
                 .with_uniform_padding(PANEL_PADDING)
                 .with_background(blended_colors::neutral_2(theme))
                 .with_border(Border::left(1.).with_border_color(blended_colors::neutral_4(theme)))

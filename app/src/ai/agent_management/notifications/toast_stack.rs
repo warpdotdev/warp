@@ -301,6 +301,7 @@ impl View for AgentNotificationToastStack {
                 entry.message_expanded,
                 is_newest.then(|| keystroke.clone()).flatten(),
                 appearance,
+                app,
             );
             column.add_child(Container::new(toast).with_margin_bottom(4.).finish());
         }
@@ -365,12 +366,13 @@ fn render_toast(
     message_expanded: bool,
     keystroke: Option<Keystroke>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let on_expand: OnExpandClick = Box::new(move |ctx: &mut warpui::EventContext| {
         ctx.dispatch_typed_action(AgentNotificationToastAction::ToggleMessageExpanded(id));
     });
-    let keybinding_hint = keystroke.map(|ks| render_keybinding_hint(ks, appearance));
+    let keybinding_hint = keystroke.map(|ks| render_keybinding_hint(ks, appearance, app));
 
     let content = render_notification_item_content(
         item,
@@ -454,12 +456,19 @@ fn render_toast(
     .finish()
 }
 
-fn render_keybinding_hint(keystroke: Keystroke, appearance: &Appearance) -> Box<dyn Element> {
+fn render_keybinding_hint(
+    keystroke: Keystroke,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
 
     let hint_text = appearance
         .ui_builder()
-        .wrappable_text("Open conversation".to_string(), false)
+        .wrappable_text(
+            crate::i18n::tr_static(app, "Open conversation").to_string(),
+            false,
+        )
         .with_style(UiComponentStyles {
             font_size: Some(12.),
             font_color: Some(theme.disabled_text_color(theme.surface_2()).into()),

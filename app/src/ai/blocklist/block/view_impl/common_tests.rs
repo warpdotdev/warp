@@ -10,9 +10,9 @@ use warpui::App;
 use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
-    inline_image_source_label, lightbox_trigger_for_section, query_prefix_highlight_len,
-    render_scrollable_collapsible_content, text_sections_with_indices, CollapsibleElementState,
-    CollapsibleExpansionState, VisualMarkdownLightboxCollection,
+    inline_image_source_label, is_supported_blocklist_image_source, lightbox_trigger_for_section,
+    query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
+    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
 };
 use crate::{
     ai::agent::{
@@ -291,4 +291,44 @@ fn blocklist_image_asset_source_uses_cached_resolution_when_available() {
         Some(AssetSource::LocalFile { path }) => assert_eq!(path, cached_path),
         other => panic!("expected cached local file asset source, got {other:?}"),
     }
+}
+
+/// `is_supported_blocklist_image_source` should accept the same image extensions
+/// that `warp_util::file_type::is_binary_file` recognises (plus `svg`, which is
+/// text/XML and not in `is_binary_file`). Until #9395 / this fix landed the
+/// blocklist list was only `jpg | jpeg | png | gif | webp | svg`, so inline
+/// references to local `.bmp` / `.tiff` / `.tif` / `.ico` images failed the
+/// support check and silently rendered as plain text.
+#[test]
+fn is_supported_blocklist_image_source_covers_common_local_formats() {
+    for source in [
+        "diagram.jpg",
+        "diagram.jpeg",
+        "diagram.png",
+        "diagram.gif",
+        "diagram.bmp",
+        "diagram.tiff",
+        "diagram.tif",
+        "diagram.webp",
+        "diagram.ico",
+        "diagram.svg",
+    ] {
+        assert!(
+            is_supported_blocklist_image_source(source),
+            "{source} should be a supported local image source"
+        );
+    }
+    // Case-insensitive on the extension.
+    assert!(is_supported_blocklist_image_source("PHOTO.PNG"));
+    assert!(is_supported_blocklist_image_source("scan.TIFF"));
+    // HTTP / HTTPS sources are intentionally rejected regardless of extension.
+    assert!(!is_supported_blocklist_image_source(
+        "http://example.com/x.png"
+    ));
+    assert!(!is_supported_blocklist_image_source(
+        "https://example.com/x.png"
+    ));
+    // Non-image extensions stay rejected.
+    assert!(!is_supported_blocklist_image_source("doc.pdf"));
+    assert!(!is_supported_blocklist_image_source("notes.md"));
 }

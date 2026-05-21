@@ -164,6 +164,7 @@ fn deletion_cleans_up_pending_artifacts() {
                 terminal_view_id,
                 conversation_id,
                 conversation_title: None,
+                run_id: None,
             });
         });
 

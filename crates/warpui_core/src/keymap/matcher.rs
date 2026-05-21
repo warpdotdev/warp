@@ -374,5 +374,5 @@ impl Matcher {
 }
 
 #[cfg(test)]
-#[path = "matcher_test.rs"]
+#[path = "matcher_tests.rs"]
 mod tests;

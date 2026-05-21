@@ -338,5 +338,5 @@ impl UndoStack {
 }
 
 #[cfg(test)]
-#[path = "undo_test.rs"]
+#[path = "undo_tests.rs"]
 pub mod tests;

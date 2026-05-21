@@ -2506,7 +2506,7 @@ impl Buffer {
         // the correct offset. For example a fragment with the text "foo" starting at 0
         // would be spliced into "fo" if the start of the range was 2.
         if range.start > *chars_to_fragment_start {
-            // Note that the current_fragment is ovewritten to be the latter part of the splice
+            // Note that the current_fragment is overwritten to be the latter part of the splice
             // whereas the spliced_fragment contains the earlier part of the splice.
             // The spliced fragment should not be styled.
             let spliced_fragment = Self::splice_fragment_at_char_offset(
@@ -3892,5 +3892,5 @@ pub enum RangesWhenEditing {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

@@ -223,5 +223,5 @@ impl fmt::Display for MerkleHash {
 }
 
 #[cfg(test)]
-#[path = "hash_test.rs"]
+#[path = "hash_tests.rs"]
 mod hash_test;

@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! Defines the Row type which makes up lines in the grid.
 use std::cmp::{max, min};
 use std::ops::{Index, IndexMut};

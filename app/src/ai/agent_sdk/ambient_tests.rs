@@ -1,6 +1,4 @@
-//! Unit tests for `filter_from_args`. Verifies the clap enums are faithfully translated into
-//! `TaskListFilter` without dropping any fields.
-
+//! Unit tests for ambient agent CLI argument mapping and message helpers.
 use chrono::{TimeZone, Utc};
 
 use warp_cli::json_filter::JsonOutput;
@@ -11,6 +9,9 @@ use warp_cli::task::{
 
 use super::*;
 use crate::server::server_api::ai::{ArtifactType, ExecutionLocation, RunSortBy, RunSortOrder};
+
+const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
+const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
 
 /// A `ListTasksArgs` whose fields are all at their defaults.
 fn empty_args() -> ListTasksArgs {
@@ -166,4 +167,50 @@ fn every_field_maps_through() {
     assert_eq!(filter.sort_by, Some(RunSortBy::CreatedAt));
     assert_eq!(filter.sort_order, Some(RunSortOrder::Asc));
     assert_eq!(filter.cursor.as_deref(), Some("abcd=="));
+}
+
+#[test]
+fn task_id_from_run_id_accepts_task_uuid() {
+    let task_id = task_id_from_run_id(TASK_ID).expect("valid task id");
+
+    assert_eq!(task_id.to_string(), TASK_ID);
+}
+
+#[test]
+fn task_id_from_run_id_ignores_non_task_ids() {
+    assert!(task_id_from_run_id("local-child-run").is_none());
+}
+
+#[test]
+#[serial_test::serial]
+fn task_id_for_message_send_prefers_sender_run_id() {
+    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, OTHER_TASK_ID);
+    let task_id = task_id_for_message_send(TASK_ID)
+        .expect("valid task id")
+        .expect("task id");
+    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+
+    assert_eq!(task_id.to_string(), TASK_ID);
+}
+
+#[test]
+#[serial_test::serial]
+fn task_id_for_message_send_falls_back_to_oz_run_id() {
+    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, TASK_ID);
+    let task_id = task_id_for_message_send("local-child-run")
+        .expect("valid env task id")
+        .expect("task id");
+    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+
+    assert_eq!(task_id.to_string(), TASK_ID);
+}
+
+#[test]
+#[serial_test::serial]
+fn task_id_from_oz_run_id_env_rejects_invalid_value() {
+    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, "not-a-task-id");
+    let err = task_id_from_oz_run_id_env().expect_err("invalid task id");
+    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+
+    assert!(err.to_string().contains("Invalid OZ_RUN_ID"));
 }

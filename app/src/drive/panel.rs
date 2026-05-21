@@ -583,7 +583,7 @@ impl DrivePanel {
         ctx.emit(DrivePanelEvent::OpenMCPServerCollection);
     }
 
-    /// Recomputes and intializes the section states for the WD Index. This is needed after
+    /// Recomputes and initializes the section states for the WD Index. This is needed after
     /// we directly change anything about the state of the index (such as folders being open/closed).
     ///
     /// This should only be called if we immeidiately need to update and rely on the updated state.
@@ -735,5 +735,5 @@ pub(crate) mod styles {
 }
 
 #[cfg(test)]
-#[path = "panel_test.rs"]
+#[path = "panel_tests.rs"]
 mod tests;

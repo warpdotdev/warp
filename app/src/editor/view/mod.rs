@@ -371,12 +371,16 @@ pub fn init(ctx: &mut AppContext) {
         FixedBinding::new(
             "pageup",
             EditorAction::PageUp,
-            id!("EditorView") & !id!("IMEOpen"),
+            id!("EditorView")
+                & !id!("IMEOpen")
+                & !id!(flags::TERMINAL_INPUT_PAGE_KEYS_HANDLED_BY_INPUT),
         ),
         FixedBinding::new(
             "pagedown",
             EditorAction::PageDown,
-            id!("EditorView") & !id!("IMEOpen"),
+            id!("EditorView")
+                & !id!("IMEOpen")
+                & !id!(flags::TERMINAL_INPUT_PAGE_KEYS_HANDLED_BY_INPUT),
         ),
         // Some editable bindings currently have more than 1 action.
         // Below's the list of those.
@@ -4073,7 +4077,7 @@ impl EditorView {
 
     /// This method is triggered by the initial double-click selection (not a drag). The way the
     /// selection range expands depends on user settings stored in SemanticSelection. Smart-select may
-    /// be enabled, and if not, the word-breaking characters may have been overriden.
+    /// be enabled, and if not, the word-breaking characters may have been overridden.
     pub fn select_word(&mut self, position: &DisplayPoint, ctx: &mut ViewContext<Self>) {
         let position = *position;
 
@@ -4236,7 +4240,7 @@ impl EditorView {
             .first_selection(ctx)
             .head()
             .to_byte_offset(buffer)
-            .expect("Selection must be convertable to byte offset")
+            .expect("Selection must be convertible to byte offset")
     }
 
     /// Finds the start byte of the token under the given point (the offset at
@@ -6346,12 +6350,12 @@ impl EditorView {
                         selection
                             .head()
                             .to_point(buffer)
-                            .expect("Selection head must be convertable to a Point")
+                            .expect("Selection head must be convertible to a Point")
                     } else {
                         selection
                             .end()
                             .to_point(buffer)
-                            .expect("Selection end must be convertable to a Point")
+                            .expect("Selection end must be convertible to a Point")
                     };
                     if let Ok(mut boundaries) =
                         buffer.subword_ends_from_offset_exclusive(end_position)
@@ -6361,7 +6365,7 @@ impl EditorView {
                             .anchor_before(
                                 subword_start
                                     .to_display_point(map, ctx)
-                                    .expect("Subword start must be convertable to a DisplayPoint"),
+                                    .expect("Subword start must be convertible to a DisplayPoint"),
                                 Bias::Right,
                                 ctx,
                             )
@@ -6394,12 +6398,12 @@ impl EditorView {
                     selection
                         .head()
                         .to_point(buffer)
-                        .expect("Selection head must be convertable to a Point")
+                        .expect("Selection head must be convertible to a Point")
                 } else {
                     selection
                         .start()
                         .to_point(buffer)
-                        .expect("Selection start must be convertable to a Point")
+                        .expect("Selection start must be convertible to a Point")
                 };
                 if let Ok(mut boundaries) =
                     buffer.subword_backward_starts_from_offset_exclusive(start_position)
@@ -6409,7 +6413,7 @@ impl EditorView {
                         .anchor_before(
                             subword_start
                                 .to_display_point(map, ctx)
-                                .expect("Subword start must be convertable to a DisplayPoint"),
+                                .expect("Subword start must be convertible to a DisplayPoint"),
                             Bias::Left,
                             ctx,
                         )
@@ -8767,5 +8771,5 @@ pub fn position_id_for_first_cursor(editor_view_id: EntityId) -> String {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

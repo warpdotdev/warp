@@ -42,6 +42,7 @@ use warpui::{
 use warpui::{BlurContext, ModelHandle};
 
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
 #[cfg(feature = "local_fs")]
@@ -51,13 +52,16 @@ use crate::terminal::view::{TerminalDropTargetData, TerminalView};
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::openable_file_type::{is_file_content_binary, EditorLayout, FileTarget};
+use crate::util::openable_file_type::{
+    is_file_content_binary, is_markdown_file, EditorLayout, FileTarget,
+};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
     resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice,
 };
 use crate::{
     appearance::Appearance,
+    i18n::{self, I18nKey},
     menu::{Menu, MenuItem, MenuItemFields},
     server::telemetry::TelemetryEvent,
     ui_components::icons::Icon,
@@ -67,7 +71,6 @@ use crate::{
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::{color::internal_colors, Fill};
 use warp_core::HostId;
-use warpui::ui_components::components::UiComponent;
 
 mod editing;
 mod render;
@@ -549,13 +552,15 @@ impl FileTreeView {
                 if !root_paths.is_empty() {
                     let id = RepositoryIdentifier::Local(std_path.clone());
                     if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&id, ctx) {
-                        for root_path in root_paths {
-                            if let Some(root_dir) = self.root_directories.get_mut(&root_path) {
+                        for root_path in &root_paths {
+                            if let Some(root_dir) = self.root_directories.get_mut(root_path) {
                                 root_dir.entry = state.entry.clone();
                             }
                         }
 
-                        self.rebuild_flattened_items();
+                        for root_path in &root_paths {
+                            self.rebuild_flattened_items_for_root(root_path);
+                        }
                         self.apply_pending_focus_target();
                         ctx.notify();
                     }
@@ -600,7 +605,11 @@ impl FileTreeView {
                     if let Some(root_dir) = self.root_directories.get_mut(&repo_path) {
                         root_dir.entry = state.entry.clone();
                     }
-                    self.rebuild_flattened_items();
+                    // Only rebuild the affected remote root instead of all roots.
+                    // Remote servers stream frequent incremental updates; a full
+                    // rebuild would cause unrelated local roots to re-render on
+                    // every remote filesystem change, leading to visible flicker.
+                    self.rebuild_flattened_items_for_root(&repo_path);
                     ctx.notify();
                 }
             }
@@ -610,7 +619,10 @@ impl FileTreeView {
                 let repo_path = &remote_id.path;
                 self.displayed_directories.retain(|p| p != repo_path);
                 self.root_directories.remove(repo_path);
-                self.rebuild_flattened_items();
+                // The removed root is already gone from root_directories, so
+                // this is effectively a no-op rebuild that avoids touching
+                // the remaining roots' flattened items.
+                self.rebuild_flattened_items_for_root(repo_path);
                 ctx.notify();
             }
             RepoMetadataEvent::FileTreeUpdated { .. }
@@ -730,9 +742,17 @@ impl FileTreeView {
     fn handle_code_event(&mut self, event: &ActiveFileEvent, ctx: &mut ViewContext<Self>) {
         // When a file is focused, scroll to show it in the file tree
         match event {
-            ActiveFileEvent::ActiveFileChanged { file_info } => {
-                let Ok(file_std) = StandardizedPath::try_from_local(file_info) else {
-                    return;
+            ActiveFileEvent::ActiveFileChanged { location } => {
+                let file_std = match location {
+                    crate::code::buffer_location::LocalOrRemotePath::Local(path) => {
+                        match StandardizedPath::try_from_local(path) {
+                            Ok(std_path) => std_path,
+                            Err(_) => return,
+                        }
+                    }
+                    crate::code::buffer_location::LocalOrRemotePath::Remote(remote) => {
+                        remote.path.clone()
+                    }
                 };
                 // Prefer the currently-selected item's root if the file lives under it;
                 // otherwise fall back to the deepest matching root directory.
@@ -1273,8 +1293,9 @@ impl FileTreeView {
                     remote_host_id: None,
                 });
             let root_local = root_path.to_local_path_lossy();
-            if let Some(repo_root) =
-                DetectedRepositories::as_ref(ctx).get_root_for_path(&root_local)
+            if let Some(repo_root) = DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(root_local))
+                .and_then(|r| PathBuf::try_from(r).ok())
             {
                 let repo_entry = {
                     let repo_metadata = RepoMetadataModel::as_ref(ctx);
@@ -1287,6 +1308,12 @@ impl FileTreeView {
                             if state.entry.contains(root_path) =>
                         {
                             Some(state.entry.clone())
+                        }
+                        Some(IndexedRepoState::Pending(_)) => {
+                            // Repo is being (re-)indexed. Keep whatever entry
+                            // we already have so the tree doesn't flash to a
+                            // loading state during the transition.
+                            continue;
                         }
                         _ => None,
                     }
@@ -1555,14 +1582,21 @@ impl FileTreeView {
         }
 
         let id = repo_metadata::RepositoryIdentifier::local(path.clone());
-        let entry = RepoMetadataModel::as_ref(ctx)
-            .get_repository(&id, ctx)
-            .map(|state| state.entry.clone());
+        let repo_state = RepoMetadataModel::as_ref(ctx).repository_state(&id, ctx);
         if let Some(root_dir) = self.root_directories.get_mut(path) {
-            root_dir.entry = match entry {
-                Some(entry) => entry,
-                None => Self::create_empty_entry(path),
-            };
+            match repo_state {
+                Some(IndexedRepoState::Indexed(state)) => {
+                    root_dir.entry = state.entry.clone();
+                }
+                Some(IndexedRepoState::Pending(_)) => {
+                    // Repo is being (re-)indexed. Keep whatever entry we already
+                    // have so the tree doesn't flash back to a loading state
+                    // during the Pending → Indexed transition.
+                }
+                Some(IndexedRepoState::Failed(_)) | None => {
+                    root_dir.entry = Self::create_empty_entry(path);
+                }
+            }
         }
     }
 
@@ -1573,40 +1607,62 @@ impl FileTreeView {
     fn show_exceeded_file_limit_toast(ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
+            let toast = DismissibleToast::error(String::from(crate::i18n::tr_static(
+                ctx,
                 "Folder has too many files to display in the file explorer.",
-            ))
+            )))
             .with_object_id("file_tree_exceeded_file_limit".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
 
+    /// Rebuilds the flattened items list for a single root directory only,
+    /// leaving all other roots untouched. Use this when only one root's
+    /// backing data has changed (e.g. a metadata update) to avoid
+    /// unnecessarily re-flattening — and re-rendering — unrelated roots.
+    fn rebuild_flattened_items_for_root(&mut self, target_root: &StandardizedPath) {
+        self.rebuild_flatten_items_impl(None, None, Some(target_root));
+    }
+
     /// Rebuilds the flattened items list from the current entry tree, optionally removing an item.
     fn rebuild_flattened_items(&mut self) {
-        self.rebuild_flatten_items_and_select_path(None, None);
+        self.rebuild_flatten_items_impl(None, None, None);
     }
 
     fn rebuild_flattened_items_without(&mut self, path_to_remove: &StandardizedPath) -> bool {
-        self.rebuild_flatten_items_and_select_path(None, Some(path_to_remove))
+        self.rebuild_flatten_items_impl(None, Some(path_to_remove), None)
     }
 
-    /// Rebuilds the flattened items list from the current entry tree
-    /// If `id_to_select` is `Some`, the item identified by that FileTreeIdentifier will be selected.
-    /// If `path_to_remove` is `Some`, the item identified by `path_to_remove` will be removed
-    /// upon rebuilding.
+    /// Core implementation for rebuilding the flattened items list.
+    ///
+    /// When `target_root` is `Some`, only that root is re-flattened; all
+    /// other roots keep their existing items. When `None`, every displayed
+    /// root is rebuilt.
+    ///
+    /// If `id_to_select` is `Some`, the item identified by that
+    /// `FileTreeIdentifier` will be selected. If `path_to_remove` is
+    /// `Some`, the item at that path will be excluded from the result.
+    ///
     /// Returns `true` if an item was removed.
-    fn rebuild_flatten_items_and_select_path(
+    fn rebuild_flatten_items_impl(
         &mut self,
         id_to_select: Option<&FileTreeIdentifier>,
         path_to_remove: Option<&StandardizedPath>,
+        target_root: Option<&StandardizedPath>,
     ) -> bool {
         let mut any_item_removed = false;
 
         // Clone the ID to preserve so we don't hold a borrow on self.selected_item
         let id_to_preserve = id_to_select.cloned().or_else(|| self.selected_item.clone());
 
-        // Process all displayed directories
+        // Process displayed directories, optionally filtering to a single root.
         for root_path in self.displayed_directories.clone() {
+            if let Some(target) = target_root {
+                if root_path != *target {
+                    continue;
+                }
+            }
+
             let Some(root_dir) = self.root_directories.get(&root_path) else {
                 continue;
             };
@@ -1924,7 +1980,12 @@ impl FileTreeView {
     }
 
     /// Renders a clickable tree item with mouse state handle
-    fn render_item(&self, id: &FileTreeIdentifier, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_item(
+        &self,
+        id: &FileTreeIdentifier,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
         let Some(root_dir) = self.root_directories.get(&id.root) else {
             return Empty::new().finish();
         };
@@ -1935,7 +1996,6 @@ impl FileTreeView {
         let is_selected = self.selected_item.as_ref() == Some(id);
         let is_expanded = self.is_item_expanded(&id.root, item);
         let render_state = item.to_render_state(is_expanded, appearance);
-        let is_remote_file = root_dir.is_remote() && matches!(item, FileTreeItem::File { .. });
 
         let item_display_name = render_state.display_name.clone();
         let item_position_id = format!("file_tree_item:{item_display_name}");
@@ -1954,34 +2014,14 @@ impl FileTreeView {
         let id_for_context = id.clone();
         let id_for_drop = id.clone();
         let id_for_drag = id.clone();
-        let ui_builder = appearance.ui_builder();
         let hoverable = Hoverable::new(render_state.mouse_state.clone(), move |mouse_state| {
             let item_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
-            let element = Self::render_item_with_hover(
+            Self::render_item_with_hover(
                 render_state,
                 appearance,
                 item_highlight_state,
                 editor_view,
-            );
-
-            if is_remote_file && mouse_state.is_hovered() {
-                let tooltip = ui_builder
-                    .tool_tip("Opening files is unavailable for remote sessions".to_string())
-                    .build()
-                    .finish();
-                let offset = OffsetPositioning::offset_from_parent(
-                    Vector2F::new(0., 4.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomLeft,
-                    ChildAnchor::TopLeft,
-                );
-                Stack::new()
-                    .with_child(element)
-                    .with_positioned_overlay_child(tooltip, offset)
-                    .finish()
-            } else {
-                element
-            }
+            )
         })
         .on_click(
             move |event_ctx: &mut EventContext, _app_ctx: &AppContext, _position| {
@@ -2004,12 +2044,7 @@ impl FileTreeView {
                 });
             },
         )
-        // Remote files can't be opened in the editor, so use the default cursor.
-        .with_cursor(if is_remote_file {
-            Cursor::Arrow
-        } else {
-            Cursor::PointingHand
-        })
+        .with_cursor(Cursor::PointingHand)
         .finish();
 
         let draggable = Draggable::new(draggable_state, hoverable)
@@ -2208,7 +2243,7 @@ impl FileTreeView {
         );
 
         ctx.emit(FileTreeEvent::OpenFile {
-            path: path.to_path_buf(),
+            path: LocalOrRemotePath::Local(path.to_path_buf()),
             target,
             line_col: None,
         });
@@ -2230,8 +2265,38 @@ impl FileTreeView {
 
         match item {
             FileTreeItem::File { metadata, .. } => {
-                // Remote file trees don't support opening files in the editor.
-                if !is_remote {
+                if is_remote {
+                    // Emit a remote open event if we have a host ID.
+                    if let Some(host_id) = &root_dir.remote_host_id {
+                        let remote_path = warp_util::remote_path::RemotePath::new(
+                            host_id.clone(),
+                            (*metadata.path).clone(),
+                        );
+                        let path_str = metadata.path.as_str();
+                        let target = if is_markdown_file(Path::new(path_str)) {
+                            #[cfg(feature = "local_fs")]
+                            {
+                                let prefer_md = *EditorSettings::as_ref(ctx).prefer_markdown_viewer;
+                                if prefer_md {
+                                    FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                                } else {
+                                    FileTarget::CodeEditor(EditorLayout::SplitPane)
+                                }
+                            }
+                            #[cfg(not(feature = "local_fs"))]
+                            {
+                                FileTarget::CodeEditor(EditorLayout::SplitPane)
+                            }
+                        } else {
+                            FileTarget::CodeEditor(EditorLayout::SplitPane)
+                        };
+                        ctx.emit(FileTreeEvent::OpenFile {
+                            path: LocalOrRemotePath::Remote(remote_path),
+                            target,
+                            line_col: None,
+                        });
+                    }
+                } else {
                     let path = metadata.path.to_local_path_lossy();
                     self.open_file(&path, None, ctx);
                 }
@@ -2267,6 +2332,7 @@ impl FileTreeView {
         &self,
         item: &FileTreeItem,
         id: &FileTreeIdentifier,
+        app: &AppContext,
     ) -> Vec<MenuItem<FileTreeAction>> {
         let is_remote = self.is_remote_item(id);
 
@@ -2283,12 +2349,12 @@ impl FileTreeView {
                     let path_local = item.path().to_local_path_lossy();
                     if !is_file_content_binary(&path_local) {
                         items.extend([
-                            MenuItemFields::new("Open in new pane")
+                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewPane))
                                 .with_on_select_action(FileTreeAction::OpenInNewPane {
                                     id: id.clone(),
                                 })
                                 .into_item(),
-                            MenuItemFields::new("Open in new tab")
+                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewTab))
                                 .with_on_select_action(FileTreeAction::OpenInNewTab {
                                     id: id.clone(),
                                 })
@@ -2296,7 +2362,7 @@ impl FileTreeView {
                         ]);
                     } else {
                         items.push(
-                            MenuItemFields::new("Open file")
+                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenFile))
                                 .with_on_select_action(FileTreeAction::ItemClicked {
                                     id: id.clone(),
                                 })
@@ -2306,7 +2372,7 @@ impl FileTreeView {
                 }
                 FileTreeItem::DirectoryHeader { .. } => {
                     items.push(
-                        MenuItemFields::new("New file")
+                        MenuItemFields::new(i18n::tr(app, I18nKey::CodeNewFile))
                             .with_on_select_action(FileTreeAction::NewFileBelowDirectory {
                                 id: id.clone(),
                             })
@@ -2315,7 +2381,7 @@ impl FileTreeView {
                     items.push(MenuItem::Separator);
                     if self.has_terminal_session {
                         items.push(
-                            MenuItemFields::new("cd to directory")
+                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeCdToDirectory))
                                 .with_on_select_action(FileTreeAction::CDToDirectory {
                                     id: id.clone(),
                                 })
@@ -2323,7 +2389,7 @@ impl FileTreeView {
                         );
                     }
                     items.push(
-                        MenuItemFields::new("Open in new tab")
+                        MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewTab))
                             .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
                             .into_item(),
                     );
@@ -2331,11 +2397,11 @@ impl FileTreeView {
             };
 
             let open_text = if cfg!(target_os = "macos") {
-                "Reveal in Finder"
+                i18n::tr(app, I18nKey::CodeRevealInFinder)
             } else if cfg!(target_os = "windows") {
-                "Reveal in Explorer"
+                i18n::tr(app, I18nKey::CodeRevealInExplorer)
             } else {
-                "Reveal in file manager"
+                i18n::tr(app, I18nKey::CodeRevealInFileManager)
             };
             items.push(
                 MenuItemFields::new(open_text)
@@ -2348,12 +2414,12 @@ impl FileTreeView {
             let is_repo_root_dir = id.index == 0;
             if !is_repo_root_dir {
                 items.push(
-                    MenuItemFields::new("Rename")
+                    MenuItemFields::new(i18n::tr(app, I18nKey::CommonRename))
                         .with_on_select_action(FileTreeAction::Rename { id: id.clone() })
                         .into_item(),
                 );
                 items.push(
-                    MenuItemFields::new("Delete")
+                    MenuItemFields::new(i18n::tr(app, I18nKey::CommonDelete))
                         .with_on_select_action(FileTreeAction::Delete { id: id.clone() })
                         .into_item(),
                 );
@@ -2365,7 +2431,7 @@ impl FileTreeView {
                 items.push(MenuItem::Separator);
             }
             items.push(
-                MenuItemFields::new("Attach as context")
+                MenuItemFields::new(i18n::tr(app, I18nKey::CodeAttachAsContext))
                     .with_on_select_action(FileTreeAction::AttachAsContext { id: id.clone() })
                     .into_item(),
             );
@@ -2375,10 +2441,10 @@ impl FileTreeView {
             items.push(MenuItem::Separator);
         }
         items.extend([
-            MenuItemFields::new("Copy path")
+            MenuItemFields::new(i18n::tr(app, I18nKey::CommonCopyPath))
                 .with_on_select_action(FileTreeAction::CopyPath { id: id.clone() })
                 .into_item(),
-            MenuItemFields::new("Copy relative path")
+            MenuItemFields::new(i18n::tr(app, I18nKey::CodeCopyRelativePath))
                 .with_on_select_action(FileTreeAction::CopyRelativePath { id: id.clone() })
                 .into_item(),
         ]);
@@ -2619,7 +2685,7 @@ impl FileTreeView {
                 range
                     .filter_map(|global_index| {
                         let item_id = view.identifier_from_global_index(global_index)?;
-                        Some(view.render_item(&item_id, appearance))
+                        Some(view.render_item(&item_id, appearance, app))
                     })
                     .collect::<Vec<_>>()
                     .into_iter()
@@ -2855,7 +2921,7 @@ pub enum FileTreeEvent {
     AttachAsContext { path: PathBuf },
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFile {
-        path: PathBuf,
+        path: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
@@ -2890,6 +2956,13 @@ impl View for FileTreeView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         if matches!(self.enablement, CodingPanelEnablementState::Disabled) {
             return self.render_error_state(DISABLED_TEXT.to_string(), app);
+        }
+
+        if matches!(
+            self.enablement,
+            CodingPanelEnablementState::PendingRemoteSession
+        ) {
+            return self.render_loading_state(app);
         }
 
         if self.displayed_directories.is_empty() {
@@ -3012,7 +3085,7 @@ impl TypedActionView for FileTreeView {
                 self.context_menu_state = Some(ContextMenuState {
                     position: *position,
                 });
-                let menu_items = self.context_menu_items(item, id);
+                let menu_items = self.context_menu_items(item, id, ctx);
                 self.context_menu.update(ctx, move |menu, ctx| {
                     menu.set_items(menu_items, ctx);
                     ctx.notify();

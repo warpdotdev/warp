@@ -35,7 +35,7 @@ pub struct Appearance {
 /// Defines appearance change events.
 ///
 /// For any properties that are read from appearance (e.g.: theme, font, etc.),
-/// users should listen for these events rather than directly listenting to
+/// users should listen for these events rather than directly listening to
 /// settings change events for the underlying properties.
 ///
 /// NOTE: You do NOT need to set up subscriptions for these events and use them

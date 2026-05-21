@@ -2,7 +2,7 @@
 Example of how to add a new language grammar: https://github.com/warpdotdev/warp-internal/pull/11501/files
 
 ## TSLanguage
-We need a [TSLanguage(https://tree-sitter.github.io/tree-sitter/using-parsers#the-basic-objects) object to parse a source code file. We use open-source libraries that provide functions that create these objects. These functions are usually written in C but we can use them in Rust crates.
+We need a [TSLanguage](https://tree-sitter.github.io/tree-sitter/using-parsers#the-basic-objects) object to parse a source code file. We use open-source libraries that provide functions that create these objects. These functions are usually written in C but we can use them in Rust crates.
 
 ## config.yaml
 You can find this information on language specific documentation and style guides.

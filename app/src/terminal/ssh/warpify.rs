@@ -183,5 +183,5 @@ pub fn warpify_ssh_session_command(
     }
 }
 #[cfg(test)]
-#[path = "warpify_test.rs"]
+#[path = "warpify_tests.rs"]
 mod tests;

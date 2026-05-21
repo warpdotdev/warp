@@ -4493,6 +4493,9 @@ impl Buffer {
         ctx: &mut ModelContext<Self>,
     ) {
         if edits.is_empty() {
+            // TODO: This is temporary. We will add support to properly maintain the undo stack after incremental updates.
+            self.reset_undo_stack();
+            self.set_version(new_version);
             return;
         }
 
@@ -6118,5 +6121,5 @@ pub(super) enum BoundaryEdge {
 }
 
 #[cfg(test)]
-#[path = "buffer_test.rs"]
+#[path = "buffer_tests.rs"]
 pub mod tests;

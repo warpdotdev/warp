@@ -22,6 +22,9 @@ pub struct Dialog {
     child: Option<Box<dyn Element>>,
     styles: UiComponentStyles,
     close_button: Option<Box<dyn Element>>,
+    /// Optional icon rendered above the title. When set, the header row becomes
+    /// `[icon] … [close button]` with the title on its own row below.
+    header_icon: Option<Box<dyn Element>>,
     show_separator: bool,
 }
 
@@ -51,6 +54,7 @@ impl Dialog {
             bottom_row: Default::default(),
             bottom_row_left: Default::default(),
             close_button: None,
+            header_icon: None,
             show_separator: false,
         }
     }
@@ -62,6 +66,13 @@ impl Dialog {
 
     pub fn with_close_button(mut self, close_button: Box<dyn Element>) -> Self {
         self.close_button = Some(close_button);
+        self
+    }
+
+    /// Sets an icon element rendered in the top row alongside the close button,
+    /// with the dialog title displayed below that row.
+    pub fn with_header_icon(mut self, icon: Box<dyn Element>) -> Self {
+        self.header_icon = Some(icon);
         self
     }
 
@@ -90,28 +101,18 @@ impl UiComponent for Dialog {
     type ElementType = Dismiss;
 
     fn build(self) -> Dismiss {
-        let mut header = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new(
-                        self.title,
-                        self.styles.font_family_id.expect("FamilyId set"),
-                        self.styles.font_size.expect("Font size set"),
-                    )
-                    .with_style(self.styles.font_properties())
-                    .with_color(self.styles.font_color.unwrap_or_default())
-                    .finish(),
-                )
-                .finish(),
-            );
-
-        if let Some(close_button) = self.close_button {
-            header.add_child(close_button);
-        }
+        let title_element = Shrinkable::new(
+            1.,
+            Text::new(
+                self.title,
+                self.styles.font_family_id.expect("FamilyId set"),
+                self.styles.font_size.expect("Font size set"),
+            )
+            .with_style(self.styles.font_properties())
+            .with_color(self.styles.font_color.unwrap_or_default())
+            .finish(),
+        )
+        .finish();
 
         let footer = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -150,13 +151,45 @@ impl UiComponent for Dialog {
                 )
             };
 
-        let mut main_content = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(
+        let mut main_content =
+            Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+
+        if let Some(header_icon) = self.header_icon {
+            // Icon + close button in the top row, title on its own row below.
+            let mut icon_row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(header_icon);
+            if let Some(close_button) = self.close_button {
+                icon_row.add_child(close_button);
+            }
+            main_content.add_child(
+                Container::new(icon_row.finish())
+                    .with_padding_bottom(12.)
+                    .finish(),
+            );
+            main_content.add_child(
+                Container::new(title_element)
+                    .with_padding_bottom(DIALOG_PADDING)
+                    .finish(),
+            );
+        } else {
+            // Original layout: title and close button share the same row.
+            let mut header = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(title_element);
+            if let Some(close_button) = self.close_button {
+                header.add_child(close_button);
+            }
+            main_content.add_child(
                 Container::new(header.finish())
                     .with_padding_bottom(DIALOG_PADDING)
                     .finish(),
             );
+        }
 
         if let Some(body) = self.body {
             main_content.add_child(

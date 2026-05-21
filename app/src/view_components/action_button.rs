@@ -324,6 +324,10 @@ impl ActionButton {
         self.has_menu = has_menu;
         self
     }
+    pub fn set_has_menu(&mut self, has_menu: bool, ctx: &mut ViewContext<Self>) {
+        self.has_menu = has_menu;
+        ctx.notify();
+    }
 
     #[allow(dead_code)]
     pub fn with_callout(mut self, callout: Callout) -> Self {
@@ -429,6 +433,11 @@ impl ActionButton {
 
     pub fn set_tooltip(&mut self, tooltip: Option<impl Into<String>>, ctx: &mut ViewContext<Self>) {
         self.tooltip = tooltip.map(|t| t.into());
+        ctx.notify();
+    }
+
+    pub fn clear_tooltip(&mut self, ctx: &mut ViewContext<Self>) {
+        self.tooltip = None;
         ctx.notify();
     }
 

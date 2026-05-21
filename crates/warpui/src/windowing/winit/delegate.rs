@@ -71,7 +71,7 @@ pub fn open_url_in_system(url: &str) {
         let _ = window.open_with_url_and_target(url, "_blank");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         // Opening in WSL is complicated for a few reasons
         // 1. By default, wsl does not have an awareness of browsers installed in windows.
@@ -125,7 +125,7 @@ pub fn open_url_in_system(url: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn use_wsl_browser() -> bool {
     static USE_WSL_BROWSER: OnceLock<bool> = OnceLock::new();
     USE_WSL_BROWSER
@@ -214,7 +214,7 @@ impl AppDelegate {
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 self.clipboard = Box::new(super::wasm::WebClipboard::new());
-            } else if #[cfg(target_os = "linux")] {
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
@@ -251,7 +251,7 @@ impl platform::Delegate for AppDelegate {
 
     #[cfg(not(target_family = "wasm"))]
     fn system_theme(&self) -> platform::SystemTheme {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         match super::linux::get_system_theme() {
             Ok(system_theme) => {
                 return system_theme;
@@ -295,7 +295,7 @@ impl platform::Delegate for AppDelegate {
 
     fn open_file_path(&self, path: &Path) {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 let _ = command::blocking::Command::new("xdg-open")
                     .arg(path)
                     .spawn();

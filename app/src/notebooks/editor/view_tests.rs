@@ -1,27 +1,38 @@
 use crate::features::FeatureFlag;
 use async_channel::TryRecvError;
-use std::sync::Arc;
+use parking_lot::Mutex;
+use std::{path::PathBuf, sync::Arc};
 use string_offset::CharOffset;
-use warp_editor::render::{
-    element::RichTextAction,
-    model::{HitTestBlockType, Location, RenderEvent},
+use tempfile::tempdir;
+use warp_editor::{
+    content::mermaid_diagram::mermaid_asset_source,
+    render::{
+        element::RichTextAction,
+        model::{
+            BlockItem, BlockSpacing, HitTestBlockType, ImageBlockConfig, Location, RenderEvent,
+        },
+    },
 };
 use warp_util::user_input::UserInput;
+use warpui::assets::asset_cache::{AssetCache, AssetState};
 
 use warpui::event::ModifiersState;
+use warpui::image_cache::ImageType;
 use warpui::r#async::block_on;
+use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
 use warpui::{platform::WindowStyle, presenter::ChildView, App, Element, Entity, View, ViewHandle};
 use warpui::{SingletonEntity, TypedActionView, WindowId};
 
-use super::{EditorViewAction, RichTextEditorConfig, RichTextEditorView};
+use super::{EditorViewAction, LayoutAffectingAssetLoad, RichTextEditorConfig, RichTextEditorView};
 use crate::appearance::Appearance;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::link_editor::LinkEditorAction;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
-use crate::notebooks::link::{NotebookLinks, SessionSource};
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::link::{LinkEvent, NotebookLinks, SessionSource};
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 
@@ -30,6 +41,8 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 
 use crate::auth::AuthStateProvider;
 use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::{model::session::Session, shell::ShellType, ShellLaunchData};
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::ActiveSession;
 use crate::UserWorkspaces;
@@ -134,6 +147,25 @@ async fn reset_editor_with_markdown(
         .await;
 }
 
+fn link_offset(
+    editor: &RichTextEditorView,
+    link_url: &str,
+    ctx: &warpui::AppContext,
+) -> CharOffset {
+    let max_offset = editor.markdown(ctx).chars().count();
+    (0..=max_offset)
+        .map(CharOffset::from)
+        .find(|offset| {
+            editor
+                .model
+                .as_ref(ctx)
+                .link_url_at(*offset, ctx)
+                .as_deref()
+                == Some(link_url)
+        })
+        .expect("Expected link URL to exist in editor")
+}
+
 fn rendered_mermaid_block_range(
     editor: &RichTextEditorView,
     ctx: &warpui::AppContext,
@@ -155,6 +187,68 @@ fn rendered_mermaid_block_range(
     }
 
     None
+}
+
+#[test]
+fn test_loaded_mermaid_diagram_with_placeholder_height_needs_relayout() {
+    App::test((), |app| async move {
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let contents = "graph TD\nA[Start] --> B[Finish]\n";
+        let asset_source = mermaid_asset_source(contents);
+
+        let pending = app.read(|ctx| {
+            let asset_cache = AssetCache::as_ref(ctx);
+            match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => handle.when_loaded(asset_cache),
+                AssetState::Loaded { .. } => None,
+                AssetState::Evicted => panic!("Mermaid asset should not be evicted during test"),
+                AssetState::FailedToLoad(err) => {
+                    panic!("Mermaid asset should load successfully: {err}")
+                }
+            }
+        });
+        if let Some(future) = pending {
+            future.await;
+        }
+
+        app.read(|ctx| {
+            let config = ImageBlockConfig {
+                width: Pixels::new(640.),
+                height: Pixels::new(120.),
+                spacing: BlockSpacing::default(),
+            };
+            let block = BlockItem::MermaidDiagram {
+                content_length: CharOffset::from(contents.chars().count()),
+                asset_source,
+                config,
+            };
+            let asset_cache = AssetCache::as_ref(ctx);
+
+            assert!(matches!(
+                RichTextEditorView::layout_affecting_asset_load(&block, asset_cache),
+                Some(LayoutAffectingAssetLoad::LoadedNeedsRelayout)
+            ));
+        });
+    })
+}
+
+#[test]
+fn layout_affecting_asset_loads_rebuild_selectable_and_editable_layouts() {
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::Selectable,
+        )
+    );
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::Editable,
+        )
+    );
+    assert!(
+        RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
+            InteractionState::EditableWithInvalidSelection,
+        )
+    );
 }
 
 #[test]
@@ -275,6 +369,22 @@ fn test_omnibar_is_hidden_for_rendered_mermaid_selection() {
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
 
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+
         editor_view.update(&mut app, |editor, ctx| {
             let mermaid_block_range =
                 rendered_mermaid_block_range(editor, ctx).expect("Expected rendered Mermaid block");
@@ -297,6 +407,22 @@ fn test_shift_click_on_rendered_mermaid_dispatches_selection_update_to_block_bou
         let (_, editor_view, _) = initialize_editor(&mut app);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
 
         editor_view.update(&mut app, |editor, ctx| {
             editor.selection_start(CharOffset::from(2), false, ctx);
@@ -377,6 +503,22 @@ fn test_drag_on_rendered_mermaid_dispatches_selection_update_to_block_boundary()
         let (_, editor_view, _) = initialize_editor(&mut app);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
         reset_editor_with_markdown(&mut app, &editor_view, markdown).await;
+
+        // Blocks default to Raw; explicitly enable Rendered mode for the Mermaid block.
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.model.update(ctx, |model, ctx| {
+                model.set_mermaid_render_mode(
+                    CharOffset::from(7),
+                    MarkdownDisplayMode::Rendered,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
 
         editor_view.update(&mut app, |editor, ctx| {
             editor.selection_start(CharOffset::from(2), false, ctx);
@@ -522,6 +664,128 @@ fn test_link_editing() {
     });
 }
 
+#[test]
+fn test_editable_markdown_anchor_click_opens_link_tooltip() {
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        reset_editor_with_markdown(&mut app, &editor_view, "- [Goal](#goal)\n\n## Goal").await;
+
+        let offset = editor_view.read(&app, |editor, ctx| link_offset(editor, "#goal", ctx));
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &EditorViewAction::MaybeOpenFileOrUrl {
+                    offset,
+                    link_in_text: None,
+                    cmd: false,
+                },
+                ctx,
+            );
+        });
+
+        editor_view.read(&app, |editor, _ctx| {
+            let open_link = editor
+                .open_link
+                .as_ref()
+                .expect("Editable anchor click should show the link tooltip");
+            assert_eq!(open_link.url, "#goal");
+            assert!(open_link.editable);
+        });
+    });
+}
+
+#[test]
+fn test_cmd_click_markdown_anchor_navigates_without_link_tooltip() {
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        reset_editor_with_markdown(&mut app, &editor_view, "- [Goal](#goal)\n\n## Goal").await;
+
+        let offset = editor_view.read(&app, |editor, ctx| link_offset(editor, "#goal", ctx));
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &EditorViewAction::MaybeOpenFileOrUrl {
+                    offset,
+                    link_in_text: None,
+                    cmd: true,
+                },
+                ctx,
+            );
+        });
+
+        editor_view.read(&app, |editor, _ctx| {
+            assert!(
+                editor.open_link.is_none(),
+                "Cmd-click anchor navigation should not show the link tooltip"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cmd_click_missing_markdown_anchor_falls_back_to_link_resolution() {
+    App::test((), |mut app| async move {
+        let (window_id, editor_view, _) = initialize_editor(&mut app);
+        let base = tempdir().expect("Expected temp dir");
+        let fallback_path = base.path().join("#missing.png");
+        std::fs::File::create(&fallback_path).expect("Expected fallback file");
+        let session = Arc::new(Session::test().with_shell_launch_data(
+            ShellLaunchData::Executable {
+                executable_path: PathBuf::from("/bin/bash"),
+                shell_type: ShellType::Bash,
+            },
+        ));
+
+        ActiveSession::handle(&app).update(&mut app, |active_session, ctx| {
+            active_session.set_session_for_test(
+                window_id,
+                session.clone(),
+                Some(base.path()),
+                None,
+                ctx,
+            );
+        });
+
+        reset_editor_with_markdown(
+            &mut app,
+            &editor_view,
+            "- [Missing](#missing.png)\n\n## Goal",
+        )
+        .await;
+
+        let events = Arc::new(Mutex::new(Vec::<LinkEvent>::new()));
+        let links = editor_view.read(&app, |editor, _ctx| editor.links.clone());
+        {
+            let events = events.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
+                    events.lock().push(event.clone());
+                })
+            });
+        }
+
+        let offset = editor_view.read(&app, |editor, ctx| link_offset(editor, "#missing.png", ctx));
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &EditorViewAction::MaybeOpenFileOrUrl {
+                    offset,
+                    link_in_text: None,
+                    cmd: true,
+                },
+                ctx,
+            );
+        });
+
+        assert_eventually!(
+            events.lock().iter().any(|event| {
+                matches!(
+                    event,
+                    LinkEvent::OpenFileWithTarget { path, .. } if path == &fallback_path
+                )
+            }),
+            "Missing anchor click should fall back to link resolution: {:?}",
+            events.lock().clone()
+        );
+    });
+}
 #[test]
 fn test_run_command_from_text_selection() {
     // This tests that, starting from a text selection, we can still run a command.

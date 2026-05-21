@@ -101,6 +101,25 @@ pub fn convert_keyboard_input_event(
         {
             input.key_without_modifiers()
         }
+        // On Windows, non-Latin keyboard layouts (Cyrillic, Greek, Arabic, etc.) translate
+        // the physical key to a non-ASCII character even when Ctrl/Cmd is held. That makes
+        // bindings like `ctrl-c` / `ctrl-v` fail to match. Fall back to the US-QWERTY
+        // position so chord shortcuts work regardless of the active layout — same approach
+        // used by VS Code, JetBrains, and Chromium. Issue #9036.
+        //
+        // Right-Alt is excluded because Windows reports AltGr as Ctrl+Alt; without this
+        // guard, AltGr-produced characters (e.g. `€` on a German layout) would be rewritten
+        // into a spurious chord and the typed character would be swallowed.
+        #[cfg(windows)]
+        Key::Character(c)
+            if (window_state.modifiers.control_key() || window_state.modifiers.super_key())
+                && !window_state.right_alt_pressed
+                && !c.is_ascii() =>
+        {
+            us_qwerty_fallback_for_chord(&input.physical_key, shift)
+                .map(|s| Key::Character(s.into()))
+                .unwrap_or_else(|| input.logical_key.clone())
+        }
         _ => input.logical_key,
     };
     let input_key = get_input_key(&logical_key, shift);
@@ -251,6 +270,100 @@ fn convert_key(key: Key) -> Option<Cow<'static, str>> {
     };
 
     Some(Cow::Borrowed(value))
+}
+
+/// Maps a winit `PhysicalKey` to the US-QWERTY character it would produce. Used on Windows
+/// to recover layout-independent chord shortcuts (e.g. `ctrl-c`) when a non-Latin keyboard
+/// layout has translated the logical key to a non-ASCII character.
+///
+/// Returns `None` for keys outside the standard letter/digit/punctuation set (function keys,
+/// modifiers, navigation keys, etc.), since those either aren't typically used in chord
+/// bindings as character keys or are already handled via `NamedKey` in `convert_key`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn us_qwerty_fallback_for_chord(
+    physical_key: &winit::keyboard::PhysicalKey,
+    shift: bool,
+) -> Option<&'static str> {
+    use winit::keyboard::{KeyCode, PhysicalKey};
+    let PhysicalKey::Code(code) = physical_key else {
+        return None;
+    };
+    // Letters always return lowercase here; `get_input_key` applies the uppercase
+    // transform downstream when shift is held. Digit/punctuation keys must return
+    // the shifted US-QWERTY symbol up front because `get_input_key` passes
+    // non-letter characters through unchanged, so bindings like `ctrl-shift-}`
+    // would otherwise see `ctrl-shift-]` on non-Latin layouts.
+    Some(match (code, shift) {
+        (KeyCode::KeyA, _) => "a",
+        (KeyCode::KeyB, _) => "b",
+        (KeyCode::KeyC, _) => "c",
+        (KeyCode::KeyD, _) => "d",
+        (KeyCode::KeyE, _) => "e",
+        (KeyCode::KeyF, _) => "f",
+        (KeyCode::KeyG, _) => "g",
+        (KeyCode::KeyH, _) => "h",
+        (KeyCode::KeyI, _) => "i",
+        (KeyCode::KeyJ, _) => "j",
+        (KeyCode::KeyK, _) => "k",
+        (KeyCode::KeyL, _) => "l",
+        (KeyCode::KeyM, _) => "m",
+        (KeyCode::KeyN, _) => "n",
+        (KeyCode::KeyO, _) => "o",
+        (KeyCode::KeyP, _) => "p",
+        (KeyCode::KeyQ, _) => "q",
+        (KeyCode::KeyR, _) => "r",
+        (KeyCode::KeyS, _) => "s",
+        (KeyCode::KeyT, _) => "t",
+        (KeyCode::KeyU, _) => "u",
+        (KeyCode::KeyV, _) => "v",
+        (KeyCode::KeyW, _) => "w",
+        (KeyCode::KeyX, _) => "x",
+        (KeyCode::KeyY, _) => "y",
+        (KeyCode::KeyZ, _) => "z",
+        (KeyCode::Digit1, true) => "!",
+        (KeyCode::Digit1, false) => "1",
+        (KeyCode::Digit2, true) => "@",
+        (KeyCode::Digit2, false) => "2",
+        (KeyCode::Digit3, true) => "#",
+        (KeyCode::Digit3, false) => "3",
+        (KeyCode::Digit4, true) => "$",
+        (KeyCode::Digit4, false) => "4",
+        (KeyCode::Digit5, true) => "%",
+        (KeyCode::Digit5, false) => "5",
+        (KeyCode::Digit6, true) => "^",
+        (KeyCode::Digit6, false) => "6",
+        (KeyCode::Digit7, true) => "&",
+        (KeyCode::Digit7, false) => "7",
+        (KeyCode::Digit8, true) => "*",
+        (KeyCode::Digit8, false) => "8",
+        (KeyCode::Digit9, true) => "(",
+        (KeyCode::Digit9, false) => "9",
+        (KeyCode::Digit0, true) => ")",
+        (KeyCode::Digit0, false) => "0",
+        (KeyCode::Minus, true) => "_",
+        (KeyCode::Minus, false) => "-",
+        (KeyCode::Equal, true) => "+",
+        (KeyCode::Equal, false) => "=",
+        (KeyCode::BracketLeft, true) => "{",
+        (KeyCode::BracketLeft, false) => "[",
+        (KeyCode::BracketRight, true) => "}",
+        (KeyCode::BracketRight, false) => "]",
+        (KeyCode::Backslash, true) => "|",
+        (KeyCode::Backslash, false) => "\\",
+        (KeyCode::Semicolon, true) => ":",
+        (KeyCode::Semicolon, false) => ";",
+        (KeyCode::Quote, true) => "\"",
+        (KeyCode::Quote, false) => "'",
+        (KeyCode::Comma, true) => "<",
+        (KeyCode::Comma, false) => ",",
+        (KeyCode::Period, true) => ">",
+        (KeyCode::Period, false) => ".",
+        (KeyCode::Slash, true) => "?",
+        (KeyCode::Slash, false) => "/",
+        (KeyCode::Backquote, true) => "~",
+        (KeyCode::Backquote, false) => "`",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

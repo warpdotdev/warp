@@ -779,7 +779,7 @@ impl GridHandler {
         }
     }
 
-    /// Makes manual adjustments to the index we are starting a replacment from
+    /// Makes manual adjustments to the index we are starting a replacement from
     /// depending on the dirty range position. Adjustments may be necessary if
     /// there are context lines or if the dirty range falls in the middle of a
     /// displayed range.
@@ -912,7 +912,7 @@ impl GridHandler {
         replace_start_idx
     }
 
-    /// Makes manual adjustments to the index we are ending a replacment on
+    /// Makes manual adjustments to the index we are ending a replacement on
     /// depending on the dirty range position. Adjustments may be necessary if
     /// there are context lines or if the dirty range falls in the middle of a
     /// displayed range.

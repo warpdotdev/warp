@@ -138,7 +138,7 @@ impl WarpifyBannerState {
 }
 
 /// This banner is shown when the user runs a command which is recognized as a subshell-compatible
-/// command. It asks if they want to boostrap a subshell and, if so, whether we should ask again
+/// command. It asks if they want to bootstrap a subshell and, if so, whether we should ask again
 /// next time they run the same command.
 pub fn render_warpification_banner(
     state: &WarpifyBannerState,
@@ -160,7 +160,7 @@ pub fn render_warpification_banner(
                 ButtonVariant::Text,
                 state.dont_ask_button_mouse_state.clone(),
             )
-            .with_text_label("Do not show again".to_owned())
+            .with_text_label(crate::i18n::tr_static(app, "Do not show again").to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(

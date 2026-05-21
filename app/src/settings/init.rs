@@ -37,7 +37,7 @@ use super::{
     native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
     AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
     CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    GPUSettings, InputBoxType, InputModeSettings, InputSettings, PaneSettings,
+    GPUSettings, InputBoxType, InputModeSettings, InputSettings, LanguageSettings, PaneSettings,
     SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
     VimBannerSettings, WarpDrivePrivacySettings,
 };
@@ -79,6 +79,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
     ThemeSettings::register(ctx);
+    LanguageSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
     CloudPreferencesSettings::register(ctx);
@@ -99,7 +100,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     super::LinuxAppConfiguration::register(ctx);
 
     #[cfg(feature = "local_fs")]
@@ -261,7 +262,7 @@ fn init_platform_native_preferences() -> user_preferences::Model {
     cfg_if::cfg_if! {
         if #[cfg(test)] {
             Box::<user_preferences::in_memory::InMemoryPreferences>::default()
-        } else if #[cfg(any(target_os = "linux", feature = "integration_tests"))] {
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd", feature = "integration_tests"))] {
             match user_preferences::file_backed::FileBackedUserPreferences::new(super::user_preferences_file_path()) {
                 Ok(prefs) => Box::new(prefs) as user_preferences::Model,
                 Err(err) => {

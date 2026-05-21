@@ -253,7 +253,7 @@ impl Engine {
                 log::warn!("Forward DFA found a match end, but reverse DFA did not find a start");
             }
 
-            // Because we seeked to the left of the match end, move to the next item after the
+            // Because we sought to the left of the match end, move to the next item after the
             // match to prevent an infinite loop.
             buffer_cursor.next_char_position();
 

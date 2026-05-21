@@ -15,7 +15,7 @@ use crate::{
             json_model::{JsonModel, JsonSerializer},
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
+        JsonObjectType, Revision,
     },
     drive::items::{env_var_collection::WarpDriveEnvVarCollection, WarpDriveItem},
     external_secrets::ExternalSecret,
@@ -136,8 +136,8 @@ impl EnvVarCollection {
         self.vars.iter().map(|var| (var.name.as_str(), &var.value))
     }
 
-    pub fn export_variables(&self, delimeter: &str, shell_family: ShellFamily) -> String {
-        serialize_variables_internal(self.key_value_iter(), "", "=", "", delimeter, shell_family)
+    pub fn export_variables(&self, delimiter: &str, shell_family: ShellFamily) -> String {
+        serialize_variables_internal(self.key_value_iter(), "", "=", "", delimiter, shell_family)
     }
 
     pub fn export_variables_for_shell(&self, shell_type: ShellType) -> String {
@@ -185,13 +185,6 @@ impl StringModel for EnvVarCollection {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::EnvVarCollection(server_envvar_collection) = server_cloud_object {
-            return Some(server_envvar_collection.model.clone().string_model);
-        }
         None
     }
 
@@ -264,17 +257,17 @@ pub fn serialize_variables_for_shell<'s, I: IntoIterator<Item = (&'s str, &'s En
 // Prefix — what's prepended to each variable
 // Separator — what separates the variable name from the value
 // Postfix — what's appended to the end of each variable
-// Delimeter — what separates one variable from the next one
+// Delimiter — what separates one variable from the next one
 // set -x var_name var_value;   set -x name2 value2;
 // ------     -             -   -
 //   ^        ^             ^   ^
-// prefix  separator   postfix  delimeter (in this case 4 spaces, usually one space or newline)
+// prefix  separator   postfix  delimiter (in this case 4 spaces, usually one space or newline)
 fn serialize_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s EnvVarValue)>>(
     pairs: I,
     prefix: &str,
     separator: &str,
     postfix: &str,
-    delimeter: &str,
+    delimiter: &str,
     shell_family: ShellFamily,
 ) -> String {
     pairs
@@ -290,5 +283,5 @@ fn serialize_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s EnvVarV
             )
         })
         .collect_vec()
-        .join(delimeter)
+        .join(delimiter)
 }

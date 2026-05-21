@@ -1,5 +1,5 @@
 use warpui::{
-    elements::{CornerRadius, Dismiss, MouseStateHandle, Radius},
+    elements::{Container, CornerRadius, Dismiss, MouseStateHandle, Radius},
     fonts::Weight,
     platform::Cursor,
     ui_components::{
@@ -27,12 +27,17 @@ const CANCEL_TEXT: &str = "Cancel";
 
 const DELETE_TEAM_TITLE_TEXT: &str = "Are you sure you want to delete this team?";
 const LEAVE_TEAM_TITLE_TEXT: &str = "Are you sure you want to leave this team?";
+const REMOVE_TEAM_MEMBER_TITLE_TEXT: &str = "Are you sure you want to remove this member?";
 
 const DELETE_TEAM_BODY_TEXT: &str = "Deleting this team will permanently delete it and all of its related content, including billing information or credits. You will not be able to restore them.";
 const LEAVE_TEAM_BODY_TEXT: &str = "You will need to be reinvited in order to rejoin.";
+const LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT: &str = "If you leave this team, you’ll lose access to any remaining reload credits tied to it. You’ll regain access to any unused, non-expired credits if you rejoin the same team later.";
+const REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT: &str = "This member will lose access to any remaining reload credits tied to this team. If they rejoin later, they’ll regain access to any unused, non-expired credits.";
 
 const DELETE_TEAM_CONFIRM_TEXT: &str = "Yes, delete";
 const LEAVE_TEAM_CONFIRM_TEXT: &str = "Yes, leave";
+const LEAVE_TEAM_RELOAD_CREDITS_CONFIRM_TEXT: &str = "Leave Team";
+const REMOVE_TEAM_MEMBER_RELOAD_CREDITS_CONFIRM_TEXT: &str = "Remove Member";
 
 pub enum CloudActionConfirmationDialogEvent {
     Cancel,
@@ -49,6 +54,8 @@ pub enum CloudActionConfirmationDialogAction {
 pub enum CloudActionConfirmationDialogVariant {
     LeaveTeam,
     DeleteTeam,
+    LeaveTeamReloadCredits,
+    RemoveTeamMemberReloadCredits,
     #[default]
     None,
 }
@@ -78,30 +85,58 @@ impl CloudActionConfirmationDialog {
         self.confirmation_button_enabled = enabled;
     }
 
-    fn title_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_TITLE_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_TITLE_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::None => "".to_string(),
-        }
+    fn title_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam
+                | CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_TITLE_TEXT
+                }
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_TITLE_TEXT,
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_TITLE_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 
-    fn body_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_BODY_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_BODY_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::None => "".to_string(),
-        }
+    fn body_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_BODY_TEXT,
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_BODY_TEXT,
+                CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT
+                }
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 
-    fn confirm_button_text(&self) -> String {
-        match self.variant {
-            CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_CONFIRM_TEXT.to_string(),
-            CloudActionConfirmationDialogVariant::DeleteTeam => {
-                DELETE_TEAM_CONFIRM_TEXT.to_string()
-            }
-            CloudActionConfirmationDialogVariant::None => "".to_string(),
-        }
+    fn confirm_button_text(&self, app: &AppContext) -> String {
+        crate::i18n::tr_static(
+            app,
+            match self.variant {
+                CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_CONFIRM_TEXT,
+                CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_CONFIRM_TEXT,
+                CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
+                    LEAVE_TEAM_RELOAD_CREDITS_CONFIRM_TEXT
+                }
+                CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
+                    REMOVE_TEAM_MEMBER_RELOAD_CREDITS_CONFIRM_TEXT
+                }
+                CloudActionConfirmationDialogVariant::None => "",
+            },
+        )
+        .to_string()
     }
 }
 
@@ -156,7 +191,7 @@ impl View for CloudActionConfirmationDialog {
                 padding: Some(Coords::uniform(BUTTON_PADDING)),
                 ..Default::default()
             })
-            .with_text_label(CANCEL_TEXT.into())
+            .with_text_label(crate::i18n::tr_static(app, CANCEL_TEXT).into())
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -174,7 +209,7 @@ impl View for CloudActionConfirmationDialog {
                 Some(primary_hovered_and_clicked_styles),
                 Some(primary_hovered_and_clicked_styles),
             )
-            .with_text_label(self.confirm_button_text())
+            .with_text_label(self.confirm_button_text(app))
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -188,12 +223,16 @@ impl View for CloudActionConfirmationDialog {
         };
 
         let dialog = Dialog::new(
-            self.title_text(),
-            Some(self.body_text()),
+            self.title_text(app),
+            Some(self.body_text(app)),
             dialog_styles(appearance),
         )
         .with_bottom_row_child(cancel_button)
-        .with_bottom_row_child(confirm_button)
+        .with_bottom_row_child(
+            Container::new(confirm_button)
+                .with_margin_left(12.)
+                .finish(),
+        )
         .with_width(DIALOG_WIDTH)
         .build()
         .finish();

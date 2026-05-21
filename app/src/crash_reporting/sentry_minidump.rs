@@ -166,6 +166,15 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
             minidumper::LoopAction::Exit
         }
 
+        fn on_client_disconnected(&self, num_clients: usize) -> minidumper::LoopAction {
+            if num_clients == 0 {
+                log::info!("All clients disconnected, shutting down minidump server");
+                minidumper::LoopAction::Exit
+            } else {
+                minidumper::LoopAction::Continue
+            }
+        }
+
         fn on_message(&self, _kind: u32, buffer: Vec<u8>) {
             match bincode::deserialize::<MinidumpCommand>(&buffer) {
                 Ok(MinidumpCommand::Shutdown) => {

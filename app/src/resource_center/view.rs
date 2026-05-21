@@ -327,16 +327,22 @@ impl ResourceCenterView {
         .finish()
     }
 
-    fn render_header_contents(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
+    fn render_header_contents(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Vec<Box<dyn Element>> {
         let current_page = self.page_views.get(self.current_view_index).map(|x| x.page);
 
         let header_text = match current_page {
-            Some(ResourceCenterPage::Keybindings) => "Keyboard Shortcuts".to_string(),
+            Some(ResourceCenterPage::Keybindings) => {
+                crate::i18n::tr(app, crate::i18n::I18nKey::MenuKeyboardShortcuts).to_string()
+            }
             _ => {
                 if FeatureFlag::AvatarInTabBar.is_enabled() {
                     String::new()
                 } else {
-                    "Warp Essentials".to_string()
+                    crate::i18n::tr_static(app, "Warp Essentials").to_string()
                 }
             }
         };
@@ -379,7 +385,7 @@ impl ResourceCenterView {
     fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         const HEADER_VERTICAL_PADDING: f32 = 5.;
         const HEADER_HORIZONTAL_PADDING: f32 = 6.;
-        let header_body = self.render_header_contents(appearance);
+        let header_body = self.render_header_contents(appearance, app);
 
         let header_element = ConstrainedBox::new(
             Container::new(
@@ -412,6 +418,7 @@ impl ResourceCenterView {
         &self,
         item: ResourceCenterFooterItem,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mouse_state = match item {
             ResourceCenterFooterItem::Docs => self.button_mouse_states.view_user_docs.clone(),
@@ -432,7 +439,20 @@ impl ResourceCenterView {
         let button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, mouse_state)
-            .with_text_label(item.ui_label().to_string())
+            .with_text_label(
+                match item {
+                    ResourceCenterFooterItem::Docs => {
+                        crate::i18n::tr(app, crate::i18n::I18nKey::MenuDocumentation)
+                    }
+                    ResourceCenterFooterItem::Slack => {
+                        crate::i18n::tr(app, crate::i18n::I18nKey::MenuSlack)
+                    }
+                    ResourceCenterFooterItem::Feedback => {
+                        crate::i18n::tr(app, crate::i18n::I18nKey::MenuFeedback)
+                    }
+                }
+                .to_string(),
+            )
             .with_style(
                 UiComponentStyles::default().set_padding(Coords::default().left(SCROLLBAR_OFFSET)),
             )
@@ -450,11 +470,13 @@ impl ResourceCenterView {
             .finish()
     }
 
-    fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let docs_button = self.render_footer_button(ResourceCenterFooterItem::Docs, appearance);
-        let slack_button = self.render_footer_button(ResourceCenterFooterItem::Slack, appearance);
+    fn render_footer(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let docs_button =
+            self.render_footer_button(ResourceCenterFooterItem::Docs, appearance, app);
+        let slack_button =
+            self.render_footer_button(ResourceCenterFooterItem::Slack, appearance, app);
         let feedback_button =
-            self.render_footer_button(ResourceCenterFooterItem::Feedback, appearance);
+            self.render_footer_button(ResourceCenterFooterItem::Feedback, appearance, app);
 
         let footer = Flex::row()
             .with_child(docs_button)
@@ -504,7 +526,7 @@ impl View for ResourceCenterView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let header = self.render_header(appearance, app);
-        let footer = self.render_footer(appearance);
+        let footer = self.render_footer(appearance, app);
         let resource_center_page = &self.page_views[self.current_view_index].page_view_handle;
 
         let body = match &resource_center_page {

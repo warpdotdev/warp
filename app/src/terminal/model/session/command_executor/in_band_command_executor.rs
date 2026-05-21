@@ -203,7 +203,7 @@ impl InBandCommandExecutor {
     /// completes the `Future` returned by `Self::execute_command()` for the command with the
     /// same command ID.
     ///
-    /// Afterwords, attempts to execute the next pending command, if there is any.
+    /// Afterwards, attempts to execute the next pending command, if there is any.
     pub fn handle_executed_command_event(&self, event: ExecutedExecutorCommandEvent) {
         {
             // Scope all of this within a block so the `running_command` MutexGuard is not in scope when we call

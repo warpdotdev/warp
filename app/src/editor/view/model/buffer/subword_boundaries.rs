@@ -266,7 +266,7 @@ impl<T: TextBuffer + ?Sized> Iterator for SubwordBoundaries<'_, T> {
 /// Storage for characters from the buffer, used by the `SubwordBoundaries`
 /// iterator to find the start and end of subwords.
 struct CharWindow {
-    /// A store of characters retreived from the `chars` iterator.
+    /// A store of characters retrieved from the `chars` iterator.
     ///
     /// `char_window[0]`: character at the current offset.
     ///

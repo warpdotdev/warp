@@ -18,6 +18,7 @@ mod notebooks;
 mod pane_restoration;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
+mod remote_server;
 mod rules;
 mod secrets;
 mod session_restoration;
@@ -51,6 +52,7 @@ pub use notebooks::*;
 pub use pane_restoration::*;
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
+pub use remote_server::*;
 pub use rules::*;
 pub use secrets::*;
 pub use session_restoration::*;
@@ -2171,10 +2173,10 @@ pub fn test_ctrl_tab_session_switching() -> Builder {
     let mut builder = new_builder();
 
     // If linux return early.  For reasons unknown and not worth the time to debug currently
-    // this test fails on linux at the step where the command pallete is expected to show.
+    // this test fails on linux at the step where the command palette is expected to show.
     // The feature does work on linux though - there's some underlying issue with our integration
     // test here.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         return builder;
     }
@@ -2873,7 +2875,7 @@ pub fn test_execute_multiple_cursor_command() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("Set up multiple cursor commamd")
+            new_step_with_default_assertions("Set up multiple cursor command")
                 .with_typed_characters(&["a", " ", "a"])
                 .with_keystrokes(&[
                     ADD_NEXT_OCCURRENCE_KEYBINDING,
@@ -3170,7 +3172,9 @@ pub fn test_block_based_snackbar_small_window() -> Builder {
             integration_testing::create_file_from_assets(
                 TEST_ONLY_ASSETS,
                 "small_window.sqlite",
-                &integration_testing::persistence::database_file_path(),
+                &integration_testing::persistence::database_file_path_for_scope(
+                    &integration_testing::persistence::PersistenceScope::App,
+                ),
             );
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))

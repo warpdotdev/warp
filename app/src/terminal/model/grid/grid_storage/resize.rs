@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! Grid resize and reflow.
 
 use std::cmp::{min, Ordering};
@@ -218,7 +221,7 @@ impl GridStorage {
                     // `num_wrapped` can be completed correctly, without saturating at (0, 0) (which previously
                     // occurred, if the cursor isn't adjusted). Ultimately, the user-facing impact resulted in an
                     // incorrect cursor position comparison leading to incorrect block heights, since Warp
-                    // erronenously believed a command to be "empty" (when comparing the "end of prompt" cursor
+                    // erroneously believed a command to be "empty" (when comparing the "end of prompt" cursor
                     // to the "end of the command").
                     // Note that last_row is a wrapped line in this case (see `should_reflow` and `debug_assert` above)!
                     self.cursor.point.row += 1;

@@ -147,5 +147,5 @@ impl Element for SizeConstraintSwitch {
 }
 
 #[cfg(test)]
-#[path = "size_constraint_switch_test.rs"]
+#[path = "size_constraint_switch_tests.rs"]
 mod tests;

@@ -4,6 +4,7 @@ use crate::persistence::ModelEvent;
 use crate::server::server_api::auth::AuthClient;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::{app_state::get_app_state, server::server_api::ServerApiProvider};
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
@@ -124,6 +125,18 @@ fn save_app(_: &(), ctx: &mut AppContext) {
     }
 
     if !*GeneralSettings::as_ref(ctx).restore_session {
+        return;
+    }
+
+    // While a cross-window tab drag is active, the dragged tab's pane group
+    // is in flight between source and preview windows and `get_app_state`
+    // would produce a snapshot with zero windows. Persisting that snapshot
+    // wipes the on-disk session via `save_app_state`'s delete-then-insert
+    // transaction. `save_app` fires from window move / focus / resize /
+    // close callbacks (see `app_callbacks` in `lib.rs`), all of which run
+    // during a drag, so we have to short-circuit at this boundary. The
+    // first save after the drag finalizes will rewrite the snapshot.
+    if CrossWindowTabDrag::as_ref(ctx).is_active() {
         return;
     }
 

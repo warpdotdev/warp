@@ -93,7 +93,8 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
             | AIAgentInput::InvokeSkill { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
-            | AIAgentInput::EventsFromAgents { .. } => Err(anyhow::anyhow!(
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => Err(anyhow::anyhow!(
                 "This input type is not persisted. Only Query inputs are persisted for up-arrow history."
             )),
         }
@@ -319,6 +320,9 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             },
             AIAgentActionType::StartAgent { .. } => Self::NotPersisted,
             AIAgentActionType::SendMessageToAgent { .. } => Self::NotPersisted,
+            // Orchestrate is rendered from the in-history tool call message;
+            // there is no per-action state we need to persist locally.
+            AIAgentActionType::RunAgents(_) => Self::NotPersisted,
         }
     }
 }

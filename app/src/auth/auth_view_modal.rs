@@ -64,7 +64,7 @@ pub fn init(app: &mut AppContext) {
     // to solve it in a more general way later). In the meantime, we
     // add a basic ctrl+v binding for the auth view, since there is no
     // terminal to interact with yet.
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     app.register_fixed_bindings([FixedBinding::new(
         "cmdorctrl-v",
         AuthViewAction::PasteAuthUrl,

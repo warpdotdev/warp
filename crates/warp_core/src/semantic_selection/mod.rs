@@ -219,5 +219,5 @@ impl SemanticSelection {
 
 #[cfg(test)]
 #[cfg(feature = "test-util")]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

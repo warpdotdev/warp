@@ -755,7 +755,7 @@ impl FileUploadState {
                     folder.server_id = Some(server_id.clone());
 
                     // If a folder has no children or all of its children complete syncing,
-                    // we need to bubble the state up in the folder hierachy tree.
+                    // we need to bubble the state up in the folder hierarchy tree.
                     if folder.children().is_empty() || folder.all_children_synced {
                         folder.status = UploadStatus::Loaded(server_id);
                         true

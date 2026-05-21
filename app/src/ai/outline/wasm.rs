@@ -11,6 +11,13 @@ impl RepoOutlines {
         Self {}
     }
 
+    pub fn new_with_indexing_enabled(
+        _indexing_enabled: bool,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        Self {}
+    }
+
     pub fn get_outline(&self, _path: &Path) -> Option<(&OutlineStatus, PathBuf)> {
         None
     }

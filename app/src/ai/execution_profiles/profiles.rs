@@ -185,7 +185,7 @@ impl AIExecutionProfilesModel {
                     // execution profiles. They never reach this code path
                     // since they don't go through initialize_app, but handle
                     // exhaustively.
-                    LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon => DefaultProfileState::Unsynced {
+                    LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
                         profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
                     },
@@ -840,6 +840,39 @@ impl AIExecutionProfilesModel {
         }
     }
 
+    pub fn set_run_agents(
+        &mut self,
+        profile_id: ClientProfileId,
+        permission: super::RunAgentsPermission,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let current_value = self
+            .get_profile_by_id(profile_id, ctx)
+            .map(|p| p.data().run_agents);
+
+        self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.run_agents != permission {
+                    profile.run_agents = permission;
+                    return true;
+                }
+                false
+            },
+            ctx,
+        );
+
+        if current_value != Some(permission) {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AIExecutionProfileSettingUpdated {
+                    setting_type: "run_agents".to_string(),
+                    setting_value: format!("{permission:?}"),
+                },
+                ctx
+            );
+        }
+    }
+
     pub fn set_web_search_enabled(
         &mut self,
         profile_id: ClientProfileId,
@@ -1184,7 +1217,7 @@ impl AIExecutionProfilesModel {
     /// `edit_profile_internal` edits an AIExecutionProfile and upserts the changed profile to the cloud
     /// Parameters:
     /// * `profile_id`: The id of the profile to edit
-    /// * `edit_fn`: a closure that safely modifies the AIExecutionProfile. It should return `true` if the profile was changed, `false` otherwise. When `true`, it syncs the changes to the cloud, and otherwise exits early to prevent excessive cloud operations if no changes occured.
+    /// * `edit_fn`: a closure that safely modifies the AIExecutionProfile. It should return `true` if the profile was changed, `false` otherwise. When `true`, it syncs the changes to the cloud, and otherwise exits early to prevent excessive cloud operations if no changes occurred.
     /// * `ctx`: The model context
     ///
     /// Returns `true` if the profile was actually changed (and synced),

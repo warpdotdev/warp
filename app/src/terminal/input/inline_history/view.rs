@@ -11,11 +11,12 @@ use warpui::{AppContext, Element, Entity, EntityId, ModelHandle, View, ViewConte
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::features::FeatureFlag;
+use crate::i18n;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
 use crate::settings_view::SettingsSection;
 use crate::terminal::history::LinkedWorkflowData;
-use crate::terminal::input::buffer_model::InputBufferModel;
+use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::inline_history::data_source::{
     AcceptHistoryItem, InlineHistoryMenuDataSource,
 };
@@ -162,6 +163,7 @@ pub struct InlineHistoryMenuView {
     buffer_model: ModelHandle<InputBufferModel>,
     pending_tab_switch_selection: Option<HistoryItemIdentity>,
     caller_supplied_tabs: bool,
+    pending_initial_buffer_sync: bool,
 }
 
 impl InlineHistoryMenuView {
@@ -260,8 +262,8 @@ impl InlineHistoryMenuView {
         });
 
         let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
-            let configure_button = ctx.add_view(|_| {
-                ActionButton::new("Configure", ConfigureButtonTheme)
+            let configure_button = ctx.add_view(|ctx| {
+                ActionButton::new(i18n::tr_static(ctx, "Configure"), ConfigureButtonTheme)
                     .with_icon(Icon::Settings)
                     .with_size(ButtonSize::Small)
                     .on_click(|ctx| {
@@ -310,6 +312,24 @@ impl InlineHistoryMenuView {
                 me.open_with_current_buffer(ctx);
             }
         });
+
+        let suggestions_mode_model_for_buffer = input_suggestions_model.clone();
+        ctx.subscribe_to_model(
+            &buffer_model,
+            move |me, _, _: &InputBufferUpdateEvent, ctx| {
+                if !suggestions_mode_model_for_buffer
+                    .as_ref(ctx)
+                    .is_inline_history_menu()
+                {
+                    return;
+                }
+                if !me.pending_initial_buffer_sync {
+                    return;
+                }
+                me.pending_initial_buffer_sync = false;
+                me.open_with_current_buffer(ctx);
+            },
+        );
 
         let suggestions_mode_model = input_suggestions_model.clone();
         ctx.subscribe_to_model(
@@ -425,6 +445,7 @@ impl InlineHistoryMenuView {
             buffer_model,
             pending_tab_switch_selection: None,
             caller_supplied_tabs,
+            pending_initial_buffer_sync: false,
         }
     }
 
@@ -470,6 +491,10 @@ impl InlineHistoryMenuView {
     pub fn accept_selected_item(&self, ctx: &mut ViewContext<Self>) {
         self.menu_view
             .update(ctx, |v, ctx| v.accept_selected_item(false, ctx));
+    }
+
+    pub fn arm_initial_buffer_sync(&mut self) {
+        self.pending_initial_buffer_sync = true;
     }
 
     fn open_with_current_buffer(&mut self, ctx: &mut ViewContext<Self>) {

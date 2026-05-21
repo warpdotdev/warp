@@ -25,7 +25,7 @@ use super::success_block::WarpifySuccessBlock;
 pub type SeparatorId = usize;
 
 /// These are elements in the BlockList which are similar to inline banners but are smaller, and
-/// only meant to render in compact mode when their in-padding flag couterparts don't have enough
+/// only meant to render in compact mode when their in-padding flag counterparts don't have enough
 /// space in the padding to render.
 #[derive(Default)]
 struct SubshellSeparatorState {

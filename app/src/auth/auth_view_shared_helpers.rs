@@ -47,6 +47,7 @@ pub fn render_offline_contents<A>(
     ui_builder: &UiBuilder,
     mouse_state_handle: MouseStateHandle,
     action: A,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     A: Action + Clone,
@@ -101,7 +102,7 @@ where
             Some(click_button_style),
             None,
         )
-        .with_centered_text_label("Learn more".into())
+        .with_centered_text_label(crate::i18n::tr_static(app, "Learn more").into())
         .build()
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(action.clone());
@@ -112,7 +113,7 @@ where
         .with_child(
             Container::new(
                 ui_builder
-                    .paragraph(text)
+                    .paragraph(crate::i18n::tr_static(app, text))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),
@@ -151,6 +152,7 @@ pub fn render_square_logo(appearance: &Appearance) -> Box<dyn Element> {
 
 pub fn render_offline_info_overlay_body<A>(
     appearance: &Appearance,
+    app: &AppContext,
     mouse_state_handle: MouseStateHandle,
     action: A,
 ) -> Box<dyn Element>
@@ -191,7 +193,7 @@ where
                 Container::new(
                     appearance
                         .ui_builder()
-                        .span("Using Warp Offline")
+                        .span(crate::i18n::tr_static(app, "Using Warp Offline"))
                         .with_style(header_styles)
                         .build()
                         .finish(),
@@ -203,7 +205,7 @@ where
                 Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph(paragraph_1)
+                        .paragraph(crate::i18n::tr_static(app, paragraph_1))
                         .with_style(body_text_styles)
                         .build()
                         .finish(),
@@ -215,7 +217,7 @@ where
                 Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph(paragraph_2)
+                        .paragraph(crate::i18n::tr_static(app, paragraph_2))
                         .with_style(body_text_styles)
                         .build()
                         .finish(),
@@ -227,7 +229,7 @@ where
                 Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph(paragraph_3)
+                        .paragraph(crate::i18n::tr_static(app, paragraph_3))
                         .with_style(body_text_styles)
                         .build()
                         .finish(),
@@ -238,7 +240,7 @@ where
             .with_child(render_close_overlay_button(
                 appearance,
                 appearance.ui_builder(),
-                "Dismiss".into(),
+                crate::i18n::tr_static(app, "Dismiss").into(),
                 mouse_state_handle,
                 action,
             ))
@@ -369,7 +371,7 @@ pub fn render_privacy_settings_overlay_body<A: Action + Clone + 'static>(
             .with_child(
                 Container::new(
                     ui_builder
-                        .span("Privacy Settings")
+                        .span(crate::i18n::tr_static(app, "Privacy Settings"))
                         .with_style(header_styles)
                         .build()
                         .finish(),
@@ -387,7 +389,7 @@ pub fn render_privacy_settings_overlay_body<A: Action + Clone + 'static>(
             .with_child(render_close_overlay_button(
                 appearance,
                 ui_builder,
-                "Done".into(),
+                crate::i18n::tr_static(app, "Done").into(),
                 handles.close_button_mouse.clone(),
                 actions.hide_overlay.clone(),
             ))
@@ -456,7 +458,11 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
         .with_child(
             Shrinkable::new(
                 1.,
-                render_privacy_settings_section_header("Help improve Warp", appearance).finish(),
+                render_privacy_settings_section_header(
+                    crate::i18n::tr_static(app, "Help improve Warp"),
+                    appearance,
+                )
+                .finish(),
             )
             .finish(),
         )
@@ -475,7 +481,11 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
 
     let telemetry_description = render_description(
         appearance,
-        "High-level feature usage data helps Warp's product team prioritize the roadmap.".into(),
+        crate::i18n::tr_static(
+            app,
+            "High-level feature usage data helps Warp's product team prioritize the roadmap.",
+        )
+        .into(),
     );
 
     let telemetry_link = Flex::row()
@@ -483,7 +493,7 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
             appearance
                 .ui_builder()
                 .link(
-                    "Learn more".into(),
+                    crate::i18n::tr_static(app, "Learn more").into(),
                     Some(PRIVACY_URL.into()),
                     None,
                     handles.telemetry_docs_mouse.clone(),
@@ -501,7 +511,11 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
         .with_child(
             Shrinkable::new(
                 1.,
-                render_privacy_settings_section_header("Send crash reports", appearance).finish(),
+                render_privacy_settings_section_header(
+                    crate::i18n::tr_static(app, "Send crash reports"),
+                    appearance,
+                )
+                .finish(),
             )
             .finish(),
         )
@@ -520,7 +534,11 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
 
     let crash_reporting_description = render_description(
         appearance,
-        "Crash reporting helps Warp's engineering team understand stability and improve performance.".into(),
+        crate::i18n::tr_static(
+            app,
+            "Crash reporting helps Warp's engineering team understand stability and improve performance.",
+        )
+        .into(),
     );
 
     let toggle_cloud = actions.toggle_cloud_conversation_storage.clone();
@@ -531,7 +549,7 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
             Shrinkable::new(
                 1.,
                 render_privacy_settings_section_header(
-                    "Store AI conversations in the cloud",
+                    crate::i18n::tr_static(app, "Store AI conversations in the cloud"),
                     appearance,
                 )
                 .finish(),
@@ -554,9 +572,9 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
     let cloud_conversation_storage_description = render_description(
         appearance,
         if PrivacySettings::as_ref(app).is_cloud_conversation_storage_enabled {
-            "Agent conversations can be shared with others and are retained when you log in on different devices. This data is only stored for product functionality, and Warp will not use it for analytics."
+            crate::i18n::tr_static(app, "Agent conversations can be shared with others and are retained when you log in on different devices. This data is only stored for product functionality, and Warp will not use it for analytics.")
         } else {
-            "Agent conversations are only stored locally on your machine, are lost upon logout, and cannot be shared. Note: conversation data for ambient agents are still stored in the cloud."
+            crate::i18n::tr_static(app, "Agent conversations are only stored locally on your machine, are lost upon logout, and cannot be shared. Note: conversation data for ambient agents are still stored in the cloud.")
         }
         .into(),
     );

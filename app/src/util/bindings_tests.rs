@@ -4,7 +4,11 @@ use warpui::{
     App,
 };
 
-use crate::{util::bindings::keybinding_name_to_display_string, workspace::WorkspaceAction};
+use crate::{
+    terminal,
+    util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke},
+    workspace::WorkspaceAction,
+};
 
 #[test]
 fn test_keybinding_name_to_display_string() {
@@ -69,6 +73,27 @@ fn test_keybinding_name_to_display_string() {
                 keybinding_name_to_display_string("workspace:toggle_resource_center", ctx)
                     .as_deref()
             );
+        });
+    });
+}
+
+#[test]
+fn test_terminal_page_scroll_bindings_are_editable() {
+    App::test((), |mut app| async move {
+        app.update(terminal::init);
+
+        app.update(|ctx| {
+            let page_up = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "terminal:scroll_up_one_page")
+                .and_then(|binding| trigger_to_keystroke(binding.trigger));
+            let page_down = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "terminal:scroll_down_one_page")
+                .and_then(|binding| trigger_to_keystroke(binding.trigger));
+
+            assert_eq!(page_up, Keystroke::parse("pageup").ok());
+            assert_eq!(page_down, Keystroke::parse("pagedown").ok());
         });
     });
 }

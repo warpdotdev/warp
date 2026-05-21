@@ -558,7 +558,7 @@ fn parse_code_block_and_language(nodes: &[Rc<Node>]) -> (String, Option<String>)
     (text, language)
 }
 
-// Parse a HMTL style string into its corresponding name -> value hashmap
+// Parse a HTML style string into its corresponding name -> value hashmap
 // For example "font-style:italic;font-weight:400" will be parsed into
 // {"font-style": "italic", "font-weight": "400"}.
 fn parse_style_into_dict(style: &str) -> HashMap<&str, &str> {
@@ -576,5 +576,5 @@ fn parse_style_into_dict(style: &str) -> HashMap<&str, &str> {
 }
 
 #[cfg(test)]
-#[path = "html_parser_test.rs"]
+#[path = "html_parser_tests.rs"]
 mod tests;

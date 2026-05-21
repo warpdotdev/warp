@@ -7,7 +7,7 @@
 # Source of truth: warpdotdev/feedback-triage-bot ownership-areas.md
 
 # Default fallback: FA leads are tagged when no more specific path matches
-/ @vorporeal @alokedesai @zachbai @bnavetta @szgupta @jefflloyd
+/ @warpdotdev/oss-maintainers
 
 ###########################################################################
 # Team: App
@@ -46,7 +46,7 @@
 /app/src/terminal/input/ @vkodithala
 /app/src/pane_group/ @vkodithala
 /app/src/tab.rs @vkodithala
-/crates/warp_ripgrep/ @vkodithala @moirahuang @szgupta
+/crates/warp_ripgrep/ @moirahuang @szgupta
 
 # Command palette
 /app/src/command_palette.rs @acarl005
@@ -54,7 +54,6 @@
 /app/src/search/command_palette/ @acarl005
 
 # @ context, slash commands, and global search / file tree
-/app/src/context_chips/ @moirahuang
 /app/src/search/ai_context_menu/ @moirahuang
 /app/src/search/files/ @moirahuang
 /app/src/search/search_results_menu/ @moirahuang
@@ -62,6 +61,11 @@
 /app/src/terminal/input/slash_commands/ @moirahuang
 /app/src/code/file_tree/ @moirahuang
 /app/src/workspace/view/global_search/ @moirahuang
+
+# Tab configs and worktrees
+/app/src/tab_configs/ @moirahuang
+/app/resources/tab_configs/ @moirahuang
+/crates/warp_util/src/worktree_names.rs @moirahuang
 
 # Onboarding / code review and git diff
 /app/src/ai/onboarding.rs @kevinchevalier
@@ -71,9 +75,18 @@
 /crates/onboarding/ @kevinchevalier
 
 # MCP and skills
-/app/src/ai/mcp/ @peicodes
-/app/src/ai/skills/ @peicodes
-/crates/mcp/ @peicodes
+/app/src/ai/mcp/ @peicodes @vkodithala
+/app/src/ai/skills/ @peicodes @vkodithala
+/crates/mcp/ @peicodes @vkodithala
+/resources/bundled/skills/feedback/ @captainsafia
+
+# File-based MCP (overrides MCP and skills above)
+/app/src/ai/mcp/file_based_manager.rs @vkodithala
+/app/src/ai/mcp/file_based_manager_tests.rs @vkodithala
+/app/src/ai/mcp/file_mcp_watcher.rs @vkodithala
+/app/src/ai/mcp/file_mcp_watcher_tests.rs @vkodithala
+/app/src/ai/mcp/dummy_file_based_manager.rs @vkodithala
+/app/src/ai/mcp/dummy_file_mcp_watcher.rs @vkodithala
 
 # Conversation management / credit usage footer / input UI / natural-language detection
 /app/src/ai/active_agent_views_model.rs @harryalbert
@@ -87,17 +100,26 @@
 /crates/input_classifier/ @harryalbert
 /crates/natural_language_detection/ @harryalbert
 
+# Notifications
+/app/src/notification.rs @harryalbert
+/app/src/ai/agent_management/notifications/ @harryalbert
+/app/src/terminal/view/inline_banner/ @harryalbert
+
 # Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / warpifying
-/app/src/ai/blocklist/ @zachbai
-/app/src/root_view.rs @zachbai
+/app/src/ai/blocklist/ @zachbai @MaggieShan
+/app/src/root_view.rs @zachbai @MaggieShan
 /app/src/terminal/bootstrap.rs @zachbai
-/app/src/terminal/warpify/ @zachbai
-/app/src/settings_view/warpify_page.rs @zachbai
+/app/src/terminal/warpify/ @zachbai @MaggieShan
+/app/src/settings_view/warpify_page.rs @zachbai @MaggieShan
 /app/assets/bundled/bootstrap/ @zachbai
-/crates/warp_completer/ @zachbai @szgupta @alokedesai
+/crates/warp_completer/ @zachbai @szgupta @alokedesai @acarl005
 
 # Agent mode
 /app/src/ai/agent/ @zachbai
+
+# Vertical tabs
+/app/src/workspace/view/vertical_tabs.rs @johnturcoo
+/app/src/workspace/view/vertical_tabs/ @johnturcoo
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M
@@ -107,25 +129,57 @@
 /app/src/voice/ @Advait-M
 /crates/voice_input/ @Advait-M
 
+# Rich input
+/app/src/terminal/view/use_agent_footer/ @Advait-M
+/app/src/terminal/view/use_agent_footer/warpify_footer.rs @MaggieShan
+/app/src/terminal/input/cli_agent.rs @Advait-M
+
 # UI framework
-/crates/warpui/ @vorporeal
-/crates/warpui_core/ @vorporeal
+/crates/warpui/ @vorporeal @alokedesai @acarl005
+/crates/warpui_core/ @vorporeal @alokedesai
 /crates/warpui_extras/ @vorporeal
-/crates/ui_components/ @vorporeal
+/crates/warpui_extras/src/user_preferences @danielpeng
+/crates/ui_components/ @vorporeal @acarl005 @zachbai @bnavetta
 
 # Conversation rewind / CLI agent UI / macOS/Linux platform issues / performance issues
-/app/src/terminal/cli_agent.rs @zachbai
-/app/src/terminal/cli_agent_sessions/ @zachbai
+/app/src/terminal/cli_agent.rs @zachbai @harryalbert
+/app/src/terminal/cli_agent_tests.rs @zachbai @harryalbert
+/app/src/terminal/cli_agent_sessions/ @zachbai @harryalbert
 /app/src/terminal/input/rewind/ @alokedesai
 /app/src/workspace/rewind_confirmation_dialog.rs @alokedesai
 /app/src/platform/mac/ @alokedesai
 /resources/linux/ @acarl005
+
+# Windows and Linux (and winit) platform
+/crates/warpui/src/windowing/winit/ @acarl005 @vorporeal @alokedesai
+/app/src/terminal/local_tty/windows/ @abhishekp106 @vorporeal @acarl005
+/app/src/autoupdate/windows.rs @acarl005
+/app/src/autoupdate/linux.rs @vorporeal
+/app/src/app_services/windows/ @acarl005
+/app/src/app_services/linux/ @vorporeal
+/app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
+/app/assets/bundled/bootstrap/pwsh.ps1 @acarl005
+/app/assets/bundled/bootstrap/pwsh_init_shell.ps1 @acarl005
 
 # /pr-comments
 /app/src/search/slash_command_menu/static_commands/commands.rs @lucieleblanc
 
 # Grep tool call UI
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
+
+# Long-running shell commands
+/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli_controller.rs @vkodithala @MaggieShan
+
+# Vim
+/crates/vim/ @liliwilson
+/app/src/vim_registers.rs @liliwilson
+/app/src/code/editor/view/vim_handler.rs @liliwilson
+/app/src/code/editor/view/vim_handler_tests.rs @liliwilson
+/app/src/editor/view/vim_handler_test.rs @liliwilson
+/app/src/terminal/view/inline_banner/vim_mode.rs @liliwilson
+/app/src/settings/vim_banner.rs @liliwilson
 
 ###########################################################################
 # Team: Platform
@@ -178,6 +232,14 @@
 /crates/isolation_platform/ @bnavetta @ianhodge
 /crates/managed_secrets/ @bnavetta @ianhodge
 /crates/warp_web_event_bus/ @bnavetta @ianhodge
+
+# Command signatures v2
+/command-signatures-v2/ @zachbai
+
+# OS-level bootstrap scripts
+/script/linux/bootstrap @acarl005
+/script/macos/bootstrap @acarl005
+/script/windows/bootstrap.ps1 @acarl005
 
 # Shell completions in the Warp CLI
 /crates/warp_cli/src/completions.rs @zachbai @szgupta @alokedesai

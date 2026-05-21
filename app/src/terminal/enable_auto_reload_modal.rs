@@ -253,7 +253,7 @@ impl EnableAutoReloadModalBody {
             .finish()
     }
 
-    fn render_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_buttons(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let cancel_button = appearance
             .ui_builder()
             .button(
@@ -270,7 +270,7 @@ impl EnableAutoReloadModalBody {
                 }),
                 ..Default::default()
             })
-            .with_text_label("Cancel".to_string())
+            .with_text_label(crate::i18n::tr_static(app, "Cancel").to_string())
             .build()
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(Action::Cancel);
@@ -349,7 +349,7 @@ impl View for EnableAutoReloadModalBody {
             .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
             .finish();
 
-        let buttons = Container::new(self.render_buttons(appearance))
+        let buttons = Container::new(self.render_buttons(appearance, app))
             .with_horizontal_padding(MODAL_PADDING)
             .with_vertical_padding(12.)
             .finish();

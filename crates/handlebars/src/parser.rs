@@ -299,5 +299,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "parser_test.rs"]
+#[path = "parser_tests.rs"]
 mod tests;

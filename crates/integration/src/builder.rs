@@ -185,7 +185,7 @@ impl Builder {
             // printed out during shell initialization telling the user how to
             // use `sudo`. This can interfere with tests that make assertions
             // about the block list, so suppress the message.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             std::fs::File::create(dir.join(".sudo_as_admin_successful"))
                 .expect("should not fail to create file in home directory");
 

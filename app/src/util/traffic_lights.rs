@@ -1,13 +1,13 @@
 //! This module is meant to be a single source of truth for information about the windows' "traffic
 //! light" buttons, the minimize, maximize, and close buttons in the corner of the window, so named
-//! b/c of their resemblence to traffic lights on MacOS. How (whether or not) these are rendered
+//! b/c of their resemblance to traffic lights on MacOS. How (whether or not) these are rendered
 //! depends on the platform. The Warp app must use this information to avoid rendering UI elements
 //! underneath them.
 
 #[cfg(windows)]
 pub mod windows;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux_only {
     pub(super) use crate::workspace::TOTAL_TAB_BAR_HEIGHT;
     pub(super) use pathfinder_color::ColorU;
@@ -19,7 +19,7 @@ mod linux_only {
     };
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use linux_only::*;
 
 #[cfg(target_os = "windows")]
@@ -54,7 +54,7 @@ use warpui::elements::MouseStateHandle;
 use warpui::platform::FullscreenState;
 use warpui::{AppContext, Element, WindowId};
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", any(target_os = "linux", target_os = "freebsd")))]
 const BUTTON_ICON_SIZE: f32 = 22.;
 
 pub fn traffic_light_data(ctx: &AppContext, window_id: WindowId) -> Option<TrafficLightData> {
@@ -73,7 +73,9 @@ pub fn traffic_light_data(ctx: &AppContext, window_id: WindowId) -> Option<Traff
             side: TrafficLightSide::Left,
             scales_with_zoom: false,
         })
-    } else if cfg!(target_os = "linux") && !ctx.windows().is_tiling_window_manager() {
+    } else if cfg!(any(target_os = "linux", target_os = "freebsd"))
+        && !ctx.windows().is_tiling_window_manager()
+    {
         Some(TrafficLightData {
             width: 116.,
             side: TrafficLightSide::Right,
@@ -145,7 +147,7 @@ impl TrafficLightData {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub fn render(
         &self,
         fullscreen_state: FullscreenState,
@@ -153,7 +155,7 @@ impl TrafficLightData {
         theme: &WarpTheme,
         _app: &AppContext,
     ) -> Box<dyn Element> {
-        if !cfg!(target_os = "linux") {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
             return Empty::new().finish();
         }
 
@@ -226,7 +228,7 @@ impl TrafficLightData {
         .finish()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn render_linux_maximize_button_icon(
         fg_color: ColorU,
         fullscreen_state: FullscreenState,
@@ -282,7 +284,7 @@ impl TrafficLightData {
         maximize_button_icon
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn render_button(
         mouse_state: MouseStateHandle,
         child: Box<dyn Element>,
@@ -442,7 +444,10 @@ impl TrafficLightData {
         })
     }
 
-    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    #[cfg(all(
+        not(any(target_os = "linux", target_os = "freebsd")),
+        not(target_os = "windows")
+    ))]
     pub fn render(
         &self,
         _fullscreen_state: FullscreenState,

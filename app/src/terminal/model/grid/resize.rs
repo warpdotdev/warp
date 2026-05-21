@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 use string_offset::ByteOffset;
 use warp_terminal::model::{
     grid::{
@@ -9,7 +12,7 @@ use warp_terminal::model::{
 
 use crate::terminal::{model::grid::Cursor, SizeInfo};
 
-use super::GridHandler;
+use super::{FullGridClearBehavior, GridHandler};
 
 impl GridHandler {
     /// Resize terminal to new dimensions.
@@ -59,13 +62,27 @@ impl GridHandler {
         use std::cmp::min;
 
         // If this is the alt screen, we can skip reflowing the grid and simply
-        // adjust the size of rows.
-        if self.ansi_handler_state.is_alt_screen {
+        // adjust the size of rows. We also do this for CLI agent TUIs so pane
+        // resizes don't append old frames into block scrollback before the app
+        // redraws (GH #9838).
+        if self.ansi_handler_state.is_alt_screen
+            || (self.full_grid_clear_behavior == FullGridClearBehavior::Clear && !self.finished)
+        {
             // We should never finish the alt screen grid.
-            debug_assert!(!self.finished);
+            debug_assert!(!self.ansi_handler_state.is_alt_screen || !self.finished);
             // We can delegate to the old grid resizing logic, as there's no
             // flat storage for the alt screen.
             self.grid.resize(false, num_rows, num_cols, self.finished);
+
+            // Keep flat_storage's column count in sync so that rows
+            // scrolled into it later (via scroll_region_up) match the
+            // width the iterator expects. Without this, rows from the
+            // wider/narrower grid get pushed with process_grapheme_info_
+            // unchecked and RowIterator::next panics.
+            if !self.ansi_handler_state.is_alt_screen {
+                self.flat_storage.set_columns(num_cols);
+            }
+
             return;
         }
 

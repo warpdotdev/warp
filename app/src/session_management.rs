@@ -20,7 +20,7 @@ pub struct SessionNavigationData {
     prompt: String,
     /// The various parts of the prompt, like virtual environment and working directory.
     prompt_elements: SessionNavigationPromptElements,
-    /// A running commmand, if there is one.
+    /// A running command, if there is one.
     command_context: CommandContext,
     /// A `PaneViewLocator` to navigate to the session.
     pane_view_locator: PaneViewLocator,
@@ -233,4 +233,15 @@ pub fn num_shared_sessions(ctx: &AppContext) -> usize {
         }
     }
     num_shared_sessions
+}
+
+/// Metadata for a single tab, used by the Ctrl+Tab MRU switcher.
+#[derive(Clone)]
+pub struct TabNavigationData {
+    pub pane_group_id: EntityId,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub window_id: WindowId,
+    /// 1-based left-to-right tab index for display disambiguation.
+    pub tab_index: usize,
 }

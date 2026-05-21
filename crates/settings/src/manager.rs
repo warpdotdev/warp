@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use anyhow::{Result, anyhow};
+use warp_features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::UserPreferences;
 
@@ -232,7 +233,7 @@ impl SettingsManager {
             <PrivatePreferences as SingletonEntity>::as_ref(ctx).deref();
         let prefs: &dyn UserPreferences = if self.is_private_for_storage_key(storage_key) {
             private
-        } else if super::is_settings_file_enabled() {
+        } else if FeatureFlag::SettingsFile.is_enabled() {
             <super::PublicPreferences as SingletonEntity>::as_ref(ctx).as_preferences()
         } else {
             // When the settings file is disabled, fall back to the private

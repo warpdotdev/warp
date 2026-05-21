@@ -12,26 +12,13 @@ pub(super) fn should_show_task_in_blocklist(task: &Task) -> bool {
 }
 
 /// Returns true if the conversation contains at least one exchange that would be shown in the
-/// blocklist (per `should_show_task_in_blocklist`).
+/// blocklist (per `exchanges_for_blocklist`).
 pub(crate) fn conversation_would_render_in_blocklist(conversation: &AIConversation) -> bool {
-    if conversation.exchange_count() == 0 {
-        return false;
-    }
-
-    if conversation
-        .get_root_task()
-        .is_some_and(|task| should_show_task_in_blocklist(task) && task.exchanges_len() > 0)
-    {
-        return true;
-    }
-
-    conversation
-        .all_tasks()
-        .any(|task| should_show_task_in_blocklist(task) && task.exchanges_len() > 0)
+    !exchanges_for_blocklist(conversation).is_empty()
 }
 
 /// Returns all exchanges from a conversation that should be displayed in the blocklist.
-/// Filters by task type using `should_show_task_in_blocklist`.
+/// Filters by task type using `should_show_task_in_blocklist` and skips hidden exchanges.
 pub(super) fn exchanges_for_blocklist(conversation: &AIConversation) -> Vec<&AIAgentExchange> {
     conversation
         .all_exchanges_by_task()
@@ -43,6 +30,7 @@ pub(super) fn exchanges_for_blocklist(conversation: &AIConversation) -> Vec<&AIA
                 .map(|_| exchanges)
         })
         .flatten()
+        .filter(|exchange| !conversation.is_exchange_hidden(exchange.id))
         .collect()
 }
 

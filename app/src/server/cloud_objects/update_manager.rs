@@ -56,7 +56,6 @@ use crate::{
         },
     },
     settings::cloud_preferences::Preference,
-    util::sync::Condition,
     workflows::{
         workflow::Workflow,
         workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum},
@@ -83,6 +82,7 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
 use warpui::{duration_with_jitter, AppContext};
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -422,7 +422,7 @@ impl UpdateManager {
                     }
                 });
 
-                // Delete the actions on the client ID. Once we get a server ID for an object, we start dequeing any pending object actions and those
+                // Delete the actions on the client ID. Once we get a server ID for an object, we start dequeuing any pending object actions and those
                 // directly populate the ObjectActions model with the server ID, so we don't need to worry about any conversion or anything like that.
                 ObjectActions::handle(ctx).update(ctx, |object_actions, ctx| {
                     object_actions.delete_actions_for_object(&client_id.to_string(), ctx);
@@ -2877,7 +2877,7 @@ impl UpdateManager {
                 let cloud_model = CloudModel::as_ref(ctx);
                 let object: Option<&CloudWorkflowEnum> = cloud_model.get_object_of_type(enum_id);
                 let Some(object) = object else {
-                    log::error!("Could not find referenced worfklow enum to copy over to the new space, skipping");
+                    log::error!("Could not find referenced workflow enum to copy over to the new space, skipping");
                     continue;
                 };
 
@@ -3212,6 +3212,25 @@ impl UpdateManager {
             // When adding the initiated_by parameter to this function call, InitiatedBy::User was set as a default value.
             // This can be changed to InitiatedBy::System if this action was automatically kicked off by the system and we do not want a user facing toast.
             InitiatedBy::User,
+            ctx,
+        )
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+        self.create_object_online(
+            CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
+            owner,
+            client_id,
+            Default::default(),
+            false,
+            None,
             ctx,
         )
     }
@@ -4804,5 +4823,5 @@ impl Entity for UpdateManager {
 impl SingletonEntity for UpdateManager {}
 
 #[cfg(test)]
-#[path = "update_manager_test.rs"]
+#[path = "update_manager_tests.rs"]
 mod tests;

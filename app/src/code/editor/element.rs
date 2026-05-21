@@ -351,7 +351,7 @@ impl GutterRange {
 
 #[derive(Debug, Clone, Copy)]
 pub enum GutterHoverTarget {
-    // The entire line covered by the gutter is cosidered the hover target.
+    // The entire line covered by the gutter is considered the hover target.
     Line,
     // Only the gutter element itself is considered the hover target.
     GutterElement,

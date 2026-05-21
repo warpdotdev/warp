@@ -134,19 +134,6 @@ fn not_installed_via_trait_when_claude_home_empty() {
 }
 
 #[test]
-fn can_auto_install_is_true() {
-    assert!(ClaudeCodePluginManager::new(None, None, None).can_auto_install());
-}
-
-#[test]
-fn minimum_version() {
-    assert_eq!(
-        ClaudeCodePluginManager::new(None, None, None).minimum_plugin_version(),
-        "2.0.0"
-    );
-}
-
-#[test]
 fn installed_version_returns_version_when_present() {
     let dir = tempfile::tempdir().unwrap();
     let plugins_dir = dir.path().join("plugins");

@@ -7,8 +7,7 @@ use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, Vi
 use crate::view_components::copyable_text_field::COPY_FEEDBACK_DURATION;
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_conversations_model::AgentRunDisplayStatus;
-use crate::ai::agent_management::view::ManagementCardItemId;
+use crate::ai::agent_conversations_model::{AgentConversationEntryId, AgentRunDisplayStatus};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
@@ -25,7 +24,7 @@ pub struct ActionButtonsConfig {
     pub fork_conversation_id: Option<AIConversationId>,
     /// Shows an info button for viewing more details.
     /// Only used in management view hover toolbelt.
-    pub view_details_item_id: Option<ManagementCardItemId>,
+    pub view_details_item_id: Option<AgentConversationEntryId>,
     /// Conversation link URL (either to the transcript or live session) for copy link button.
     pub copy_link_url: Option<String>,
 }
@@ -87,7 +86,7 @@ pub enum AgentDetailsButtonEvent {
     Open,
     CancelTask { task_id: AmbientAgentTaskId },
     ForkConversation { conversation_id: AIConversationId },
-    ViewDetails { item_id: ManagementCardItemId },
+    ViewDetails { item_id: AgentConversationEntryId },
     CopyLink { link: String },
 }
 
@@ -260,9 +259,7 @@ impl TypedActionView for ConversationActionButtonsRow {
             }
             AgentDetailsAction::ViewDetails => {
                 if let Some(item_id) = &self.config.view_details_item_id {
-                    ctx.emit(AgentDetailsButtonEvent::ViewDetails {
-                        item_id: item_id.clone(),
-                    });
+                    ctx.emit(AgentDetailsButtonEvent::ViewDetails { item_id: *item_id });
                 }
             }
             AgentDetailsAction::CopyLink => {

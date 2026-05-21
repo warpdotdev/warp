@@ -1,3 +1,6 @@
+// The code in this file is adapted from the vte crate (an Alacritty project)
+// under the Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! This module exports abstractions for parameters of control sequence actions;
 //! e.g. actions to be executed after receiving a control sequence from the pty.
 //!

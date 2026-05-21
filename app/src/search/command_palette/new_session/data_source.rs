@@ -47,7 +47,7 @@ impl AllowedSessionKinds {
 /// Gathers this data by:
 /// - Listening for any binding source changes
 /// - Comparing the options in binding sources (open new tab, open new window, etc.)
-///   to the list of available shells, and creates an interesction of those items.
+///   to the list of available shells, and creates an intersection of those items.
 pub struct NewSessionDataSource {
     searcher: Box<dyn NewSessionSearcher>,
     allowed: AllowedSessionKinds,

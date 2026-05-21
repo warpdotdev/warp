@@ -109,5 +109,5 @@ fn is_command_copied_from_env_var_collection(
 }
 
 #[cfg(test)]
-#[path = "requested_command_attribution_test.rs"]
+#[path = "requested_command_attribution_tests.rs"]
 mod tests;

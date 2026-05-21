@@ -96,9 +96,11 @@ impl ChangelogSectionView {
             improvements_highlighted_link: Default::default(),
             bug_fixes_highlighted_link: Default::default(),
             changelog_fetch_error: create_formatted_text_from_string(
-                CHANGELOG_FETCH_ERROR_MSG.to_string(),
+                crate::i18n::tr_static(ctx, CHANGELOG_FETCH_ERROR_MSG).to_string(),
             ),
-            changelog_loading: create_formatted_text_from_string(CHANGELOG_LOADING_MSG.to_string()),
+            changelog_loading: create_formatted_text_from_string(
+                crate::i18n::tr_static(ctx, CHANGELOG_LOADING_MSG).to_string(),
+            ),
         }
     }
 
@@ -360,12 +362,12 @@ impl SectionView for ChangelogSectionView {
         None
     }
 
-    fn section_link(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn section_link(&self, appearance: &Appearance, app: &AppContext) -> Option<Box<dyn Element>> {
         Some(
             appearance
                 .ui_builder()
                 .link(
-                    "Read all changelogs".into(),
+                    crate::i18n::tr_static(app, "Read all changelogs").into(),
                     Some("https://docs.warp.dev/changelog".into()),
                     None,
                     self.changelog_button_mouse_states

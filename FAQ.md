@@ -6,7 +6,7 @@ This FAQ covers the questions we hear most often about contributing to the Warp 
 
 ### How do I contribute?
 
-Start with a GitHub issue. Bug reports are implicitly ready to fix once triaged; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+Start with a GitHub issue. Bug reports can go straight to a code PR once they are triaged as actionable; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### How do I file a good bug report or feature request?
 
@@ -17,7 +17,7 @@ If you're already running Warp, the `/feedback` command files an issue with logs
 ### What do the readiness labels mean?
 
 - **`ready-to-spec`** — the problem is understood, the design is open. Next step is a spec PR.
-- **`ready-to-implement`** — the design is settled, or it's a triaged bug. Next step is a code PR.
+- **`ready-to-implement`** — the issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable.
 - **`needs-mocks`** — design mocks are required before implementation can start.
 
 Anyone can pick up a labeled issue. Mention **@oss-maintainers** on an issue if it needs triage or readiness re-evaluation.
@@ -136,7 +136,7 @@ Yes — that's what AGPL is for. The license prevents fully-proprietary relaunch
 
 - The [Warp docs](https://docs.warp.dev/) for using the product.
 - [GitHub Issues](https://github.com/warpdotdev/warp/issues) for bug reports and feature requests.
-- The [Slack community](https://go.warp.dev/join-preview) for general questions and discussion.
+- The [Slack community](https://go.warp.dev/join-preview) for general questions and discussion — contributors chat with each other and the Warp team in [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB).
 - Mention **@oss-maintainers** on an issue or PR to escalate to the team.
 
 ### How do I report a security vulnerability?

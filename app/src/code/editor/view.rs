@@ -33,10 +33,11 @@ use ai::diff_validation::DiffDelta;
 use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
+use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::rc::Rc;
 use std::{collections::HashMap, ops::Range};
-use std::{collections::HashSet, path::Path};
 use string_offset::CharOffset;
 use vec1::{vec1, Vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
@@ -65,6 +66,7 @@ use warp_editor::{
     search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL},
 };
 use warp_util::content_version::ContentVersion;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{
     elements::{
         new_scrollable::{
@@ -80,8 +82,8 @@ use warpui::{
     prelude::RectF,
     text::point::Point,
     units::Pixels,
-    AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, View,
-    ViewContext, ViewHandle, WeakViewHandle, WindowId,
+    AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
+    SingletonEntity, View, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
 mod actions;
@@ -1415,9 +1417,15 @@ impl CodeEditorView {
         });
     }
 
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+    pub fn set_language_with_path(&mut self, path: &StandardizedPath, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
             model.set_language_with_path(path, ctx);
+        });
+    }
+
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.set_language_with_local_path(path, ctx);
         });
     }
 
@@ -2019,7 +2027,7 @@ impl CodeEditorView {
                         }
                     }
 
-                    // If the character is opening autcomplete symbol, we want to autocomplete it with a closing symbol.
+                    // If the character is opening autocomplete symbol, we want to autocomplete it with a closing symbol.
                     if let Some(close) = AUTOCOMPLETE_SYMBOLS.get(&first_char) {
                         self.model.update(ctx, |model, ctx| {
                             model.autocomplete_symbol(first_char, *close, ctx);
@@ -2335,6 +2343,18 @@ impl View for CodeEditorView {
         }
     }
 
+    fn active_cursor_position(&self, ctx: &ViewContext<Self>) -> Option<CursorInfo> {
+        let render_state = self.model.as_ref(ctx).render_state().as_ref(ctx);
+        let cursor_id = render_state.saved_positions().cursor_id();
+        let font_size = render_state.styles().base_text.font_size;
+
+        ctx.element_position_by_id(cursor_id.as_str())
+            .map(|position| CursorInfo {
+                position,
+                font_size,
+            })
+    }
+
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
         if blur_ctx.is_self_blurred() {
             ctx.notify();
@@ -2349,8 +2369,14 @@ impl View for CodeEditorView {
         }
         if let Some(vim_mode) = self.vim_mode(app) {
             context.set.insert("Vim");
-            if vim_mode == VimMode::Normal {
-                context.set.insert("VimNormalMode");
+            match vim_mode {
+                VimMode::Normal => {
+                    context.set.insert("VimNormalMode");
+                }
+                VimMode::Visual(_) => {
+                    context.set.insert("VimVisualMode");
+                }
+                _ => {}
             }
         }
         if self.find_bar.is_some() {

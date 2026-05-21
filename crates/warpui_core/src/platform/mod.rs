@@ -585,6 +585,13 @@ pub trait WindowManager {
     fn hide_window(&self, window_id: WindowId);
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF);
 
+    /// Sets the per-window opacity, where `1.0` is fully opaque and `0.0` is fully
+    /// transparent. Unlike `hide_window`, this leaves the window in the window list
+    /// and does not change focus, key, or z-order. Useful for cheaply hiding a
+    /// window during a drag without triggering AppKit's `orderOut:` machinery.
+    /// Default is a no-op on platforms that don't support per-window alpha.
+    fn set_window_alpha(&self, _window_id: WindowId, _alpha: f32) {}
+
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
 
@@ -669,7 +676,7 @@ impl OperatingSystem {
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 wasm::current_platform()
-            } else if #[cfg(target_os = "linux")] {
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 OperatingSystem::Linux
             } else if #[cfg(target_os = "macos")] {
                 OperatingSystem::Mac

@@ -368,5 +368,5 @@ impl Element for EventHandler {
 }
 
 #[cfg(test)]
-#[path = "event_handler_test.rs"]
+#[path = "event_handler_tests.rs"]
 mod tests;

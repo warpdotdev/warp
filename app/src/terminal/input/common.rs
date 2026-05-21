@@ -210,7 +210,7 @@ pub(super) fn add_voltron_overlay(
     );
 }
 
-/// Renders the appropriate input suggestions overlay over the input, bsaed on the current input
+/// Renders the appropriate input suggestions overlay over the input, based on the current input
 /// suggestions mode (if any).
 pub(super) fn add_input_suggestions_overlays(
     input: &Input,

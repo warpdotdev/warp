@@ -48,7 +48,7 @@ impl WithinBlockBanner {
     }
 }
 
-/// These Elements should be common accross all block banners. The specific content for each banner
+/// These Elements should be common across all block banners. The specific content for each banner
 /// should be passed in here. This function also enforces the height invariant.
 fn render_block_banner(
     build_child: impl FnOnce(&MouseState) -> Box<dyn Element>,

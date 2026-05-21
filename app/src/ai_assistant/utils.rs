@@ -423,7 +423,7 @@ fn translate_formatted_text_into_markdown_segments(
     // result is a set of markdown_segments.
     let mut markdown_segments = vec![];
 
-    // The running non-code block is a contigous sequence of FormattedTextLine's
+    // The running non-code block is a contiguous sequence of FormattedTextLine's
     // that _do not_ contain any code blocks.
     let mut running_non_code_block = vec![];
 

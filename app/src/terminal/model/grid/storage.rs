@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, PartialEq};
 use std::mem;
@@ -439,5 +442,5 @@ impl IndexMut<VisibleRow> for Storage {
 }
 
 #[cfg(test)]
-#[path = "storage_test.rs"]
+#[path = "storage_tests.rs"]
 mod tests;

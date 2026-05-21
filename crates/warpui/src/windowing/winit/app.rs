@@ -15,10 +15,10 @@ use crate::notification::RequestPermissionsOutcome;
 
 use crate::platform::NotificationInfo;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::sync::OnceLock;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub static WINDOWING_SYSTEM: OnceLock<WindowingSystem> = OnceLock::new();
 
 pub type RequestPermissionsCallback =
@@ -65,9 +65,9 @@ pub enum CustomEvent {
     Clipboard(ClipboardEvent),
     SetCursorShape(platform::Cursor),
     ActiveCursorPositionUpdated,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     AboutToSleep,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     ResumedFromSleep,
     /// The application is connected to the internet.
     #[cfg_attr(any(target_os = "macos"), allow(dead_code))]
@@ -115,7 +115,7 @@ pub enum ClipboardEvent {
     Paste(ClipboardContent),
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Debug, PartialEq)]
 pub enum WindowingSystem {
     X11,
@@ -127,7 +127,7 @@ pub struct App {
     assets: Box<dyn AssetProvider>,
     is_integration_test: bool,
     window_class: Option<String>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     force_x11: bool,
 }
 
@@ -142,7 +142,7 @@ impl App {
             assets,
             is_integration_test: test_driver.is_some(),
             window_class: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11: false,
         }
     }
@@ -154,7 +154,7 @@ impl App {
         self.window_class = Some(window_class);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub(crate) fn force_x11(&mut self, force_x11: bool) {
         self.force_x11 = force_x11;
     }
@@ -168,13 +168,13 @@ impl App {
             assets,
             is_integration_test,
             window_class,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11,
         } = self;
 
         let mut event_loop_builder = winit::event_loop::EventLoop::with_user_event();
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if force_x11 {
             winit::platform::x11::EventLoopBuilderExtX11::with_x11(&mut event_loop_builder);
         }
@@ -188,7 +188,7 @@ impl App {
 
         // Perform some platform-specific initialization.
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 super::linux::maybe_register_xlib_error_hook(&event_loop);
                 super::linux::ensure_cursor_theme();
             } else if #[cfg(target_family = "wasm")] {

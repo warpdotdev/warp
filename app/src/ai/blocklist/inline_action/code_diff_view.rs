@@ -51,6 +51,7 @@ use warpui::{
 };
 
 use super::malformed_line_heuristics::has_malformed_terminal_correction_signal;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::{
     ai::{
@@ -889,7 +890,7 @@ impl CodeDiffView {
         let code_review_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::Diff)
-                .with_tooltip("Review changes")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Review changes"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -901,7 +902,7 @@ impl CodeDiffView {
         let expansion_button_collapsed = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronRight)
-                .with_tooltip("Expand")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Expand"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -912,7 +913,7 @@ impl CodeDiffView {
         let expansion_button_expanded = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronDown)
-                .with_tooltip("Collapse")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Collapse"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -1000,15 +1001,14 @@ impl CodeDiffView {
                 let file_path = diff.base.file_path.clone();
 
                 // Set up the editor buffer with the pre-loaded content.
-                let path = Path::new(&file_path);
+                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 editor.update(ctx, |editor_view, ctx| {
-                    editor_view.set_language_with_path(path, ctx);
+                    editor_view.set_language_with_local_path(Path::new(&file_path), ctx);
                     let state = InitialBufferState::plain_text(&diff.base.content);
                     editor_view.reset(state, ctx);
                 });
 
                 // Create the InlineDiffView which applies diffs to the editor buffer.
-                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 let diff_viewer = ctx.add_typed_action_view(|ctx| {
                     InlineDiffView::new(
                         editor.clone(),
@@ -2541,7 +2541,10 @@ impl CodeDiffView {
 
         let checkbox_text = appearance
             .ui_builder()
-            .span("Don't show me suggested code banners again")
+            .span(crate::i18n::tr_static(
+                app,
+                "Don't show me suggested code banners again",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(font_color),
                 font_size: Some(font_size),
@@ -2608,6 +2611,23 @@ impl CodeDiffView {
             .as_ref(app)
             .file_path()
             .map(|p| p.to_string())
+    }
+
+    /// Returns the primary file location as a `LocalOrRemotePath`,
+    /// using `diff_session_type` to correctly identify remote files.
+    pub fn primary_file_location(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
+        let path_str = self.primary_file_path(app)?;
+        match &self.diff_session_type {
+            DiffSessionType::Local => Some(LocalOrRemotePath::Local(PathBuf::from(path_str))),
+            DiffSessionType::Remote(host_id) => {
+                StandardizedPath::try_new(&path_str).ok().map(|path| {
+                    LocalOrRemotePath::Remote(warp_util::remote_path::RemotePath {
+                        host_id: host_id.clone(),
+                        path,
+                    })
+                })
+            }
+        }
     }
 }
 
@@ -3042,7 +3062,7 @@ pub fn convert_file_edits_to_file_diffs(
 
                 for (index, (_, search_content)) in search_blocks_with_ranges.iter().enumerate() {
                     if index > 0 {
-                        // add "..." between each edit to indicate the seperation
+                        // add "..." between each edit to indicate the separation
                         dummy_content.push_str("...\n");
                     }
                     for search_line in search_content.lines() {

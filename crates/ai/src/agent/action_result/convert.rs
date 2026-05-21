@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use warp_multi_agent_api::{
     self as api,
     apply_file_diffs_result::success::UpdatedFileContent,
@@ -7,6 +8,13 @@ use warp_multi_agent_api::{
 use crate::agent::{action_result::ShellCommandError, convert::ConvertToAPITypeError};
 
 use super::*;
+
+fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: timestamp.timestamp(),
+        nanos: timestamp.timestamp_subsec_nanos() as i32,
+    }
+}
 
 impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_result::Result {
     type Error = ConvertToAPITypeError;
@@ -18,7 +26,8 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                 block_id,
                 output,
                 exit_code,
-                ..
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::RunShellCommand(
                     #[allow(deprecated)]
@@ -31,6 +40,8 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
                         )),
                     },
@@ -112,7 +123,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                     },
                 ),
             ),
-            WriteToLongRunningShellCommandResult::CommandFinished { block_id, output, exit_code, .. } => Ok(
+            WriteToLongRunningShellCommandResult::CommandFinished { block_id, output, exit_code, start_ts, completed_ts } => Ok(
                 api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
                     api::WriteToLongRunningShellCommandResult {
                         result: Some(api::write_to_long_running_shell_command_result::Result::CommandFinished(
@@ -120,6 +131,8 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             }
                         ))
                     },
@@ -651,7 +664,8 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                 block_id,
                 output,
                 exit_code,
-                ..
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::ReadShellCommandOutput(
                     api::ReadShellCommandOutputResult {
@@ -661,6 +675,8 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                 command_id: block_id.to_string(),
                                 output,
                                 exit_code: exit_code.value(),
+                                start_ts: start_ts.map(local_datetime_to_timestamp),
+                                finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
                         )),
                     },
@@ -745,6 +761,8 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                 block_id,
                 output,
                 exit_code,
+                start_ts,
+                completed_ts,
             } => Ok(
                 api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
                     api::TransferShellCommandControlToUserResult {
@@ -754,6 +772,8 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                                     command_id: block_id.to_string(),
                                     output,
                                     exit_code: exit_code.value(),
+                                    start_ts: start_ts.map(local_datetime_to_timestamp),
+                                    finish_ts: completed_ts.map(local_datetime_to_timestamp),
                                 },
                             ),
                         ),
@@ -1284,6 +1304,121 @@ impl From<AskUserQuestionResult> for api::request::input::tool_call_result::Resu
         api::request::input::tool_call_result::Result::AskUserQuestion(api::AskUserQuestionResult {
             result: api_result,
         })
+    }
+}
+
+impl From<RunAgentsLaunchedExecutionMode>
+    for api::run_agents_result::launched::ResolvedExecutionMode
+{
+    fn from(mode: RunAgentsLaunchedExecutionMode) -> Self {
+        match mode {
+            RunAgentsLaunchedExecutionMode::Local => {
+                api::run_agents_result::launched::ResolvedExecutionMode::Local(
+                    api::run_agents::Local {},
+                )
+            }
+            RunAgentsLaunchedExecutionMode::Remote {
+                environment_id,
+                worker_host,
+                computer_use_enabled,
+            } => api::run_agents_result::launched::ResolvedExecutionMode::Remote(
+                api::run_agents::Remote {
+                    environment_id,
+                    worker_host,
+                    computer_use_enabled,
+                },
+            ),
+        }
+    }
+}
+
+impl From<RunAgentsAgentOutcome> for api::run_agents_result::AgentOutcome {
+    fn from(outcome: RunAgentsAgentOutcome) -> Self {
+        let result = match outcome.kind {
+            RunAgentsAgentOutcomeKind::Launched { agent_id } => {
+                api::run_agents_result::agent_outcome::Result::Launched(
+                    api::run_agents_result::LaunchedAgent { agent_id },
+                )
+            }
+            RunAgentsAgentOutcomeKind::Failed { error } => {
+                api::run_agents_result::agent_outcome::Result::Failed(
+                    api::run_agents_result::FailedAgent { error },
+                )
+            }
+        };
+        api::run_agents_result::AgentOutcome {
+            name: outcome.name,
+            result: Some(result),
+        }
+    }
+}
+
+/// Maps a client-side harness string identifier (e.g. "oz", "claude")
+/// to the new proto `Harness` oneof. Returns `None` for empty,
+/// unrecognized, or `"unknown"` strings; callers leave
+/// `resolved_harness` unset in that case.
+pub(super) fn build_api_harness(harness_type: &str) -> Option<api::Harness> {
+    let normalized = harness_type.trim().to_ascii_lowercase().replace('_', "-");
+    let variant = match normalized.as_str() {
+        "oz" => api::harness::Variant::Oz(api::harness::Oz {}),
+        "claude" | "claude-code" => api::harness::Variant::ClaudeCode(api::harness::ClaudeCode {}),
+        "opencode" | "open-code" => api::harness::Variant::OpenCode(api::harness::OpenCode {}),
+        "gemini" => api::harness::Variant::Gemini(api::harness::Gemini {}),
+        "codex" => api::harness::Variant::Codex(api::harness::Codex {}),
+        _ => return None,
+    };
+    Some(api::Harness {
+        variant: Some(variant),
+    })
+}
+
+impl TryFrom<RunAgentsResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    fn try_from(result: RunAgentsResult) -> Result<Self, Self::Error> {
+        match result {
+            RunAgentsResult::Launched {
+                model_id,
+                harness_type,
+                execution_mode,
+                agents,
+            } => Ok(
+                api::request::input::tool_call_result::Result::RunAgentsResult(
+                    api::RunAgentsResult {
+                        outcome: Some(api::run_agents_result::Outcome::Launched(
+                            api::run_agents_result::Launched {
+                                resolved_model_id: model_id,
+                                resolved_harness: build_api_harness(&harness_type),
+                                resolved_execution_mode: Some(execution_mode.into()),
+                                agents: agents.into_iter().map(Into::into).collect(),
+                            },
+                        )),
+                    },
+                ),
+            ),
+            RunAgentsResult::Denied { reason } => Ok(
+                api::request::input::tool_call_result::Result::RunAgentsResult(
+                    api::RunAgentsResult {
+                        outcome: Some(api::run_agents_result::Outcome::Denied(
+                            api::run_agents_result::Denied { reason },
+                        )),
+                    },
+                ),
+            ),
+            RunAgentsResult::Failure { error } => Ok(
+                api::request::input::tool_call_result::Result::RunAgentsResult(
+                    api::RunAgentsResult {
+                        outcome: Some(api::run_agents_result::Outcome::Failure(
+                            api::run_agents_result::Failure { error },
+                        )),
+                    },
+                ),
+            ),
+            // Reject is conveyed by the generic ToolCallResult.Cancel marker
+            // synthesized server-side on the next user input; nothing for the
+            // client to send on the wire here.
+            RunAgentsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
     }
 }
 

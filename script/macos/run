@@ -96,7 +96,17 @@ rm -rf "$WARP_APP_PATH"
 
 pushd app > /dev/null
 echo "Bundling app (bin: $WARP_BIN_NAME)..."
-cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+# cargo-bundle 0.5.1 can panic while rendering colored output when invoked from
+# a "dumb" terminal. Give it a sane color-capable terminal only for bundling.
+(
+  if [ -z "${TERM:-}" ] || [ "$TERM" = "dumb" ]; then
+    export TERM="xterm-256color"
+  fi
+  if [ -z "${COLORTERM:-}" ]; then
+    export COLORTERM="truecolor"
+  fi
+  cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+)
 echo "Successfully bundled..."
 popd > /dev/null
 

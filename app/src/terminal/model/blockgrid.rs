@@ -299,6 +299,10 @@ impl BlockGrid {
         self.grid_handler.set_track_content_length(trim);
     }
 
+    pub(in crate::terminal) fn enable_full_grid_clear_behavior(&mut self) {
+        self.grid_handler.enable_full_grid_clear_behavior();
+    }
+
     /// Returns a freshly-computed value of rightmost_nonempty_cell if this grid isn't
     /// finished yet. Otherwise, return a memoized value since the grid won't be mutated anymore.
     pub fn rightmost_visible_nonempty_cell(&self) -> Option<usize> {
@@ -995,5 +999,5 @@ impl ansi::Handler for BlockGrid {
 }
 
 #[cfg(test)]
-#[path = "blockgrid_test.rs"]
+#[path = "blockgrid_tests.rs"]
 mod tests;

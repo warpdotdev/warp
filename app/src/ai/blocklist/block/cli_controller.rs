@@ -317,8 +317,14 @@ impl CLISubagentController {
 
         let active_block = terminal_model.block_list_mut().active_block_mut();
         let block_id = active_block.id().clone();
-        if let Err(e) = active_block.take_over_control_for_user(reason) {
-            log::error!("Failed to take control for user: {e:?}");
+        let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
+        let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
+        if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
+            log::error!(
+                "Failed to take control for user: {e:?}, reason={reason:?}, \
+                 block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
+                 lrc_state={lrc_state_debug}"
+            );
             return;
         }
 
@@ -365,15 +371,23 @@ impl CLISubagentController {
         let active_block = terminal_model.block_list_mut().active_block_mut();
         let conversation_id = active_block.ai_conversation_id();
         let block_id = active_block.id().clone();
+        let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
         // Check if control was transferred from agent before handoff.
         let was_transfer_from_agent = active_block
             .long_running_control_state()
             .and_then(|state| state.user_take_over_reason())
             .is_some_and(|reason| reason.is_transfer_from_agent());
         if let Err(e) = active_block.handoff_control_to_agent() {
-            log::error!("Failed to handoff control to agent: {e:?}");
+            log::error!(
+                "Failed to handoff control to agent: {e:?}, \
+                 block_id={block_id:?}, lrc_state={lrc_state_debug}"
+            );
             return;
         }
+        log::info!(
+            "handoff_active_command_control_to_agent: block_id={block_id:?}, \
+             conversation_id={conversation_id:?}, lrc_state={lrc_state_debug}"
+        );
         let action_id = active_block.requested_command_action_id().cloned();
         let agent_has_control = active_block.is_agent_in_control();
         drop(terminal_model);

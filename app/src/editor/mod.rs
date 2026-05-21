@@ -30,5 +30,5 @@ impl<T: Ord + Clone> RangeExt<T> for Range<T> {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 pub mod tests;

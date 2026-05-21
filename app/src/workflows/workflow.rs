@@ -384,5 +384,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "workflow_test.rs"]
+#[path = "workflow_tests.rs"]
 mod tests;

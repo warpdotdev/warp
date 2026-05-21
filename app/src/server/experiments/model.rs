@@ -29,7 +29,7 @@ impl ServerExperiments {
 
     /// Updates the model with the latest server-side state.
     ///
-    /// Assumes the set of proivded [`ServerExperiment`]s are unambiguous;
+    /// Assumes the set of provided [`ServerExperiment`]s are unambiguous;
     /// that is, there are not two arms enabled for the same experiment group.
     pub fn apply_latest_state(
         &mut self,

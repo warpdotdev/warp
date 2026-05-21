@@ -1069,7 +1069,7 @@ impl EditorModel {
             && self.all_cursors_next_character_matches_char(
                 text.chars()
                     .next()
-                    .expect("Autocompleted symobl should have at least one character"),
+                    .expect("Autocompleted symbol should have at least one character"),
                 ctx,
             )
         {
@@ -3114,7 +3114,7 @@ impl EditorModel {
                     selection.set_end(
                         buffer
                             .anchor_before(point)
-                            .expect("valid point should be vaild anchor"),
+                            .expect("valid point should be valid anchor"),
                     );
                 }
 
@@ -3221,5 +3221,5 @@ impl EditorModel {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

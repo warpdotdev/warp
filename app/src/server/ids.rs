@@ -1,4 +1,6 @@
 // Re-export types from warp_server_client.
+#[allow(unused_imports)]
+pub use warp_server_client::ids::GenericStringObjectId;
 pub use warp_server_client::ids::{
     parse_sqlite_id_to_uid, ApiKeyUid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId,
     ServerIdAndType, SyncId, ToServerId,
@@ -70,5 +72,5 @@ macro_rules! server_id_traits {
 }
 
 #[cfg(test)]
-#[path = "ids_test.rs"]
+#[path = "ids_tests.rs"]
 mod tests;

@@ -1,10 +1,18 @@
 use ordered_float::OrderedFloat;
 use warp_core::ui::theme::Fill;
+use warpui::fonts::FamilyId;
 use warpui::{Action, AppContext, Element};
 
 use crate::appearance::Appearance;
 
 use super::result_renderer::ItemHighlightState;
+
+#[derive(Clone)]
+pub struct SearchItemDetail {
+    pub title: String,
+    pub description: Option<String>,
+    pub title_font_family: FamilyId,
+}
 
 /// Location where icon should be rendered relative to the [`SearchItem`].
 pub enum IconLocation {
@@ -107,6 +115,10 @@ pub trait SearchItem: Send + Sync {
 
     /// Returns an optional tooltip string to display when hovering over this item.
     fn tooltip(&self) -> Option<String> {
+        None
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
         None
     }
 }

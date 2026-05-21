@@ -246,7 +246,7 @@ impl Prompt {
         }
     }
 
-    /// Wehther same line prompt is enabled for Warp prompt.
+    /// Whether same line prompt is enabled for Warp prompt.
     pub fn same_line_prompt_enabled(&self) -> bool {
         self.config.same_line_prompt_enabled
     }

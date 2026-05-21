@@ -37,6 +37,11 @@ pub enum CommandPaletteItemAction {
         pane_view_locator: PaneViewLocator,
         window_id: WindowId,
     },
+    /// Navigate to a specific tab identified by its pane_group EntityId.
+    NavigateToTab {
+        pane_group_id: EntityId,
+        window_id: WindowId,
+    },
     /// Navigate to a specific conversation.
     NavigateToConversation {
         pane_view_locator: Option<PaneViewLocator>,
@@ -93,6 +98,9 @@ impl CommandPaletteItemAction {
                 pane_view_locator, ..
             } => ItemSummary::Session {
                 pane_view_locator: *pane_view_locator,
+            },
+            CommandPaletteItemAction::NavigateToTab { pane_group_id, .. } => ItemSummary::Tab {
+                pane_group_id: *pane_group_id,
             },
             CommandPaletteItemAction::NavigateToConversation {
                 conversation_id, ..
@@ -168,6 +176,9 @@ pub enum ItemSummary {
     },
     Session {
         pane_view_locator: PaneViewLocator,
+    },
+    Tab {
+        pane_group_id: EntityId,
     },
     NewSession {
         id: NewSessionOptionId,

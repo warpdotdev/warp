@@ -134,12 +134,15 @@ impl ThemePickerSlide {
         app: &AppContext,
     ) -> Box<dyn Element> {
         // The option "chrome" (background, borders, text) should be styled using the currently
-        // selected theme.
-        let selected_theme = self
-            .theme_options
-            .get(self.selected_theme_index)
-            .map(|option| option.theme.clone())
-            .unwrap_or_else(|| self.theme_options[0].theme.clone());
+        // selected theme, if sync_with_os is not selected.
+        let selected_theme = if self.sync_with_os {
+            appearance.theme().clone()
+        } else {
+            self.theme_options
+                .get(self.selected_theme_index)
+                .map(|option| option.theme.clone())
+                .unwrap_or_else(|| self.theme_options[0].theme.clone())
+        };
 
         let bottom_nav = self.render_bottom_nav(appearance, app);
 

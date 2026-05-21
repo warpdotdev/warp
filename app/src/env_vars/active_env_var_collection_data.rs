@@ -168,7 +168,7 @@ impl ActiveEnvVarCollectionData {
 
         let new_id = ClientId::default();
 
-        // Set the active env var collection to be an uncommited collection
+        // Set the active env var collection to be an uncommitted collection
         self.active_env_var_collection = ActiveEnvVarCollection::NewEnvVarCollection(Box::new(
             CloudEnvVarCollection::new_local(
                 CloudEnvVarCollectionModel::default(),

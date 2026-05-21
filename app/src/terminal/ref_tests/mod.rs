@@ -1,3 +1,6 @@
+// The test harness in this file is adapted from the alacritty_terminal crate
+// under the Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;

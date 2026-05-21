@@ -178,7 +178,7 @@ impl ToSentryTags for CrashRecoveryMetadata {
     }
 }
 
-/// Initializes the crash reporting susbsystem.  Returns whether or not crash
+/// Initializes the crash reporting subsystem.  Returns whether or not crash
 /// reporting is active.
 pub(crate) fn init(ctx: &mut AppContext) -> bool {
     if !FeatureFlag::CrashReporting.is_enabled() {
@@ -408,6 +408,14 @@ fn sentry_client_options() -> sentry::ClientOptions {
         session_mode: SessionMode::Application,
         ..Default::default()
     }
+}
+
+/// Returns whether the Rust Sentry client is currently initialized.
+pub(crate) fn is_initialized() -> bool {
+    matches!(
+        &*RUST_SENTRY_CLIENT_GUARD.lock(),
+        RustSentryClientGuard::Initialized { .. }
+    )
 }
 
 /// Uninitializes sentry, effectively ending reporting on crashes and errors.

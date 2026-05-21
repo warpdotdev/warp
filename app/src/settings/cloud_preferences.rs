@@ -9,7 +9,7 @@ use crate::{
             json_model::{JsonModel, JsonSerializer},
         },
         GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject, UniquePer,
+        JsonObjectType, Revision, UniquePer,
     },
     server::sync_queue::QueueItem,
 };
@@ -68,7 +68,10 @@ impl Platform {
             return Self::Mac;
         }
 
-        if cfg!(all(not(target_family = "wasm"), target_os = "linux")) {
+        if cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", target_os = "freebsd")
+        )) {
             return Self::Linux;
         }
 
@@ -150,13 +153,6 @@ impl StringModel for Preference {
     fn warn_if_unsaved_at_quit() -> bool {
         // Don't block quitting on unsaved cloud prefs changes
         false
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Preference(server_preference) = server_cloud_object {
-            return Some(server_preference.model.clone().string_model);
-        }
-        None
     }
 
     fn model_format() -> GenericStringObjectFormat {

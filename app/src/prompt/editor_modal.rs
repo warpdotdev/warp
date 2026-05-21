@@ -596,10 +596,14 @@ impl EditorModal {
 
     // TODO: consider supporting SLP with the new Warp prompt.
     #[allow(dead_code)]
-    fn render_same_line_prompt_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_same_line_prompt_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let label = appearance
             .ui_builder()
-            .span("Same line prompt".to_string())
+            .span(crate::i18n::tr_static(app, "Same line prompt").to_string())
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_CONTENT_FONT_SIZE),
                 ..Default::default()
@@ -637,7 +641,7 @@ impl EditorModal {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .span("Separator".to_string())
+                        .span(crate::i18n::tr_static(app, "Separator").to_string())
                         .with_style(UiComponentStyles {
                             font_size: Some(MODAL_CONTENT_FONT_SIZE),
                             ..Default::default()

@@ -12,8 +12,9 @@ use warpui::ui_components::button::ButtonVariant;
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationEntryId, AgentConversationNavigationSubject,
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters, ArtifactFilter,
-    ConversationOrTask, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
+    ConversationUpdateKind, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
     OwnerFilter, SessionStatus, SourceFilter, StatusFilter,
 };
 use crate::ai::agent_management::agent_type_selector::{
@@ -28,14 +29,13 @@ use crate::ai::agent_management::details_action_buttons::{
 use crate::ai::agent_management::telemetry::{
     AgentManagementTelemetryEvent, ArtifactType, FilterType, OpenedFrom,
 };
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::{cancel_task_with_toast, AgentSource};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
-use crate::ai::conversation_status_ui::render_status_element;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::app_state::PersistedAgentManagementFilters;
 use crate::appearance::Appearance;
@@ -47,7 +47,9 @@ use crate::editor::{
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
 use crate::settings::ai::AISettings;
+use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
@@ -65,7 +67,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{send_telemetry_from_ctx, AgentModeEntrypoint};
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warp_cli::agent::Harness;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -105,8 +106,9 @@ const CARD_CONTENT_PADDING: f32 = 12.;
 const CARD_BORDER_RADIUS: f32 = 4.;
 const CARD_MARGIN_BOTTOM: f32 = 8.;
 
-const STATUS_ICON_SIZE: f32 = 12.;
 const BUTTON_SIZE: f32 = 20.;
+/// Total size of the agent icon-with-status component rendered in each card's header row.
+const CARD_AGENT_ICON_SIZE: f32 = 24.;
 const CREATOR_AVATAR_FONT_SIZE: f32 = 10.;
 
 const SESSION_EXPIRED_TEXT: &str = "Sessions expire after one week and cannot be opened.";
@@ -125,21 +127,7 @@ fn should_show_artifacts(artifacts: &[Artifact]) -> bool {
     !artifacts.is_empty() && FeatureFlag::ConversationArtifacts.is_enabled()
 }
 
-/// Identifies a card item - either a task ID or a conversation ID
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ManagementCardItemId {
-    Task(AmbientAgentTaskId),
-    Conversation(AIConversationId),
-}
-
-impl ManagementCardItemId {
-    fn as_key(&self) -> String {
-        match self {
-            ManagementCardItemId::Task(id) => format!("task_{id}"),
-            ManagementCardItemId::Conversation(id) => format!("conv_{id}"),
-        }
-    }
-}
+pub type ManagementCardItemId = AgentConversationEntryId;
 
 /// Store state for a given task row
 struct CardState {
@@ -222,12 +210,22 @@ impl AgentManagementView {
             Self::handle_agent_management_model_event,
         );
 
+        ctx.subscribe_to_model(
+            &HarnessAvailabilityModel::handle(ctx),
+            |me, _, _event, ctx| {
+                me.update_harness_dropdown(ctx);
+            },
+        );
+
         let list_state = Self::construct_fresh_list_state(ctx.handle());
 
-        let all_filter_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("All", NakedTheme)
+        let all_filter_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "All"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("View your agent tasks plus all shared team tasks")
+                .with_tooltip(crate::i18n::tr_static(
+                    ctx,
+                    "View your agent tasks plus all shared team tasks",
+                ))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AgentManagementViewAction::SetOwnerFilter(
                         OwnerFilter::All,
@@ -235,10 +233,10 @@ impl AgentManagementView {
                 })
         });
 
-        let personal_filter_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Personal", NakedTheme)
+        let personal_filter_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Personal"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("View agent tasks you created")
+                .with_tooltip(crate::i18n::tr_static(ctx, "View agent tasks you created"))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AgentManagementViewAction::SetOwnerFilter(
                         OwnerFilter::PersonalOnly,
@@ -247,7 +245,7 @@ impl AgentManagementView {
         });
 
         let setup_guide_button = CompactibleActionButton::new(
-            "Get started".to_string(),
+            crate::i18n::tr_static(ctx, "Get started").to_string(),
             None,
             ButtonSize::Small,
             AgentManagementViewAction::ToggleSetupGuide,
@@ -256,8 +254,8 @@ impl AgentManagementView {
             ctx,
         );
 
-        let view_agents_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("View Agents", NakedTheme)
+        let view_agents_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "View Agents"), NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_icon(Icon::ArrowLeft)
                 .on_click(|ctx| {
@@ -274,16 +272,16 @@ impl AgentManagementView {
         let environment_dropdown = ctx.add_typed_action_view(Self::create_environment_dropdown);
         let creator_dropdown = ctx.add_typed_action_view(Self::create_creator_dropdown);
 
-        let no_filter_results_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new("Clear filters", SecondaryTheme)
+        let no_filter_results_button = ctx.add_typed_action_view(move |ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Clear filters"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters)
                 })
         });
 
-        let clear_all_filters_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new("Clear all", NakedTheme)
+        let clear_all_filters_button = ctx.add_typed_action_view(move |ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Clear all"), NakedTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
@@ -314,7 +312,7 @@ impl AgentManagementView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "Search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&search_editor, |me, _handle, event, ctx| {
@@ -322,7 +320,7 @@ impl AgentManagementView {
         });
 
         let new_agent_button = CompactibleActionButton::new(
-            "New agent".to_string(),
+            crate::i18n::tr_static(ctx, "New agent").to_string(),
             None,
             ButtonSize::Small,
             AgentManagementViewAction::ShowAgentTypeSelector,
@@ -490,7 +488,7 @@ impl AgentManagementView {
         };
 
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Status", ctx);
+        Self::setup_filter_menu(&mut dropdown, crate::i18n::tr_static(ctx, "Status"), ctx);
 
         // Use this helper to make dropdown items with status icons
         let make_status_option =
@@ -505,22 +503,22 @@ impl AgentManagementView {
 
         let items = vec![
             make_status_option(
-                "All",
+                crate::i18n::tr_static(ctx, "All"),
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::All),
                 None,
             ),
             make_status_option(
-                "Working",
+                crate::i18n::tr_static(ctx, "Working"),
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Working),
                 Some((Icon::ClockLoader, Fill::from(magenta))),
             ),
             make_status_option(
-                "Done",
+                crate::i18n::tr_static(ctx, "Done"),
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Done),
                 Some((Icon::Check, Fill::from(green))),
             ),
             make_status_option(
-                "Failed",
+                crate::i18n::tr_static(ctx, "Failed"),
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Failed),
                 Some((Icon::X, Fill::from(red))),
             ),
@@ -535,18 +533,20 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Source", ctx);
+        Self::setup_filter_menu(&mut dropdown, crate::i18n::tr_static(ctx, "Source"), ctx);
         // Set a max height so we can fit all of the source options without scrolling
         dropdown.set_menu_max_height(200., ctx);
 
-        let items = Self::build_source_dropdown_items();
+        let items = Self::build_source_dropdown_items(ctx);
         dropdown.set_rich_items(items, ctx);
         dropdown.set_selected_by_index(0, ctx);
         dropdown
     }
 
     /// Build the list of source filter items.
-    fn build_source_dropdown_items() -> Vec<MenuItem<DropdownAction<AgentManagementViewAction>>> {
+    fn build_source_dropdown_items(
+        app: &AppContext,
+    ) -> Vec<MenuItem<DropdownAction<AgentManagementViewAction>>> {
         // Build up the sources list
         let mut sources = vec![
             AgentSource::WebApp,
@@ -564,9 +564,11 @@ impl AgentManagementView {
         }
 
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new("All").with_on_select_action(DropdownAction::SelectActionAndClose(
-                AgentManagementViewAction::SetSourceFilter(SourceFilter::All),
-            )),
+            MenuItemFields::new(crate::i18n::tr_static(app, "All")).with_on_select_action(
+                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetSourceFilter(
+                    SourceFilter::All,
+                )),
+            ),
         )];
         for source in sources {
             items.push(MenuItem::Item(
@@ -583,7 +585,7 @@ impl AgentManagementView {
 
     /// Update the source dropdown items when tasks change.
     fn update_source_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let items = Self::build_source_dropdown_items();
+        let items = Self::build_source_dropdown_items(ctx);
         self.source_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_rich_items(items, ctx);
             dropdown.set_selected_by_action(
@@ -597,29 +599,38 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Created on", ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::i18n::tr_static(ctx, "Created on"),
+            ctx,
+        );
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new("All").with_on_select_action(
-                DropdownAction::SelectActionAndClose(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::All),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "All")).with_on_select_action(
+                    DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::All),
+                    ),
                 ),
-            )),
-            MenuItem::Item(MenuItemFields::new("Last 24 hours").with_on_select_action(
-                DropdownAction::SelectActionAndClose(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Last24Hours),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new("Past 3 days").with_on_select_action(
-                DropdownAction::SelectActionAndClose(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Past3Days),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new("Last week").with_on_select_action(
-                DropdownAction::SelectActionAndClose(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::LastWeek),
-                ),
-            )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Last 24 hours"))
+                    .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Last24Hours),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Past 3 days"))
+                    .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Past3Days),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Last week"))
+                    .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::LastWeek),
+                    )),
+            ),
         ];
 
         dropdown.set_rich_items(items, ctx);
@@ -631,34 +642,46 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Has artifact", ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::i18n::tr_static(ctx, "Has artifact"),
+            ctx,
+        );
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new("All").with_on_select_action(
-                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetArtifactFilter(
-                    ArtifactFilter::All,
-                )),
-            )),
-            MenuItem::Item(MenuItemFields::new("Pull Request").with_on_select_action(
-                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetArtifactFilter(
-                    ArtifactFilter::PullRequest,
-                )),
-            )),
-            MenuItem::Item(MenuItemFields::new("Plan").with_on_select_action(
-                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetArtifactFilter(
-                    ArtifactFilter::Plan,
-                )),
-            )),
-            MenuItem::Item(MenuItemFields::new("Screenshot").with_on_select_action(
-                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetArtifactFilter(
-                    ArtifactFilter::Screenshot,
-                )),
-            )),
-            MenuItem::Item(MenuItemFields::new("File").with_on_select_action(
-                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetArtifactFilter(
-                    ArtifactFilter::File,
-                )),
-            )),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "All")).with_on_select_action(
+                    DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::All),
+                    ),
+                ),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Pull Request"))
+                    .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::PullRequest),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Plan")).with_on_select_action(
+                    DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Plan),
+                    ),
+                ),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Screenshot"))
+                    .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Screenshot),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "File")).with_on_select_action(
+                    DropdownAction::SelectActionAndClose(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::File),
+                    ),
+                ),
+            ),
         ];
 
         dropdown.set_rich_items(items, ctx);
@@ -670,17 +693,29 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Harness", ctx);
+        Self::setup_filter_menu(&mut dropdown, crate::i18n::tr_static(ctx, "Harness"), ctx);
 
-        // "All" has no leading icon, matching the Status dropdown's "All" row.
+        let items = Self::build_harness_dropdown_items(ctx);
+        dropdown.set_rich_items(items, ctx);
+        dropdown.set_selected_by_index(0, ctx);
+        dropdown
+    }
+
+    fn build_harness_dropdown_items(
+        app: &AppContext,
+    ) -> Vec<MenuItem<DropdownAction<AgentManagementViewAction>>> {
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new("All").with_on_select_action(DropdownAction::SelectActionAndClose(
-                AgentManagementViewAction::SetHarnessFilter(HarnessFilter::All),
-            )),
+            MenuItemFields::new(crate::i18n::tr_static(app, "All")).with_on_select_action(
+                DropdownAction::SelectActionAndClose(AgentManagementViewAction::SetHarnessFilter(
+                    HarnessFilter::All,
+                )),
+            ),
         )];
 
-        for harness in [Harness::Oz, Harness::Claude, Harness::Gemini] {
-            let mut fields = MenuItemFields::new(harness_display::display_name(harness))
+        let availability = HarnessAvailabilityModel::as_ref(app);
+        for entry in availability.available_harnesses() {
+            let harness = entry.harness;
+            let mut fields = MenuItemFields::new(entry.display_name.clone())
                 .with_icon(harness_display::icon_for(harness))
                 .with_on_select_action(DropdownAction::SelectActionAndClose(
                     AgentManagementViewAction::SetHarnessFilter(HarnessFilter::Specific(harness)),
@@ -691,16 +726,18 @@ impl AgentManagementView {
             items.push(MenuItem::Item(fields));
         }
 
-        dropdown.set_rich_items(items, ctx);
-        dropdown.set_selected_by_index(0, ctx);
-        dropdown
+        items
     }
 
     fn create_environment_dropdown(
         ctx: &mut ViewContext<FilterableDropdown<AgentManagementViewAction>>,
     ) -> FilterableDropdown<AgentManagementViewAction> {
         let mut dropdown = FilterableDropdown::new(ctx);
-        Self::setup_searchable_filter_menu(&mut dropdown, "Environment", ctx);
+        Self::setup_searchable_filter_menu(
+            &mut dropdown,
+            crate::i18n::tr_static(ctx, "Environment"),
+            ctx,
+        );
 
         // Keep the button compact when a specific environment ID is selected by abbreviating the
         // displayed ID. (The dropdown menu still shows the full ID.)
@@ -755,6 +792,13 @@ impl AgentManagementView {
         dropdown.set_button_variant(ButtonVariant::Secondary);
     }
 
+    fn update_harness_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let items = Self::build_harness_dropdown_items(ctx);
+        self.harness_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_rich_items(items, ctx);
+        });
+    }
+
     /// Since the valid set of environments depends on what tasks we have loaded in,
     /// we use this function to update the available options depending on the most recent
     /// set of tasks.
@@ -763,14 +807,16 @@ impl AgentManagementView {
         let envs = model.get_all_environment_ids_and_names(ctx);
 
         let selected_name = match &self.filters.environment {
-            EnvironmentFilter::All => Some("All".to_string()),
-            EnvironmentFilter::NoEnvironment => Some("None".to_string()),
+            EnvironmentFilter::All => Some(crate::i18n::tr_static(ctx, "All").to_string()),
+            EnvironmentFilter::NoEnvironment => {
+                Some(crate::i18n::tr_static(ctx, "None").to_string())
+            }
             EnvironmentFilter::Specific(id) => envs.get(id).cloned(),
         };
 
         self.environment_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new("All").with_on_select_action(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "All")).with_on_select_action(
                     DropdownAction::SelectActionAndClose(
                         AgentManagementViewAction::SetEnvironmentFilter(EnvironmentFilter::All),
                     ),
@@ -778,7 +824,7 @@ impl AgentManagementView {
             )];
 
             items.push(MenuItem::Item(
-                MenuItemFields::new("None").with_on_select_action(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "None")).with_on_select_action(
                     DropdownAction::SelectActionAndClose(
                         AgentManagementViewAction::SetEnvironmentFilter(
                             EnvironmentFilter::NoEnvironment,
@@ -812,12 +858,12 @@ impl AgentManagementView {
     fn update_creator_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(ctx);
         let creator_filter_name = match &self.filters.creator {
-            CreatorFilter::All => "All",
+            CreatorFilter::All => crate::i18n::tr_static(ctx, "All"),
             CreatorFilter::Specific { name, .. } => name,
         };
         self.creator_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new("All").with_on_select_action(
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "All")).with_on_select_action(
                     DropdownAction::SelectActionAndClose(
                         AgentManagementViewAction::SetCreatorFilter(CreatorFilter::All),
                     ),
@@ -938,46 +984,34 @@ impl AgentManagementView {
         let model = AgentConversationsModel::as_ref(ctx);
         let search_query = self.search_query.trim().to_lowercase();
         let cards: Vec<CardData> = model
-            .get_tasks_and_conversations(&self.filters, ctx)
-            .filter(|t| {
+            .get_entries(&self.filters, ctx)
+            .into_iter()
+            .filter(|entry| {
                 if search_query.is_empty() {
                     return true;
                 }
-                match_indices_case_insensitive(&t.title(ctx), &search_query).is_some()
+                match_indices_case_insensitive(&entry.display.title, &search_query).is_some()
             })
-            .map(|t| {
-                let item_id = match t {
-                    ConversationOrTask::Task(task) => ManagementCardItemId::Task(task.task_id),
-                    ConversationOrTask::Conversation(conversation) => {
-                        ManagementCardItemId::Conversation(conversation.nav_data.id)
-                    }
-                };
-                let artifacts = t.artifacts(ctx);
-
-                let copy_link_url = t.session_or_conversation_link(ctx);
-                let mut config = match t {
-                    ConversationOrTask::Task(task) => ActionButtonsConfig::for_task(
-                        task.task_id,
-                        &t.display_status(ctx),
-                        None, // Don't show open button in card hover
-                        copy_link_url,
-                    ),
-                    ConversationOrTask::Conversation(conversation) => {
-                        ActionButtonsConfig::for_conversation(
-                            conversation.nav_data.id,
-                            None, // Don't show open button in card hover
-                            copy_link_url,
+            .map(|entry| {
+                let item_id = entry.id;
+                let copy_link_url = entry
+                    .capabilities
+                    .can_copy_link
+                    .then(|| {
+                        AgentConversationsModel::resolve_copy_link(
+                            AgentConversationNavigationSubject::Entry(entry.id),
+                            ctx,
                         )
-                    }
-                };
-                // Show info button in card hover for ViewDetails if feature flag enabled
+                    })
+                    .flatten();
+                let mut config = Self::action_buttons_config_for_entry(&entry, None, copy_link_url);
                 if FeatureFlag::AgentManagementDetailsView.is_enabled() {
-                    config.view_details_item_id = Some(item_id.clone());
+                    config.view_details_item_id = Some(item_id);
                 }
 
                 CardData {
                     item_id,
-                    artifacts,
+                    artifacts: entry.display.artifacts,
                     action_buttons_config: config,
                 }
             })
@@ -1026,11 +1060,8 @@ impl AgentManagementView {
                 } else {
                     None
                 };
-                let action_buttons_view = self.create_action_buttons_view(
-                    card.item_id.clone(),
-                    card.action_buttons_config,
-                    ctx,
-                );
+                let action_buttons_view =
+                    self.create_action_buttons_view(card.item_id, card.action_buttons_config, ctx);
 
                 new_items.push(CardState {
                     hover_state: MouseStateHandle::default(),
@@ -1072,6 +1103,29 @@ impl AgentManagementView {
         });
         view.update(ctx, |row, ctx| row.set_config(config, ctx));
         view
+    }
+
+    fn action_buttons_config_for_entry(
+        entry: &AgentConversationEntry,
+        open_action: Option<WorkspaceAction>,
+        copy_link_url: Option<String>,
+    ) -> ActionButtonsConfig {
+        if let Some(task_id) = entry.identity.ambient_agent_task_id {
+            ActionButtonsConfig::for_task(
+                task_id,
+                &entry.display.status,
+                open_action,
+                copy_link_url,
+            )
+        } else if let Some(conversation_id) = entry.identity.local_conversation_id {
+            ActionButtonsConfig::for_conversation(conversation_id, open_action, copy_link_url)
+        } else {
+            ActionButtonsConfig {
+                open_action,
+                copy_link_url,
+                ..Default::default()
+            }
+        }
     }
 
     fn handle_action_buttons_event(
@@ -1122,7 +1176,7 @@ impl AgentManagementView {
                 );
 
                 self.update_details_panel_for_item(item_id, ctx);
-                self.selected_item_id = Some(item_id.clone());
+                self.selected_item_id = Some(*item_id);
                 ctx.notify();
             }
             AgentDetailsButtonEvent::CopyLink { link } => {
@@ -1136,7 +1190,7 @@ impl AgentManagementView {
                             ctx
                         );
                     }
-                    ManagementCardItemId::Task(task_id) => {
+                    ManagementCardItemId::AmbientRun(task_id) => {
                         send_telemetry_from_ctx!(
                             AgentManagementTelemetryEvent::SessionLinkCopied {
                                 task_id: task_id.to_string(),
@@ -1193,7 +1247,9 @@ impl AgentManagementView {
 
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default("Copied branch name".to_string());
+                    let toast = DismissibleToast::default(
+                        crate::i18n::tr_static(ctx, "Copied branch name").to_string(),
+                    );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1237,13 +1293,9 @@ impl AgentManagementView {
                 self.refresh_details_panel_if_needed(ctx);
                 self.get_tasks_from_model(ctx);
             }
-            AgentConversationsModelEvent::ConversationUpdated => {
-                self.get_tasks_from_model(ctx);
-                self.refresh_details_panel_if_needed(ctx);
-                ctx.notify();
+            AgentConversationsModelEvent::ConversationUpdated { kind } => {
+                self.handle_conversation_updated(*kind, ctx);
             }
-            // TaskManuallyOpened is handled by the conversation list view, not here.
-            AgentConversationsModelEvent::TaskManuallyOpened => {}
             AgentConversationsModelEvent::ConversationArtifactsUpdated { conversation_id } => {
                 self.update_artifacts_for_conversation(*conversation_id, ctx);
                 self.refresh_details_panel_if_needed(ctx);
@@ -1253,9 +1305,43 @@ impl AgentManagementView {
 
     /// Refresh the details panel if it's currently showing an item
     fn refresh_details_panel_if_needed(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(item_id) = self.selected_item_id.clone() {
+        if let Some(item_id) = self.selected_item_id {
             self.update_details_panel_for_item(&item_id, ctx);
         }
+    }
+
+    /// Decide how much work a `ConversationUpdated` event requires, based on its kind and the
+    /// active status filter:
+    /// * `Restored`: the underlying status didn't change, so the visible cards don't change
+    ///   either. Just refresh the details panel.
+    /// * `StatusSet` that crosses the active status filter: rebuild the
+    ///   card list via `get_tasks_from_model`.
+    /// * `StatusSet` that doesn't cross the active filter (or `All` is active):
+    ///   just refresh the details panel re-render so the status icon picks up the new value.
+    fn handle_conversation_updated(
+        &mut self,
+        kind: ConversationUpdateKind,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match kind {
+            ConversationUpdateKind::Restored => {}
+            ConversationUpdateKind::MetadataChanged => self.get_tasks_from_model(ctx),
+            ConversationUpdateKind::StatusSet {
+                prev_filter,
+                new_filter,
+            } => {
+                if self
+                    .filters
+                    .status
+                    .is_membership_crossed(prev_filter, new_filter)
+                {
+                    self.get_tasks_from_model(ctx);
+                } else {
+                    ctx.notify();
+                }
+            }
+        }
+        self.refresh_details_panel_if_needed(ctx);
     }
 
     /// Update the details panel with fresh data for the given item.
@@ -1265,75 +1351,28 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Self>,
     ) {
         let model = AgentConversationsModel::as_ref(ctx);
-
-        let data = match item_id {
-            ManagementCardItemId::Task(task_id) => {
-                let Some(task_wrapper) = model.get_task(task_id) else {
-                    return;
-                };
-                // Agent management view should always open in a new tab
-                let open_action =
-                    task_wrapper.get_open_action(Some(RestoreConversationLayout::NewTab), ctx);
-                let copy_link_url = task_wrapper.session_or_conversation_link(ctx);
-                let Some(task) = model.get_task_data(task_id) else {
-                    return;
-                };
-                ConversationDetailsData::from_task(&task, open_action, copy_link_url, ctx)
-            }
-            ManagementCardItemId::Conversation(conversation_id) => {
-                let Some(conversation) = model.get_conversation(conversation_id) else {
-                    return;
-                };
-                // Agent management view should always open in a new tab
-                let open_action =
-                    conversation.get_open_action(Some(RestoreConversationLayout::NewTab), ctx);
-
-                let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                let ai_conversation = conversation
-                    .navigation_data()
-                    .and_then(|nav| history_model.conversation(&nav.id));
-
-                let server_conv_id = ai_conversation
-                    .and_then(|c| c.server_conversation_token())
-                    .map(|t| t.as_str().to_string())
-                    .or_else(|| {
-                        conversation
-                            .navigation_data()
-                            .and_then(|nav| history_model.get_conversation_metadata(&nav.id))
-                            .and_then(|m| m.server_conversation_token.as_ref())
-                            .map(|t| t.as_str().to_string())
-                    });
-                let artifacts = ai_conversation
-                    .map(|c| c.artifacts().to_vec())
-                    .unwrap_or_default();
-                let status = Some(conversation.status(ctx));
-                let navigation_data = conversation.navigation_data();
-                let copy_link_url = conversation.session_or_conversation_link(ctx);
-
-                // Prefer server-reported harness when available; otherwise treat as a pure
-                // local conversation (always Warp Agent).
-                let harness = navigation_data
-                    .and_then(|nav| history_model.get_server_conversation_metadata(&nav.id))
-                    .map(|m| Harness::from(m.harness))
-                    .or(Some(Harness::Oz));
-
-                ConversationDetailsData::from_conversation_metadata(
-                    *conversation_id,
-                    conversation.title(ctx),
-                    conversation.creator_name(ctx),
-                    conversation.created_at().with_timezone(&chrono::Local),
-                    navigation_data.and_then(|n| n.initial_working_directory.clone()),
-                    conversation.request_usage(ctx),
-                    server_conv_id,
-                    artifacts,
-                    open_action,
-                    status,
-                    navigation_data.and_then(|n| n.initial_query.clone()),
-                    copy_link_url,
-                    harness,
-                )
-            }
+        let Some(entry) = model.get_entry_by_id(item_id, ctx) else {
+            return;
         };
+        let open_action = AgentConversationsModel::resolve_open_action(
+            AgentConversationNavigationSubject::Entry(*item_id),
+            Some(RestoreConversationLayout::NewTab),
+            ctx,
+        );
+        let copy_link_url = AgentConversationsModel::resolve_copy_link(
+            AgentConversationNavigationSubject::Entry(*item_id),
+            ctx,
+        );
+        let task = entry
+            .identity
+            .ambient_agent_task_id
+            .and_then(|task_id| model.get_task_data(&task_id));
+        let data = ConversationDetailsData::from_agent_conversation_entry(
+            &entry,
+            task.as_ref(),
+            open_action,
+            copy_link_url,
+        );
 
         self.details_panel.update(ctx, |p, ctx| {
             p.set_conversation_details(data, ctx);
@@ -1347,19 +1386,14 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Self>,
     ) {
         let model = AgentConversationsModel::as_ref(ctx);
-        let Some(card_data) = model.get_conversation(&conversation_id) else {
+        let Some((index, entry)) = self.items.iter().enumerate().find_map(|(index, card)| {
+            let entry = model.get_entry_by_id(&card.item_id, ctx)?;
+            (entry.identity.local_conversation_id == Some(conversation_id))
+                .then_some((index, entry))
+        }) else {
             return;
         };
-        let artifacts = card_data.artifacts(ctx);
-
-        // Find the index of the card for this conversation
-        let Some(index) = self
-            .items
-            .iter()
-            .position(|card| card.item_id == ManagementCardItemId::Conversation(conversation_id))
-        else {
-            return;
-        };
+        let artifacts = entry.display.artifacts;
 
         // Update the artifact buttons for this card
         if should_show_artifacts(&artifacts) {
@@ -1497,7 +1531,7 @@ impl AgentManagementView {
     fn render_session_status_label(
         appearance: &Appearance,
         mouse_state: MouseStateHandle,
-        session_status: SessionStatus,
+        session_status: &SessionStatus,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
@@ -1604,21 +1638,17 @@ impl AgentManagementView {
         };
 
         let model = AgentConversationsModel::as_ref(app);
-        let card_data = match &card_state.item_id {
-            ManagementCardItemId::Task(task_id) => model.get_task(task_id),
-            ManagementCardItemId::Conversation(conv_id) => model.get_conversation(conv_id),
-        };
-        let Some(card_data) = card_data else {
+        let Some(entry) = model.get_entry_by_id(&card_state.item_id, app) else {
             return Empty::new().finish();
         };
 
-        self.render_card(card_state, &card_data, appearance, app)
+        self.render_card(card_state, &entry, appearance, app)
     }
 
     fn render_card(
         &self,
         card_state: &CardState,
-        card_data: &ConversationOrTask,
+        entry: &AgentConversationEntry,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1642,10 +1672,8 @@ impl AgentManagementView {
         let card_hoverable = Hoverable::new(card_state.hover_state.clone(), move |mouse_state| {
             let mut card_content = Flex::column()
                 .with_spacing(CARD_ROW_SPACING)
-                .with_child(Self::render_header_row(
-                    card_state, card_data, appearance, app,
-                ))
-                .with_child(Self::render_metadata_row(card_data, appearance, app));
+                .with_child(Self::render_header_row(card_state, entry, appearance))
+                .with_child(Self::render_metadata_row(entry, appearance, app));
 
             // Add artifacts row if there is a buttons view
             if let Some(buttons_element) = artifact_buttons_element {
@@ -1706,18 +1734,12 @@ impl AgentManagementView {
         })
         .with_defer_events_to_children();
 
-        // Add click handler to open session if available
-        let item_id = card_state.item_id.clone();
-        let card_hoverable = if card_data
-            .get_open_action(Some(RestoreConversationLayout::NewTab), app)
-            .is_some()
-        {
+        let item_id = card_state.item_id;
+        let card_hoverable = if entry.capabilities.can_open {
             card_hoverable
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::OpenSession {
-                        item_id: item_id.clone(),
-                    });
+                    ctx.dispatch_typed_action(AgentManagementViewAction::OpenSession { item_id });
                 })
         } else {
             card_hoverable
@@ -1728,29 +1750,30 @@ impl AgentManagementView {
 
     fn render_header_row(
         card_state: &CardState,
-        card_data: &ConversationOrTask,
+        entry: &AgentConversationEntry,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
 
-        let title = card_data.title(app);
-        let title_text = Text::new_inline(title, font_family, font_size)
+        let title_text = Text::new_inline(entry.display.title.clone(), font_family, font_size)
             .with_color(theme.active_ui_text_color().into());
-
-        let status_icon =
-            render_status_element(&card_data.display_status(app), STATUS_ICON_SIZE, appearance);
-
-        // Build the time and avatar elements
-        let last_updated = card_data.last_updated();
-        let time_str = format_approx_duration_from_now_utc(last_updated);
+        let status_icon = render_icon_with_status(
+            agent_conversation_entry_icon_variant(entry),
+            CARD_AGENT_ICON_SIZE,
+            0.,
+            theme,
+            internal_colors::fg_overlay_1(theme),
+        );
+        let time_str = format_approx_duration_from_now_utc(entry.display.last_updated);
         let time_text = Text::new_inline(time_str, font_family, font_size)
             .with_color(theme.nonactive_ui_text_color().into());
-
-        let creator_name = card_data
-            .creator_name(app)
+        let creator_name = entry
+            .display
+            .creator
+            .name
+            .clone()
             .unwrap_or_else(|| "Unknown".to_string());
         let avatar = Self::render_avatar_with_tooltip(
             &creator_name,
@@ -1763,12 +1786,11 @@ impl AgentManagementView {
             .with_spacing(2.)
             .with_child(Container::new(status_icon).with_margin_right(4.).finish())
             .with_child(Expanded::new(1., title_text.finish()).finish());
-
         let mut time_and_avatar = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.);
 
-        if let Some(session_status) = card_data.get_session_status() {
+        if let Some(session_status) = &entry.display.session_status {
             time_and_avatar.add_child(Self::render_session_status_label(
                 appearance,
                 card_state.session_status_hover_state.clone(),
@@ -1792,41 +1814,56 @@ impl AgentManagementView {
     }
 
     fn render_metadata_row(
-        card_data: &ConversationOrTask,
+        entry: &AgentConversationEntry,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
-
-        // Build metadata parts conditionally
         let mut metadata_parts = Vec::new();
 
-        if let Some(source) = card_data.source() {
+        if let Some(source) = &entry.display.source {
             metadata_parts.push(format!("Source: {}", source.display_name()));
         }
 
-        if FeatureFlag::AgentHarness.is_enabled() {
-            if let Some(harness) = card_data.harness() {
+        let availability = HarnessAvailabilityModel::as_ref(app);
+        if availability.should_show_harness_selector() {
+            if let Some(harness) = entry.display.harness {
                 metadata_parts.push(format!(
                     "Harness: {}",
-                    harness_display::display_name(harness)
+                    availability.display_name_for(harness)
                 ));
             }
         }
 
-        if let Some(run_time) = card_data.run_time() {
+        if let Some(executor) = &entry.display.executor {
+            let same_as_creator =
+                executor.uid.is_some() && executor.uid == entry.display.creator.uid;
+            if !same_as_creator {
+                if let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
+                    let label = if executor
+                        .principal_type
+                        .is_some_and(|pt| pt.is_service_account())
+                    {
+                        "Agent"
+                    } else {
+                        "Executor"
+                    };
+                    metadata_parts.push(format!("{label}: {name}"));
+                }
+            }
+        }
+
+        if let Some(run_time) = &entry.display.run_time {
             metadata_parts.push(format!("Run time: {run_time}"));
         }
 
-        if let Some(usage) = card_data.display_request_usage(app) {
+        if let Some(usage) = entry.display.request_usage.map(format_credits) {
             metadata_parts.push(format!("Credits used: {usage}"));
         }
 
-        let metadata_text = metadata_parts.join(" • ");
-
-        Text::new(metadata_text, font_family, font_size)
+        Text::new(metadata_parts.join(" • "), font_family, font_size)
             .with_color(theme.nonactive_ui_text_color().into())
             .finish()
     }
@@ -1943,7 +1980,7 @@ impl AgentManagementView {
                 .with_child(ChildView::new(&self.created_on_dropdown).finish())
                 .with_child(ChildView::new(&self.artifact_dropdown).finish());
 
-            if FeatureFlag::AgentHarness.is_enabled() {
+            if HarnessAvailabilityModel::as_ref(app).should_show_harness_selector() {
                 filters_wrap.add_child(ChildView::new(&self.harness_dropdown).finish());
             }
 
@@ -2352,17 +2389,11 @@ impl TypedActionView for AgentManagementView {
                 ctx.notify();
             }
             AgentManagementViewAction::OpenSession { item_id } => {
-                let model = AgentConversationsModel::as_ref(ctx);
-                let card_data = match item_id {
-                    ManagementCardItemId::Task(task_id) => model.get_task(task_id),
-                    ManagementCardItemId::Conversation(conv_id) => model.get_conversation(conv_id),
-                };
-                let Some(card_data) = card_data else {
-                    return;
-                };
-                let Some(action) =
-                    card_data.get_open_action(Some(RestoreConversationLayout::NewTab), ctx)
-                else {
+                let Some(action) = AgentConversationsModel::resolve_open_action(
+                    AgentConversationNavigationSubject::Entry(*item_id),
+                    Some(RestoreConversationLayout::NewTab),
+                    ctx,
+                ) else {
                     return;
                 };
 
@@ -2376,7 +2407,7 @@ impl TypedActionView for AgentManagementView {
                             ctx
                         );
                     }
-                    ManagementCardItemId::Task(task_id) => {
+                    ManagementCardItemId::AmbientRun(task_id) => {
                         send_telemetry_from_ctx!(
                             AgentManagementTelemetryEvent::CloudRunOpened {
                                 task_id: task_id.to_string(),

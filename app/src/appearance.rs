@@ -203,7 +203,7 @@ impl AppearanceManager {
             // icons do not adapt to the preferred style.
             //
             // Local channel is not bundled, so don't attempt this for that case. This method only
-            // works if the dock tile plugin hasn't overriden the default icon already, so skip
+            // works if the dock tile plugin hasn't overridden the default icon already, so skip
             // this method if the app started up with a non-default icon, as setting to "nil" would
             // revert to the icon we started up with. We therefore need to use an in-memory
             // override to display the default icon. This has the drawback of _not_ inheriting the

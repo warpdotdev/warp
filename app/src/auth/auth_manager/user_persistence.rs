@@ -80,5 +80,5 @@ impl PersistedUser {
 }
 
 #[cfg(test)]
-#[path = "user_persistence_test.rs"]
+#[path = "user_persistence_tests.rs"]
 mod tests;

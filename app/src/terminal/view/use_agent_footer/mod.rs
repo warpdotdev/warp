@@ -8,8 +8,10 @@ use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
     AgentInputFooter, AgentInputFooterEvent,
 };
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
 use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionScrollbackType};
+use crate::util::image::{infer_mime_type, MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES};
 use base64::Engine;
 use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::clipboard::{ClipboardContent, ImageData};
@@ -18,6 +20,7 @@ mod warpify_footer;
 pub use crate::terminal::CLIAgent;
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
 
+use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -96,6 +99,18 @@ const CLI_AGENT_IMAGE_PASTE_DELAY: Duration = Duration::from_millis(300);
 #[allow(clippy::byte_char_slices)]
 const CLI_AGENT_MODE_SWITCH_PREFIXES: &[u8] = &[b'!', b'&'];
 
+/// Bytes that simulate a "paste image from clipboard" keystroke for the
+/// foreground CLI agent. `0x16` is `Ctrl+V` (SYN); on Windows Claude Code
+/// listens for `Alt+V` (`ESC` + `'v'`) instead. Mirrored from the equivalent
+/// branch in `TerminalView::paste`.
+fn cli_agent_paste_keystroke_bytes() -> Vec<u8> {
+    if cfg!(windows) {
+        vec![0x1b, b'v']
+    } else {
+        vec![0x16]
+    }
+}
+
 /// How rich input delivers text + Enter to the CLI agent's PTY.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RichInputSubmitStrategy {
@@ -127,9 +142,13 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::CursorCli => RichInputSubmitStrategy::DelayedEnter,
-        CLIAgent::Amp | CLIAgent::Droid | CLIAgent::Pi | CLIAgent::Unknown => {
-            RichInputSubmitStrategy::Inline
-        }
+        CLIAgent::Amp
+        | CLIAgent::Droid
+        | CLIAgent::Pi
+        | CLIAgent::Goose
+        | CLIAgent::Hermes
+        | CLIAgent::Vibe
+        | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
 }
 
@@ -596,14 +615,16 @@ impl TerminalView {
     }
 
     /// Conditionally closes CLI agent rich input after a prompt submission.
-    /// When auto-toggle is active with a plugin listener, rich input stays
-    /// open (status-change events manage visibility instead).
-    /// Otherwise, respects the auto-dismiss-after-submit setting.
+    /// When auto-toggle is active with a plugin listener that emits rich
+    /// status, rich input stays open (status-change events manage visibility
+    /// instead). Otherwise, respects the auto-dismiss-after-submit setting.
     fn maybe_close_rich_input_after_submit(&mut self, ctx: &mut ViewContext<Self>) {
         let session = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id);
-        let has_plugin = session
-            .as_ref()
-            .is_some_and(|s| s.listener.is_some() && s.should_auto_toggle_input);
+        let has_plugin = session.as_ref().is_some_and(|s| {
+            s.listener.is_some()
+                && s.should_auto_toggle_input
+                && agent_supports_rich_status(&s.agent)
+        });
         let ai_settings = AISettings::as_ref(ctx);
 
         let should_close = if has_plugin && *ai_settings.auto_toggle_rich_input {
@@ -793,7 +814,7 @@ impl TerminalView {
                                 }]),
                                 ..Default::default()
                             });
-                            me.write_user_bytes_to_pty(vec![0x16], ctx);
+                            me.write_user_bytes_to_pty(cli_agent_paste_keystroke_bytes(), ctx);
                             true
                         })
                         .await;
@@ -814,6 +835,110 @@ impl TerminalView {
                 }
                 me.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
             },
+        );
+    }
+
+    /// Mirrors the CLI-agent Cmd+V image-paste path in `TerminalView::paste`
+    /// for dropped image files: reads each file, writes its bytes to the
+    /// system clipboard as image data, and sends the agent's paste keystroke
+    /// to the PTY so the agent reads the image directly. This produces the
+    /// same outcome as if the user had copied the image to their clipboard
+    /// and pressed Cmd+V over the agent's TUI.
+    pub(super) fn paste_dropped_images_to_cli_agent(
+        &mut self,
+        image_filepaths: Vec<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if image_filepaths.is_empty() {
+            return;
+        }
+        let spawner = ctx.spawner();
+        ctx.spawn(
+            async move {
+                for path_str in image_filepaths {
+                    // Stat first so a multi-GB drop doesn't load into memory
+                    // before we reject it. CLI agents handle their own
+                    // compression, so the cap only exists to bound memory use.
+                    match async_fs::metadata(&path_str).await {
+                        Ok(meta) if (meta.len() as usize) > MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT => {
+                            let filename = Path::new(&path_str)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path_str.clone());
+                            let limit_mb = MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT / 1_000_000;
+                            let msg = format!(
+                                "{filename} is too large to send to the agent (limit {limit_mb}MB)."
+                            );
+                            let _ = spawner
+                                .spawn(move |me, ctx| {
+                                    me.show_error_toast(msg, ctx);
+                                })
+                                .await;
+                            continue;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("Failed to stat dropped image {path_str}: {e}");
+                            continue;
+                        }
+                    }
+
+                    let bytes = match async_fs::read(&path_str).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            log::error!("Failed to read dropped image {path_str}: {e}");
+                            continue;
+                        }
+                    };
+                    let path = Path::new(&path_str);
+                    let filename = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                    let sniff_len = bytes.len().min(MIME_SNIFF_BYTES);
+                    let mime_type = infer_mime_type(path, &bytes[..sniff_len]);
+
+                    // Hop back to the view to write the clipboard + paste
+                    // keystroke. Bail if the CLI agent session disappeared,
+                    // OR if the agent's long-running block exited while we
+                    // were reading off-thread — without that second check
+                    // the paste byte would leak into the shell after the
+                    // agent quit, since the session entry can outlive its
+                    // foreground block.
+                    let should_continue = spawner
+                        .spawn(move |me, ctx| {
+                            if !me.has_active_cli_agent_session(ctx) {
+                                return false;
+                            }
+                            let still_long_running = me
+                                .model
+                                .lock()
+                                .block_list()
+                                .active_block()
+                                .is_active_and_long_running();
+                            if !still_long_running {
+                                return false;
+                            }
+                            ctx.clipboard().write(ClipboardContent {
+                                images: Some(vec![ImageData {
+                                    data: bytes,
+                                    mime_type,
+                                    filename,
+                                }]),
+                                ..Default::default()
+                            });
+                            me.write_user_bytes_to_pty(cli_agent_paste_keystroke_bytes(), ctx);
+                            true
+                        })
+                        .await;
+
+                    if !matches!(should_continue, Ok(true)) {
+                        return;
+                    }
+
+                    // Give the CLI agent time to read from the clipboard
+                    // before we overwrite it with the next image.
+                    Timer::after(CLI_AGENT_IMAGE_PASTE_DELAY).await;
+                }
+            },
+            |_, _, _| {},
         );
     }
 
@@ -1406,5 +1531,5 @@ impl ActionButtonTheme for AgentFooterButtonTheme {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

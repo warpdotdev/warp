@@ -86,5 +86,5 @@ pub fn render_template(template: &str, context: &HashMap<String, String>) -> Str
 }
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
+#[path = "lib_tests.rs"]
 mod tests;

@@ -134,8 +134,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 ///
 /// Folds the parent feature flag, the user's dedicated per-feature AI toggle
 /// (which itself requires active AI / auth / remote-session org policy to
-/// allow AI), and an enterprise check with the same Warp-plan exception and
-/// dogfood override as `share_block_modal.rs::should_send_title_gen_request`.
+/// allow AI), and the current team's Git Operations AI tier policy.
 ///
 /// When this returns `false`, call sites skip AI entirely: commit.rs opens
 /// with the manual-type placeholder and pr.rs goes straight to
@@ -143,7 +142,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
     FeatureFlag::GitOperationsInCodeReview.is_enabled()
         && AISettings::as_ref(app).is_git_operations_autogen_enabled(app)
-        && UserWorkspaces::as_ref(app).ai_allowed_for_current_team()
+        && UserWorkspaces::as_ref(app).is_git_operations_ai_enabled()
 }
 
 /// Maps a raw git error string to a user-friendly toast message. Known
@@ -581,8 +580,8 @@ impl GitDialog {
             }
             button.on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Confirm))
         });
-        let cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Cancel"), NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_height(32.)
                 .on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Cancel))
@@ -669,6 +668,20 @@ impl GitDialog {
         }
     }
 
+    fn header_icon(&self) -> Icon {
+        match &self.mode {
+            GitDialogMode::Commit(_) => Icon::GitCommit,
+            GitDialogMode::Push(state) => {
+                if state.publish {
+                    Icon::UploadCloud
+                } else {
+                    Icon::ArrowUp
+                }
+            }
+            GitDialogMode::CreatePr(_) => Icon::Github,
+        }
+    }
+
     fn render_body(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         match &self.mode {
@@ -682,6 +695,7 @@ impl GitDialog {
     /// it in centered overlay chrome with a blurred background.
     fn render_dialog(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
 
         let close = ChildView::new(&self.close_button).finish();
         let cancel = ChildView::new(&self.cancel_button).finish();
@@ -690,6 +704,25 @@ impl GitDialog {
             .finish();
 
         let body = self.render_body(app);
+
+        let surface2 = theme.surface_2();
+        let icon_color = theme.main_text_color(surface2).into_solid();
+        let header_icon = Container::new(
+            ConstrainedBox::new(
+                IconElement::new(
+                    <Icon as Into<&'static str>>::into(self.header_icon()),
+                    icon_color,
+                )
+                .finish(),
+            )
+            .with_width(16.)
+            .with_height(16.)
+            .finish(),
+        )
+        .with_uniform_padding(8.)
+        .with_background(surface2)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .finish();
 
         let dialog = Dialog::new(
             self.title().to_string(),
@@ -700,6 +733,7 @@ impl GitDialog {
                 ..dialog_styles(appearance)
             },
         )
+        .with_header_icon(header_icon)
         .with_close_button(close)
         .with_child(body)
         .with_separator()

@@ -6,6 +6,7 @@ pub mod directory_fetcher;
 pub mod display;
 pub mod display_chip;
 pub mod display_menu;
+pub(crate) mod git_branch_on_click;
 pub(crate) mod logging;
 pub mod node_version_popup;
 pub mod prompt;
@@ -338,7 +339,7 @@ impl ContextChipKind {
                 RefreshConfig::OnDemandOnly,
             )),
             Self::SvnDirtyItems => Some(ContextChip::shell_builtin(
-                "Svn Uncommited File Count",
+                "Svn Uncommitted File Count",
                 builtins::svn_dirty_items(),
                 None,
                 RefreshConfig::OnDemandOnly,

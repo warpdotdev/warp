@@ -1018,7 +1018,7 @@ impl EditorElement {
                         }
                         MarkedTextState::Inactive => selection.end.column() as usize,
                     };
-                    // Use baseline position to get to bottom of text line, then substract the font size to
+                    // Use baseline position to get to bottom of text line, then subtract the font size to
                     // get to top of text. We have the multipliers of default line height ratio and top bottom ratio
                     // to get to the "correct" spot above the normal characters within a font.
                     // Note that we don't want to start from top of line (don't want
@@ -2222,7 +2222,7 @@ struct LayoutState {
     // Will hold either the suggestion text or placeholder text or empty vector, if neither exist.
     // Suggestion text should take precedence.
     placeholder_suggestion_text_line_layouts: Vec<Arc<text_layout::Line>>,
-    // This contains the shorcut icon that shows new users how to accept the autosuggestion.
+    // This contains the shortcut icon that shows new users how to accept the autosuggestion.
     max_visible_line_width: f32,
     /// True if the `autoscroll_vertically` function on the editor view returns true
     /// and the soft wrap setting is off.

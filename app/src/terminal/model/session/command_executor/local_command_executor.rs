@@ -173,7 +173,7 @@ impl LocalCommandExecutor {
 
         let mut command_process = command_builder.build(command, shell_config_flag);
 
-        // This sets then enviornment variables, including the PATH var.
+        // This sets then environment variables, including the PATH var.
         // We need to run the command with the PATH var set because if the
         // user opened Warp through a parent process that didn't have the PATH var set
         // (i.e. outside of a shell, for example opening the app via Finder),

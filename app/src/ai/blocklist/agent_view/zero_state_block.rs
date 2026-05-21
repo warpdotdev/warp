@@ -177,22 +177,31 @@ impl AgentViewZeroStateBlock {
         if let Some(cloud_agent_view_model) = cloud_agent_view_model {
             let model_events_clone = model_events_dispatcher.clone();
             ctx.subscribe_to_model(cloud_agent_view_model, move |me, model, event, ctx| {
-                if FeatureFlag::CloudModeSetupV2.is_enabled() {
-                    match event {
+                if me.should_hide {
+                    return;
+                }
+
+                // Hide the zero state when this pane becomes a local-to-cloud handoff
+                // pane (REMOTE-1486). The fresh cloud-mode banner is suppressed because
+                // the pane is actually pre-loaded with a forked source conversation, not
+                // a brand-new one.
+                if matches!(event, AmbientAgentViewModelEvent::PendingHandoffChanged)
+                    && model.as_ref(ctx).is_local_to_cloud_handoff()
+                {
+                    me.should_hide = true;
+                } else if FeatureFlag::CloudModeSetupV2.is_enabled() {
+                    if matches!(
+                        event,
                         AmbientAgentViewModelEvent::DispatchedAgent
-                        | AmbientAgentViewModelEvent::Cancelled
-                            if !me.should_hide =>
-                        {
-                            me.should_hide = true;
-                            ctx.unsubscribe_to_model(&model);
-                            ctx.unsubscribe_to_model(&model_events_clone);
-                            ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
-                            ctx.notify();
-                        }
-                        _ => (),
+                            | AmbientAgentViewModelEvent::Cancelled
+                    ) {
+                        me.should_hide = true;
                     }
                 } else if model.as_ref(ctx).should_show_status_footer() {
                     me.should_hide = true;
+                }
+
+                if me.should_hide {
                     ctx.unsubscribe_to_model(&model);
                     ctx.unsubscribe_to_model(&model_events_clone);
                     ctx.unsubscribe_to_model(&BlocklistAIHistoryModel::handle(ctx));
@@ -203,6 +212,8 @@ impl AgentViewZeroStateBlock {
 
         let has_parent_terminal =
             cloud_agent_view_model.is_none_or(|model| !model.as_ref(ctx).is_ambient_agent());
+        let is_local_to_cloud_handoff = cloud_agent_view_model
+            .is_some_and(|model| model.as_ref(ctx).is_local_to_cloud_handoff());
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, changelog_model, event, ctx| {
             if let changelog_model::Event::ChangelogRequestComplete { .. } = event {
@@ -259,7 +270,8 @@ impl AgentViewZeroStateBlock {
             terminal_model,
             current_working_directory,
             cached_recent_conversations,
-            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff),
+            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
+                || is_local_to_cloud_handoff,
             should_show_init_callout,
             has_parent_terminal,
             state_handles,

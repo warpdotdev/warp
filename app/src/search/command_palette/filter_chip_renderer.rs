@@ -100,6 +100,7 @@ impl FilterChipRenderer for QueryFilter {
             | QueryFilter::NaturalLanguage
             | QueryFilter::Actions
             | QueryFilter::Sessions
+            | QueryFilter::Tabs
             | QueryFilter::Drive
             | QueryFilter::LaunchConfigurations
             | QueryFilter::PromptHistory
@@ -118,7 +119,7 @@ impl FilterChipRenderer for QueryFilter {
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),
-            QueryFilter::Conversations | QueryFilter::HistoricalConversations => appearance
+            QueryFilter::Conversations => appearance
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),

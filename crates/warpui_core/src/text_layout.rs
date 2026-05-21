@@ -1416,6 +1416,17 @@ impl Line {
             _ => available_width,
         };
 
+        // When start-clipping with an ellipsis we reserved `ellipsis_width` of
+        // space at the LEFT for the ellipsis glyph. Visible glyphs need to be
+        // offset by that amount so they stay flush with the right edge and do
+        // not overlap the ellipsis. This is constant for the entire paint, so
+        // hoist it out of the per-glyph loop.
+        let start_ellipsis_offset = if is_start_clipping && ellipsis_width > 0. {
+            ellipsis_width
+        } else {
+            0.
+        };
+
         'runs: for run in run_iter {
             let mut glyph_color = default_color;
             // We define foreground_color to overwrite syntax_color since the
@@ -1473,7 +1484,11 @@ impl Line {
                 remaining_width -= glyph.width;
 
                 let glyph_origin = if is_start_clipping {
-                    line_origin + vec2f(remaining_width, glyph.position_along_baseline.y())
+                    line_origin
+                        + vec2f(
+                            remaining_width + start_ellipsis_offset,
+                            glyph.position_along_baseline.y(),
+                        )
                 } else {
                     line_origin + glyph.position_along_baseline
                 };
@@ -1540,5 +1555,5 @@ impl CaretPosition {
 }
 
 #[cfg(test)]
-#[path = "text_layout_test.rs"]
+#[path = "text_layout_tests.rs"]
 mod tests;

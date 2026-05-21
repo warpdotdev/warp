@@ -140,7 +140,7 @@ fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
         let executor =
             app.add_model(|_| UploadArtifactExecutor::new(active_session, terminal_view_id));
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, false, false, ctx)
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         let action = build_upload_artifact_action("reports/report.txt");
 
@@ -190,7 +190,7 @@ fn execute_returns_error_when_conversation_has_not_synced_to_server() {
         let executor =
             app.add_model(|_| UploadArtifactExecutor::new(active_session, terminal_view_id));
         let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, false, false, ctx)
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         let action = build_upload_artifact_action(&artifact_path.display().to_string());
 

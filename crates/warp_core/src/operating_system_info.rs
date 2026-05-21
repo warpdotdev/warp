@@ -131,7 +131,7 @@ pub enum OperatingSystemCategory {
 impl OperatingSystemCategory {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn new() -> Option<Self> {
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             Some(OperatingSystemCategory::Linux)
         } else if cfg!(target_os = "macos") {
             Some(OperatingSystemCategory::Mac)

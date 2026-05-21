@@ -43,8 +43,8 @@ pub mod watcher;
 pub mod wrapper_model;
 
 pub use entry::{
-    gitignores_for_directory, matches_gitignores, path_passes_filters, should_ignore_git_path,
-    BuildTreeError, DirectoryEntry, Entry, FileId, FileMetadata,
+    gitignores_for_directory, matches_gitignores, should_ignore_git_path, BuildTreeError,
+    DirectoryEntry, Entry, FileId, FileMetadata,
 };
 
 // Re-export the local model's event under its original name for backward compatibility.
@@ -56,9 +56,10 @@ pub use watcher::{DirectoryWatcher, RepositoryUpdate, TargetFile};
 #[cfg(not(target_family = "wasm"))]
 pub fn is_in_repo(path: &str, app: &warpui::AppContext) -> bool {
     use crate::repositories::DetectedRepositories;
+    use warp_util::local_or_remote_path::LocalOrRemotePath;
 
     DetectedRepositories::as_ref(app)
-        .get_root_for_path(std::path::Path::new(path))
+        .get_root_for_path(&LocalOrRemotePath::Local(std::path::PathBuf::from(path)))
         .is_some()
 }
 

@@ -1,4 +1,6 @@
-use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use super::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -85,10 +87,10 @@ impl TaskStatusSyncModel {
         match event {
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
-                is_restored,
+                update,
                 ..
             } => {
-                if !*is_restored {
+                if matches!(update, ConversationStatusUpdate::Changed { .. }) {
                     self.on_conversation_status_updated(*conversation_id, ctx);
                 }
             }
@@ -258,10 +260,14 @@ pub(crate) fn classify_renderable_error(
     error: &RenderableAIError,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
-        RenderableAIError::QuotaLimit => (
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
-                "Your team has run out of credits. Purchase more credits to continue.",
+                user_display_message.as_deref().unwrap_or(
+                    "Your team has run out of credits. Purchase more credits to continue.",
+                ),
                 PlatformErrorCode::InsufficientCredits,
             )),
         ),

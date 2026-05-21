@@ -338,7 +338,7 @@ fn new_command_executor_for_local_tty_session(
                 // shortly after subshells launch. The setting that triggers this
                 // codepath is only accessible via a user defaults command that a Warp
                 // engineer would have given to the user via some first-hand
-                // correspondance (e.g. GitHub issues).
+                // correspondence (e.g. GitHub issues).
                 log::info!("creating a no-op executor!");
                 Arc::new(NoOpCommandExecutor::new())
             } else {

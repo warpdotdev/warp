@@ -201,5 +201,5 @@ impl ArgumentsState {
 }
 
 #[cfg(test)]
-#[path = "arguments_test.rs"]
+#[path = "arguments_tests.rs"]
 mod tests;

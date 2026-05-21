@@ -152,8 +152,8 @@ pub(super) fn new_state(
         handle_editor_event(me, event, ctx);
     });
 
-    let commit_button = ctx.add_typed_action_view(|_ctx| {
-        ActionButton::new("Commit", SecondaryTheme)
+    let commit_button = ctx.add_typed_action_view(|ctx| {
+        ActionButton::new(crate::i18n::tr_static(ctx, "Commit"), SecondaryTheme)
             .with_size(ButtonSize::XSmall)
             .with_height(32.)
             .with_icon(Icon::GitCommit)
@@ -176,16 +176,19 @@ pub(super) fn new_state(
     });
 
     let commit_and_create_pr_button = if allow_create_pr {
-        Some(ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Commit and create PR", SecondaryTheme)
-                .with_size(ButtonSize::XSmall)
-                .with_height(32.)
-                .with_icon(Icon::Github)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::SetIntent(
-                        CommitIntent::CommitAndCreatePr,
-                    )))
-                })
+        Some(ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Commit and create PR"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::XSmall)
+            .with_height(32.)
+            .with_icon(Icon::Github)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::SetIntent(
+                    CommitIntent::CommitAndCreatePr,
+                )))
+            })
         }))
     } else {
         None

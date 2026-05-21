@@ -150,6 +150,10 @@ impl platform::WindowManager for WindowManager {
         Window::set_window_bounds(window_id, bound)
     }
 
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        Window::set_window_alpha(window_id, alpha)
+    }
+
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
         Window::set_all_windows_background_blur_radius(blur_radius_pixels)
     }
@@ -327,6 +331,10 @@ impl platform::WindowManager for IntegrationTestWindowManager {
         self.window_manager.set_window_bounds(window_id, bound)
     }
 
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.window_manager.set_window_alpha(window_id, alpha)
+    }
+
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
         // no-op for tests
     }
@@ -448,6 +456,7 @@ extern "C" {
     fn activate_app();
     fn show_window_and_focus_app(window: id, bringToFront: BOOL);
     fn hide_window(window: id);
+    fn set_window_alpha(window: id, alpha: f64);
     fn position_and_order_front(window: id);
     fn position_at_given_location(window: id, origin: NSPoint);
     fn order_front_without_focus(window: id, origin: NSPoint);
@@ -841,6 +850,14 @@ impl Window {
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
                 hide_window(window)
+            }
+        }
+    }
+
+    pub fn set_window_alpha(window_id: WindowId, alpha: f32) {
+        unsafe {
+            if let Some(window) = Self::find_window_with_id(window_id) {
+                set_window_alpha(window, alpha as f64)
             }
         }
     }

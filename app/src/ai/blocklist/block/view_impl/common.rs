@@ -24,12 +24,12 @@ use warpui::{
     assets::asset_cache::{AssetCache, AssetSource, AssetState},
     elements::{
         new_scrollable::{ScrollableAppearance, SingleAxisConfig},
-        Align, Axis, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
-        Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers, Hoverable,
-        Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
+        Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
+        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
+        EventHandler, Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers,
+        Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+        SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
         TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
     },
     fonts::{Properties, Weight},
@@ -67,7 +67,8 @@ use crate::{
             icons::red_stop_icon, AIAgentAction, AIAgentActionType, AIAgentInput,
             AIAgentOutputMessageType, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
             AgentOutputMermaidDiagram, AgentOutputTable, AgentOutputTableRendering,
-            ProgrammingLanguage, RenderableAIError, SummarizationType, WebSearchStatus,
+            ProgrammingLanguage, RenderableAIError, SummarizationType, UserQueryMode,
+            WebSearchStatus,
         },
         blocklist::{
             block::{
@@ -492,6 +493,7 @@ pub fn render_warping_indicator<V: View>(
         (Some(_), Some(force_refresh_button_props)) => Some(render_force_refresh_inline(
             force_refresh_button_props,
             appearance,
+            app,
         )),
         _ => None,
     };
@@ -565,19 +567,6 @@ pub fn render_warping_indicator_base(
 
     let text = render_output_status_text(warping_indicator_text, appearance, app);
 
-    let mut row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_spacing(6.);
-
-    if let Some(icon) = icon {
-        row = row.with_child(
-            ConstrainedBox::new(icon)
-                .with_width(icon_size(app) - STATUS_ICON_SIZE_DELTA)
-                .with_height(icon_size(app) - STATUS_ICON_SIZE_DELTA)
-                .finish(),
-        );
-    }
-
     let text_content = {
         let mut row = Flex::row().with_child(Shrinkable::new(1., text).finish());
 
@@ -636,14 +625,29 @@ pub fn render_warping_indicator_base(
         );
     }
 
+    let mut row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(6.);
+
+    if let Some(icon) = icon {
+        row = row.with_child(
+            ConstrainedBox::new(icon)
+                .with_width(icon_size(app) - STATUS_ICON_SIZE_DELTA)
+                .with_height(icon_size(app) - STATUS_ICON_SIZE_DELTA)
+                .finish(),
+        );
+    }
+
     row = row.with_child(Expanded::new(1., text_col.finish()).finish());
 
     if let Some(buttons) = buttons {
         row = row.with_child(buttons);
     }
 
+    let content = Clipped::new(row.finish()).finish();
+
     if is_passive_code_diff {
-        Container::new(row.finish())
+        Container::new(content)
             // Use custom padding for the passive code diff block
             .with_padding_top(8.)
             .with_padding_bottom(4.)
@@ -651,7 +655,7 @@ pub fn render_warping_indicator_base(
             .finish()
     } else {
         let mut container = Container::new(
-            ConstrainedBox::new(row.finish())
+            ConstrainedBox::new(content)
                 .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
                 .finish(),
         )
@@ -931,9 +935,15 @@ fn get_icon_size(appearance: &Appearance) -> f32 {
 fn render_force_refresh_inline(
     props: ForceRefreshButtonProps<'_>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_builder = appearance.ui_builder().clone();
+    let tooltip = crate::i18n::tr_static(
+        app,
+        "Ask the agent to check this command now, skipping its timer.",
+    )
+    .to_owned();
     let sub_text_color = blended_colors::text_sub(theme, theme.surface_1());
     let hovered_text_color: ColorU = theme.foreground().into();
     let font_family = appearance.ui_font_family();
@@ -964,10 +974,7 @@ fn render_force_refresh_inline(
         // `render_ai_follow_up_icon` in `view_util.rs`.
         let mut stack = Stack::new().with_child(text_with_margin);
         if state.is_hovered() {
-            let tool_tip = ui_builder
-                .tool_tip("Ask the agent to check this command now, skipping its timer.".to_owned())
-                .build()
-                .finish();
+            let tool_tip = ui_builder.tool_tip(tooltip.clone()).build().finish();
             stack.add_positioned_overlay_child(
                 tool_tip,
                 OffsetPositioning::offset_from_parent(
@@ -2311,7 +2318,7 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
         .map(|ext| {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg"
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "ico" | "svg"
             )
         })
         .unwrap_or(false)
@@ -2950,16 +2957,22 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     let appearance = Appearance::as_ref(app);
 
     let error_text = match props.error {
-        RenderableAIError::QuotaLimit => {
-            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-            let formatted_next_refresh_time = ai_request_usage_model
-                .next_refresh_time()
-                .format("%B %d")
-                .to_string();
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => {
+            if let Some(message) = user_display_message {
+                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else {
+                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
+                let formatted_next_refresh_time = ai_request_usage_model
+                    .next_refresh_time()
+                    .format("%B %d")
+                    .to_string();
 
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-            )
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
+                )
+            }
         }
         RenderableAIError::ServerOverloaded => {
             "Warp is currently overloaded. Please try again later.".to_string()
@@ -3119,7 +3132,7 @@ fn render_invalid_api_key_error(
             background: Some(internal_colors::fg_overlay_3(theme).into()),
             ..Default::default()
         })
-        .with_text_label("Edit API Keys".to_string())
+        .with_text_label(crate::i18n::tr_static(app, "Edit API Keys").to_string())
         .with_cursor(Some(Cursor::PointingHand))
         .build()
         .on_click(move |ctx, _, _| {
@@ -3252,7 +3265,7 @@ pub(crate) fn render_debug_footer<V: View>(
                     warpui::ui_components::button::ButtonVariant::Text,
                     props.submit_issue_button_handle,
                 )
-                .with_centered_text_label("Send Feedback".to_string())
+                .with_centered_text_label(crate::i18n::tr_static(app, "Send Feedback").to_string())
                 .with_style(submit_button_style)
                 .with_hovered_styles(submit_button_hover_style)
                 .with_clicked_styles(submit_button_hover_style)
@@ -3402,13 +3415,28 @@ pub struct UserQueryProps<'a> {
     pub find_context: Option<FindContext<'a>>,
     pub font_properties: &'a Properties,
 }
+pub(crate) fn user_query_mode_prefix_highlight_len(mode: UserQueryMode) -> Option<usize> {
+    match mode {
+        UserQueryMode::Normal => None,
+        UserQueryMode::Plan => Some(commands::PLAN.name.len()),
+        UserQueryMode::Orchestrate => Some(commands::ORCHESTRATE.name.len()),
+    }
+}
+
 pub(super) fn query_prefix_highlight_len(
     input: &AIAgentInput,
     displayed_query: &str,
 ) -> Option<usize> {
-    if displayed_query.starts_with(commands::PLAN.name) {
-        Some(commands::PLAN.name.len())
-    } else if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
+    if let AIAgentInput::UserQuery {
+        user_query_mode, ..
+    } = input
+    {
+        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
+            return Some(prefix_len);
+        }
+    }
+
+    if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
         Some(commands::CREATE_ENVIRONMENT.name.len())
     } else if displayed_query.starts_with(commands::AGENT.name) {
         Some(commands::AGENT.name.len())
@@ -3432,7 +3460,8 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::ActionResult { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::PassiveSuggestionResult { .. } => None,
+            | AIAgentInput::PassiveSuggestionResult { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
         }
     }
 }

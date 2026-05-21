@@ -141,10 +141,13 @@ impl OpenWarpLaunchModal {
                 .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::Close))
         });
 
-        let cta_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Visit the repo", CtaButtonTheme)
-                .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::VisitRepo))
+        let cta_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Visit the repo"),
+                CtaButtonTheme,
+            )
+            .with_full_width(true)
+            .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::VisitRepo))
         });
 
         Self {
@@ -190,15 +193,23 @@ impl OpenWarpLaunchModal {
     }
 
     fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
-        Container::new(
-            Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-                .with_color(PhenomenonStyle::modal_badge_text())
-                .finish(),
+        let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
+            .with_color(PhenomenonStyle::modal_badge_text())
+            .finish();
+        ConstrainedBox::new(
+            Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_child(text)
+                    .finish(),
+            )
+            .with_horizontal_padding(8.)
+            .with_background(Fill::Solid(PhenomenonStyle::modal_badge_background()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+            .finish(),
         )
-        .with_horizontal_padding(8.)
-        .with_vertical_padding(2.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .with_background(Fill::Solid(PhenomenonStyle::modal_badge_background()))
+        .with_height(24.)
         .finish()
     }
 

@@ -365,7 +365,7 @@ impl ImportModalBody {
         ctx.notify();
     }
 
-    fn render_upload_state(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_upload_state(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let is_loading = matches!(self.state, ImportState::PathLoaded | ImportState::Loading);
         let base_button = appearance
             .ui_builder()
@@ -387,13 +387,13 @@ impl ImportModalBody {
 
         let file_picker_button = if is_loading {
             base_button
-                .with_centered_text_label("Preparing...".to_string())
+                .with_centered_text_label(crate::i18n::tr_static(app, "Preparing...").to_string())
                 .disabled()
         } else {
             base_button.with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::TextFirst,
-                    "Choose files...".to_string(),
+                    crate::i18n::tr_static(app, "Choose files...").to_string(),
                     Icon::Import.to_warpui_icon(
                         appearance
                             .theme()
@@ -510,7 +510,7 @@ impl View for ImportModalBody {
 
         match &self.state {
             ImportState::Upload | ImportState::Loading | ImportState::PathLoaded => {
-                self.render_upload_state(appearance)
+                self.render_upload_state(appearance, app)
             }
             ImportState::PathExpanded(paths) => {
                 self.render_loaded_state(paths, sync_queue_dequeueing, appearance)

@@ -263,6 +263,14 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_ssh_into_sh);
     register_test!(test_ssh_into_ash);
     register_test!(test_ssh_with_shell_override);
+
+    // Remote server integration tests
+    register_test!(test_remote_server_connect_bash);
+    register_test!(test_remote_server_connect_zsh);
+    register_test!(test_remote_server_navigate_to_repo);
+    register_test!(test_remote_server_completions);
+    register_test!(test_remote_server_file_operations);
+    register_test!(test_remote_server_lazy_load_directory);
     register_test!(test_custom_open_completions_menu_binding);
     register_test!(test_color_overrides_in_prompt_dont_crash);
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
@@ -336,10 +344,17 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_active_session_follows_focus);
+    register_test!(test_tab_context_menu_copies_metadata);
+    register_test!(test_vertical_tab_context_menu_copies_metadata);
+    register_test!(test_vertical_pane_context_menu_copies_metadata);
 
     register_test!(test_focus_panes_on_hover);
 
     register_test!(test_close_tab_with_long_running_process);
+    register_test!(test_reorder_tabs_with_drag);
+    register_test!(test_detach_tab_to_new_window_with_drag);
+    register_test!(test_attach_tab_to_other_window_and_continue_drag);
+    register_test!(test_single_tab_handoff_continues_drag);
 
     register_test!(test_restore_single_closed_pane);
     register_test!(test_restore_multiple_closed_panes);
@@ -351,7 +366,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_close_notebook_tab);
     register_test!(test_open_in_warp_banner);
     register_test!(test_close_notebook_window);
-    register_test!(test_backspace_inside_rendered_mermaid_block_is_atomic);
+    register_test!(test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block);
 
     // Workflow tests
     register_test!(test_open_workflow_in_pane);

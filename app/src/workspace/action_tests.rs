@@ -74,4 +74,8 @@ fn pane_name_actions_save_workspace_state() {
 
     assert!(WorkspaceAction::RenamePane(locator).should_save_app_state_on_action());
     assert!(WorkspaceAction::ResetPaneName(locator).should_save_app_state_on_action());
+    // GH-9351: the keyboard-bindable variant must persist app state on the
+    // same conditions as the locator-based one, since both ultimately drive
+    // `rename_pane` which mutates `pane_configuration`.
+    assert!(WorkspaceAction::RenameActivePane.should_save_app_state_on_action());
 }

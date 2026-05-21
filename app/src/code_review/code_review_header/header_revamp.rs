@@ -114,9 +114,7 @@ impl CodeReviewHeader {
             );
         }
 
-        let button_row = Container::new(row.finish()).with_margin_right(4.).finish();
-
-        let mut stack = Stack::new().with_child(button_row);
+        let mut stack = Stack::new().with_child(row.finish());
         if code_review_header_fields.git_operations_menu_open {
             stack.add_positioned_overlay_child(
                 ChildView::new(&code_review_header_fields.git_operations_menu).finish(),
@@ -129,7 +127,11 @@ impl CodeReviewHeader {
             );
         }
 
-        Some(stack.finish())
+        Some(
+            Container::new(stack.finish())
+                .with_margin_right(4.)
+                .finish(),
+        )
     }
 
     /// Like `render_header_dropdown_button` but without `margin_left(4.)`,

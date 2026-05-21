@@ -222,7 +222,7 @@ pub enum TerminalAction {
     },
     InputContextMenuItem(InputContextMenuAction),
     /// Open the menu on the specified [`crate::ai::blocklist::AIBlock`] that lists the blocks that
-    /// were attached to the query in the specifed [`crate::ai::blocklist::AIAgentExchange`] which
+    /// were attached to the query in the specified [`crate::ai::blocklist::AIAgentExchange`] which
     /// is part of the specified [`crate::ai::blocklist::AIConversation`].
     OpenAIBlockAttachedBlocksMenu {
         ai_block_view_id: EntityId,
@@ -412,7 +412,7 @@ pub enum TerminalAction {
     EnterCloudAgentView,
     StartNewAgentConversation,
     /// Toggle the cloud mode conversation details panel
-    ToggleCloudModeDetailsPanel,
+    ToggleConversationDetailsPanel,
     /// Cancel the ambient agent task while it's loading
     CancelAmbientAgentTask,
     OpenInlineHistoryMenu,
@@ -426,11 +426,47 @@ pub enum TerminalAction {
     RevealChildAgent {
         conversation_id: AIConversationId,
     },
+    /// Switch the active terminal view's agent view to display the given
+    /// conversation in place, without spawning or revealing a separate pane.
+    /// Used by the orchestration pill bar to navigate the current pane to a
+    /// sibling/parent conversation.
+    SwitchAgentViewToConversation {
+        conversation_id: AIConversationId,
+    },
+    /// Open a child agent conversation in a separate pane (split off from
+    /// the orchestrator). Dispatched from the orchestration pill bar's
+    /// 3-dot overflow menu ("Open in new pane"). For child agents that have
+    /// a hidden pane in `child_agent_panes` this reveals the existing pane;
+    /// for already-visible panes it focuses the existing pane.
+    OpenChildAgentInNewPane {
+        conversation_id: AIConversationId,
+    },
+    /// Open a child agent conversation in a separate tab. V2-of-V2 stub:
+    /// dispatched from the orchestration pill bar's 3-dot overflow menu
+    /// ("Open in new tab"). For now this falls back to the same path as
+    /// `OpenChildAgentInNewPane` until tab-level routing is wired through.
+    OpenChildAgentInNewTab {
+        conversation_id: AIConversationId,
+    },
+    /// Stop a child agent conversation: cancel the in-flight ambient task
+    /// (if any) and the local conversation's controller. The conversation
+    /// itself stays alive so the user can still navigate to it. Dispatched
+    /// from the orchestration pill bar's 3-dot overflow menu ("Stop agent").
+    StopAgentConversation {
+        conversation_id: AIConversationId,
+    },
+    /// Kill a child agent conversation: stop it if running, best-effort cancel
+    /// any backing cloud task, then remove the conversation from local history.
+    /// Dispatched from the orchestration pill bar's 3-dot overflow menu
+    /// ("Kill agent").
+    KillAgentConversation {
+        conversation_id: AIConversationId,
+    },
     /// Toggle PTY recording for this session.
     ToggleSessionRecording,
-    /// Open the rich input editor for composing a prompt to send to a CLI agent.
+    /// Toggle the rich input editor for composing a prompt to send to a CLI agent.
     /// Triggered by Ctrl-G when a CLI agent is detected, or from the footer button.
-    OpenCLIAgentRichInput,
+    ToggleCLIAgentRichInput,
 }
 
 // Manually implementing Debug to avoid leaking sensitive information in logs
@@ -694,7 +730,7 @@ impl fmt::Debug for TerminalAction {
             ExitAgentView => write!(f, "ExitAgentView"),
             EnterCloudAgentView => write!(f, "EnterCloudAgentView"),
             StartNewAgentConversation => write!(f, "StartNewAgentConversation"),
-            ToggleCloudModeDetailsPanel => write!(f, "ToggleCloudModeDetailsPanel"),
+            ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),
             OpenInlineHistoryMenu => write!(f, "OpenInlineHistoryMenu"),
             OpenModelSelector => write!(f, "OpenModelSelector"),
@@ -703,8 +739,13 @@ impl fmt::Debug for TerminalAction {
             AwsCliNotInstalledBanner(action) => write!(f, "AwsCliNotInstalledBanner({action:?})"),
             ToggleUsageFooter => write!(f, "ToggleUsageFooter"),
             RevealChildAgent { .. } => write!(f, "RevealChildAgent"),
+            SwitchAgentViewToConversation { .. } => write!(f, "SwitchAgentViewToConversation"),
+            OpenChildAgentInNewPane { .. } => write!(f, "OpenChildAgentInNewPane"),
+            OpenChildAgentInNewTab { .. } => write!(f, "OpenChildAgentInNewTab"),
+            StopAgentConversation { .. } => write!(f, "StopAgentConversation"),
+            KillAgentConversation { .. } => write!(f, "KillAgentConversation"),
             ToggleSessionRecording => write!(f, "ToggleSessionRecording"),
-            OpenCLIAgentRichInput => write!(f, "OpenCLIAgentRichInput"),
+            ToggleCLIAgentRichInput => write!(f, "ToggleCLIAgentRichInput"),
         }
     }
 }

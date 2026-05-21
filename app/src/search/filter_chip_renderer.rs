@@ -36,6 +36,7 @@ impl FilterChipRenderer for QueryFilter {
     fn icon_margin_top(&self) -> f32 {
         match self {
             QueryFilter::Sessions => 2.,
+            QueryFilter::Tabs => 2.,
             QueryFilter::NaturalLanguage => 2.,
             _ => 0.,
         }

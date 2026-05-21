@@ -36,12 +36,12 @@ pub enum FeatureSection {
 }
 
 impl FeatureSection {
-    pub fn section_name_string(&self) -> &'static str {
+    pub fn section_name_string(&self, app: &AppContext) -> &'static str {
         match self {
-            FeatureSection::WhatsNew => "What's New?",
-            FeatureSection::GettingStarted => "Getting Started",
-            FeatureSection::MaximizeWarp => "Maximize Warp",
-            FeatureSection::AdvancedSetup => "Advanced Setup",
+            FeatureSection::WhatsNew => crate::i18n::tr_static(app, "What's New?"),
+            FeatureSection::GettingStarted => crate::i18n::tr_static(app, "Getting Started"),
+            FeatureSection::MaximizeWarp => crate::i18n::tr_static(app, "Maximize Warp"),
+            FeatureSection::AdvancedSetup => crate::i18n::tr_static(app, "Advanced Setup"),
         }
     }
 }
@@ -428,7 +428,11 @@ impl SectionView for FeatureSectionView {
         }
     }
 
-    fn section_link(&self, _appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn section_link(
+        &self,
+        _appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         None
     }
 }

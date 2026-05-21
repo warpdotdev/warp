@@ -167,11 +167,11 @@ pub enum QueryFilter {
     /// Filter results for open sessions.
     Sessions,
 
+    /// Filter results for open tabs.
+    Tabs,
+
     /// Filter results for all conversations.
     Conversations,
-
-    /// Filter results for only historical conversations. Used in the "View All" palette on new tabs
-    HistoricalConversations,
 
     /// Filter results for launch configurations.
     LaunchConfigurations,
@@ -239,8 +239,8 @@ impl QueryFilter {
             QueryFilter::NaturalLanguage => "e.g. replace string in file",
             QueryFilter::Actions => "Search actions",
             QueryFilter::Sessions => "Search sessions",
+            QueryFilter::Tabs => "Search tabs",
             QueryFilter::Conversations => "Search conversations",
-            QueryFilter::HistoricalConversations => "Search historical conversations",
             QueryFilter::LaunchConfigurations => "Search launch configurations",
             QueryFilter::Drive => "Search objects in drive",
             QueryFilter::EnvironmentVariables => "Search environment variables",
@@ -273,6 +273,7 @@ impl QueryFilter {
             QueryFilter::NaturalLanguage => &NATURAL_LANGUAGE_FILTER_ATOM,
             QueryFilter::Actions => &ACTIONS_FILTER_ATOM,
             QueryFilter::Sessions => &SESSIONS_FILTER_ATOM,
+            QueryFilter::Tabs => &NO_FILTER_ATOM,
             QueryFilter::Conversations => &CONVERSATIONS_FILTER_ATOM,
             QueryFilter::LaunchConfigurations => &LAUNCH_CONFIG_FILTER_ATOM,
             QueryFilter::Drive => &DRIVE_FILTER_ATOM,
@@ -286,7 +287,6 @@ impl QueryFilter {
             QueryFilter::Repos => &REPOS_FILTER_ATOM,
             QueryFilter::DiffSets => &DIFFSETS_FILTER_ATOM,
             QueryFilter::StaticSlashCommands => &STATIC_SLASH_COMMANDS_FILTER_ATOM,
-            QueryFilter::HistoricalConversations => &NO_FILTER_ATOM,
             QueryFilter::Skills => &NO_FILTER_ATOM,
             QueryFilter::BaseModels => &NO_FILTER_ATOM,
             QueryFilter::FullTerminalUseModels => &NO_FILTER_ATOM,
@@ -305,6 +305,7 @@ impl QueryFilter {
             QueryFilter::NaturalLanguage => "AI command suggestions",
             QueryFilter::Actions => "actions",
             QueryFilter::Sessions => "sessions",
+            QueryFilter::Tabs => "tabs",
             QueryFilter::Conversations => "conversations",
             QueryFilter::LaunchConfigurations => "launch configurations",
             QueryFilter::Drive => "Warp Drive",
@@ -318,7 +319,6 @@ impl QueryFilter {
             QueryFilter::Repos => "repos",
             QueryFilter::DiffSets => "diff sets",
             QueryFilter::StaticSlashCommands => "slash commands",
-            QueryFilter::HistoricalConversations => "historical conversations",
             QueryFilter::Skills => "skills",
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
@@ -342,9 +342,8 @@ impl QueryFilter {
             }
             QueryFilter::Actions => None,
             QueryFilter::Sessions => Some("bundled/svg/terminal-input.svg"),
-            QueryFilter::Conversations | QueryFilter::HistoricalConversations => {
-                Some("bundled/svg/conversation.svg")
-            }
+            QueryFilter::Tabs => Some("bundled/svg/terminal-input.svg"),
+            QueryFilter::Conversations => Some("bundled/svg/conversation.svg"),
             QueryFilter::LaunchConfigurations => Some("bundled/svg/navigation.svg"),
             QueryFilter::Drive => Some("bundled/svg/warp-drive.svg"),
             QueryFilter::EnvironmentVariables => Some("bundled/svg/env-var-collection.svg"),
@@ -456,6 +455,10 @@ impl<T: Action + Clone> QueryResult<T> {
 
     pub fn accessibility_help_message(&self) -> Option<String> {
         self.item.accessibility_help_message()
+    }
+
+    pub fn detail_data(&self) -> Option<crate::search::item::SearchItemDetail> {
+        self.item.detail_data()
     }
 
     /// Returns an optional deduplication key for this item from the [`SearchItem`].

@@ -143,6 +143,30 @@ impl<P: BackingView> PaneHeader<P> {
         ctx.notify();
     }
 
+    pub fn open_shared_session_qr_code(
+        &mut self,
+        source: SharingDialogSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_sharing_dialog_enabled(ctx) || !self.has_shareable_shared_session(ctx) {
+            return;
+        }
+
+        let dialog_was_closed = self.open_overlay != OpenOverlay::SharingDialog;
+        if self.open_overlay == OpenOverlay::OverflowMenu {
+            ctx.emit(Event::PaneHeaderOverflowMenuToggled(false));
+        }
+        self.open_overlay = OpenOverlay::SharingDialog;
+        ctx.focus(&self.shared_content.sharing_dialog);
+        self.sharing_dialog().update(ctx, |dialog, ctx| {
+            dialog.show_qr_code(ctx);
+            if dialog_was_closed {
+                dialog.report_open(source, ctx);
+            }
+        });
+        ctx.notify();
+    }
+
     fn handle_sharing_dialog_event(
         &mut self,
         event: &SharingDialogEvent,

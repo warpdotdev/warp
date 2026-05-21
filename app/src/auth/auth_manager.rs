@@ -267,7 +267,7 @@ impl AuthManager {
 
     /// Authenticate asynchronously using the OAuth2 device authorization flow.
     ///
-    /// This is only used by the Warp CLI if running on a devic that does not have the Warp app installed.
+    /// This is only used by the Warp CLI if running on a device that does not have the Warp app installed.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn authorize_device(&self, ctx: &mut ModelContext<Self>) {
         // Clear any stale user state so old credentials don't interfere
@@ -884,5 +884,5 @@ impl Entity for AuthManager {
 impl SingletonEntity for AuthManager {}
 
 #[cfg(test)]
-#[path = "auth_manager_test.rs"]
+#[path = "auth_manager_tests.rs"]
 mod auth_manager_test;

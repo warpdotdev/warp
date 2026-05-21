@@ -627,11 +627,6 @@ mod file_transform_tests {
 // Private / public settings split tests
 // ---------------------------------------------------------------------------
 
-// Tests that call `set_settings_file_enabled` are marked `#[serial_test::serial]`
-// because they mutate the process-global `SETTINGS_FILE_ENABLED` AtomicBool and
-// would race under `cargo test` (thread-based parallelism). This can be removed
-// when the SettingsFile feature flag is cleaned up and the global flag is deleted.
-
 #[test]
 fn test_is_private_returns_false_for_public_setting() {
     assert!(!SimpleSetting::is_private());
@@ -643,18 +638,8 @@ fn test_is_private_returns_true_for_private_setting() {
 }
 
 #[test]
-#[serial_test::serial]
-fn test_settings_file_enabled_flag_round_trip() {
-    crate::set_settings_file_enabled(true);
-    assert!(crate::is_settings_file_enabled());
-    crate::set_settings_file_enabled(false);
-    assert!(!crate::is_settings_file_enabled());
-}
-
-#[test]
-#[serial_test::serial]
 fn test_public_setting_writes_to_public_prefs_when_flag_enabled() {
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -690,9 +675,8 @@ fn test_public_setting_writes_to_public_prefs_when_flag_enabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_private_setting_writes_to_private_prefs_when_flag_enabled() {
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -737,9 +721,8 @@ fn test_private_setting_writes_to_private_prefs_when_flag_enabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_new_from_storage_reads_from_correct_backend_when_flag_enabled() {
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -775,9 +758,8 @@ fn test_new_from_storage_reads_from_correct_backend_when_flag_enabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_clear_value_clears_from_correct_backend() {
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -831,9 +813,8 @@ fn test_clear_value_clears_from_correct_backend() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_public_setting_uses_private_prefs_when_flag_disabled() {
-    crate::set_settings_file_enabled(false);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -872,9 +853,8 @@ fn test_public_setting_uses_private_prefs_when_flag_disabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_private_setting_uses_private_prefs_when_flag_disabled() {
-    crate::set_settings_file_enabled(false);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -906,9 +886,8 @@ fn test_private_setting_uses_private_prefs_when_flag_disabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_new_from_storage_reads_from_private_backend_when_flag_disabled() {
-    crate::set_settings_file_enabled(false);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -1003,9 +982,8 @@ fn test_manager_default_values_for_settings_file_excludes_private() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_manager_read_local_setting_value_routes_when_flag_enabled() {
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -1051,9 +1029,8 @@ fn test_manager_read_local_setting_value_routes_when_flag_enabled() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_manager_read_local_setting_value_falls_back_when_flag_disabled() {
-    crate::set_settings_file_enabled(false);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
     warpui::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
@@ -1102,11 +1079,10 @@ fn test_manager_read_local_setting_value_falls_back_when_flag_disabled() {
 /// section like `[account]` are invisible to the SettingsManager and the
 /// cloud preferences syncer clobbers them with stale cloud state.
 #[test]
-#[serial_test::serial]
 fn test_manager_read_local_setting_value_respects_hierarchy_with_settings_file() {
     use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
-    crate::set_settings_file_enabled(true);
+    let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("settings.toml");
 

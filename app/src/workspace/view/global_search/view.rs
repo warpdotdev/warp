@@ -651,7 +651,7 @@ impl GlobalSearchView {
             };
 
             let mut editor = EditorView::new(options, ctx);
-            editor.set_placeholder_text("Search in files", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "Search in files"), ctx);
             editor
         });
 
@@ -662,20 +662,20 @@ impl GlobalSearchView {
             |_, _| {},
         );
 
-        let case_sensitivity_button = ctx.add_typed_action_view(|_ctx| {
+        let case_sensitivity_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new_with_boxed_theme(String::new(), Arc::new(NakedTheme))
                 .with_icon(UiIcon::CaseSensitivity)
-                .with_tooltip("Toggle Case Sensitivity")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Toggle Case Sensitivity"))
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(GlobalSearchAction::ToggleCaseSensitivity);
                 })
         });
 
-        let regex_button = ctx.add_typed_action_view(|_ctx| {
+        let regex_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new_with_boxed_theme(String::new(), Arc::new(NakedTheme))
                 .with_icon(UiIcon::Regex)
-                .with_tooltip("Toggle Regex")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Toggle Regex"))
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(GlobalSearchAction::ToggleRegexSearch);
@@ -1995,7 +1995,8 @@ impl View for GlobalSearchView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         match self.enablement {
-            CodingPanelEnablementState::RemoteSession { .. } => {
+            CodingPanelEnablementState::PendingRemoteSession
+            | CodingPanelEnablementState::RemoteSession { .. } => {
                 return self.render_remote_state(app);
             }
             CodingPanelEnablementState::UnsupportedSession => {
@@ -2256,7 +2257,7 @@ impl GlobalSearchView {
         self.render_zero_state(
             Icon::AlertTriangle,
             "Global search unavailable",
-            "Global search requries access to your local workspace. Open a new session or navigate to an active session to view.",
+            "Global search requires access to your local workspace. Open a new session or navigate to an active session to view.",
             app,
         )
     }

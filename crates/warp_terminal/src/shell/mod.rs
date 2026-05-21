@@ -519,7 +519,7 @@ impl ShellType {
 
             ShellType::Fish => {
                 let history_file_contents = String::from_utf8_lossy(history_file_bytes);
-                // fish has psuedo-yaml.
+                // fish has pseudo-yaml.
                 // The commands start with "- cmd: ".
                 history_lines = history_file_contents
                     .lines()

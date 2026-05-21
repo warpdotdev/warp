@@ -137,6 +137,15 @@ impl BuyCreditsBanner {
                     .addon_credits_options
                     .get(self.selected_denomination_index)
                     .map(|option| option.credits);
+                let has_admin_permissions = {
+                    let auth_state = AuthStateProvider::as_ref(ctx).get();
+                    let current_team = UserWorkspaces::as_ref(ctx).current_team();
+                    auth_state
+                        .user_email()
+                        .zip(current_team)
+                        .map(|(email, team)| team.has_admin_permissions(&email))
+                        .unwrap_or_default()
+                };
 
                 // Things we always do:
                 // - emit telemetry
@@ -161,7 +170,7 @@ impl BuyCreditsBanner {
                 // - Banner toggle flow: optionally enable auto-reload immediately.
                 // - Post-purchase modal flow: show the modal.
                 if banner_toggle_flag_enabled {
-                    if self.auto_reload_enabled {
+                    if has_admin_permissions && self.auto_reload_enabled {
                         self.banner_auto_reload_update_in_flight = true;
 
                         if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
@@ -176,7 +185,7 @@ impl BuyCreditsBanner {
                             });
                         }
                     }
-                } else if post_purchase_modal_flag_enabled {
+                } else if has_admin_permissions && post_purchase_modal_flag_enabled {
                     // Default selection in the modal should match the denomination the user clicked "buy" on.
                     ctx.emit(BuyCreditsBannerEvent::OpenAutoReloadModal {
                         purchased_credits: selected_credits.unwrap_or(0),
@@ -413,7 +422,7 @@ impl BuyCreditsBanner {
             .with_children([
                 appearance
                     .ui_builder()
-                    .paragraph("Monthly limit reached")
+                    .paragraph(crate::i18n::tr_static(app, "Monthly limit reached"))
                     .with_style(UiComponentStyles {
                         font_size: Some(14.),
                         ..Default::default()
@@ -464,7 +473,7 @@ impl BuyCreditsBanner {
                     }),
                     ..Default::default()
                 })
-                .with_text_label("Manage billing".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "Manage billing").to_string())
                 .build()
                 .on_click(|ctx, _, _| {
                     ctx.dispatch_typed_action(Action::ManageBilling);
@@ -549,7 +558,7 @@ impl BuyCreditsBanner {
         let make_banner_text = || {
             let mut banner_text_children = vec![appearance
                 .ui_builder()
-                .paragraph("Out of credits")
+                .paragraph(crate::i18n::tr_static(app, "Out of credits"))
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     ..Default::default()

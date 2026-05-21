@@ -51,7 +51,7 @@ use crate::{
         shared_session::{
             connect_endpoint,
             network::heartbeat::{Event as HeartbeatEvent, Heartbeat},
-            viewer::event_loop::EventLoop,
+            viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
             EventNumber, SELECTION_THROTTLE_PERIOD,
         },
         TerminalModel, TerminalView,
@@ -123,6 +123,7 @@ pub struct Network {
 
     channel_event_proxy: ChannelEventListener,
     terminal_model: Arc<FairMutex<TerminalModel>>,
+    initial_load_mode: SharedSessionInitialLoadMode,
 
     stage: Stage,
 
@@ -158,6 +159,7 @@ impl Network {
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
+        initial_load_mode: SharedSessionInitialLoadMode,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
@@ -175,6 +177,7 @@ impl Network {
             ws_proxy_rx: ws_proxy_rx.clone(),
             channel_event_proxy,
             terminal_model,
+            initial_load_mode,
             terminal_view,
             stage: Stage::BeforeJoined,
             id: None,
@@ -237,6 +240,7 @@ impl Network {
             ws_proxy_rx,
             channel_event_proxy,
             terminal_model,
+            initial_load_mode: SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
             terminal_view,
             stage: Stage::BeforeJoined,
             id: Some(viewer_id.clone()),
@@ -555,6 +559,7 @@ impl Network {
                         window_size,
                         *scrollback,
                         latest_event_no,
+                        self.initial_load_mode,
                         ctx,
                     )
                 });
@@ -1188,5 +1193,5 @@ impl Drop for Network {
 }
 
 #[cfg(test)]
-#[path = "network_test.rs"]
+#[path = "network_tests.rs"]
 mod tests;

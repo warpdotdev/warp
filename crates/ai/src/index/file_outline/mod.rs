@@ -43,7 +43,7 @@ impl Outline {
         let mut queue = VecDeque::from([&self.root]);
         let mut repo_map = Vec::new();
 
-        // Iteratively print the files while perserving their traversal order.
+        // Iteratively print the files while preserving their traversal order.
         while let Some(entry) = queue.pop_front() {
             match entry {
                 Entry::Directory(directory) => {
@@ -91,7 +91,7 @@ impl Outline {
         let mut queue = VecDeque::from([&self.root]);
         let mut file_to_symbols = HashMap::new();
 
-        // Iteratively print the files while perserving their traversal order.
+        // Iteratively print the files while preserving their traversal order.
         while let Some(entry) = queue.pop_front() {
             match entry {
                 Entry::Directory(directory) => {

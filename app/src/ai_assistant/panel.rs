@@ -747,7 +747,7 @@ impl AIAssistantPanelView {
             );
 
             header.add_child(
-                Container::new(self.render_copy_transcript_button(appearance))
+                Container::new(self.render_copy_transcript_button(appearance, app))
                     .with_margin_right(4.)
                     .finish(),
             );
@@ -773,9 +773,14 @@ impl AIAssistantPanelView {
         header.finish()
     }
 
-    fn render_copy_transcript_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_copy_transcript_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let tooltip_background = appearance.theme().surface_1().into_solid();
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip = crate::i18n::tr_static(app, "Copy transcript to clipboard").to_owned();
         icon_button(
             appearance,
             crate::ui_components::icons::Icon::Copy,
@@ -788,7 +793,7 @@ impl AIAssistantPanelView {
                 ..Default::default()
             };
             ui_builder
-                .tool_tip("Copy transcript to clipboard".to_owned())
+                .tool_tip(tooltip.clone())
                 .with_style(tool_tip_style)
                 .build()
                 .finish()

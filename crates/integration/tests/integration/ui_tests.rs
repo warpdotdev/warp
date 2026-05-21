@@ -209,10 +209,17 @@ integration_tests! {
     test_secrets_are_always_redacted_in_ai_inputs,
 
     test_active_session_follows_focus,
+    test_tab_context_menu_copies_metadata,
+    test_vertical_tab_context_menu_copies_metadata,
+    test_vertical_pane_context_menu_copies_metadata,
 
     test_focus_panes_on_hover,
 
     test_close_tab_with_long_running_process,
+    test_reorder_tabs_with_drag,
+    test_detach_tab_to_new_window_with_drag,
+    test_attach_tab_to_other_window_and_continue_drag,
+    test_single_tab_handoff_continues_drag,
 
     test_restore_single_closed_pane,
     test_restore_multiple_closed_panes,
@@ -224,7 +231,7 @@ integration_tests! {
     test_close_notebook_tab,
     test_open_in_warp_banner,
     test_close_notebook_window,
-    test_backspace_inside_rendered_mermaid_block_is_atomic,
+    test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block,
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,
@@ -296,7 +303,7 @@ integration_tests! {
     test_restored_ai_block_renders_mermaid_and_local_images,
 
     // Middle-click-paste is only implemented for Linux right now.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     test_middle_click_paste,
     test_agent_mode_pane_minimum_size,
 

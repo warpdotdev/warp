@@ -269,6 +269,10 @@ impl HeaderToolbarChipSelection {
             Self::Custom { right, .. } => right.clone(),
         }
     }
+
+    pub fn contains_item(&self, item: &super::header_toolbar_item::HeaderToolbarItemKind) -> bool {
+        self.left_items().contains(item) || self.right_items().contains(item)
+    }
 }
 
 settings::macros::implement_setting_for_enum!(

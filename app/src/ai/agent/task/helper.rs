@@ -139,6 +139,7 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::AskUserQuestion(_) => "ask_user_question",
             Tool::SendMessageToAgent(_) => "send_message_to_agent",
             Tool::TransferShellCommandControlToUser(_) => "transfer_shell_command_control",
+            Tool::RunAgents(_) => "orchestrate",
         }
     }
 }

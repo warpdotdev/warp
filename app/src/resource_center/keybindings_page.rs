@@ -15,11 +15,11 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::settings_view;
 use crate::workspace::tab_settings::TabSettings;
 use crate::{
     appearance::Appearance,
     command_palette::PRIORITIZED_KEYBINDINGS,
+    i18n::{self, I18nKey},
     search_bar::SearchBar,
     settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
     util::bindings::filter_bindings_including_keystroke,
@@ -54,7 +54,7 @@ struct MouseStateHandles {
 }
 
 pub struct KeybindingsView {
-    /// List of all keybidings.
+    /// List of all keybindings.
     bindings: Option<Vec<CommandBinding>>,
     /// List of keybindings based on search query.
     binding_results: Option<Vec<CommandBinding>>,
@@ -100,7 +100,7 @@ impl KeybindingsView {
 
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text(settings_view::keybindings::SEARCH_PLACEHOLDER, ctx);
+            editor.set_placeholder_text(i18n::tr(ctx, I18nKey::KeybindingsSearchPlaceholder), ctx);
         });
 
         let search_bar = {
@@ -325,7 +325,7 @@ impl KeybindingsView {
             .finish()
     }
 
-    fn render_subheader(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_subheader(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let bindings = self
             .bindings
             .as_ref()
@@ -356,7 +356,11 @@ impl KeybindingsView {
                         .build()
                         .finish(),
                 )
-                .with_child(self.render_text("To toggle this panel".into(), None, appearance))
+                .with_child(self.render_text(
+                    i18n::tr_static(app, "To toggle this panel").into(),
+                    None,
+                    appearance,
+                ))
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .finish();
 
@@ -371,7 +375,7 @@ impl KeybindingsView {
             appearance
                 .ui_builder()
                 .link(
-                    "here.".into(),
+                    i18n::tr_static(app, "here.").into(),
                     None,
                     Some(Box::new(|ctx| {
                         ctx.dispatch_typed_action(WorkspaceAction::ConfigureKeybindingSettings {
@@ -393,11 +397,17 @@ impl KeybindingsView {
 
         Container::new(
             column
-                .with_child(self.render_text(
-                    "Go to settings > keyboard shortcuts to configure custom keybindings".into(),
-                    None,
-                    appearance,
-                ))
+                .with_child(
+                    self.render_text(
+                        i18n::tr_static(
+                            app,
+                            "Go to settings > keyboard shortcuts to configure custom keybindings",
+                        )
+                        .into(),
+                        None,
+                        appearance,
+                    ),
+                )
                 .with_child(settings_link)
                 .finish(),
         )
@@ -412,6 +422,7 @@ impl KeybindingsView {
         &self,
         section: KeybindingSection,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let mut bindings = self.get_bindings_by_section(section.clone()).peekable();
 
@@ -422,11 +433,11 @@ impl KeybindingsView {
             Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         let title = match section {
-            KeybindingSection::Essentials => "Essentials",
-            KeybindingSection::Blocks => "Blocks",
-            KeybindingSection::InputEditor => "Input Editor",
-            KeybindingSection::Terminal => "Terminal",
-            KeybindingSection::Fundamentals => "Fundamentals",
+            KeybindingSection::Essentials => i18n::tr_static(app, "Essentials"),
+            KeybindingSection::Blocks => i18n::tr_static(app, "Blocks"),
+            KeybindingSection::InputEditor => i18n::tr_static(app, "Input Editor"),
+            KeybindingSection::Terminal => i18n::tr_static(app, "Terminal"),
+            KeybindingSection::Fundamentals => i18n::tr_static(app, "Fundamentals"),
         };
 
         let mut section_header = self.render_text(
@@ -456,10 +467,11 @@ impl KeybindingsView {
             let mut binding_row = Flex::row();
 
             let label = self.render_text(
-                binding
-                    .description
-                    .in_context(DescriptionContext::Default)
-                    .to_string(),
+                i18n::tr_text(
+                    app,
+                    binding.description.in_context(DescriptionContext::Default),
+                )
+                .to_string(),
                 None,
                 appearance,
             );
@@ -490,12 +502,12 @@ impl KeybindingsView {
         Some(binding_list.finish())
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let keybinding_sections = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_children(
                 all::<KeybindingSection>()
-                    .filter_map(|section| self.render_section(section, appearance))
+                    .filter_map(|section| self.render_section(section, appearance, app))
                     .map(|child| {
                         Container::new(child)
                             .with_margin_bottom(SECTION_SPACING)
@@ -548,8 +560,8 @@ impl View for KeybindingsView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let search_bar = ChildView::new(&self.search_bar).finish();
-        let subheader = self.render_subheader(appearance);
-        let body = self.render_body(appearance);
+        let subheader = self.render_subheader(appearance, app);
+        let body = self.render_body(appearance, app);
 
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)

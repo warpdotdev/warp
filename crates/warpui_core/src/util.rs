@@ -65,5 +65,5 @@ pub fn parse_i32(input: &[u8]) -> Option<i32> {
 }
 
 #[cfg(test)]
-#[path = "util_test.rs"]
+#[path = "util_tests.rs"]
 mod tests;

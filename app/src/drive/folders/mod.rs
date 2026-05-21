@@ -8,7 +8,7 @@ use crate::{
     appearance::Appearance,
     cloud_object::{
         CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Revision, ServerCloudObject, Space,
+        GenericCloudObject, GenericServerObject, ObjectType, Revision, Space,
         UpdateCloudObjectResult,
     },
     persistence::ModelEvent,
@@ -118,17 +118,6 @@ impl CloudModelType for CloudFolderModel {
 
     fn serialized(&self) -> SerializedModel {
         SerializedModel::new(self.name.to_owned())
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Folder(server_folder) = server_cloud_object {
-            return Some(CloudFolderModel {
-                name: server_folder.model.name.clone(),
-                is_open: self.is_open,
-                is_warp_pack: server_folder.model.is_warp_pack,
-            });
-        }
-        None
     }
 
     fn can_move_to_space(&self, current_space: Space, new_space: Space) -> bool {

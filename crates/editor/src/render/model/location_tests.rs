@@ -580,6 +580,7 @@ fn test_hit_code_block() {
                 width - COMMAND_SPACING.x_axis_offset().as_f32(),
             )),
             code_block_type: Default::default(),
+            pending_mermaid_asset: None,
         },
     ]);
     model.set_content(tree);

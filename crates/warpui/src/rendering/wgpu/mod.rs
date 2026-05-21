@@ -78,7 +78,7 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
         }
 
         instance_lock_guard.get_or_insert_with(|| {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             {
                 use crate::windowing::{winit::app::WINDOWING_SYSTEM, WindowingSystem};
                 // If the user hasn't enabled (and is making use of) native Wayland

@@ -62,6 +62,7 @@ use crate::{
     features::FeatureFlag,
     notebooks::{
         editor::{find_bar::FindBarAction, model::word_unit},
+        file::MarkdownDisplayMode,
         link::{LinkTarget, NotebookLinks, ResolveError},
         telemetry::{ActionEntrypoint, BlockInfo, EmbeddedObjectInfo, SelectionMode},
     },
@@ -465,7 +466,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("ctrl-f"),
         EditableBinding::new(
             // This doesn't reuse the move_to_line_start naming from the terminal input editor to
-            // distinguish between soft-wrappped line and hard-wrapped line (paragraph) movement.
+            // distinguish between soft-wrapped line and hard-wrapped line (paragraph) movement.
             "editor_view:move_to_paragraph_start",
             "Move to start of paragraph",
             EditorViewAction::MoveToParagraphStart,
@@ -884,6 +885,11 @@ pub enum EditorViewAction {
         line_and_column_num: Option<LineAndColumnArg>,
         force_open_in_warp: bool,
     },
+    /// Signal from a Mermaid toggle view that the user changed the display mode for a block.
+    MermaidDisplayModeSelected {
+        start_anchor: Anchor,
+        mode: MarkdownDisplayMode,
+    },
 }
 
 impl EditorViewAction {
@@ -909,6 +915,34 @@ impl EditorViewAction {
                 | EditorViewAction::SelectionEnd
         )
     }
+}
+
+#[derive(Default)]
+struct LayoutAffectingAssetLoads {
+    loading: HashSet<AssetHandle>,
+    loaded_needs_relayout: bool,
+}
+
+enum LayoutAffectingAssetLoad {
+    Loading(AssetHandle),
+    LoadedNeedsRelayout,
+}
+
+fn mermaid_diagram_needs_loaded_layout(
+    config: &warp_editor::render::model::ImageBlockConfig,
+    image: &ImageType,
+) -> bool {
+    let ImageType::Svg { svg } = image else {
+        return false;
+    };
+    let intrinsic_size = svg.size();
+    let intrinsic_width = intrinsic_size.width();
+    let intrinsic_height = intrinsic_size.height();
+    if intrinsic_width <= 0. || intrinsic_height <= 0. {
+        return false;
+    }
+    let expected_height = config.width.as_f32() * intrinsic_height / intrinsic_width;
+    (config.height.as_f32() - expected_height).abs() > 0.5
 }
 
 pub enum EditorViewEvent {
@@ -962,7 +996,7 @@ struct MouseStateHandles {
     secondary_link_mouse_handle: MouseStateHandle,
 }
 
-// Represents the states of an ongoing mouse event. Note that these states are mutally exclusive:
+// Represents the states of an ongoing mouse event. Note that these states are mutually exclusive:
 // If one is selecting, they couldn't be initiating task list toggling at the same time.
 enum OngoingMouseEvent {
     Selecting,
@@ -1110,7 +1144,7 @@ impl RichTextEditorView {
 
         // Ensure that we re-render when the rendering model changes.
         ctx.observe(&model.as_ref(ctx).render_state().clone(), |me, _, ctx| {
-            me.watch_visible_layout_affecting_asset_loads(ctx);
+            me.watch_layout_affecting_asset_loads(ctx);
             ctx.notify();
         });
 
@@ -1298,37 +1332,69 @@ impl RichTextEditorView {
         }
     }
 
-    fn visible_layout_affecting_asset_loads(
-        &self,
-        ctx: &ViewContext<Self>,
-    ) -> HashSet<AssetHandle> {
+    fn layout_affecting_asset_loads(&self, ctx: &ViewContext<Self>) -> LayoutAffectingAssetLoads {
         let render_state = self.model.as_ref(ctx).render_state().clone();
         let render_state = render_state.as_ref(ctx);
-        let viewport = render_state.viewport();
         let asset_cache = AssetCache::as_ref(ctx);
+        let mut loads = LayoutAffectingAssetLoads::default();
 
         render_state
             .content()
-            .viewport_items(viewport.height(), viewport.width(), viewport.scroll_top())
-            .filter_map(|(_, block)| Self::layout_affecting_asset_load(block, asset_cache))
-            .collect()
+            .block_items()
+            .filter_map(|block| Self::layout_affecting_asset_load(block, asset_cache))
+            .for_each(|load| match load {
+                LayoutAffectingAssetLoad::Loading(handle) => {
+                    loads.loading.insert(handle);
+                }
+                LayoutAffectingAssetLoad::LoadedNeedsRelayout => {
+                    loads.loaded_needs_relayout = true;
+                }
+            });
+        loads
     }
 
     fn layout_affecting_asset_load(
         block: &BlockItem,
         asset_cache: &AssetCache,
-    ) -> Option<AssetHandle> {
-        let BlockItem::MermaidDiagram { asset_source, .. } = block else {
-            return None;
-        };
-        match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
-            AssetState::Loading { handle } => Some(handle),
-            AssetState::Loaded { .. } | AssetState::Evicted | AssetState::FailedToLoad(_) => None,
+    ) -> Option<LayoutAffectingAssetLoad> {
+        match block {
+            BlockItem::MermaidDiagram {
+                asset_source,
+                config,
+                ..
+            } => match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => Some(LayoutAffectingAssetLoad::Loading(handle)),
+                AssetState::Loaded { data } => {
+                    mermaid_diagram_needs_loaded_layout(config, data.as_ref())
+                        .then_some(LayoutAffectingAssetLoad::LoadedNeedsRelayout)
+                }
+                AssetState::Evicted | AssetState::FailedToLoad(_) => None,
+            },
+            // Mermaid-labeled code blocks that are currently rendered as code (because the
+            // Mermaid source has not yet been verified as parseable) also need to be watched
+            // so we can re-run layout when the asset load resolves.
+            BlockItem::RunnableCodeBlock {
+                pending_mermaid_asset: Some(asset_source),
+                ..
+            } => match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                AssetState::Loading { handle } => Some(LayoutAffectingAssetLoad::Loading(handle)),
+                AssetState::Loaded { .. } | AssetState::Evicted | AssetState::FailedToLoad(_) => {
+                    None
+                }
+            },
+            _ => None,
         }
     }
 
-    fn watch_visible_layout_affecting_asset_loads(&mut self, ctx: &mut ViewContext<Self>) {
-        for handle in self.visible_layout_affecting_asset_loads(ctx) {
+    fn watch_layout_affecting_asset_loads(&mut self, ctx: &mut ViewContext<Self>) {
+        let loads = self.layout_affecting_asset_loads(ctx);
+        if loads.loaded_needs_relayout {
+            self.model.update(ctx, |model, ctx| {
+                model.rebuild_layout(ctx);
+            });
+        }
+
+        for handle in loads.loading {
             if self
                 .pending_layout_affecting_asset_loads
                 .insert(handle.clone())
@@ -1338,8 +1404,9 @@ impl RichTextEditorView {
                     ctx.spawn(future, move |me, (), ctx| {
                         me.pending_layout_affecting_asset_loads.remove(&handle);
                         me.model.update(ctx, |model, ctx| {
-                            if matches!(model.interaction_state(ctx), InteractionState::Selectable)
-                            {
+                            if Self::should_rebuild_layout_after_layout_affecting_asset_load(
+                                model.interaction_state(ctx),
+                            ) {
                                 model.rebuild_layout(ctx);
                             }
                         });
@@ -1350,6 +1417,15 @@ impl RichTextEditorView {
                 }
             }
         }
+    }
+
+    fn should_rebuild_layout_after_layout_affecting_asset_load(state: InteractionState) -> bool {
+        matches!(
+            state,
+            InteractionState::Selectable
+                | InteractionState::Editable
+                | InteractionState::EditableWithInvalidSelection
+        )
     }
 
     /// Handles changes to the lifecycle state.
@@ -1880,6 +1956,18 @@ impl RichTextEditorView {
         };
 
         if let Some(url) = url {
+            if url.starts_with('#')
+                && (cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable))
+            {
+                let scrolled = self
+                    .model
+                    .update(ctx, |model, ctx| model.scroll_to_matching_header(&url, ctx));
+                if scrolled {
+                    self.open_link = None;
+                    ctx.notify();
+                    return;
+                }
+            }
             // In read-only comment chips (Selectable), open the link directly on
             // click instead of showing a tooltip.
             if cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable) {
@@ -2289,13 +2377,17 @@ impl RichTextEditorView {
 
         // Common secondary link actions:
         let ui_builder = appearance.ui_builder().clone();
+        let copy_link_tooltip = crate::i18n::tr_static(ctx, "Copy link").to_owned();
         tool_tip.add_child(
             Container::new(
                 appearance
                     .ui_builder()
                     .copy_button(12., self.mouse_states.copy_link_mouse_handle.clone())
                     .with_tooltip(move || {
-                        ui_builder.tool_tip("Copy link".to_owned()).build().finish()
+                        ui_builder
+                            .tool_tip(copy_link_tooltip.clone())
+                            .build()
+                            .finish()
                     })
                     .build()
                     .on_click(|ctx, _, _| ctx.dispatch_typed_action(EditorViewAction::CopyLink))
@@ -2347,7 +2439,7 @@ impl RichTextEditorView {
                             ButtonVariant::Text,
                             self.mouse_states.edit_link_mouse_handle.clone(),
                         )
-                        .with_text_label("Edit".to_string())
+                        .with_text_label(crate::i18n::tr_static(ctx, "Edit").to_string())
                         .build()
                         .on_click(|ctx, _, _| ctx.dispatch_typed_action(EditorViewAction::EditLink))
                         .finish(),
@@ -2746,7 +2838,10 @@ impl TypedActionView for RichTextEditorView {
                 }
                 let window_id = ctx.window_id();
                 crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(String::from("Link copied"));
+                    let toast = DismissibleToast::default(String::from(crate::i18n::tr_static(
+                        ctx,
+                        "Link copied",
+                    )));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 ctx.notify();
@@ -2960,6 +3055,20 @@ impl TypedActionView for RichTextEditorView {
             } => self.model.update(ctx, |model, ctx| {
                 model.update_code_block_type_at_offset(code_block_type, start_anchor.clone(), ctx)
             }),
+            MermaidDisplayModeSelected { start_anchor, mode } => {
+                let offset = self
+                    .model
+                    .as_ref(ctx)
+                    .buffer_selection_model()
+                    .as_ref(ctx)
+                    .resolve_anchor(start_anchor);
+                if let Some(offset) = offset {
+                    let mode = *mode;
+                    self.model.update(ctx, |model, ctx| {
+                        model.set_mermaid_render_mode(offset, mode, ctx);
+                    });
+                }
+            }
             CopyTextToClipboard {
                 text,
                 block,
@@ -3217,6 +3326,7 @@ impl TypedActionView for RichTextEditorView {
             | EditorViewAction::RunWorkflow(_)
             | EditorViewAction::RemoveEmbeddingAt(_)
             | EditorViewAction::OpenFile { .. }
+            | EditorViewAction::MermaidDisplayModeSelected { .. }
             | EditorViewAction::VimUserTyped(_) => ActionAccessibilityContent::Empty,
         }
     }

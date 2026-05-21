@@ -114,6 +114,7 @@ pub(crate) fn fuzzy_match_saved_prompts(
                             name_match_result,
                             description_match_result: None,
                             score: OrderedFloat(100.0),
+                            compact_layout: false,
                         };
                         results.push(QueryResult::from(item));
                     }
@@ -143,6 +144,7 @@ pub(crate) fn fuzzy_match_saved_prompts(
                             name_match_result: match_result.name_match_result,
                             description_match_result: match_result.content_match_result,
                             score,
+                            compact_layout: false,
                         };
                         results.push(QueryResult::from(item));
                     }

@@ -106,7 +106,7 @@ impl BlockInsertionMenuState {
 
         if embedded_objects_enabled {
             menu.add_item(
-                MenuItemFields::new("Embed")
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Embed"))
                     .with_icon(Icon::EmbedBlock)
                     .with_on_select_action(EditorViewAction::OpenEmbeddedObjectSearch)
                     .into_item(),
@@ -126,7 +126,7 @@ impl BlockInsertionMenuState {
         }
 
         menu.add_item(
-            MenuItemFields::new("Divider")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Divider"))
                 .with_icon(Icon::HorizontalRuleBlock)
                 .with_on_select_action(EditorViewAction::InsertBlock(
                     warp_editor::content::text::BlockType::Item(BufferBlockItem::HorizontalRule),
@@ -301,6 +301,7 @@ impl RichTextEditorView {
     fn render_button(&self, stack: &mut Stack, app: &AppContext) {
         let appearance = Appearance::as_ref(app);
         let ui_builder = appearance.ui_builder().clone();
+        let insert_block_tooltip = crate::i18n::tr_static(app, "Insert block").to_string();
         let button = icon_button(
             appearance,
             Icon::Plus,
@@ -315,7 +316,7 @@ impl RichTextEditorView {
         })
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Insert block".to_string())
+                .tool_tip(insert_block_tooltip.clone())
                 .build()
                 .finish()
         })

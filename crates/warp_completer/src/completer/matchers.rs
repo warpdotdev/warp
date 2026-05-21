@@ -110,5 +110,5 @@ impl From<Match> for MatchType {
 }
 
 #[cfg(test)]
-#[path = "matchers_test.rs"]
+#[path = "matchers_tests.rs"]
 mod tests;

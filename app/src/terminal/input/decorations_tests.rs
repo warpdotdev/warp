@@ -69,7 +69,7 @@ fn test_decorations_with_multibyte_chars() {
                 let future_handle = input
                     .decorations_future_handle
                     .take()
-                    .expect("should have spanwed decoration task");
+                    .expect("should have spawned decoration task");
                 ctx.await_spawned_future(future_handle.future_id())
             })
             .await;

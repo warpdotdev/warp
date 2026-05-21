@@ -209,9 +209,9 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::SummarizeConversation { prompt } => {
+            AIAgentInput::SummarizeConversation { prompt, context } => {
                 return Ok(api::request::Input {
-                    context: None,
+                    context: Some(convert_context(context.as_ref())),
                     r#type: Some(api::request::input::Type::SummarizeConversation(
                         api::request::input::SummarizeConversation {
                             prompt: prompt.unwrap_or_default(),
@@ -435,6 +435,19 @@ fn convert_input_to_user_input(
                 ),
             )
         }
+        AIAgentInput::OrchestrationConfigUpdate {
+            plan_id,
+            config,
+            status,
+        } => Ok(
+            api::request::input::user_inputs::user_input::Input::OrchestrationConfigUpdate(
+                api::OrchestrationConfigUpdate {
+                    plan_id,
+                    config: Some(config.to_proto()),
+                    status: status.to_proto(),
+                },
+            ),
+        ),
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InitProjectRules { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CodeReview { .. } => Err(ConvertToAPITypeError::Ignore),
@@ -692,6 +705,9 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::AskUserQuestion(ask_user_question_result) => {
                 Some(ask_user_question_result.into())
             }
+            AIAgentActionResultType::RunAgents(orchestrate_result) => {
+                Some(orchestrate_result.try_into()?)
+            }
         };
         Ok(
             api::request::input::user_inputs::user_input::Input::ToolCallResult(
@@ -792,6 +808,8 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 api_context.git = Some(api::input_context::Git {
                     head,
                     branch: branch.unwrap_or_default(),
+                    repository: None,   // TODO: populate?
+                    pull_request: None, // TODO: populate?
                 });
             }
             AIAgentContext::Skills { skills } => {
@@ -940,7 +958,7 @@ impl From<BlockContext> for api::ExecutedShellCommand {
     }
 }
 
-/// Trys to convert a [`serde_json::Value`] to a [`prost_types::Value`].
+/// Tries to convert a [`serde_json::Value`] to a [`prost_types::Value`].
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn serde_json_to_prost(value: serde_json::Value) -> Result<prost_types::Value, String> {
     use prost_types::value::Kind::*;

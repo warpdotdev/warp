@@ -36,7 +36,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             ));
 
             // Log some additional windowing system information on Linux.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             {
                 use winit::raw_window_handle::HasDisplayHandle as _;
 
@@ -54,7 +54,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }
     }
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
     {
         use std::ops::Deref as _;
 
@@ -90,7 +90,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         let lspci_info = collect_output_or_suggest_install("lspci");
         println!("##################################################");

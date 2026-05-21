@@ -82,7 +82,7 @@ impl Iterator for BlockOutlines<'_> {
         let end_count = self.count + 1;
         self.cursor.seek(&end_count, SeekBias::Left);
 
-        // We seeked to the start of the next block, so it's where we start on the next pass.
+        // We sought to the start of the next block, so it's where we start on the next pass.
         self.count = end_count;
         Some(BlockOutline {
             start: start_offset,

@@ -26,7 +26,7 @@ use warp_multi_agent_api as api;
 use warpui::{async_assert, integration::TestStep, text::SelectionType, Event, SingletonEntity};
 
 cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
+    if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
         lazy_static! {
             /// Position directly to the left of the first user query.
             static ref START_OF_FIRST_BLOCK_POSITION: Vector2F = vec2f(17.0, 239.0);

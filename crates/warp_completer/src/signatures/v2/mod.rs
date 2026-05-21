@@ -227,5 +227,5 @@ impl Opt {
 }
 
 #[cfg(test)]
-#[path = "signatures_test.rs"]
+#[path = "signatures_tests.rs"]
 mod test;

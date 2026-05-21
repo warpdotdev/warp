@@ -32,7 +32,13 @@ use crate::{
             listener::ObjectUpdateMessage,
             update_manager::{GetCloudObjectResponse, InitialLoadResponse},
         },
-        graphql::{get_request_context, get_user_facing_error_message},
+        graphql::{
+            get_request_context, get_user_facing_error_message,
+            schema::{
+                object_update_success_to_update_result,
+                update_generic_string_object_result_to_update_result,
+            },
+        },
         ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId, ToServerId},
         server_api::{auth::AuthClient, ServerApi},
         sync_queue::SerializedModel,
@@ -740,7 +746,9 @@ impl ObjectClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await?;
 
         match response.update_folder {
-            UpdateFolderResult::UpdateFolderOutput(output) => output.update.try_into(),
+            UpdateFolderResult::UpdateFolderOutput(output) => {
+                object_update_success_to_update_result(output.update)
+            }
             UpdateFolderResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -767,7 +775,7 @@ impl ObjectClient for ServerApi {
 
         let operation = UpdateGenericStringObject::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
-        response.update_generic_string_object.try_into()
+        update_generic_string_object_result_to_update_result(response.update_generic_string_object)
     }
 
     async fn grab_notebook_edit_access(&self, notebook_id: NotebookId) -> Result<ServerMetadata> {

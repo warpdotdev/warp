@@ -28,6 +28,7 @@ use crate::{
         EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
         TextOptions,
     },
+    i18n::{self, I18nKey},
     ui_components::icons::Icon,
 };
 
@@ -115,7 +116,7 @@ impl CodeReviewDiffMenu {
                 ..Default::default()
             };
             let mut editor = EditorView::new(options, ctx);
-            editor.set_placeholder_text("Search diff sets or branches to compare…", ctx);
+            editor.set_placeholder_text(i18n::tr(ctx, I18nKey::CodeSearchDiffSetsPlaceholder), ctx);
             editor
         });
 

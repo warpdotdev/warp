@@ -226,7 +226,7 @@ impl ActiveNotebookData {
         // create a new client id
         let new_id = ClientId::default();
 
-        // Set the active notebook to be an uncommited notebook
+        // Set the active notebook to be an uncommitted notebook
         self.active_notebook = ActiveNotebook::NewNotebook(Box::new(CloudNotebook::new_local(
             CloudNotebookModel::default(),
             owner,
@@ -311,7 +311,7 @@ impl ActiveNotebookData {
 
     /// Checks whether or not this notebook has edit conflicts that would
     /// results in the conflict resolution banner being shown. We check both
-    /// if a conflicting object has been recieved from the server, and that there
+    /// if a conflicting object has been received from the server, and that there
     /// are no pending content changes on the notebook.
     ///
     /// We need to check the pending content changes because of a race condition where

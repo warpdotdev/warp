@@ -6,4 +6,4 @@ This crate provides a stdio-only Language Server Protocol (LSP) client transport
 - Communicates over stdio using JSON-RPC with proper Content-Length framing
 
 
-See main.rs for an example implmentation
+See `examples/rust-lsp/main.rs` for an example implementation.

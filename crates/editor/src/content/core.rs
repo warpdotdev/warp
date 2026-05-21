@@ -215,6 +215,19 @@ impl Buffer {
                 .resolve(&anchors.end)
                 .expect("Anchor should exist");
             log::trace!("Start anchor => {edit_start}, end anchor => {edit_end}");
+
+            // Safety: if a previous edit in this batch caused the anchors for this
+            // action to cross (start > end), skip the action rather than panicking.
+            // This can happen when overlapping DiffDeltas slip through the diff
+            // matching layer (see WARP-CLIENT-DEV-NYY).
+            if edit_start > edit_end {
+                log::warn!(
+                    "Skipping edit action with inverted range {edit_start}..{edit_end} \
+                     (anchors crossed after a prior edit in the same batch)"
+                );
+                continue;
+            }
+
             let edit_range = edit_start..edit_end;
             let replaced_points = self.offset_range_to_point_range(edit_range.clone());
 
@@ -291,6 +304,12 @@ impl Buffer {
             };
 
             new_range_anchors.push(new_anchors);
+        }
+
+        // If every action in the batch was skipped (e.g. all had inverted ranges),
+        // there is nothing to commit — return early.
+        if new_range_anchors.is_empty() {
+            return EditResult::default();
         }
 
         // Resolve each delta's new content range anchors against the final buffer state.

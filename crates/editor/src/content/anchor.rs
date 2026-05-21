@@ -10,7 +10,7 @@ use string_offset::CharOffset;
 use super::text::BufferText;
 
 #[cfg(test)]
-#[path = "anchor_test.rs"]
+#[path = "anchor_tests.rs"]
 mod test;
 
 /// Handle to a particular anchor. As long as there is an active handle, the

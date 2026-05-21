@@ -91,7 +91,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
             // On Ubuntu (and possibly other Linux distros), a message is
             // printed out during shell initialization telling the user how to
             // use `sudo`. This interferes with our expected pty contents, so suppress the message.
-            if cfg!(target_os = "linux") {
+            if cfg!(any(target_os = "linux", target_os = "freebsd")) {
                 std::fs::File::create(dir.join(".sudo_as_admin_successful"))
                     .expect("should not fail to create file in home directory");
             }

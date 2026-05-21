@@ -38,7 +38,7 @@ pub(super) enum DProtoHook {
         value: PreexecValue,
     },
     Bootstrapped {
-        // This is wrapped in an `Box` to surpress clippy's large-enum-variant warning, not because it
+        // This is wrapped in an `Box` to suppress clippy's large-enum-variant warning, not because it
         // functionally needs to be wrapped in an `Box`.
         value: Box<BootstrappedValue>,
     },
@@ -254,6 +254,9 @@ impl DProtoHook {
                 "home_dir" => value.home_dir = map_empty_to_none(v),
                 "path" => {
                     value.path = map_empty_to_none(v);
+                }
+                "cdpath" => {
+                    value.cdpath = map_empty_to_none(v);
                 }
                 "editor" => {
                     value.editor = map_empty_to_none(v);
@@ -510,6 +513,10 @@ pub struct BootstrappedValue {
 
     #[serde(deserialize_with = "empty_string_is_none")]
     pub path: Option<String>,
+
+    /// `CDPATH` from the shell, colon-separated.
+    #[serde(deserialize_with = "empty_string_is_none", default)]
+    pub cdpath: Option<String>,
 
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub editor: Option<String>,

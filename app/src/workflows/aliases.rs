@@ -151,5 +151,5 @@ impl WorkflowAliases {
 }
 
 #[cfg(test)]
-#[path = "aliases_test.rs"]
+#[path = "aliases_tests.rs"]
 mod tests;

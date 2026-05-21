@@ -661,5 +661,5 @@ impl<T: Action + Clone> RegisteredDataSource<T> {
 }
 
 #[cfg(test)]
-#[path = "mixer_test.rs"]
+#[path = "mixer_tests.rs"]
 mod mixer_test;

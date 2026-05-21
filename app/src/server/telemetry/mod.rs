@@ -320,7 +320,7 @@ impl TelemetryApi {
             .into_iter()
             .partition(|message| message.contains_ugc);
 
-        // If we shouldn't collect UGC telemetry, forceably clear any messages with UGC before trying to send.
+        // If we shouldn't collect UGC telemetry, forcibly clear any messages with UGC before trying to send.
         if !settings_snapshot.should_collect_ai_ugc_telemetry() {
             messages_with_ugc.clear();
         }

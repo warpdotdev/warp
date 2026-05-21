@@ -1,8 +1,5 @@
 use instant::Duration;
-use settings::{
-    is_settings_file_enabled, set_settings_file_enabled, PrivatePreferences, PublicPreferences,
-    Setting, SettingsManager,
-};
+use settings::{PrivatePreferences, PublicPreferences, Setting, SettingsManager};
 use settings_value::SettingsValue;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
@@ -58,33 +55,12 @@ fn init_test_app(ctx: &mut warpui::AppContext) {
     MigrationTestSettings::register(ctx);
 }
 
-struct SettingsFileEnabledGuard(bool);
-
-impl SettingsFileEnabledGuard {
-    fn new(enabled: bool) -> Self {
-        let previous = is_settings_file_enabled();
-        set_settings_file_enabled(enabled);
-        Self(previous)
-    }
-}
-
-impl Drop for SettingsFileEnabledGuard {
-    fn drop(&mut self) {
-        set_settings_file_enabled(self.0);
-    }
-}
-
-// Only tests that toggle the process-global SettingsFile routing flag need to
-// run serially.
-
 #[test]
-#[serial_test::serial]
 fn test_migration_copies_public_settings_from_native_store() {
     warpui::App::test((), |mut app| async move {
         // Enable the settings file so `preferences_for_setting` routes
         // public setting writes to the Model singleton (not the private store).
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
-        let _settings_file_enabled = SettingsFileEnabledGuard::new(true);
 
         app.update(init_test_app);
 
@@ -172,11 +148,9 @@ fn test_migration_writes_marker_to_native_store() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_migration_skips_settings_absent_from_native_store() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
-        let _settings_file_enabled = SettingsFileEnabledGuard::new(true);
         app.update(init_test_app);
 
         // Don't seed anything in the native store — all settings are absent.
@@ -282,11 +256,9 @@ fn test_migration_does_not_rerun_when_marker_present() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_migration_with_multiple_setting_types() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
-        let _settings_file_enabled = SettingsFileEnabledGuard::new(true);
 
         app.update(init_test_app);
 
@@ -422,7 +394,7 @@ use notifications_migration::{
 fn test_notifications_from_file_value_rejects_serde_format_enum() {
     // serde serializes NotificationsMode::Enabled as "Enabled" (PascalCase),
     // but from_file_value expects "enabled" (snake_case). When the field is
-    // present but unparseable, from_file_value should return None — not
+    // present but unparsable, from_file_value should return None — not
     // silently fall back to the #[serde(default)] value (Unset).
     let serde_json_value = serde_json::to_value(NotificationsSettings {
         mode: NotificationsMode::Enabled,
@@ -462,11 +434,9 @@ fn test_notifications_from_file_value_rejects_serde_format_duration() {
 // -- Migration integration tests: these demonstrate end-to-end data loss -----
 
 #[test]
-#[serial_test::serial]
 fn test_migration_preserves_notifications_mode() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
-        let _settings_file_enabled = SettingsFileEnabledGuard::new(true);
 
         app.update(init_notifications_migration_test_app);
 
@@ -501,11 +471,9 @@ fn test_migration_preserves_notifications_mode() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_migration_preserves_custom_long_running_threshold() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
-        let _settings_file_enabled = SettingsFileEnabledGuard::new(true);
 
         app.update(init_notifications_migration_test_app);
 

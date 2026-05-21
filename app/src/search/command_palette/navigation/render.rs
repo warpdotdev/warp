@@ -80,6 +80,7 @@ fn render_session_label(
         highlight_indices.command_indices.clone(),
         highlight_indices.hint_text_indices.clone(),
         appearance,
+        app,
     );
 
     navigation_palette_item.add_child(
@@ -101,10 +102,11 @@ fn render_session_label(
 fn render_current_session_pill(
     command_context: CommandContext,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let current_session_pill = appearance
         .ui_builder()
-        .span("Current".to_string())
+        .span(crate::i18n::tr_static(app, "Current").to_string())
         .with_style(UiComponentStyles {
             font_family_id: Some(appearance.monospace_font_family()),
             // The font size is scaled down to make sure the pill fits in the row with its padding.
@@ -246,6 +248,7 @@ fn render_command_context(
     command_indices: Option<Vec<usize>>,
     hint_text_indices: Vec<usize>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let command_render_info = CommandRenderInfo::from_context(session.command_context());
 
@@ -316,6 +319,7 @@ fn render_command_context(
         command_row.add_child(render_current_session_pill(
             session.command_context(),
             appearance,
+            app,
         ));
     }
 

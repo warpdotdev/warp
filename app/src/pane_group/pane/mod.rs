@@ -32,6 +32,8 @@ pub mod workflow_pane;
 
 use std::{any::Any, fmt::Display};
 
+#[cfg(feature = "local_fs")]
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
 use crate::view_components::action_button::ActionButton;
@@ -55,7 +57,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
-use warp_core::HostId;
+use warp_util::remote_path::RemotePath;
 use warpui::{
     elements::{DispatchEventResult, EventHandler, MouseInBehavior},
     presenter::ChildView,
@@ -842,6 +844,14 @@ impl PaneConfiguration {
         ctx.emit(PaneConfigurationEvent::ToggleSharingDialog(source));
     }
 
+    pub fn open_sharing_qr_code(
+        &mut self,
+        source: SharingDialogSource,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(PaneConfigurationEvent::OpenSharingQrCode(source));
+    }
+
     /// Notifies that the header content has changed and the pane header should re-render.
     /// Use this when the backing view's state has changed in a way that affects the header
     /// content returned by `render_header_content()`.
@@ -867,6 +877,7 @@ pub enum PaneConfigurationEvent {
     RefreshPaneHeaderOverflowMenuItems,
     ShareableObjectChanged(Option<ShareableObject>),
     ToggleSharingDialog(SharingDialogSource),
+    OpenSharingQrCode(SharingDialogSource),
     DimEvenIfFocusedUpdated,
     /// The header content has changed and should be re-rendered.
     /// This is used when the backing view's state changes in a way that
@@ -1105,8 +1116,7 @@ pub enum PaneEvent {
     RepoChanged,
     /// A remote server resolved the repo root for a session in this pane.
     RemoteRepoNavigated {
-        host_id: HostId,
-        indexed_path: String,
+        remote_path: RemotePath,
     },
     /// Split the current pane into two. If `initial_query` is `Some` fill the new pane's input with
     /// its value.
@@ -1116,12 +1126,12 @@ pub enum PaneEvent {
     ClearHoveredTabIndex,
     #[cfg(feature = "local_fs")]
     ReplaceWithCodePane {
-        path: std::path::PathBuf,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
     #[cfg(feature = "local_fs")]
     ReplaceWithFilePane {
-        path: std::path::PathBuf,
+        path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
     },
 }
