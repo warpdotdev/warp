@@ -5,8 +5,8 @@ use warp_core::ui::theme::Fill;
 use warpui::{
     elements::{
         ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Element, Flex, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Radius, Stack, Text,
+        Element, Flex, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+        PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
     },
     fonts::{Properties, Weight},
     id,
@@ -58,6 +58,7 @@ pub struct DiffSelector {
     menu: ViewHandle<CodeReviewDiffMenu>,
     menu_open: bool,
     trigger_mouse_state: MouseStateHandle,
+    trigger_position_id: String,
     /// Cached label for the trigger button; mirrors the selected `DiffTarget`.
     trigger_label: String,
 }
@@ -97,6 +98,7 @@ impl DiffSelector {
         });
 
         Self {
+            trigger_position_id: format!("code_review_diff_selector_trigger_{}", menu.id()),
             menu,
             menu_open: false,
             trigger_mouse_state: MouseStateHandle::default(),
@@ -245,16 +247,18 @@ impl View for DiffSelector {
                 ctx.dispatch_typed_action(DiffSelectorAction::Toggle);
             })
             .finish();
+        let trigger = SavePosition::new(trigger, &self.trigger_position_id).finish();
 
         let mut stack = Stack::new().with_child(trigger);
 
         if self.menu_open {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.menu).finish(),
-                OffsetPositioning::offset_from_parent(
+                OffsetPositioning::offset_from_save_position_element(
+                    self.trigger_position_id.as_str(),
                     vec2f(0., MENU_OFFSET_Y),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomLeft,
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
                     ChildAnchor::TopLeft,
                 ),
             );
