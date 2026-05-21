@@ -33,7 +33,7 @@ use crate::ai::blocklist::agent_view::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
+use crate::ai::blocklist::{AppLevelHeuristic, BlocklistAIHistoryModel, SlashCommandRequest};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};

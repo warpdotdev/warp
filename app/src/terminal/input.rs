@@ -6223,7 +6223,6 @@ impl Input {
     }
 
     /// Switches to AI mode but preserves current lock state.
-
     fn enter_ai_mode(
         &mut self,
         decision_source: Option<InputTypeAutoDetectionSource>,
@@ -12716,7 +12715,7 @@ impl Input {
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
-                    input_type_decision_source: input_type_decision_source,
+                    input_type_decision_source,
                     was_lock_set_with_empty_buffer,
                     block_id,
                 },
