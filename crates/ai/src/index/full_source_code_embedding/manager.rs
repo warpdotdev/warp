@@ -13,7 +13,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use chrono::Utc;
         use super::changed_files::ChangedFiles;
-        use crate::index::{path_passes_filters, path_passes_gitignore, should_descend_into_git_path};
+        use crate::index::{is_git_internal_path, matches_gitignores};
         use ignore::gitignore::Gitignore;
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
         use warp_core::features::FeatureFlag;
@@ -842,21 +842,21 @@ impl CodebaseIndexManager {
         gitignores: Arc<Vec<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Only emit events for paths that pass the existing gitignore
-        // and `.git/` allowlist rules.
-        let emit_gitignores = gitignores.clone();
-        let should_emit_event =
-            Arc::new(move |path: &Path| path_passes_filters(path, emit_gitignores.as_slice()));
-
-        // Descend through gitignore-allowed directories and
-        // through `.git/` paths that may contain allowlisted files like `.git/HEAD`.
-        let descend_gitignores = gitignores;
-        let should_register_directory = Arc::new(move |path: &Path| {
-            path_passes_gitignore(path, descend_gitignores.as_slice())
-                && should_descend_into_git_path(path)
+        // The codebase indexer only cares about source files:
+        // skip anything inside `.git/` and anything matched by gitignore
+        // (including descendants of an ignored ancestor directory).
+        // The same predicate gates both directory descent and event emission.
+        let filter = Arc::new(move |path: &Path| {
+            !is_git_internal_path(path)
+                && !matches_gitignores(
+                    path,
+                    path.is_dir(),
+                    gitignores.as_slice(),
+                    true, /* check_ancestors */
+                )
         });
 
-        let watch_filter = WatchFilter::with_filter(should_register_directory, should_emit_event);
+        let watch_filter = WatchFilter::with_filter(filter.clone(), filter);
         self.watcher.update(ctx, |watcher, _ctx| {
             std::mem::drop(watcher.register_path(
                 root_path,

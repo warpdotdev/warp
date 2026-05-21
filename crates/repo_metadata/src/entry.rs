@@ -514,7 +514,7 @@ pub fn should_ignore_git_path(path: &Path) -> bool {
 
 /// Returns `true` when the directory at `path` should be registered for watching.
 /// Specifically for prefixes that lead to an allowlisted file and `false` for everything else inside `.git/`.
-pub fn should_descend_into_git_path(path: &Path) -> bool {
+pub fn should_watch_directory_in_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return true;
     }
@@ -546,27 +546,27 @@ pub fn should_descend_into_git_path(path: &Path) -> bool {
     descend_allowlist_matches(&suffix)
 }
 
-/// Returns `true` for an in-`.git/` path suffix that lies on the way to an allowlisted file.
-/// `suffix` is the component sequence after the `.git` component (worktree indirection already stripped).
+/// Returns `true` for an in-`.git/` directory suffix that lies on the way to an allowlisted file.
+/// `suffix` is the component sequence after the `.git` component (worktree indirection already stripped),
+/// so e.g. `.git/worktrees/<name>/refs/heads` is seen here as just `["refs", "heads"]`.
+///
+/// Only the first two components are inspected:
+/// - `top_level_dir` is the directory immediately under `.git/` (e.g. `refs`, `objects`, `worktrees`)
+///   and decides which subtree we're descending into.
+/// - `refs_subdir` is meaningful only when `top_level_dir == "refs"`, where it distinguishes
+///   the watched ref subtrees (`heads`, `remotes`) from pruned ones (`tags`, etc.).
 fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
-    let first = suffix.first().and_then(|c| c.as_os_str().to_str());
-    let second = suffix.get(1).and_then(|c| c.as_os_str().to_str());
-    match first {
-        // `.git/refs`, `.git/refs/heads`, `.git/refs/heads/...`,
-        // `.git/refs/remotes`, `.git/refs/remotes/<r>`,
-        // `.git/refs/remotes/<r>/...`.
-        Some("refs") => match second {
-            None => true,            // `.git/refs`
-            Some("heads") => true,   // `.git/refs/heads[/...]`
-            Some("remotes") => true, // `.git/refs/remotes[/<r>[/...]]`
-            Some(_) => false,        // `.git/refs/tags/*`, etc.
-        },
+    let top_level_dir = suffix.first().and_then(|c| c.as_os_str().to_str());
+    let refs_subdir = suffix.get(1).and_then(|c| c.as_os_str().to_str());
+    match top_level_dir {
+        // `.git/refs`, `.git/refs/heads[/...]`, `.git/refs/remotes[/<r>[/...]]`.
+        // `.git/refs/tags/*` and other refs subtrees stay pruned.
+        Some("refs") => matches!(refs_subdir, None | Some("heads") | Some("remotes")),
         // Worktree dispatcher — needed to reach `.git/worktrees/<name>/...`.
         Some("worktrees") => true,
-        // Other top-level entries are only descendable when they are allowlisted files.
-        // Non-allowlisted directories such as `.git/objects`, `.git/hooks`, and `.git/logs` must be pruned.
-        Some("HEAD" | "index.lock" | "config" | "config.worktree") if suffix.len() == 1 => true,
+        // All other `.git/` subdirectories (objects, hooks, logs, info, lfs, …) are pruned.
         Some(_) => false,
+        // `.git/` itself — descend so allowlisted children stay reachable.
         None => true,
     }
 }
@@ -585,44 +585,9 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter() -> WatchFilter {
     WatchFilter::with_filter(
-        Arc::new(should_descend_into_git_path),
+        Arc::new(should_watch_directory_in_git_path),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
     )
-}
-
-/// Returns true if `path` is not matched by any of the supplied gitignores.
-/// Canonicalizes the path first (when it exists on disk) and consults
-/// ancestor `.gitignore` rules so children of an ignored directory are also
-/// reported as ignored.
-pub fn path_passes_gitignore(path: &Path, gitignores: &[Gitignore]) -> bool {
-    let to_check_path = if path.exists() {
-        match dunce::canonicalize(path) {
-            Ok(canonical_path) => canonical_path,
-            Err(_) => return false,
-        }
-    } else {
-        path.to_path_buf()
-    };
-
-    !matches_gitignores(
-        &to_check_path,
-        to_check_path.is_dir(),
-        gitignores,
-        true, /* check_ancestors */
-    )
-}
-
-pub fn path_passes_filters(path: &Path, gitignores: &[Gitignore]) -> bool {
-    let to_check_path = if path.exists() {
-        match dunce::canonicalize(path) {
-            Ok(canonical_path) => canonical_path,
-            Err(_) => return false,
-        }
-    } else {
-        path.to_path_buf()
-    };
-
-    path_passes_gitignore(&to_check_path, gitignores) && !should_ignore_git_path(&to_check_path)
 }
 
 /// Determines whether a file should be parsed by a treesitter query. For now the main criteria is it shouldn't
