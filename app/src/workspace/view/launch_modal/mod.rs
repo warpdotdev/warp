@@ -2,10 +2,10 @@
 pub mod cta_button;
 pub mod oz_launch;
 
-// Re-export slide types for convenience
 use std::collections::HashMap;
 
 use markdown_parser::{parse_markdown, FormattedText, FormattedTextLine};
+// Re-export slide types for convenience
 pub use oz_launch::OzLaunchSlide;
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;

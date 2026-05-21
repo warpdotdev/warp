@@ -15,8 +15,8 @@ cfg_if::cfg_if! {
     }
 }
 
-// Re-export a variety of symbols from the internal implementation modules.
 pub use futures_util::future::LocalBoxFuture;
+// Re-export a variety of symbols from the internal implementation modules.
 pub use imp::{block_on, BoxFuture, Spawnable, SpawnableOutput, Stream, Timer, TransportStream};
 
 pub mod executor {
