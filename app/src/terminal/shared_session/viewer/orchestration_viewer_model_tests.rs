@@ -1378,6 +1378,15 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
     // circuits, and without a retry on `SetActiveConversation` the pane
     // never appears on the streamer's viewer-mode entry — leaving the
     // pill bar empty for the lifetime of the model.
+    //
+    // Production-shape setup: the viewer-side parent placeholder is created
+    // via `start_new_conversation` and marked `is_viewing_shared_session`
+    // through `set_viewing_shared_session_for_conversation` (no `task_id`
+    // is ever stamped on it — `replay_agent_conversations.rs` sends an
+    // empty `run_id` in StreamInit). The placeholder also has no
+    // `parent_conversation_id` (children get one through
+    // `start_new_child_conversation`). The discriminator in
+    // `register_viewer_mode_consumer_if_possible` must accept this shape.
     use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
     use warp_core::features::FeatureFlag;
     use warpui::SingletonEntity;
@@ -1408,17 +1417,16 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
             );
         });
 
-        // Now create the parent placeholder conversation (shared-session
-        // viewer with task_id == parent) and mark it active for the view.
-        // This emits `SetActiveConversation`, which the viewer model handles
-        // by retrying `register_viewer_mode_consumer_if_possible`.
+        // Now create the parent placeholder conversation in the shape that
+        // `on_shared_init` produces in production: `is_viewing_shared_session`
+        // is `true`, no `parent_conversation_id` is set, and `task_id` is
+        // never stamped on it. Marking it active emits `SetActiveConversation`,
+        // which the viewer model handles by retrying
+        // `register_viewer_mode_consumer_if_possible`.
         let history = BlocklistAIHistoryModel::handle(&app);
         history.update(&mut app, |history, ctx| {
             let id = history.start_new_conversation(terminal_view_id, false, true, false, ctx);
             history.set_viewing_shared_session_for_conversation(id, true);
-            if let Some(conversation) = history.conversation_mut(&id) {
-                conversation.set_task_id(parent);
-            }
             history.set_active_conversation_id(id, terminal_view_id, ctx);
         });
 
@@ -1427,7 +1435,67 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
                 me.viewer_mode_consumer_count_for_test(parent),
                 1,
                 "SetActiveConversation for a parent placeholder must trigger viewer-mode \
-                 consumer registration (regression: pill bar stayed empty in remote-remote case)"
+                 consumer registration (regression: pill bar stayed empty in remote-remote \
+                 and local-local cases under QUALITY-726 semantics)"
+            );
+        });
+    });
+}
+
+#[test]
+fn viewer_model_does_not_register_when_active_conversation_is_a_child_placeholder() {
+    // The discriminator used by `register_viewer_mode_consumer_if_possible`
+    // must reject conversations that are themselves child placeholders
+    // (created via `start_new_child_conversation`, which links them to the
+    // orchestrator placeholder through `parent_conversation_id`). Without
+    // this guard, the consumer could end up registered against a child
+    // conversation if the user swaps the pane to a child via
+    // `SwapPaneToConversation` before the orchestrator placeholder is
+    // activated — which would persist the orchestration cursor on the
+    // wrong row.
+    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+    use warp_core::features::FeatureFlag;
+    use warpui::SingletonEntity;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+        let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
+
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal_view.id();
+
+        let parent = task_id(PARENT_TASK_ID);
+        let _model = app.add_model(|ctx| {
+            OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
+        });
+
+        // Marker conversation: shared-session-viewing AND has a parent
+        // conversation, i.e. a child placeholder. The discriminator must
+        // NOT accept this as the orchestrator placeholder.
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.update(&mut app, |history, ctx| {
+            let parent_conv_id =
+                history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            let child_id = history.start_new_child_conversation(
+                terminal_view_id,
+                "child".to_string(),
+                parent_conv_id,
+                None,
+                ctx,
+            );
+            history.set_viewing_shared_session_for_conversation(child_id, true);
+            history.set_active_conversation_id(child_id, terminal_view_id, ctx);
+        });
+
+        let streamer = OrchestrationEventStreamer::handle(&app);
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.viewer_mode_consumer_count_for_test(parent),
+                0,
+                "viewer-mode consumer must not register on a child placeholder; \
+                 doing so would persist the orchestration cursor on the wrong row"
             );
         });
     });

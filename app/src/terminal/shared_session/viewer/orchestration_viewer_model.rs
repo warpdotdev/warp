@@ -220,6 +220,24 @@ impl OrchestrationViewerModel {
         }
     }
 
+    /// Identifies the orchestrator placeholder via fields that are reliably
+    /// set on the viewer side under QUALITY-726 semantics:
+    ///
+    /// - `is_viewing_shared_session()` is stamped by `on_shared_init` on the
+    ///   active conversation when the viewer joins a shared session.
+    /// - `parent_conversation_id().is_none()` distinguishes the orchestrator
+    ///   placeholder from child placeholders, which `register_child` sets up
+    ///   via `start_new_child_conversation` (in turn calling
+    ///   `set_parent_for_conversation`).
+    ///
+    /// We deliberately do NOT require `conversation.task_id() == Some(self.parent_task_id)`:
+    /// under QUALITY-726, viewer-side parent placeholders are created from
+    /// replayed StreamInit events whose `run_id` is intentionally empty
+    /// (see `replay_agent_conversations.rs`), so `task_id` on the placeholder
+    /// is always `None`. Requiring it makes this check structurally
+    /// unsatisfiable and matches what the legacy REST polling path tolerates
+    /// in `find_parent_conversation_id`, which just reads
+    /// `active_conversation_id(terminal_view_id)` with no further checks.
     fn register_viewer_mode_consumer_if_possible(&self, ctx: &mut ModelContext<Self>) {
         let Some(parent_conversation_id) =
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id)
@@ -232,22 +250,24 @@ impl OrchestrationViewerModel {
             );
             return;
         };
-        let (is_viewing_shared_session, conv_task_id) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&parent_conversation_id)
-            .map(|conversation| {
-                (
-                    conversation.is_viewing_shared_session(),
-                    conversation.task_id(),
-                )
-            })
-            .unwrap_or((false, None));
-        let is_parent_placeholder =
-            is_viewing_shared_session && conv_task_id == Some(self.parent_task_id);
+        let (is_viewing_shared_session, has_parent_conv, conv_task_id) =
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&parent_conversation_id)
+                .map(|conversation| {
+                    (
+                        conversation.is_viewing_shared_session(),
+                        conversation.parent_conversation_id().is_some(),
+                        conversation.task_id(),
+                    )
+                })
+                .unwrap_or((false, false, None));
+        let is_parent_placeholder = is_viewing_shared_session && !has_parent_conv;
         if !is_parent_placeholder {
             log::warn!(
                 "[orch-viewer] active conversation {:?} for terminal_view_id={:?} is not the \
                  expected parent placeholder (is_viewing_shared_session={is_viewing_shared_session}, \
-                 conv_task_id={conv_task_id:?}, expected parent_task_id={}); deferring registration",
+                 has_parent_conv={has_parent_conv}, conv_task_id={conv_task_id:?}, \
+                 expected parent_task_id={}); deferring registration",
                 parent_conversation_id,
                 self.terminal_view_id,
                 self.parent_task_id,
@@ -260,7 +280,7 @@ impl OrchestrationViewerModel {
         log::info!(
             "[orch-viewer] registering viewer-mode consumer parent_task_id={parent_task_id} \
              placeholder_conv_id={parent_conversation_id:?} consumer_id={consumer_id:?} \
-             terminal_view_id={:?}",
+             terminal_view_id={:?} (placeholder task_id={conv_task_id:?})",
             self.terminal_view_id,
         );
         OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, ctx| {
