@@ -178,7 +178,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   APP_NAME="WarpOss"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
-  FEATURES="release_bundle"
+  FEATURES="release_bundle,ssh_tmux_wrapper"
 fi
 
 # Artifact-specific binary naming
