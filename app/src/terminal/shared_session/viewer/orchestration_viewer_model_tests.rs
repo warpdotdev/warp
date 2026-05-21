@@ -187,6 +187,7 @@ fn setup_model(
         polling_handle: None,
         fetch_generation: 0,
         idle_due_to_no_children: false,
+        metadata_fetch_dispatch_count: 0,
     };
 
     (terminal_view_id, parent_conversation_id, model)
@@ -310,6 +311,7 @@ fn skips_child_when_no_active_parent_conversation() {
             polling_handle: None,
             fetch_generation: 0,
             idle_due_to_no_children: false,
+            metadata_fetch_dispatch_count: 0,
         };
         let model_handle = app.add_model(|_| model);
 
@@ -761,6 +763,152 @@ fn child_status_changed_updates_existing_placeholder_via_local_map() {
             let child_ids = history.child_conversation_ids_of(&parent_conv_id);
             let child = history.conversation(&child_ids[0]).unwrap();
             assert!(matches!(child.status(), ConversationStatus::Success));
+        });
+    });
+}
+
+#[test]
+fn child_status_changed_refetches_metadata_while_session_id_is_pending() {
+    // Regression: in the streamer-driven path, a child first observed
+    // pre-claim has `session_id = None` and is never materialized as a
+    // viewer pane. `handle_child_status_changed` must dispatch a metadata
+    // refetch on subsequent lifecycle events so the claim-time session_id
+    // can be picked up via the existing-entry branch of `register_child`.
+    //
+    // The actual `get_ambient_agent_task` call is dispatched onto the
+    // executor (no `MockAIClient` plumbing in this test file's setup);
+    // we observe the dispatch decision via `metadata_fetch_dispatch_count`,
+    // a cfg(test) counter inside `spawn_task_metadata_fetch`.
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Pre-claim placeholder: register_child with session_id = None.
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::Queued,
+                    "Worker",
+                    None,
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 0,
+                "register_child invoked directly bypasses spawn_task_metadata_fetch"
+            );
+            let entry = model.children.get(&task_id(CHILD_A_TASK_ID)).unwrap();
+            assert!(entry.session_id.is_none());
+            assert!(!entry.pane_materialization_requested);
+        });
+
+        // ChildStatusChanged arrives — the entry still has no session_id,
+        // so handle_child_status_changed must dispatch a refetch.
+        model_handle.update(&mut app, |model, ctx| {
+            model.handle_child_status_changed(CHILD_A_TASK_ID, ConversationStatus::InProgress, ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 1,
+                "ChildStatusChanged for a pre-claim entry must dispatch a metadata refetch"
+            );
+        });
+
+        // Simulate the refetch's callback by directly invoking the
+        // existing-entry path of register_child with the freshly-fetched
+        // task carrying a session_id. This is what
+        // `spawn_task_metadata_fetch`'s spawn callback would do on success.
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    Some(SESSION_A),
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            let entry = model.children.get(&task_id(CHILD_A_TASK_ID)).unwrap();
+            assert_eq!(
+                entry.session_id,
+                Some(SESSION_A.parse().unwrap()),
+                "refetch callback must fill in the claim-time session_id"
+            );
+            assert!(
+                entry.pane_materialization_requested,
+                "existing-entry branch must flip the materialization gate once \
+                 session_id transitions None → Some"
+            );
+        });
+
+        // A subsequent ChildStatusChanged for the same child (now fully
+        // materialized) must NOT dispatch another refetch — status writes
+        // are sufficient once we have session_id + materialization done.
+        model_handle.update(&mut app, |model, ctx| {
+            model.handle_child_status_changed(CHILD_A_TASK_ID, ConversationStatus::Success, ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 1,
+                "materialized child + session_id present ⇒ status-only writes; \
+                 no additional refetch"
+            );
+        });
+    });
+}
+
+#[test]
+fn child_status_changed_does_not_refetch_when_already_materialized() {
+    // Belt and braces: a child that already has a session_id AND has
+    // pane_materialization_requested set must NEVER trigger a refetch on
+    // ChildStatusChanged. This bounds the refetch budget (otherwise every
+    // status change for a long-running child would cost a metadata fetch).
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Register the child WITH a session_id from the start (mirroring
+        // a server response that's caught the run already claimed).
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    Some(SESSION_A),
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            let entry = model.children.get(&task_id(CHILD_A_TASK_ID)).unwrap();
+            assert!(entry.session_id.is_some());
+            assert!(entry.pane_materialization_requested);
+            assert_eq!(model.metadata_fetch_dispatch_count, 0);
+        });
+
+        // Three successive status changes; none should refetch.
+        for status in [
+            ConversationStatus::InProgress,
+            ConversationStatus::Success,
+            ConversationStatus::Cancelled,
+        ] {
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_child_status_changed(CHILD_A_TASK_ID, status, ctx);
+            });
+        }
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 0,
+                "refetch budget must be zero once the child is fully materialized"
+            );
         });
     });
 }

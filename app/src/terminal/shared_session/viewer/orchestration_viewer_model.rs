@@ -105,6 +105,13 @@ pub struct OrchestrationViewerModel {
     /// an `AppendedExchange` on the orchestrator before polling again.
     /// Distinct from the in-flight state (`polling_handle = None`).
     idle_due_to_no_children: bool,
+    /// Test-only: increments each time `spawn_task_metadata_fetch` is
+    /// invoked. Lets unit tests assert on the refetch dispatch decisions
+    /// in `handle_child_spawned` and `handle_child_status_changed`
+    /// without standing up a `MockAIClient`. Behaviorally inert in
+    /// non-test builds.
+    #[cfg(test)]
+    metadata_fetch_dispatch_count: usize,
 }
 
 impl Entity for OrchestrationViewerModel {
@@ -162,6 +169,8 @@ impl OrchestrationViewerModel {
                 polling_handle: None,
                 fetch_generation: 0,
                 idle_due_to_no_children: false,
+                #[cfg(test)]
+                metadata_fetch_dispatch_count: 0,
             };
             model.register_viewer_mode_consumer_if_possible(ctx);
             return model;
@@ -188,6 +197,8 @@ impl OrchestrationViewerModel {
             polling_handle: None,
             fetch_generation: 0,
             idle_due_to_no_children: false,
+            #[cfg(test)]
+            metadata_fetch_dispatch_count: 0,
         };
 
         // Each fetch reschedules itself via its response callback.
@@ -357,24 +368,7 @@ impl OrchestrationViewerModel {
              parent_task_id={}",
             self.parent_task_id
         );
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let parent_task_id = self.parent_task_id;
-        ctx.spawn(
-            async move { ai_client.get_ambient_agent_task(&task_id).await },
-            move |me, result, ctx| {
-                let task = match result {
-                    Ok(task) => task,
-                    Err(err) => {
-                        log::warn!(
-                            "[orch-viewer] failed to fetch pill metadata for \
-                             child task_id={task_id} parent_task_id={parent_task_id}: {err:#}"
-                        );
-                        return;
-                    }
-                };
-                me.register_child(task, ctx);
-            },
-        );
+        self.spawn_task_metadata_fetch(task_id, "ChildSpawned", ctx);
     }
 
     /// Looks up the placeholder for `run_id` and writes the status through
@@ -384,6 +378,16 @@ impl OrchestrationViewerModel {
     /// `TaskStatusSyncModel::on_conversation_status_updated` already
     /// early-returns for `is_viewing_shared_session()` conversations so
     /// these writes do not echo back to the server.
+    ///
+    /// If the placeholder is still pending materialization
+    /// (`entry.session_id.is_none() || !entry.pane_materialization_requested`),
+    /// a metadata refetch is dispatched so the claim-time `session_id`
+    /// gets picked up. The polling path gets this for free by re-fetching
+    /// the full child list every cycle; the streamer path needs an
+    /// explicit hook because lifecycle events carry only status, not
+    /// session_id. Once the entry has been materialized (i.e. once a
+    /// `register_child` call has seen `session_id: Some(_)`), subsequent
+    /// status changes do NOT refetch — they're just status-only writes.
     fn handle_child_status_changed(
         &mut self,
         run_id: &str,
@@ -408,14 +412,68 @@ impl OrchestrationViewerModel {
             return;
         };
         let conversation_id = entry.conversation_id;
+        let needs_metadata_refetch =
+            entry.session_id.is_none() || !entry.pane_materialization_requested;
         let terminal_view_id = self.terminal_view_id;
         log::debug!(
             "[orch-viewer] applying child status conversation_id={conversation_id:?} \
-             task_id={task_id} status={status:?}"
+             task_id={task_id} status={status:?} needs_metadata_refetch={needs_metadata_refetch}"
         );
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             history.update_conversation_status(terminal_view_id, conversation_id, status, ctx);
         });
+
+        if needs_metadata_refetch {
+            // The placeholder hasn't picked up a `session_id` yet (child
+            // was queued/pending at first observation), so the pill click
+            // can't materialize a viewer pane. A status transition is our
+            // cue that the server has more to tell us about this run —
+            // refetch and re-register so the existing-entry branch of
+            // `register_child` can flip `pane_materialization_requested`.
+            log::info!(
+                "[orch-viewer] refetching metadata for child task_id={task_id} \
+                 parent_task_id={} (still pending materialization)",
+                self.parent_task_id
+            );
+            self.spawn_task_metadata_fetch(task_id, "ChildStatusChanged", ctx);
+        }
+    }
+
+    /// Dispatches a `get_ambient_agent_task(task_id)` fetch and routes the
+    /// response through `register_child`. Shared between
+    /// `handle_child_spawned` (first observation) and
+    /// `handle_child_status_changed` (late-bind path for the claim-time
+    /// `session_id`). The `trigger` label is logged on fetch failure so
+    /// the two callers are distinguishable in the diagnostic stream.
+    fn spawn_task_metadata_fetch(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        trigger: &'static str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        #[cfg(test)]
+        {
+            self.metadata_fetch_dispatch_count += 1;
+        }
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let parent_task_id = self.parent_task_id;
+        ctx.spawn(
+            async move { ai_client.get_ambient_agent_task(&task_id).await },
+            move |me, result, ctx| {
+                let task = match result {
+                    Ok(task) => task,
+                    Err(err) => {
+                        log::warn!(
+                            "[orch-viewer] failed to fetch pill metadata for \
+                             child task_id={task_id} parent_task_id={parent_task_id} \
+                             trigger={trigger}: {err:#}"
+                        );
+                        return;
+                    }
+                };
+                me.register_child(task, ctx);
+            },
+        );
     }
 
     // ---- Shared child registration (used by both paths) -----------------
