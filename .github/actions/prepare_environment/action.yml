@@ -3,7 +3,7 @@ description: A shared set of setup steps to prepare the runtime environment.
 inputs:
   target_os:
     required: true
-    description: The target OS that we're building for ("macos", "linux", "windows", or "wasm").
+    description: The target OS that we're building for ("macos", "linux", or "windows").
   is_self_hosted:
     required: true
     description: Whether or not the workflow is running on a self-hosted runner.
@@ -56,8 +56,7 @@ runs:
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
       with:
-        # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
-        # don't share a cache, despite running on the same _host_ architecture.
+        # Make sure different target OS builds don't share a cache.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
         # Only cache runs on the master branch (caches on feature branches
         # are not reusable).
@@ -116,11 +115,6 @@ runs:
           if ${{ inputs.install_release_deps == 'true' }}; then
             ./script/install_cargo_release_deps
           fi
-        elif ${{ inputs.target_os == 'wasm' }}; then
-          # Update the apt cache before installing dependencies - it can be slow, so the install scripts
-          # don't do it (to avoid doing it more than once).
-          sudo apt update -y
-          ./script/wasm/install_build_deps
         else
           echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
           exit 1

@@ -37,7 +37,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use crate::terminal::local_tty::shell::ShellStarter;
 use crate::terminal::model::ansi::{Handler, PrecmdValue};
-use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::blocks::{insert_block, BlockListPoint};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
@@ -57,7 +56,6 @@ use crate::{
     terminal::TerminalView,
 };
 use fuzzy_match::FuzzyMatchResult;
-use session_sharing_protocol::common::Role;
 use smol_str::SmolStr;
 use warp_completer::completer::{
     EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,

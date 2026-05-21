@@ -1,6 +1,5 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::appearance::Appearance;
-use warp_server_client::ids::ServerId;
 use warpui::{
     elements::{
         ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
@@ -21,7 +20,7 @@ pub enum PromptAlertEvent {
     SignupAnonymousUser,
     OpenBillingAndUsagePage,
     OpenPrivacyPage,
-    OpenBillingPortal { team_uid: ServerId },
+    OpenBillingPortal { team_uid: String },
 }
 
 /// The alert state of the chip that appears to the right of certain parts of the prompt.

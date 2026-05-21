@@ -1,4 +1,5 @@
 //! Module for test-only convenience methods on `TerminalView`.
+#[cfg(test)]
 use std::sync::Arc;
 
 use warpui::ModelHandle;

@@ -422,6 +422,7 @@ pub fn init(app: &mut AppContext) {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     AppStateChanged,
     Escape,
@@ -446,8 +447,6 @@ pub enum Event {
     /// Event used to propagate a state change for one of the terminal views
     /// inside this pane group.
     TerminalViewStateChanged,
-    /// Event used to propagate guided onboarding tutorial completion to the workspace.
-    OnboardingTutorialCompleted,
     // Tell the workspace to open the workflow modal.
     OpenWorkflowModalWithCommand(String),
     // Tell the workspace to open the workflow for edit.
@@ -1159,9 +1158,7 @@ impl PaneGroup {
                 let (view, terminal_manager) = match pane_mode {
                     PaneMode::Cloud | PaneMode::Terminal | PaneMode::Agent => {
                         PaneGroup::create_session(
-                            // Use cwd from the template iff such path exists, otherwise None
-                            // TODO(CORE-3187): On Windows, support WSL directory restoration.
-                            Some(cwd).filter(|p| p.exists()),
+                            startup_directory_from_template_cwd(cwd),
                             HashMap::new(),
                             resources,
                             None,
@@ -2104,7 +2101,7 @@ impl PaneGroup {
                             }
                         });
                 }
-                // TODO: Potentially handle remote_tty and mock TerminalManager cases here as well?
+                // TODO: Potentially handle mock TerminalManager cases here as well?
             });
     }
 
@@ -4195,16 +4192,7 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         cfg_if::cfg_if! {
-            if #[cfg(feature = "remote_tty")] {
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
-                    resources,
-                    initial_size,
-                    model_event_sender,
-                    ctx.window_id(),
-                    initial_input_config,
-                    ctx,
-                );
-            } else if #[cfg(feature = "local_tty")] {
+            if #[cfg(feature = "local_tty")] {
                 let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::local_tty::TerminalManager::create_model(
                     startup_directory,
                     env_vars,
@@ -5392,6 +5380,14 @@ impl PaneGroup {
                 }
             }
         }
+    }
+}
+
+fn startup_directory_from_template_cwd(cwd: PathBuf) -> Option<PathBuf> {
+    if cwd.as_os_str().is_empty() {
+        None
+    } else {
+        Some(cwd)
     }
 }
 

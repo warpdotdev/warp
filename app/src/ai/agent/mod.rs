@@ -48,7 +48,6 @@ pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageErro
 use crate::ai::execution_context::WarpAiExecutionContext;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use derivative::Derivative;
 use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
 use serde::{Deserialize, Serialize};
@@ -2185,16 +2184,12 @@ pub enum StaticQueryType {
     Code,
     Deploy,
     SomethingElse,
-    CustomOnboardingRequest,
     EvaluationSuite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::enum_variant_names)]
 pub enum EntrypointType {
-    Onboarding {
-        chip_type: OnboardingChipType,
-    },
     PromptSuggestion {
         is_static: bool,
         is_coding: bool,
@@ -2907,7 +2902,7 @@ pub struct RequestMetadata {
     /// This only applies to `AIAgentInput::UserQuery`.
     pub is_autodetected_user_query: bool,
 
-    /// The entrypoint (onboarding, prompt suggestion, etc.) of the AI conversation.
+    /// The entrypoint (prompt suggestion, user action, etc.) of the AI conversation.
     pub entrypoint: EntrypointType,
 
     /// Whether this request is an automatic resume triggered by a previous error.

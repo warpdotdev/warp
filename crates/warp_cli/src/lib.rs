@@ -275,7 +275,7 @@ pub enum CliCommand {
 
     /// Manage secrets.
     #[command(subcommand)]
-    Secret(crate::secret::SecretCommand),
+    Secret(Box<crate::secret::SecretCommand>),
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.

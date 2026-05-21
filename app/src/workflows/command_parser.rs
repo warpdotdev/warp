@@ -331,7 +331,8 @@ fn compute_workflow_display_data_internal(
             );
 
         if let ArgumentType::Enum { enum_id } = workflow_argument.argument_type {
-            argument_index_to_object_id_map.insert(workflow_argument.argument_index, *enum_id);
+            argument_index_to_object_id_map
+                .insert(workflow_argument.argument_index, enum_id.clone());
         }
     }
 

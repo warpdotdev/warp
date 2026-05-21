@@ -2924,7 +2924,7 @@ impl TypedActionView for RichTextEditorView {
                 self.model
                     .update(ctx, |model, ctx| model.select_command_at_cursor(ctx))
             }
-            EditWorkflow(id) => ctx.emit(EditorViewEvent::EditWorkflow(*id)),
+            EditWorkflow(id) => ctx.emit(EditorViewEvent::EditWorkflow(id.clone())),
             RunWorkflow(workflow) => ctx.emit(EditorViewEvent::RunWorkflow(workflow.clone())),
             CodeBlockTypeSelectedAtOffset {
                 start_anchor,
@@ -2940,7 +2940,7 @@ impl TypedActionView for RichTextEditorView {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(text.clone().into_inner()));
                 ctx.emit(EditorViewEvent::CopiedBlock {
-                    block: *block,
+                    block: block.clone(),
                     entrypoint: *entrypoint,
                 });
             }

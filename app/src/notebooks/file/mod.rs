@@ -570,7 +570,7 @@ impl FileNotebookView {
                         .as_ref()
                         .map(|location| format!("Command from {}", location.name))
                 });
-                let source = workflow.source.unwrap_or(WorkflowSource::Notebook {
+                let source = workflow.source.clone().unwrap_or(WorkflowSource::Notebook {
                     notebook_id: None,
                     location: NotebookLocation::LocalFile,
                 });

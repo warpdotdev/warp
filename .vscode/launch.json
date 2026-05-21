@@ -14,11 +14,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp'",
+      "name": "Debug executable 'warp-oss'",
       "cargo": {
-        "args": ["build", "--bin=warp"],
+        "args": ["build", "--bin=warp-oss"],
         "filter": {
-          "name": "warp",
+          "name": "warp-oss",
           "kind": "bin"
         }
       },
@@ -31,7 +31,7 @@
       "request": "launch",
       "name": "Debug MacOS executable",
       "preLaunchTask": "build_warplocal",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/Warper.app/Contents/MacOS/warp-oss",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -39,39 +39,14 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp' with fast_dev",
+      "name": "Debug executable 'warp-oss' with fast_dev",
       "cargo": {
-        "args": ["build", "--bin=warp", "--features=fast_dev"],
+        "args": ["build", "--bin=warp-oss", "--features=fast_dev"],
         "filter": {
-          "name": "warp",
+          "name": "warp-oss",
           "kind": "bin"
         }
       },
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"]
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug executable 'warp' with with_local_server",
-      "cargo": {
-        "args": ["build", "--bin=warp", "--features=with_local_server"],
-        "filter": {
-          "name": "warp",
-          "kind": "bin"
-        }
-      },
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"]
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug MacOS executable local session sharing server",
-      "preLaunchTask": "build_warplocal_localsessionsharing",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -84,7 +59,7 @@
         "RUST_BACKTRACE": "1"
       },
       "preLaunchTask": "build_warplocal_fastdev",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/Warper.app/Contents/MacOS/warp-oss",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -92,21 +67,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug MacOS executable with fast_dev + local session sharing server",
-      "preLaunchTask": "build_warplocal_fastdev_localsessionsharing",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"]
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug unit tests in executable 'warp'",
+      "name": "Debug unit tests in executable 'warp-oss'",
       "cargo": {
-        "args": ["test", "--no-run", "--bin=warp", "--package=warp"],
+        "args": ["test", "--no-run", "--bin=warp-oss", "--package=warp"],
         "filter": {
-          "name": "warp",
+          "name": "warp-oss",
           "kind": "bin"
         }
       },

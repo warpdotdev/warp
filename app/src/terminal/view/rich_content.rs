@@ -12,7 +12,6 @@ use crate::{
             blocks::RichContentItem, rich_content::RichContentType, terminal_model::BlockIndex,
         },
         ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
-        view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock,
         warpify::success_block::WarpifySuccessBlock,
         TerminalView,
     },
@@ -211,17 +210,10 @@ impl RichContent {
 #[derive(Clone, Debug)]
 pub enum RichContentMetadata {
     AIBlock(AIBlockMetadata),
-    AIOnboardingBlock {
-        /// The ID corresponding to the `AIAgentExchange` represented in this block.
-        exchange_id: AIAgentExchangeId,
-    },
     UsageFooter,
     InitStep {
         step_kind: InitStepKind,
         block_handle: ViewHandle<InitStepBlock>,
-    },
-    OnboardingAgenticSuggestions {
-        agentic_suggestions_block_handle: ViewHandle<OnboardingAgenticSuggestionsBlock>,
     },
     EnvVarCollectionBlock {
         env_var_collection_block_handle: ViewHandle<EnvVarCollectionBlock>,

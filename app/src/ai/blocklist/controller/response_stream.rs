@@ -197,13 +197,11 @@ impl ResponseStream {
                             if matches!(
                                 finished_event.reason,
                                 Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None
-                            ) {
-                                if self.retry_count > 0 {
-                                    if let Some(original_error) = &self.original_error {
-                                        log::debug!(
-                                            "MultiAgent request completed successfully after retrying original error: {original_error}"
-                                        );
-                                    }
+                            ) && self.retry_count > 0 {
+                                if let Some(original_error) = &self.original_error {
+                                    log::debug!(
+                                        "MultiAgent request completed successfully after retrying original error: {original_error}"
+                                    );
                                 }
                             }
                         }

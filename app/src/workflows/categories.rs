@@ -491,7 +491,7 @@ impl CategoriesView {
         workflows
             .into_iter()
             .flatten()
-            .map(|workflow| (workflow.clone(), workflow_type))
+            .map(|workflow| (workflow.clone(), workflow_type.clone()))
             .collect()
     }
 
@@ -522,7 +522,7 @@ impl CategoriesView {
                 .flat_map(|(workflow_source, categorized_workflows)| {
                     Self::create_workflow_source_pair(
                         categorized_workflows.values(),
-                        *workflow_source,
+                        workflow_source.clone(),
                     )
                 })
                 .collect(),
@@ -558,7 +558,10 @@ impl CategoriesView {
                         .iter()
                         .filter_map(|(workflow_source, categorized_workflows)| {
                             categorized_workflows.get(&workflow_tag).map(|workflows| {
-                                Self::create_workflow_source_pair([workflows], *workflow_source)
+                                Self::create_workflow_source_pair(
+                                    [workflows],
+                                    workflow_source.clone(),
+                                )
                             })
                         })
                         .flatten()
@@ -806,7 +809,7 @@ impl CategoriesView {
             .map(
                 |(match_type, workflow, workflow_type, mouse_state_handle)| WorkflowForRender {
                     workflow_type: workflow,
-                    workflow_source: *workflow_type,
+                    workflow_source: workflow_type.clone(),
                     mouse_state_handle,
                     workflow_match: match_type,
                 },

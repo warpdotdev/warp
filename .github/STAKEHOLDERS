@@ -62,12 +62,10 @@
 /app/src/code/file_tree/ @moirahuang
 /app/src/workspace/view/global_search/ @moirahuang
 
-# Onboarding / code review and git diff
-/app/src/ai/onboarding.rs @kevinchevalier
+# Code review and git diff
 /app/src/code_review/ @kevinchevalier
 /app/src/code/diff_viewer.rs @kevinchevalier
 /app/src/code/inline_diff.rs @kevinchevalier
-/crates/onboarding/ @kevinchevalier
 
 # MCP and skills
 /app/src/ai/mcp/ @peicodes

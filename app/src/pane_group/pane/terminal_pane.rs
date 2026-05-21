@@ -585,16 +585,15 @@ fn handle_terminal_view_event(
             Event::TerminalViewStateChanged => {
                 ctx.emit(pane_group::Event::TerminalViewStateChanged);
             }
-            Event::OnboardingTutorialCompleted => {
-                ctx.emit(pane_group::Event::OnboardingTutorialCompleted);
-            }
             Event::OpenWorkflowModalWithCommand(command) => {
                 ctx.emit(pane_group::Event::OpenWorkflowModalWithCommand(
                     command.clone(),
                 ));
             }
             Event::OpenWorkflowModalWithLocalWorkflow(workflow_id) => {
-                ctx.emit(pane_group::Event::OpenLocalWorkflowForEdit(*workflow_id));
+                ctx.emit(pane_group::Event::OpenLocalWorkflowForEdit(
+                    workflow_id.clone(),
+                ));
             }
             Event::OpenWorkflowModalWithTemporary(workflow) => {
                 ctx.emit(pane_group::Event::OpenWorkflowModalWithTemporary(
@@ -670,7 +669,9 @@ fn handle_terminal_view_event(
                 ctx.emit(pane_group::Event::FocusPaneGroup);
             }
             Event::OpenAIFactCollection { sync_id } => {
-                ctx.emit(pane_group::Event::OpenAIFactCollection { sync_id: *sync_id });
+                ctx.emit(pane_group::Event::OpenAIFactCollection {
+                    sync_id: sync_id.clone(),
+                });
             }
             Event::SummarizationCancelDialogToggled { is_open } => {
                 group.terminal_with_open_summarization_dialog = is_open.then_some(terminal_pane_id);

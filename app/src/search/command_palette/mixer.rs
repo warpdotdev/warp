@@ -80,10 +80,14 @@ impl CommandPaletteItemAction {
             CommandPaletteItemAction::AcceptBinding { binding } => ItemSummary::Action {
                 binding_id: binding.id,
             },
-            CommandPaletteItemAction::OpenNotebook { id } => ItemSummary::Notebook { id: *id },
-            CommandPaletteItemAction::ExecuteWorkflow { id } => ItemSummary::Workflow { id: *id },
+            CommandPaletteItemAction::OpenNotebook { id } => {
+                ItemSummary::Notebook { id: id.clone() }
+            }
+            CommandPaletteItemAction::ExecuteWorkflow { id } => {
+                ItemSummary::Workflow { id: id.clone() }
+            }
             CommandPaletteItemAction::InvokeEnvironmentVariables { id } => {
-                ItemSummary::EnvVarCollection { id: *id }
+                ItemSummary::EnvVarCollection { id: id.clone() }
             }
             CommandPaletteItemAction::NavigateToSession {
                 pane_view_locator, ..

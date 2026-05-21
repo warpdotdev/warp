@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::ops::Range;
-use std::sync::Arc;
 
 use super::super::rich_text_styles;
 use super::NotebooksEditorModel;
@@ -16,7 +15,6 @@ use crate::settings::FontSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workflows::workflow::Workflow;
 use crate::workspace::ActiveSession;
 use crate::UserWorkspaces;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};

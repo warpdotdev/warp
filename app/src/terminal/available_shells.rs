@@ -85,7 +85,7 @@ enum Config {
 // The concept of specifying an available shell does not exist on non-local filesystems. So we allow
 // dead code so that the concept of the struct can exist, but remove any methods that do anything
 // with it. That way, method calls can still take `Option<AvailableShell>` as an argument, but
-// remote_ttys can just specify `None` for the value.
+// Non-local terminal managers can specify `None` for the value.
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code,))]
 /// Contains the config describing a 'shell' that can be launched for a new session. Currently falls
 /// into 4 categories:

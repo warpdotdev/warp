@@ -18,7 +18,7 @@ use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::view::left_panel::ToolPanelView;
 use crate::workspace::Workspace;
-use warp_server_client::ids::{ServerId, SyncId};
+use warp_server_client::ids::SyncId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
@@ -33,7 +33,7 @@ pub struct PaneUuid(pub Vec<u8>);
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct LocalObjectOpenSettings {
-    pub focused_folder_id: Option<ServerId>,
+    pub focused_folder_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

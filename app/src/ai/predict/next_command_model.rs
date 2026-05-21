@@ -154,8 +154,8 @@ async fn is_arg_valid(
                 };
             }
             if has_generator_arg_type {
-                // We don't have completions implemented for feature flags like --features=with_local_server.
-                // If arg is the span of `with_local_server`, attempting to complete on --features= to validate it will return no results.
+                // We don't have completions implemented for feature flags like --features=release_bundle.
+                // If arg is the span of `release_bundle`, attempting to complete on --features= to validate it will return no results.
                 // We should only use completions to validate the arg if the previous character is whitespace, until completions handles this case.
                 let prev_char = full_command.get(..arg.span.start()).and_then(|s| s.chars().next_back());
                 if prev_char.is_some_and(|c| !c.is_whitespace()) {

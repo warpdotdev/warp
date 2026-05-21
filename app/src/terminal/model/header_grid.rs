@@ -1190,7 +1190,7 @@ impl ansi::Handler for HeaderGrid {
                 // correctly with prompt caching).
                 // Only put the PS1 into the combined grid if we are honoring the PS1.
                 // Otherwise, we only put it into the prompt grid which is used solely for
-                // prompt previews (Edit Prompt modal + onboarding block).
+                // prompt previews (Edit Prompt modal).
                 if self.honor_ps1 {
                     processor.parse_bytes(
                         self.prompt_and_command_grid_mut(),

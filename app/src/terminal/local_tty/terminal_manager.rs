@@ -5,8 +5,6 @@ use crate::terminal::TerminalManager as _;
 use anyhow::Context as _;
 use async_broadcast::InactiveReceiver;
 use std::any::Any;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::mpsc::{SendError, SyncSender};
 use std::{collections::HashMap, ffi::OsString, path::PathBuf, sync::Arc, thread::JoinHandle};
 
@@ -36,7 +34,6 @@ use crate::terminal::model::session::Sessions;
 
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
-use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, wire_up_pty_controller_with_view,
@@ -59,7 +56,9 @@ use {
     super::terminal_attributes::TerminalAttributesPoller,
     crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent,
     crate::terminal::model::terminal_model::BlockIndex,
-    crate::terminal::session_settings::NotificationsMode, nix::sys::termios::LocalFlags,
+    crate::terminal::session_settings::NotificationsMode,
+    crate::terminal::view::Event as TerminalViewEvent, nix::sys::termios::LocalFlags,
+    std::cell::RefCell, std::rc::Rc,
 };
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
@@ -303,9 +302,7 @@ impl TerminalManager {
 
         ctx.subscribe_to_model(&SessionSettings::handle(ctx), move |_, event, ctx| {
             if let SessionSettingsChangedEvent::HonorPS1 { .. } = event {
-                if !*SessionSettings::as_ref(ctx).honor_ps1 {
-                    return;
-                }
+                let _ = *SessionSettings::as_ref(ctx).honor_ps1;
             }
         });
 

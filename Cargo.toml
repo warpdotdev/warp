@@ -5,9 +5,7 @@ members = [
 ]
 resolver = "2"
 
-# Include all members except serve-wasm (since it's a helper helper for serving
-# wasm binaries and not something we want to regularly compile or run
-# tests against) and integration (since it is only used for testing).
+# Include all members except integration, since it is only used for testing.
 default-members = [
   "app",
   "crates/channel_versions",
@@ -50,7 +48,6 @@ lsp = { path = "crates/lsp" }
 markdown_parser = { path = "crates/markdown_parser" }
 natural_language_detection = { path = "crates/natural_language_detection" }
 node_runtime = { path = "crates/node_runtime" }
-onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
 repo_metadata = { path = "crates/repo_metadata" }
@@ -85,7 +82,6 @@ warpui = { path = "crates/warpui" }
 warpui_core = { path = "crates/warpui_core" }
 warpui_extras = { path = "crates/warpui_extras", default-features = false }
 watcher = { path = "crates/watcher" }
-websocket = { path = "crates/websocket" }
 
 # Workspace-level dependencies used by multiple crates. Prefer adding dependencies
 # here to copying-and-pasting versions.
@@ -122,8 +118,6 @@ clap = { version = "4.5", features = ["derive"] }
 cocoa = "=0.26.0"
 ctrlc = "3.4.7"
 crc = "3.4.0"
-cynic = { version = "3" }
-cynic-codegen = { version = "3", features = ["rkyv"] }
 dashmap = "6.1.0"
 derive_more = "0.99.17"
 diesel = { version = "2.3.4", default-features = false }
@@ -145,7 +139,6 @@ gloo = { version = "0.11.0", default-features = false, features = [
   "futures",
   "utils",
 ] }
-graphql-ws-client = { version = "0.11.1", default-features = false }
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
@@ -225,17 +218,6 @@ rust-embed = { version = "8.7.0", features = ["include-exclude"] }
 rustc-hash = "2.1.1"
 rustls = "0.23.39"
 schemars = { version = "1", features = ["chrono04"] }
-sentry = { version = "0.41.0", default-features = false, features = [
-  "anyhow",
-  "backtrace",
-  "contexts",
-  "debug-images",
-  "panic",
-  "release-health",
-  "reqwest",
-  "rustls",
-] }
-sentry-log = "0.41.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11"
 serde-bytes-repr = "0.3"
@@ -243,7 +225,6 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "3a12b871dfd1019a66057e4d9b7d5c812b73ee8c" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"

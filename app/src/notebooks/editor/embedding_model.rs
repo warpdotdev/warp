@@ -40,15 +40,13 @@ impl NotebookEmbed {
             selection_model.anchor(start, ctx)
         });
 
-        let embedding = Self {
+        Self {
             start,
             hashed_id,
             selection_model,
             is_selected: false,
             mouse_state_handles: Default::default(),
-        };
-
-        embedding
+        }
     }
 
     pub fn hashed_id(&self) -> &str {

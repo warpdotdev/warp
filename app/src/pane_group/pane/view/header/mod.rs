@@ -26,7 +26,7 @@ use pathfinder_geometry::{
     rect::RectF,
     vector::{vec2f, Vector2F},
 };
-use warp_core::{features::FeatureFlag, settings::Setting};
+use warp_core::settings::Setting;
 use warpui::{
     elements::{
         AcceptedByDropTarget, Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container,
@@ -372,7 +372,7 @@ impl<P: BackingView> PaneHeader<P> {
         )
     }
 
-    fn render_toolbelt_buttons(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render_toolbelt_buttons(&self, _app: &AppContext) -> Box<dyn Element> {
         let mut flex = Flex::row();
         for toolbelt_button in &self.toolbelt_buttons {
             flex.add_child(
@@ -394,13 +394,7 @@ impl<P: BackingView> PaneHeader<P> {
         // Check if tooltip has been dismissed already.
         // We should only trigger this if we are in a git repository,
         // but the pane header will only render if we are already in one.
-        let should_show_tooltip = FeatureFlag::CodeLaunchModal.is_enabled()
-            && false
-            && !*CodeSettings::as_ref(app)
-                .dismissed_code_toolbelt_new_feature_popup
-                .value()
-                // We should not render the tooltip if no code toolbelt buttons are present.
-                && !self.toolbelt_buttons.is_empty();
+        let should_show_tooltip = false;
 
         if should_show_tooltip {
             // Position the FeaturePopup tooltip below the header

@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use warp_workflows;
 
-use warp_server_client::ids::{ServerId, SyncId};
+use warp_server_client::ids::SyncId;
 
 /// Workflow model to be used inside of `warp-internal`
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -142,18 +142,7 @@ impl Workflow {
         self.arguments()
             .iter()
             .filter_map(|arg| match arg.arg_type {
-                ArgumentType::Enum { enum_id } => Some(enum_id),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Return a list of every enum ID that has been synced to the server, used for telemetry.
-    pub fn get_server_enum_ids(&self) -> Vec<ServerId> {
-        self.arguments()
-            .iter()
-            .filter_map(|arg| match arg.arg_type {
-                ArgumentType::Enum { enum_id } => enum_id.into_server(),
+                ArgumentType::Enum { ref enum_id } => Some(enum_id.clone()),
                 _ => None,
             })
             .collect()
@@ -164,7 +153,7 @@ impl Workflow {
             Workflow::Command {
                 environment_variables,
                 ..
-            } => *environment_variables,
+            } => environment_variables.clone(),
             _ => None,
         }
     }
@@ -184,7 +173,7 @@ impl Workflow {
         for arg in arguments.iter_mut() {
             match &mut arg.arg_type {
                 ArgumentType::Enum { enum_id } if *enum_id == old_id => {
-                    *enum_id = new_id;
+                    *enum_id = new_id.clone();
                     changed = true;
                 }
                 _ => {}

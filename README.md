@@ -1,117 +1,116 @@
-> [!IMPORTANT]
-> # Warper fork changes from the original Warp repository
->
-> This repository is a Warper build of Warp focused on a local, subscription-free OpenRouter workflow.
-> The original Warp product branding, account-gated agent flow, and Warp-credit/subscription assumptions have been replaced where they blocked local OpenRouter use.
->
-> **What changed:**
->
-> - **Product identity:** the OSS app now builds and launches as **Warper** with the bundle identifier `dev.warper.Warper`, Warper desktop/app metadata, Warper prompts, and Warper-specific build outputs.
-> - **No required Warp account or subscription:** the onboarding/account gates, sign-up prompts, plan comparison affordances, request-limit checks, and paid-credit banners were removed or bypassed for the OSS Warper flow.
-> - **OpenRouter-first agent:** the built-in agent routes directly to OpenRouter when an OpenRouter key is configured. Agent requests use Warper headers and a terminal-aware Warper system prompt.
-> - **Local API key storage:** OpenRouter API keys and the selected OpenRouter model are stored locally in secure storage under `dev.warper.Warper / AiApiKeys`. They are not written to this repository, `settings.toml`, logs, or cloud sync.
-> - **Model selection:** `/model` now includes the public OpenRouter model catalog, supports typing any `provider/model` OpenRouter id manually, remembers the selected model, and uses that selected model by default for Warper agent requests.
-> - **Agent enabled by default:** OSS Warper starts in the main terminal/agent experience without the commercial onboarding screen and without requiring subscription state.
-> - **OpenRouter settings UI:** Settings includes OpenRouter API key and model controls, with explanatory text that Warper sends requests directly to OpenRouter.
-> - **Diagnostics:** OpenRouter agent requests emit useful local logs for request start, status, errors, task creation, and response parsing so hangs are easier to debug.
-> - **Terminal background image:** Appearance settings now include a terminal background image picker. The selected image path is saved in `~/.warp-oss/settings.toml` at `appearance.window.background_image`.
-> - **Build packaging:** macOS, Linux, and Windows bundling scripts were updated to produce Warper-branded artifacts; the current macOS bundle is `target/debug/bundle/osx/Warper.app`.
->
-> **Local user data locations:**
->
-> - OpenRouter key and selected model: macOS Keychain service `dev.warper.Warper`, account `AiApiKeys`.
-> - User-visible settings: `~/.warp-oss/settings.toml`.
-> - Runtime state/cache/database: `~/Library/Application Support/dev.warper.Warper/`.
-> - Logs: `~/Library/Logs/warper.log`.
->
-> The upstream Warp README continues below for original project context, licensing, and contribution guidance.
-
-<a href="https://www.warp.dev">
-    <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
-</a>
-
 <p align="center">
-  <a href="https://www.warp.dev">Website</a>
-  ·
-  <a href="https://www.warp.dev/code">Code</a>
-  ·
-  <a href="https://www.warp.dev/agents">Agents</a>
-  ·
-  <a href="https://www.warp.dev/terminal">Terminal</a>
-  ·
-  <a href="https://www.warp.dev/drive">Drive</a>
-  ·
-  <a href="https://docs.warp.dev">Docs</a>
-  ·
-  <a href="https://www.warp.dev/blog/how-warp-works">How Warp Works</a>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/warper_banner_dark.jpg">
+    <source media="(prefers-color-scheme: light)" srcset="public/warper_banner_light.jpg">
+    <img src="public/warper_banner_light.jpg" alt="Warper" width="90%" />
+  </picture>
 </p>
 
-> [!NOTE]
-> OpenAI is the founding sponsor of the new, open-source Warp repository, and the new agentic management workflows are powered by GPT models.
+> **warper** /ˈwɔːpə(r)/ *adj.* — comparative form of *warp*; more warp than the thing being compared to.
+> 
+> **example:** *"I just wanted a terminal. But warper."*
+> 
+> **antonym:** *a terminal that asks for your email before it lets you `cd`.*
 
-<h1></h1>
+<p align="center">
+  <img src="public/warper_screenshot.png" alt="Warper terminal" width="100%" />
+</p>
 
-## About
+<p align="center"><sub>Warper is a hard fork of <a href="https://www.warp.dev">Warp</a>. It keeps the terminal and drops the platform that grew around it.</sub></p>
 
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+---
 
-## Installation
+## Why this exists
 
-You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
+Warp is a good terminal that picked up a lot of other product over time. We didn't want any of it, so we forked, removed it, and rewired the AI hook to OpenRouter.
 
-## Licensing
+---
 
-Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
+## What's in
 
-The rest of the code in this repository is licensed under the [AGPL v3](LICENSE-AGPL).
+### Terminal
 
-## Open Source & Contributing
+Native Rust app with blocks, panes, tabs, session restoration, command history, shell integration, command palette, themes, keybindings, launch configs, local workflows, and a background image picker.
 
-Warp's client codebase is open source and lives in this repository. We welcome community contributions and have designed a lightweight workflow to help new contributors get started. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
+### AI (optional, BYOK, BYOA)
 
-### Issue to PR
+Small scope: generate or explain a shell command, explain an error, suggest a safer variant of a risky command, summarise selected output. OpenRouter is the supported provider, configurable in Settings or via `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`.
 
-Before filing, [search existing issues](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+sort%3Areactions-%2B1-desc) for your bug or feature request. If nothing exists, [file an issue](https://github.com/warpdotdev/warp/issues/new/choose) using our templates. Security vulnerabilities should be reported privately as described in [CONTRIBUTING.md](CONTRIBUTING.md#reporting-security-issues).
+Type `codex` and Warper notices you're running Codex; same for `claude`, `gemini`, and others. It adds a status indicator, optional rich input, and a finish notification, but doesn't try to wrap the agent CLI in its own UI. The shell already does that job.
 
-Once filed, a Warp maintainer reviews the issue and may apply a readiness label: [`ready-to-spec`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-spec) signals the design is open for contributors to spec out, and [`ready-to-implement`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-implement) signals the design is settled and code PRs are welcome. Anyone can pick up a labeled issue — mention **@oss-maintainers** on an issue if you'd like it considered for a readiness label.
+---
 
-### Building the Repo Locally
+## What's out
 
-To build and run Warp from source:
+If a feature needs an account, a server, a billing entitlement, a team object, a shared session, or any Warp.dev infrastructure, it's out of scope. Specifically removed:
+
+- Accounts, sign-up, sign-in, SSO, anonymous cloud users, subscriptions
+- Billing, plans, credits, usage limits, upgrade prompts
+- Warp Drive, team drives, shared-with-me, cloud trash
+- Teams, enterprise admin, ACLs, roles, audit, hosted workspaces
+- Session sharing, remote control, RTC presence, link collaboration
+- Oz, cloud agents, and hosted task orchestration
+- Telemetry upload, hosted crash reporting, RudderStack, Sentry, Warp-hosted autoupdate
+
+These are deleted from the product surface, not toggled off behind a flag.
+
+---
+
+## Local data
+
+Settings live in files on disk. API keys live in your keychain. Nothing is uploaded by default. On macOS:
+
+| Thing | Location |
+|---|---|
+| OpenRouter key and model | Keychain, service `dev.warper.Warper`, account `AiApiKeys` |
+| User settings | `~/.warp-oss/settings.toml` |
+| Runtime state, cache, DB | `~/Library/Application Support/dev.warper.Warper/` |
+| Logs | `~/Library/Logs/warper.log` |
+
+---
+
+## Building locally
 
 ```bash
-./script/bootstrap   # platform-specific setup
-./script/run         # build and run Warp
-./script/presubmit   # fmt, clippy, and tests
+./script/bootstrap
+./script/run
 ```
 
-See [WARP.md](WARP.md) for the full engineering guide, including coding style, testing, and platform-specific notes.
+Useful checks:
 
-## Joining the Team
+```bash
+./script/presubmit
+./script/warper_offline_local_smoke
+./script/check_warper_static_denylist all-runtime
+```
 
-Interested in joining the team? See our [open roles](https://www.warp.dev/careers).
+On macOS, `./script/run` produces `target/debug/bundle/osx/Warper.app`. Engineering notes inherited from upstream live in [WARP.md](WARP.md).
 
-## Support and Questions
+---
 
-1. See our [docs](https://docs.warp.dev/) for a comprehensive guide to Warp's features.
-2. Join our [Slack Community](https://go.warp.dev/join-preview) to connect with other users and get help from the Warp team.
-3. Try our [Preview build](https://www.warp.dev/download-preview) to test the latest experimental features.
-4. Mention **@oss-maintainers** on any issue to escalate to the team — for example, if you encounter problems with the automated agents.
+## Upstream, license, and credits
 
-## Code of Conduct
+This project is independent from Warp.dev. The names "Warp" and "Warp.dev", the related marks, and the hosted services belong to their respective owners. Warper exists because the Warp team released enough of their code to make a fork like this possible. Please don't report Warper-specific bugs against upstream Warp unless they also reproduce there.
 
-We ask everyone to be respectful and empathetic. Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
+The upstream licensing structure is preserved:
 
-## Open Source Dependencies
+- `warpui_core` and `warpui` are MIT-licensed. See [LICENSE-MIT](LICENSE-MIT).
+- Everything else in this repository is AGPL v3. See [LICENSE-AGPL](LICENSE-AGPL).
 
-We'd like to call out a few of the [open source dependencies](https://docs.warp.dev/help/licenses) that have helped Warp to get off the ground:
+Downstream users and contributors should preserve upstream notices and comply with the applicable licenses.
+
+A few of the load-bearing open-source dependencies inherited from Warp:
 
 - [Tokio](https://github.com/tokio-rs/tokio)
 - [NuShell](https://github.com/nushell/nushell)
 - [Fig Completion Specs](https://github.com/withfig/autocomplete)
 - [Warp Server Framework](https://github.com/seanmonstar/warp)
 - [Alacritty](https://github.com/alacritty/alacritty)
-- [Hyper HTTP library](https://github.com/hyperium/hyper)
+- [Hyper](https://github.com/hyperium/hyper)
 - [FontKit](https://github.com/servo/font-kit)
-- [Core-foundation](https://github.com/servo/core-foundation-rs)
+- [Core Foundation Rust bindings](https://github.com/servo/core-foundation-rs)
 - [Smol](https://github.com/smol-rs/smol)
+
+Thanks to all of them.
+
+---

@@ -79,8 +79,7 @@ impl From<crate::persistence::model::Command> for PersistedCommand {
                 if let Some(client_id) = ClientId::from_hash(workflow_id.as_str()) {
                     Some(SyncId::ClientId(client_id))
                 } else {
-                    WorkflowId::from_hash(workflow_id.as_str())
-                        .map(|id| SyncId::ServerId(id.into()))
+                    WorkflowId::from_hash(workflow_id.as_str()).map(SyncId::from)
                 }
             }),
             workflow_command: command.workflow_command,
@@ -410,7 +409,7 @@ impl HistoryEntry {
     /// if any.
     pub fn linked_workflow_data(&self) -> Option<LinkedWorkflowData> {
         match (&self.workflow_id, &self.workflow_command) {
-            (Some(workflow_id), _) => Some(LinkedWorkflowData::Id(*workflow_id)),
+            (Some(workflow_id), _) => Some(LinkedWorkflowData::Id(workflow_id.clone())),
             (_, Some(workflow_command)) => {
                 Some(LinkedWorkflowData::Command(workflow_command.clone()))
             }

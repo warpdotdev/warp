@@ -250,6 +250,7 @@ impl LLMInfo {
     }
 
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     fn new_for_test(llm_name: &str) -> Self {
         Self {
             display_name: llm_name.to_string(),
@@ -341,6 +342,7 @@ impl AvailableLLMs {
     }
 
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn new_for_test(llm_name: &str) -> Self {
         Self {
             default_id: llm_name.into(),

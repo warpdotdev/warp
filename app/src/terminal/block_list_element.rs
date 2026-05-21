@@ -169,7 +169,6 @@ const SNACKBAR_TOGGLE_BUTTON_HEIGHT: f32 = 16.;
 
 /// How far away from the right edge of the blocklist the selected block avatar should be
 /// Space between multiple avatars on a selected block.
-
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;
 

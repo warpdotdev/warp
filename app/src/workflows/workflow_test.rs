@@ -1,5 +1,5 @@
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
-use warp_server_client::ids::{ClientId, HashableId, ServerId, SyncId};
+use warp_server_client::ids::{ClientId, HashableId, SyncId};
 
 #[test]
 fn test_workflow_serialization_with_enum_params() {
@@ -16,7 +16,7 @@ fn test_workflow_serialization_with_enum_params() {
             Argument {
                 name: "server id enum".to_string(),
                 arg_type: ArgumentType::Enum {
-                    enum_id: SyncId::ServerId(ServerId::from(123)),
+                    enum_id: SyncId::LegacyObjectId("test_uid123".to_string()),
                 },
                 description: Some("description".to_string()),
                 default_value: None,
@@ -43,7 +43,7 @@ fn test_workflow_serialization_with_enum_params() {
     };
 
     let serialized = serde_json::to_string(&workflow).expect("failed to serialize");
-    let correct_serialized = r#"{"name":"name","command":"command","tags":[],"description":null,"arguments":[{"name":"text","arg_type":"Text","description":null,"default_value":"default"},{"name":"server id enum","arg_type":"Enum","enum_id":"test_uid00000000000123","description":"description","default_value":null},{"name":"client id enum","arg_type":"Enum","enum_id":"Client-06d26381-ac61-4a4a-8a23-a3431f1d340c","description":"description","default_value":null}],"source_url":null,"author":null,"author_url":null,"shells":[],"environment_variables":null}"#;
+    let correct_serialized = r#"{"name":"name","command":"command","tags":[],"description":null,"arguments":[{"name":"text","arg_type":"Text","description":null,"default_value":"default"},{"name":"server id enum","arg_type":"Enum","enum_id":"test_uid123","description":"description","default_value":null},{"name":"client id enum","arg_type":"Enum","enum_id":"Client-06d26381-ac61-4a4a-8a23-a3431f1d340c","description":"description","default_value":null}],"source_url":null,"author":null,"author_url":null,"shells":[],"environment_variables":null}"#;
 
     assert_eq!(
         serialized, correct_serialized,

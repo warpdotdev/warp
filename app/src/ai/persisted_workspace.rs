@@ -32,7 +32,6 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
 #[cfg(feature = "local_fs")]
-#[cfg(feature = "local_fs")]
 use crate::terminal::local_shell::LocalShellState;
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};

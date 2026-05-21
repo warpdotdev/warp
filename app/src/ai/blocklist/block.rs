@@ -2264,7 +2264,7 @@ impl AIBlock {
                 .run_redaction_on_complete_output(output);
         }
 
-        // This is used to trigger the theme chooser opening when the theme chooser onboarding block is active.
+        // This is used to trigger the theme chooser opening from agent output.
         if let Some(text_message) = output.text_from_agent_output().last() {
             if text_message.sections.iter().any(|section| {
                 if let AIAgentTextSection::PlainText { text } = section {

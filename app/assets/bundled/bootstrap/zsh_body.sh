@@ -693,7 +693,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         SAVED_RPROMPT=${RPROMPT:-}
       fi
       
-      # We don't unset the $PROMPT since we want to show the lprompt preview in the edit prompt modal (and onboarding blocks).
+      # We don't unset the $PROMPT since we want to show the lprompt preview in the edit prompt modal.
       # Note that the prompt grid is separate from the combined prompt/command grid and ONLY used for prompt previews, in the
       # case of the combined grid being enabled.
       # Clear the rprompt, so it doesn't accidentally appear in selections/any other relevant logic.

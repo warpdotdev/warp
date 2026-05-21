@@ -100,10 +100,6 @@
       "color": "bfdadc",
       "description": "MCP server integrations, tool connections, and resource providers."
     },
-    "area:onboarding": {
-      "color": "f9d0c4",
-      "description": "First-run experience, onboarding flows, and related callouts."
-    },
     "area:performance": {
       "color": "e36209",
       "description": "General application performance, responsiveness, and resource usage."

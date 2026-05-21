@@ -31,7 +31,7 @@ impl UserWorkspaces {
     #[cfg(test)]
     pub fn mock(cached_workspaces: Vec<Workspace>, _ctx: &mut ModelContext<Self>) -> Self {
         Self {
-            current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
+            current_workspace_uid: cached_workspaces.first().map(|w| w.uid.clone()).into(),
             workspaces: cached_workspaces.into(),
         }
     }
@@ -52,12 +52,14 @@ impl UserWorkspaces {
 
     fn current_workspace(&self) -> Option<&Workspace> {
         self.current_workspace_uid
+            .clone()
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
     }
 
     #[cfg(test)]
     fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
         self.current_workspace_uid
+            .clone()
             .and_then(|workspace_uid| self.workspace_from_uid_mut(workspace_uid))
     }
 
@@ -157,7 +159,7 @@ impl UserWorkspaces {
 
     #[cfg(test)]
     pub fn update_workspaces(&mut self, workspaces: Vec<Workspace>, ctx: &mut ModelContext<Self>) {
-        let current_workspace_uid = workspaces.first().map(|workspace| workspace.uid);
+        let current_workspace_uid = workspaces.first().map(|workspace| workspace.uid.clone());
         *self.current_workspace_uid = current_workspace_uid;
         *self.workspaces = workspaces;
         ctx.notify();

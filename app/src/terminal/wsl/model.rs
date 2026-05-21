@@ -26,7 +26,7 @@ pub(crate) struct Distribution {
 }
 
 impl WslInfo {
-    pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub(crate) fn new(_ctx: &mut ModelContext<Self>) -> Self {
         let distributions = Self::find_available_distributions()
             .inspect_err(|err| match err {
                 // This error merely occurs when user doesn't have WSL installed/enabled.

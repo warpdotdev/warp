@@ -13,34 +13,9 @@ license.workspace = true
 name = "warp"
 path = "src/lib.rs"
 
-# We define separate targets for each channel (stable, preview, dev) so that we can
-# bundle with its own icon, app name, and channel-specific configuration (such as
-# flag overrides). Otherwise these binaries are exactly identical to our main binary.
-
 [[bin]]
 name = "warp-oss"
 path = "src/bin/oss.rs"
-test = false
-
-[[bin]]
-name = "warp"
-path = "src/bin/local.rs"
-test = false
-
-[[bin]]
-name = "stable"
-path = "src/bin/stable.rs"
-test = false
-
-[[bin]]
-name = "dev"
-path = "src/bin/dev.rs"
-test = false
-
-[[bin]]
-name = "preview"
-path = "src/bin/preview.rs"
-required-features = ["preview_channel"]
 test = false
 
 [[bin]]
@@ -84,7 +59,6 @@ crc.workspace = true
 content_inspector = "0.2.4"
 concat-idents.workspace = true
 csv = "1.3.1"
-cynic.workspace = true
 dashmap.workspace = true
 deltae = "0.3.1"
 derivative.workspace = true
@@ -131,7 +105,6 @@ lazy_static.workspace = true
 libc.workspace = true
 line-ending.workspace = true
 log.workspace = true
-log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 lsp.workspace = true
 warp_logging.workspace = true
 lz4_flex = "0.11"
@@ -173,7 +146,6 @@ serde_regex = "1.1.0"
 serde_urlencoded.workspace = true
 serde_with.workspace = true
 serde_yaml.workspace = true
-session-sharing-protocol.workspace = true
 settings.workspace = true
 settings_value = { workspace = true, features = ["derive"] }
 sha2.workspace = true
@@ -224,14 +196,11 @@ warpui_extras = { workspace = true, features = ["default", "user_preferences-tom
 syntax_tree.workspace = true
 languages.workspace = true
 warp_terminal.workspace = true
-websocket.workspace = true
 wgpu = { workspace = true, optional = true }
 natural_language_detection.workspace = true
-onboarding.workspace = true
 aho-corasick = "1.1.3"
 strum.workspace = true
 strum_macros.workspace = true
-reqwest-eventsource = { workspace = true }
 lasso.workspace = true
 counter = "0.6.0"
 typed-path.workspace = true
@@ -305,11 +274,6 @@ tantivy = "0.26.0"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 console_error_panic_hook = { version = "0.1.6" }
-# We only have an indirect dependency on this crate; we depend on reqwest-eventsource@0.6.0 which depends on
-# futures-timer@3.0.2. For whatever unfortunate reason, this crate doesn't automatically enable its feature
-# required for wasm-compatibility when targeting wasm. So we need to explicitly specify this dependency when
-# targeting wasm and leverage the fact that cargo enables the superset of enabled features for a given crate.
-futures-timer = { version = "3.0.2", features = ["wasm-bindgen"] }
 js-sys = "0.3.63"
 # Make sure we embed the data into the wasm binary even when running in debug
 # mode, as it cannot be read directly from the filesystem.
@@ -422,7 +386,6 @@ agent_mode_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
-agent_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
 changelog = []
@@ -436,7 +399,6 @@ completions_v2 = [
     "warp_completer/v2",
     "dep:command-signatures-v2",
 ]
-creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 default = [
@@ -521,7 +483,6 @@ default = [
     "force_classic_completions",
     "agent_tips",
     "pluggable_notifications",
-    "agent_onboarding",
     "global_search",
     "list_skills",
     "ask_user_question",
@@ -566,7 +527,6 @@ default = [
     "cli_agent_rich_input",
     "vertical_tabs",
     "tab_configs",
-    "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
     "trim_trailing_blank_lines",
@@ -663,8 +623,6 @@ mcp_debugging_ids = []
 notebook_parameter = []
 oz_changelog_updates = []
 personal_cloud_objects = []
-# Remote-backed tty that connects to a PTY-like interface via a server.
-remote_tty = []
 # Fix for cursor reflow bug during window resize, from Alacritty resizing logic.
 resize_fix = []
 pluggable_notifications = []
@@ -693,8 +651,6 @@ selectable_prompt = []
 settings_file = []
 settings_import = []
 sequential_storage = []
-session_sharing = []
-session_sharing_acls = []
 skip_login = []
 # This feature should only be enabled when building a self-contained binary with the bundle script.
 standalone = []
@@ -713,7 +669,6 @@ integration_tests = [
     "warp_core/integration_tests",
 ]
 traces = []
-viewing_shared_sessions = []
 workflow_aliases = []
 rect_selection = []
 alacritty_settings_import = []
@@ -722,7 +677,6 @@ ai_rules = []
 am_workflows = []
 less_horizontal_terminal_padding = []
 shell_selector = []
-shared_session_long_running_commands = []
 block_toolbelt_save_as_workflow = []
 blocklist_markdown_table_rendering = []
 blocklist_markdown_images = []
@@ -857,7 +811,6 @@ transfer_control_tool = []
 solo_user_byok = []
 configurable_toolbar = []
 warpify_footer = []
-hoa_onboarding_flow = []
 git_operations_in_code_review = []
 hoa_remote_control = []
 codex_notifications = []
@@ -869,47 +822,8 @@ category = "public.app-category.developer-tools"
 copyright = "Copyleft 2026 Warper contributors"
 identifier = "dev.warper.Warper"
 name = "Warper"
-resources = ["assets/onboarding"]
 icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
 short_description = "An OpenRouter-ready agentic terminal for individuals and teams."
-
-[package.metadata.bundle.bin.stable]
-category = "public.app-category.developer-tools"
-copyright = "Copyleft 2026 Warper contributors"
-identifier = "dev.warp.Warp-Stable"
-name = "Warp"
-osx_frameworks = [
-]
-resources = ["assets/onboarding"]
-short_description = "A local-first terminal for individuals and teams, stable build."
-
-[package.metadata.bundle.bin.preview]
-category = "public.app-category.developer-tools"
-copyright = "Copyleft 2026 Warper contributors"
-identifier = "dev.warp.Warp-Preview"
-name = "WarpPreview"
-osx_frameworks = [
-]
-resources = ["assets/onboarding"]
-short_description = "A local-first terminal for individuals and teams, feature preview build."
-
-[package.metadata.bundle.bin.dev]
-category = "public.app-category.developer-tools"
-copyright = "Copyleft 2026 Warper contributors"
-identifier = "dev.warp.Warp-Dev"
-name = "WarpDev"
-osx_frameworks = [
-]
-resources = ["assets/onboarding"]
-short_description = "A local-first terminal for individuals and teams, developer build."
-
-[package.metadata.bundle.bin.warp]
-category = "public.app-category.developer-tools"
-copyright = "Copyleft 2026 Warper contributors"
-identifier = "dev.warp.Warp-Local"
-name = "WarpLocal"
-resources = ["assets/onboarding"]
-short_description = "A local-first terminal for individuals and teams, developer build."
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["embed_plist"]

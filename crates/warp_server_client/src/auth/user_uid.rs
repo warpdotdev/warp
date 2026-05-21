@@ -34,12 +34,6 @@ impl UserUid {
     }
 }
 
-impl From<UserUid> for cynic::Id {
-    fn from(user_uid: UserUid) -> Self {
-        cynic::Id::new(user_uid.as_str())
-    }
-}
-
 impl fmt::Display for UserUid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())

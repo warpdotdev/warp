@@ -4,25 +4,29 @@ use super::*;
 use settings::manager::SettingsManager;
 use warpui::SingletonEntity;
 
+fn legacy_sync_id(id: i64) -> SyncId {
+    SyncId::LegacyObjectId(format!("test_uid{id}"))
+}
+
 #[test]
 fn test_set_aliases() {
-    let workflow_1: SyncId = SyncId::ServerId(1.into());
-    let workflow_2: SyncId = SyncId::ServerId(2.into());
+    let workflow_1: SyncId = legacy_sync_id(1);
+    let workflow_2: SyncId = legacy_sync_id(2);
     let alias_1: WorkflowAlias = WorkflowAlias {
         alias: "alias1".to_string(),
-        workflow_id: workflow_1,
+        workflow_id: workflow_1.clone(),
         arguments: None,
         env_vars: None,
     };
     let alias_2: WorkflowAlias = WorkflowAlias {
         alias: "alias2".to_string(),
-        workflow_id: workflow_1,
+        workflow_id: workflow_1.clone(),
         arguments: None,
         env_vars: None,
     };
     let alias_3: WorkflowAlias = WorkflowAlias {
         alias: "alias3".to_string(),
-        workflow_id: workflow_2,
+        workflow_id: workflow_2.clone(),
         arguments: None,
         env_vars: None,
     };
@@ -53,13 +57,13 @@ fn test_set_aliases() {
             assert_eq!(WorkflowAliases::as_ref(app).get_all_aliases().len(), 3);
             assert_eq!(
                 WorkflowAliases::as_ref(app)
-                    .get_aliases_for_workflow(workflow_1)
+                    .get_aliases_for_workflow(workflow_1.clone())
                     .len(),
                 2
             );
             assert_eq!(
                 WorkflowAliases::as_ref(app)
-                    .get_aliases_for_workflow(workflow_2)
+                    .get_aliases_for_workflow(workflow_2.clone())
                     .len(),
                 1
             );
@@ -70,10 +74,10 @@ fn test_set_aliases() {
 #[test]
 fn test_set_aliases_replacement() {
     // Test that replacing aliases works correctly.
-    let workflow_1: SyncId = SyncId::ServerId(1.into());
+    let workflow_1: SyncId = legacy_sync_id(1);
     let alias_1: WorkflowAlias = WorkflowAlias {
         alias: "alias1".to_string(),
-        workflow_id: workflow_1,
+        workflow_id: workflow_1.clone(),
         arguments: None,
         env_vars: None,
     };
@@ -108,23 +112,23 @@ fn test_set_aliases_replacement() {
 
 #[test]
 fn test_remove_aliases() {
-    let workflow_1: SyncId = SyncId::ServerId(1.into());
-    let workflow_2: SyncId = SyncId::ServerId(2.into());
+    let workflow_1: SyncId = legacy_sync_id(1);
+    let workflow_2: SyncId = legacy_sync_id(2);
     let alias_1: WorkflowAlias = WorkflowAlias {
         alias: "alias1".to_string(),
-        workflow_id: workflow_1,
+        workflow_id: workflow_1.clone(),
         arguments: None,
         env_vars: None,
     };
     let alias_2: WorkflowAlias = WorkflowAlias {
         alias: "alias2".to_string(),
-        workflow_id: workflow_1,
+        workflow_id: workflow_1.clone(),
         arguments: None,
         env_vars: None,
     };
     let alias_3: WorkflowAlias = WorkflowAlias {
         alias: "alias3".to_string(),
-        workflow_id: workflow_2,
+        workflow_id: workflow_2.clone(),
         arguments: None,
         env_vars: None,
     };
@@ -151,13 +155,13 @@ fn test_remove_aliases() {
             assert_eq!(WorkflowAliases::as_ref(app).get_all_aliases().len(), 2);
             assert_eq!(
                 WorkflowAliases::as_ref(app)
-                    .get_aliases_for_workflow(workflow_1)
+                    .get_aliases_for_workflow(workflow_1.clone())
                     .len(),
                 2
             );
             assert_eq!(
                 WorkflowAliases::as_ref(app)
-                    .get_aliases_for_workflow(workflow_2)
+                    .get_aliases_for_workflow(workflow_2.clone())
                     .len(),
                 0
             );

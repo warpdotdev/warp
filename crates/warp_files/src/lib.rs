@@ -214,11 +214,9 @@ impl FileState {
     }
 
     fn local_iter_mut(&mut self) -> impl Iterator<Item = (&FileId, &mut LocalFile)> {
-        self.files
-            .iter_mut()
-            .filter_map(|(id, backend)| match backend {
-                FileBackend::Local(f) => Some((id, f)),
-            })
+        self.files.iter_mut().map(|(id, backend)| match backend {
+            FileBackend::Local(f) => (id, f),
+        })
     }
 }
 

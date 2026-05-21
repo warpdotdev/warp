@@ -2,10 +2,7 @@ use itertools::Itertools as _;
 use markdown_parser::parse_markdown;
 use parking_lot::FairMutex;
 use std::{borrow::Cow, cmp::Reverse, path::Path, sync::Arc};
-use warp_core::{
-    channel::{Channel, ChannelState},
-    ui::Icon,
-};
+use warp_core::ui::Icon;
 use warpui::{
     elements::{
         Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement, MainAxisSize,
@@ -292,7 +289,6 @@ impl View for AgentViewZeroStateBlock {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let is_oss = ChannelState::channel() == Channel::Oss;
         let mut local_description = "Send a prompt below to start a new conversation".to_owned();
         let active_session = self.active_session(app);
         let location_label = active_session.as_deref().and_then(|session| {
@@ -303,11 +299,7 @@ impl View for AgentViewZeroStateBlock {
         };
 
         let header_props = HeaderProps {
-            title: if is_oss {
-                "New agent conversation".into()
-            } else {
-                "New agent conversation".into()
-            },
+            title: "New agent conversation".into(),
             description: AgentViewDescription::PlainText(vec![local_description.into()]),
             icon: Icon::Warp,
         };

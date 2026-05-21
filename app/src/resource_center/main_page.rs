@@ -97,7 +97,7 @@ impl ResourceCenterMainView {
 
         sections
             .iter()
-            .filter_map(|section| match section {
+            .map(|section| match section {
                 Section::Feature(data) => {
                     let is_tips_completed = tips_completed.as_ref(ctx).skipped_or_completed;
                     let is_expanded = match data.section_name {
@@ -106,20 +106,18 @@ impl ResourceCenterMainView {
                         _ => false,
                     };
 
-                    Some(SectionViewHandle::Feature(
-                        Self::build_feature_section_view(
-                            data,
-                            action_target.clone(),
-                            ctx,
-                            tips_completed.clone(),
-                            true,
-                            is_expanded,
-                        ),
+                    SectionViewHandle::Feature(Self::build_feature_section_view(
+                        data,
+                        action_target.clone(),
+                        ctx,
+                        tips_completed.clone(),
+                        true,
+                        is_expanded,
                     ))
                 }
-                Section::Content(data) => Some(SectionViewHandle::Content(
-                    Self::build_content_section_view(data, ctx),
-                )),
+                Section::Content(data) => {
+                    SectionViewHandle::Content(Self::build_content_section_view(data, ctx))
+                }
             })
             .collect()
     }

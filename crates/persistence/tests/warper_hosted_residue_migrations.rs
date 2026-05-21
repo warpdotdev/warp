@@ -6,8 +6,43 @@ use diesel::{
     sqlite::Sqlite,
 };
 use diesel_migrations::MigrationHarness;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const HOSTED_RESIDUE_CLEANUP_VERSION: &str = "20260505020000";
+type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+struct TempDatabaseDir {
+    path: PathBuf,
+}
+
+impl TempDatabaseDir {
+    fn new() -> io::Result<Self> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "warper-hosted-residue-migrations-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&path)?;
+        Ok(Self { path })
+    }
+
+    fn database_path(&self) -> PathBuf {
+        self.path.join("warp.sqlite")
+    }
+}
+
+impl Drop for TempDatabaseDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 
 #[derive(QueryableByName)]
 struct SqlCount {
@@ -15,12 +50,10 @@ struct SqlCount {
     count: i64,
 }
 
-fn setup_database_before_hosted_cleanup(
-    database_path: &std::path::Path,
-) -> anyhow::Result<SqliteConnection> {
+fn setup_database_before_hosted_cleanup(database_path: &Path) -> TestResult<SqliteConnection> {
     let db_url = database_path
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("failed to convert db path to a string"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "database path is not UTF-8"))?;
     let mut conn = SqliteConnection::establish(db_url)?;
     conn.batch_execute(
         r#"
@@ -34,7 +67,7 @@ fn setup_database_before_hosted_cleanup(
 
     let migrations: Vec<Box<dyn Migration<Sqlite>>> = persistence::MIGRATIONS
         .migrations()
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        .map_err(|err| io::Error::other(err.to_string()))?;
     let migrations_before_cutoff = migrations
         .into_iter()
         .filter(|migration| {
@@ -43,7 +76,7 @@ fn setup_database_before_hosted_cleanup(
         .collect::<Vec<_>>();
 
     conn.run_migrations(&migrations_before_cutoff)
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        .map_err(|err| io::Error::other(err.to_string()))?;
     Ok(conn)
 }
 
@@ -60,8 +93,8 @@ fn table_exists(conn: &mut SqliteConnection, table_name: &str) -> bool {
 
 #[test]
 fn hosted_cloud_team_billing_account_state_is_deleted_by_migrations() {
-    let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let tempdir = TempDatabaseDir::new().expect("tempdir should be created");
+    let database_path = tempdir.database_path();
     let mut conn = setup_database_before_hosted_cleanup(&database_path)
         .expect("database should initialize before hosted cleanup migration");
 
@@ -77,7 +110,6 @@ fn hosted_cloud_team_billing_account_state_is_deleted_by_migrations() {
             is_pending,
             object_type,
             revision_ts,
-            server_id,
             client_id,
             shareable_object_id,
             retry_count,
@@ -94,7 +126,6 @@ fn hosted_cloud_team_billing_account_state_is_deleted_by_migrations() {
             FALSE,
             'NOTEBOOK',
             123,
-            'server-object-701',
             'client-object-701',
             700,
             2,

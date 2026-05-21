@@ -1,7 +1,6 @@
 mod action;
 mod agent_view;
 mod block_banner;
-pub mod block_onboarding;
 pub(crate) mod blocklist_filter;
 mod bookmarks;
 pub mod init;
@@ -20,8 +19,6 @@ pub use init_project::{
     InitActionResult, InitProjectModel, InitProjectModelEvent, InitStepBlock, InitStepKind,
     ProjectScopedRulesResult,
 };
-use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
-use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 pub(crate) mod docker_sandbox;
 mod link_detection;
 mod open_in_warp;
@@ -137,13 +134,10 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction};
+pub use action::TerminalAction;
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use ai::index::full_source_code_embedding::manager::{BuildSource, CodebaseIndexManager};
 pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
-use block_onboarding::onboarding_agentic_suggestions_block::{
-    OnboardingAgenticSuggestionsBlock, OnboardingAgenticSuggestionsBlockEvent, OnboardingChipType,
-};
 pub use init::{
     init, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
@@ -153,7 +147,7 @@ pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBa
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
 use uuid::Uuid;
-use warp_core::channel::{Channel, ChannelState};
+use warp_core::channel::ChannelState;
 use warpui::elements::ChildView;
 use warpui::fonts::Properties;
 use warpui::{ViewHandle, WeakModelHandle};
@@ -163,8 +157,8 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId, Conversat
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::{
-    AIAgentActionType, AIAgentOutputStatus, AIAgentTextSection, EntrypointType,
-    FinishedAIAgentOutput, RenderableAIError, StaticQueryType,
+    AIAgentActionType, AIAgentOutputStatus, AIAgentTextSection, FinishedAIAgentOutput,
+    RenderableAIError,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::{model::AIBlockModelImpl, ClientIdentifiers};
@@ -238,7 +232,6 @@ use crate::terminal::local_tty::get_shell_starter;
 use crate::terminal::local_tty::shell::ShellStarter;
 #[cfg(all(windows, feature = "local_tty"))]
 use crate::terminal::local_tty::windows::get_user_and_system_env_variable;
-use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::{Session, SessionId};
 use crate::terminal::model::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretHandle};
@@ -253,7 +246,6 @@ use crate::terminal::session_settings::{
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
-use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::warpify::{
     render::render_subshell_separator, settings::WarpifySettings, SubshellSource,
 };
@@ -392,7 +384,6 @@ use crate::terminal::event::TerminalMode;
 use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::find::{BlockGridMatch, BlockListMatch, TerminalFindModel};
 use crate::terminal::input::{InputState, MenuPositioning, MenuPositioningProvider};
-use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::metadata::{InteractionSource, ToggleBlockFilterSource};
 use crate::terminal::model::block::{AgentInteractionMetadata, BlockMetadata};
 use crate::terminal::model::block::{Block, BlockId};
@@ -471,7 +462,7 @@ use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
-use super::{GridType, HistoryEvent};
+use super::GridType;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::terminal::links::should_directly_open_link;
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
@@ -1554,10 +1545,6 @@ pub enum Event {
     CloseRequested,
     /// Used to focus and bring this session to the foreground.
     FocusSession,
-    /// Emitted when the onboarding init flow completes.
-    OnboardingInitCompleted,
-    /// Emitted when the guided onboarding tutorial callout is completed or dismissed.
-    OnboardingTutorialCompleted,
     SelectedBlocksChanged,
     SelectedTextChanged,
     /// The input editor was locally edited and
@@ -1908,11 +1895,6 @@ impl BlocklistAIRenderContext {
             {
                 self.context_color(theme)
             }
-            RichContentMetadata::AIOnboardingBlock { exchange_id, .. }
-                if self.is_exchange_in_active_conversation(exchange_id) =>
-            {
-                self.context_color(theme)
-            }
             _ => None,
         }
     }
@@ -2246,18 +2228,7 @@ pub struct TerminalView {
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
 
-    // Whether the block onboarding view is active or not.
-    block_onboarding_active: bool,
-
-    // View handles for the onboarding blocks.
-    onboarding_prompt_block: Option<ViewHandle<OnboardingPromptBlock>>,
-    settings_import_onboarding_block: Option<ViewHandle<SettingsImportView>>,
-    onboarding_agentic_suggestions_block: Option<ViewHandle<OnboardingAgenticSuggestionsBlock>>,
-
-    onboarding_callout_view: Option<ViewHandle<onboarding::OnboardingCalloutView>>,
-
-    // If the agentic suggestions onboarding block is pending, mark it here.
-    pending_onboarding_agentic_suggestions_block: bool,
+    settings_import_block: Option<ViewHandle<SettingsImportView>>,
 
     /// The type of the subshell that we will bootstrap/"warpify"" on the next [`AfterBlockStarted`]
     /// terminal model event. Will only be `Some` with a [`ShellType`] we can bootstrap.
@@ -3575,12 +3546,7 @@ impl TerminalView {
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
             usage_footer_view_ids: Default::default(),
-            block_onboarding_active: false,
-            onboarding_agentic_suggestions_block: None,
-            onboarding_prompt_block: None,
-            settings_import_onboarding_block: None,
-            onboarding_callout_view: None,
-            pending_onboarding_agentic_suggestions_block: true,
+            settings_import_block: None,
             pending_auto_bootstrap_shell_type: None,
             pending_env_var_collection: None,
             env_vars: Vec::new(),
@@ -7453,7 +7419,6 @@ impl TerminalView {
 
         let suggestion = &banner_state.prompt_suggestion;
         let prompt = suggestion.prompt.clone();
-        let is_static_suggestion = suggestion.static_prompt_suggestion_name.is_some();
         let trigger = banner_state.trigger.clone();
         let should_start_new_conversation = suggestion.should_start_new_conversation;
         let conversation_id = banner_state.conversation_id;
@@ -7527,11 +7492,6 @@ impl TerminalView {
                 AgentViewEntryOrigin::AcceptedPromptSuggestion,
                 ctx,
             );
-        }
-
-        // Send telemetry.
-        if is_static_suggestion {
-        } else {
         }
 
         true
@@ -7655,7 +7615,6 @@ impl TerminalView {
     ) {
         if action == VimModeBannerAction::Enable {
             self.enable_vim_keybindings(ctx);
-        } else {
         }
         self.remove_vim_mode_banner(ctx);
         VimBannerSettings::handle(ctx).update(ctx, |banner_settings, model_ctx| {
@@ -8923,7 +8882,7 @@ impl TerminalView {
                     ctx.emit(Event::PendingCommandCompleted);
 
                     // If agent view entry was deferred until setup commands
-                    // finished, enter it now (unless suppressed by onboarding).
+                    // finished, enter it now.
                     if self.enter_agent_view_after_pending_commands {
                         self.enter_agent_view_after_pending_commands = false;
                         self.enter_agent_view_for_new_conversation(
@@ -9933,7 +9892,6 @@ impl TerminalView {
 
         self.ignore_next_set_title_event = true;
 
-        let should_show_onboarding = false;
         let is_launch_modal_open = false;
 
         let has_plugin_instructions_block = self.rich_content_views.iter().any(|rc| {
@@ -9946,8 +9904,6 @@ impl TerminalView {
         if FeatureFlag::AgentView.is_enabled()
             && TerminalSettings::as_ref(ctx).should_show_zero_state_block(ctx)
             && !self.model.lock().block_list().is_restored_session()
-            && !should_show_onboarding
-            && self.onboarding_callout_view.is_none()
             && !is_launch_modal_open
             && !is_subshell_or_ssh
             && !has_plugin_instructions_block
@@ -10068,83 +10024,15 @@ impl TerminalView {
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    fn get_ps1_grid_info(&mut self) -> Option<(BlockGrid, SizeInfo)> {
-        let model = self.model.lock();
-        let ps1_grid_info = model
-            .prompt_grid()
-            .cloned()
-            .zip(Some(*model.block_list().size()));
-        ps1_grid_info
-    }
-
-    fn add_agentic_suggestions_block(&mut self, ctx: &mut ViewContext<Self>) {
-        self.reset_onboarding_blocks(ctx);
-        self.block_onboarding_active = true;
-        ctx.focus_self();
-        let session_id_opt = self.active_block_session_id();
-        let shell_type = self.active_session_shell_type(ctx);
-
-        if let (Some(shell_type), Some(session_id)) = (shell_type, session_id_opt) {
-            let terminal_view_handle = ctx.handle();
-            let onboarding_agentic_suggestions_block = ctx.add_typed_action_view(|ctx| {
-                OnboardingAgenticSuggestionsBlock::new(
-                    session_id,
-                    shell_type,
-                    terminal_view_handle,
-                    self.model_events_handle.clone(),
-                    self.ai_action_model.clone(),
-                    ctx,
-                )
-            });
-            self.onboarding_agentic_suggestions_block =
-                Some(onboarding_agentic_suggestions_block.clone());
-
-            ctx.subscribe_to_view(
-                &onboarding_agentic_suggestions_block,
-                move |me, _, event, ctx| {
-                    me.handle_onboarding_agentic_suggestions_block_event(event, ctx);
-                },
-            );
-
-            self.insert_rich_content(
-                None,
-                onboarding_agentic_suggestions_block.clone(),
-                Some(RichContentMetadata::OnboardingAgenticSuggestions {
-                    agentic_suggestions_block_handle: onboarding_agentic_suggestions_block,
-                }),
-                RichContentInsertionPosition::Append {
-                    insert_below_long_running_block: false,
-                },
-                ctx,
-            );
-        } else {
-            ctx.subscribe_to_model(&History::handle(ctx), |me, _, event, ctx| match event {
-                HistoryEvent::Initialized(_) => {
-                    if me.pending_onboarding_agentic_suggestions_block {
-                        me.add_agentic_suggestions_block(ctx);
-                        me.pending_onboarding_agentic_suggestions_block = false;
-                    }
-                }
-            });
-        }
-
-        #[cfg(feature = "voice_input")]
-        voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
-            voice_input.should_suppress_new_feature_popup = true;
-        });
-    }
-
-    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn add_settings_import_block(&mut self, ctx: &mut ViewContext<Self>) {
-        self.block_onboarding_active = true;
         let current_block_view_handle = ctx.add_typed_action_view(SettingsImportView::new);
-        self.settings_import_onboarding_block = Some(current_block_view_handle.clone());
+        self.settings_import_block = Some(current_block_view_handle.clone());
 
         ctx.subscribe_to_view(
             &current_block_view_handle,
-            move |terminal_view, settings_import_view_handle, event, ctx| match event {
+            move |terminal_view, settings_import_view_handle, event, _ctx| match event {
                 SettingsImportEvent::Completed(true) => {
-                    terminal_view.add_prompt_block(ctx);
+                    terminal_view.settings_import_block = None;
                 }
                 SettingsImportEvent::NoConfigsFound => {
                     // In the case where no settings were found to import, we want to remove the settings import block.
@@ -10154,10 +10042,10 @@ impl TerminalView {
                         .block_list_mut()
                         .remove_rich_content(settings_import_view_handle.id());
 
-                    terminal_view.add_prompt_block(ctx);
+                    terminal_view.settings_import_block = None;
                 }
                 _ => {
-                    terminal_view.add_prompt_block(ctx);
+                    terminal_view.settings_import_block = None;
                 }
             },
         );
@@ -10178,82 +10066,14 @@ impl TerminalView {
         });
     }
 
-    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    fn add_prompt_block(&mut self, ctx: &mut ViewContext<Self>) {
-        let ps1_grid_info = self.get_ps1_grid_info();
-        let current_block_view_handle =
-            ctx.add_typed_action_view(|_| OnboardingPromptBlock::new(ps1_grid_info));
-        self.onboarding_prompt_block = Some(current_block_view_handle.clone());
-
-        self.insert_rich_content(
-            None,
-            current_block_view_handle,
-            None,
-            RichContentInsertionPosition::Append {
-                insert_below_long_running_block: false,
-            },
-            ctx,
-        );
-
-        if self.block_onboarding_active {
-            #[cfg(feature = "voice_input")]
-            {
-                voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
-                    voice_input.should_suppress_new_feature_popup = true;
-                });
-            }
-        }
-    }
-
-    fn handle_onboarding_agentic_suggestions_block_event(
-        &mut self,
-        event: &OnboardingAgenticSuggestionsBlockEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            OnboardingAgenticSuggestionsBlockEvent::RunAgentModeCommand { prompt, chip_type } => {
-                let static_query_type = if matches!(chip_type, OnboardingChipType::Other) {
-                    Some(StaticQueryType::CustomOnboardingRequest)
-                } else {
-                    None
-                };
-
-                self.ai_controller.update(ctx, move |controller, ctx| {
-                    controller.send_user_query_in_new_conversation(
-                        prompt.clone(),
-                        static_query_type,
-                        EntrypointType::Onboarding {
-                            chip_type: *chip_type,
-                        },
-                        ctx,
-                    )
-                });
-            }
-        }
-    }
-
-    pub fn interrupt_onboarding_blocks(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(onboarding_prompt_block_handle) = &self.onboarding_prompt_block {
-            onboarding_prompt_block_handle.update(ctx, |onboarding_prompt_block, block_ctx| {
-                onboarding_prompt_block.interrupt_block(block_ctx);
-            })
-        }
-
-        if let Some(settings_import_onboarding_block_handle) =
-            &self.settings_import_onboarding_block
-        {
-            settings_import_onboarding_block_handle.update(ctx, |settings_import_view, ctx| {
+    pub fn interrupt_settings_import_block(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(settings_import_block_handle) = &self.settings_import_block {
+            settings_import_block_handle.update(ctx, |settings_import_view, ctx| {
                 settings_import_view.interrupt_block(ctx);
             })
         }
 
-        if let Some(agentic_suggestions_block_handle) = &self.onboarding_agentic_suggestions_block {
-            agentic_suggestions_block_handle.update(ctx, |agentic_suggestions_block, ctx| {
-                agentic_suggestions_block.interrupt_block(ctx);
-            })
-        }
-
-        self.reset_onboarding_blocks(ctx);
+        self.settings_import_block = None;
     }
 
     /// Opens a folder that the user may or may not have opened in the past
@@ -10430,7 +10250,6 @@ impl TerminalView {
                     #[cfg(feature = "local_fs")]
                     me.start_lsp_server_in_active_pwd(ctx);
                     me.redetermine_terminal_focus(ctx);
-                    ctx.emit(Event::OnboardingInitCompleted);
                 }
                 InitProjectModelEvent::GenerateProjectRules => {
                     me.ai_controller.update(ctx, |controller, ctx| {
@@ -10635,27 +10454,6 @@ impl TerminalView {
         });
     }
 
-    fn reset_onboarding_blocks(&mut self, ctx: &mut ViewContext<Self>) {
-        self.block_onboarding_active = false;
-        self.onboarding_prompt_block = None;
-        self.settings_import_onboarding_block = None;
-        self.onboarding_agentic_suggestions_block = None;
-
-        #[cfg(feature = "voice_input")]
-        voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
-            voice_input.should_suppress_new_feature_popup = false;
-        });
-        let _ = ctx;
-    }
-
-    /// Returns the save position ID for the agent view zero state, if one exists.
-    fn agent_view_zero_state_save_position_id(&self, app: &AppContext) -> Option<String> {
-        self.agent_view_controller
-            .as_ref(app)
-            .agent_view_state()
-            .zero_state_position_id()
-    }
-
     /// Gets the selected text from the terminal, if any.
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {
         let semantic_selection = SemanticSelection::handle(ctx).as_ref(ctx);
@@ -10685,38 +10483,6 @@ impl TerminalView {
     }
 }
 
-/// Constructs the keybindings struct for the onboarding callout.
-///
-/// Gets display strings for:
-/// - Toggle input mode: from TerminalKeybindings (editable binding)
-/// - Submit to local agent: fixed binding (cmd-enter / ctrl-shift-enter)
-fn build_onboarding_keybindings(ctx: &AppContext) -> OnboardingKeybindings {
-    let toggle_input_mode = TerminalKeybindings::handle(ctx)
-        .as_ref(ctx)
-        .set_input_mode_agent_keybinding()
-        .unwrap_or_else(|| {
-            if OperatingSystem::get().is_mac() {
-                "⌘-I".to_string()
-            } else {
-                "Ctrl-I".to_string()
-            }
-        });
-
-    // EditorAction::CmdEnter is a fixed binding, not editable.
-    let submit_to_local_agent = if OperatingSystem::get().is_mac() {
-        Keystroke::parse("cmd-enter")
-    } else {
-        Keystroke::parse("ctrl-shift-enter")
-    }
-    .map(|k| k.displayed())
-    .unwrap_or_else(|_| "⌘-⏎".to_string());
-
-    OnboardingKeybindings {
-        toggle_input_mode,
-        submit_to_local_agent,
-    }
-}
-
 /// Builds the context-menu label for forking an AI conversation from a given query.
 fn fork_label_for_query(query: &str) -> String {
     if query.is_empty() {
@@ -10734,271 +10500,6 @@ fn fork_label_for_query(query: &str) -> String {
 }
 
 impl TerminalView {
-    fn start_agent_onboarding_tutorial(
-        &mut self,
-        version: AgentOnboardingVersion,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // If we are already showing the onboarding callout, do nothing.
-        if self.onboarding_callout_view.is_some() {
-            log::warn!("Attempted to start onboarding tutorial when one is already active.");
-            return;
-        }
-
-        // The MeetTerminalInput step expects terminal mode. If the default
-        // session mode is Agent (e.g. from cloud-synced settings), the tab
-        // may already be in agent view — exit it first.
-        self.exit_agent_view(ctx);
-
-        // Remove the terminal zero-state welcome block so it doesn't appear
-        // underneath the onboarding callout.
-        let zero_state_ids: Vec<_> = self
-            .rich_content_views
-            .iter()
-            .filter(|view| {
-                matches!(
-                    view.metadata(),
-                    Some(RichContentMetadata::TerminalViewZeroState)
-                )
-            })
-            .map(|view| view.view_id())
-            .collect();
-        for view_id in zero_state_ids {
-            self.model
-                .lock()
-                .block_list_mut()
-                .remove_rich_content(view_id);
-            self.rich_content_views
-                .retain(|view| view.view_id() != view_id);
-        }
-
-        log::info!("Starting onboarding tutorial with version: {:?}", version);
-
-        let view = ctx.add_typed_action_view(|ctx| {
-            let keybindings = build_onboarding_keybindings(ctx);
-
-            match version {
-                AgentOnboardingVersion::UniversalInput { has_project } => {
-                    let initial_natural_language_detection_enabled = AISettings::handle(ctx)
-                        .as_ref(ctx)
-                        .is_nld_in_terminal_enabled(ctx);
-                    OnboardingCalloutView::new_universal_input(
-                        has_project,
-                        initial_natural_language_detection_enabled,
-                        keybindings,
-                        ctx,
-                    )
-                }
-                AgentOnboardingVersion::AgentModality {
-                    has_project,
-                    intention,
-                } => {
-                    let initial_natural_language_detection_enabled = AISettings::handle(ctx)
-                        .as_ref(ctx)
-                        .is_nld_in_terminal_enabled(ctx);
-                    OnboardingCalloutView::new_agent_modality(
-                        has_project,
-                        intention,
-                        initial_natural_language_detection_enabled,
-                        keybindings,
-                        ctx,
-                    )
-                }
-            }
-        });
-
-        ctx.subscribe_to_view(&view, |me, callout_view, event, ctx| {
-            me.handle_onboarding_callout_view_event(&callout_view, event, ctx)
-        });
-
-        view.update(ctx, |view, ctx| {
-            view.start_onboarding(ctx);
-        });
-
-        self.onboarding_callout_view = Some(view);
-        ctx.notify();
-    }
-
-    fn handle_onboarding_callout_view_event(
-        &mut self,
-        callout_view: &ViewHandle<OnboardingCalloutView>,
-        event: &OnboardingCalloutViewEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            OnboardingCalloutViewEvent::Completed {
-                final_state: FinalState::Submit,
-            } => {
-                // Submit whatever is currently in the input as an Agent Mode query.
-                // We explicitly override any Shell lock so this always routes to AI.
-                let prompt = callout_view.as_ref(ctx).prompt_string(ctx);
-
-                if FeatureFlag::AgentView.is_enabled() {
-                    self.enter_agent_view_for_new_conversation(
-                        Some(prompt),
-                        AgentViewEntryOrigin::OnboardingCallout,
-                        ctx,
-                    )
-                } else {
-                    self.set_ai_input_mode_with_query(Some(&prompt), ctx);
-                    self.input()
-                        .update(ctx, |input, ctx| input.input_enter(ctx));
-                }
-
-                self.onboarding_callout_view = None;
-                ctx.emit(Event::OnboardingTutorialCompleted);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::Completed {
-                final_state: FinalState::Initialize,
-            } => {
-                // Clear the input first, then submit the initialization query
-                self.input
-                    .update(ctx, |input, ctx| input.replace_buffer_content("", ctx));
-                // Submit /init as an Agent Mode query
-                self.enter_agent_view_for_new_conversation(
-                    Some("/init".to_string()),
-                    AgentViewEntryOrigin::Onboarding,
-                    ctx,
-                );
-                self.onboarding_callout_view = None;
-                ctx.emit(Event::OnboardingTutorialCompleted);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::Completed {
-                final_state: FinalState::Skip | FinalState::Finish,
-            } => {
-                // Close the callout without submitting and clear the input.
-                self.input
-                    .update(ctx, |input, ctx| input.replace_buffer_content("", ctx));
-                self.onboarding_callout_view = None;
-                ctx.emit(Event::OnboardingTutorialCompleted);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::Completed {
-                final_state: FinalState::BackToTerminal,
-            } => {
-                // Exit the agent view and return to terminal
-                self.exit_agent_view(ctx);
-                self.input
-                    .update(ctx, |input, ctx| input.replace_buffer_content("", ctx));
-                self.onboarding_callout_view = None;
-                ctx.emit(Event::OnboardingTutorialCompleted);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::StateUpdated => {
-                self.apply_onboarding_callout_query_to_input(callout_view, ctx);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::EnterAgentModality => {
-                // Enter agent view without submitting a prompt (mid-flow entry)
-                self.enter_agent_view_for_new_conversation(
-                    None,
-                    AgentViewEntryOrigin::Onboarding,
-                    ctx,
-                );
-                // Re-focus the callout so its keybindings continue to work
-                self.focus_onboarding_callout_if_active(ctx);
-                ctx.notify();
-            }
-            OnboardingCalloutViewEvent::NaturalLanguageDetectionToggled(enabled) => {
-                // Apply the setting immediately when the user toggles the checkbox
-                self.apply_natural_language_detection_setting(*enabled, ctx);
-            }
-        }
-    }
-
-    fn apply_natural_language_detection_setting(
-        &mut self,
-        enable: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .nld_in_terminal_enabled_internal
-                .set_value(enable, ctx));
-        });
-    }
-
-    fn maybe_render_onboarding_callout(
-        &self,
-        menu_positioning: MenuPositioning,
-        should_position_above_zero_state: bool,
-        stack: &mut Stack,
-        app: &AppContext,
-    ) {
-        let Some(onboarding_view) = self.onboarding_callout_view.as_ref() else {
-            return;
-        };
-
-        let (position_id, anchor, child_anchor, offset) = match (
-            should_position_above_zero_state,
-            self.agent_view_zero_state_save_position_id(app),
-            menu_positioning,
-        ) {
-            (true, Some(zero_state_position_id), _) => (
-                zero_state_position_id,
-                PositionedElementAnchor::TopLeft,
-                ChildAnchor::BottomLeft,
-                vec2f(4., -8.),
-            ),
-            (_, _, MenuPositioning::BelowInputBox) => (
-                self.input.as_ref(app).status_free_input_save_position_id(),
-                PositionedElementAnchor::BottomLeft,
-                ChildAnchor::TopLeft,
-                vec2f(4., 8.),
-            ),
-            (_, _, MenuPositioning::AboveInputBox) => (
-                self.input.as_ref(app).status_free_input_save_position_id(),
-                PositionedElementAnchor::TopLeft,
-                ChildAnchor::BottomLeft,
-                vec2f(4., -8.),
-            ),
-        };
-
-        stack.add_positioned_overlay_child(
-            ChildView::new(onboarding_view).finish(),
-            OffsetPositioning::offset_from_save_position_element(
-                position_id.as_str(),
-                offset,
-                PositionedElementOffsetBounds::WindowByPosition,
-                anchor,
-                child_anchor,
-            ),
-        );
-    }
-
-    // Read the current terminal input text from the onboarding tutorial callout
-    // and apply it to the terminal input box. Lock the input mode based on query type.
-    fn apply_onboarding_callout_query_to_input(
-        &mut self,
-        callout_view: &ViewHandle<OnboardingCalloutView>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let prompt = callout_view.as_ref(ctx).prompt(ctx);
-
-        if let OnboardingQuery::None = prompt {
-            // No-op: don't clear existing input
-            return;
-        }
-
-        self.input.update(ctx, |input, ctx| {
-            match &prompt {
-                OnboardingQuery::TerminalCommand(text) => {
-                    input.replace_buffer_content(text, ctx);
-                }
-                OnboardingQuery::AgentPrompt(text) => {
-                    input.replace_buffer_content(text, ctx);
-                    // Force agent mode, overriding any shell lock
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
-                }
-                _ => {}
-            }
-        });
-
-        ctx.focus(callout_view);
-    }
-
     // Redundantly issues resize changes to increase the chances that the alt-screen program
     // gets the latest winsize when it has a resize handler setup.
     //
@@ -11944,9 +11445,7 @@ impl TerminalView {
         self.enter_agent_view_after_pending_commands = true;
     }
 
-    /// Clears the deferred agent view entry flag. Called by the workspace
-    /// during onboarding to keep the session in terminal mode for the
-    /// guided tutorial.
+    /// Clears the deferred agent view entry flag.
     pub fn clear_enter_agent_view_after_pending_commands(&mut self) {
         self.enter_agent_view_after_pending_commands = false;
     }
@@ -14127,9 +13626,6 @@ impl TerminalView {
                             self.reset_selection_to_single_block(*block_index, ctx);
                         }
 
-                        if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
-                        } else if !self.selected_blocks.is_empty() {
-                        }
                         self.tips_completed.update(ctx, |tips, ctx| {
                             mark_feature_used_and_write_to_user_defaults(
                                 Tip::Hint(TipHint::BlockSelect),
@@ -14803,10 +14299,6 @@ impl TerminalView {
         self.update_focused_terminal_info(ctx);
 
         ctx.notify();
-
-        if self.block_onboarding_active {
-            self.reset_onboarding_blocks(ctx);
-        }
     }
 
     fn find_within_block(&mut self, ctx: &mut ViewContext<Self>) {
@@ -15309,10 +14801,6 @@ impl TerminalView {
     fn show_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
         let model = self.model.lock();
         let inverted_blocklist = self.is_inverted_blocklist(ctx);
-        // Emit a telemetry event depending on whether the find bar is opened in blocklist or alt screen.
-        if model.is_alt_screen_active() {
-        } else {
-        }
         self.find_bar.update(ctx, |view, ctx| {
             let semantic_selection = SemanticSelection::as_ref(ctx);
             if let Some(selected) =
@@ -15834,23 +15322,6 @@ impl TerminalView {
         ctx.notify();
     }
 
-    fn focus_onboarding_callout_if_active(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let Some(onboarding_callout_view) = self.onboarding_callout_view.as_ref() else {
-            return false;
-        };
-
-        if !onboarding_callout_view
-            .as_ref(ctx)
-            .is_onboarding_active(ctx)
-        {
-            return false;
-        }
-
-        ctx.focus(onboarding_callout_view);
-        ctx.notify();
-        true
-    }
-
     fn focus_block_filter_editor(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.block_filter_editor);
         ctx.notify();
@@ -16356,12 +15827,6 @@ impl TerminalView {
             return;
         }
 
-        // If the onboarding callout is active, it should win focus so that its displayed
-        // keybindings (enter/delete) actually work.
-        if self.focus_onboarding_callout_if_active(ctx) {
-            return;
-        }
-
         self.last_focus_ts = Some(Local::now().naive_local());
 
         let is_input_visible = {
@@ -16718,10 +16183,6 @@ impl TerminalView {
                 }
 
                 ctx.emit(Event::ExecuteCommand(event.as_ref().clone()));
-
-                if self.block_onboarding_active {
-                    self.interrupt_onboarding_blocks(ctx);
-                }
             }
             InputEvent::ExecuteAIQuery => {
                 // Clear the "enter again to send" ephemeral message if it's currently showing
@@ -17175,15 +16636,6 @@ impl TerminalView {
             );
             return;
         };
-
-        let model = self.model.lock();
-        let previous_filter = model.get_filter_on_block(active_filter_editor_block_index);
-        if (previous_filter.is_none()
-            || previous_filter
-                .is_some_and(|previous_filter| !previous_filter.is_active_and_nonempty()))
-            && block_filter_query.is_active_and_nonempty()
-        {}
-        drop(model);
 
         self.update_block_filter_for_block(
             active_filter_editor_block_index,
@@ -19499,8 +18951,6 @@ impl TerminalView {
                 }
             }
             AskAI(ask_source) => {
-                if FeatureFlag::AgentMode.is_enabled() {}
-
                 self.ask_ai(ask_source, ctx);
             }
             OpenWorkflowModal => self.open_workflow_modal(ctx),
@@ -20928,7 +20378,6 @@ impl TypedActionView for TerminalView {
             | AliasExpansionBanner(_)
             | VimModeBanner(_)
             | InsertMostRecentCommandCorrection
-            | OnboardingFlow(_)
             | ImportSettings
             | DragAndDropFiles(_)
             | WarpifySSHSession
@@ -21000,7 +20449,6 @@ impl TypedActionView for TerminalView {
             | StartFileDropTarget
             | StopFileDropTarget
             | RunNativeShellCompletions { .. }
-            | SelectAgenticSuggestion(_)
             | GenerateCodebaseIndex
             | DeleteAttachment { .. }
             | WriteCodebaseIndex
@@ -21354,12 +20802,10 @@ impl TypedActionView for TerminalView {
                 self.open_workflow_modal_from_block(*block_index, ctx)
             }
             OpenWorkflowModalWithLocalWorkflow(workflow_id) => {
-                self.open_workflow_modal_with_existing(*workflow_id, ctx)
+                self.open_workflow_modal_with_existing(workflow_id.clone(), ctx)
             }
             OpenBlockListContextMenu => self.open_block_list_context_menu_via_keybinding(ctx),
             AttachBlockAsAgentContext { block_index } => {
-                if FeatureFlag::AgentMode.is_enabled() {}
-
                 self.ask_ai(&AskAISource::Block(*block_index), ctx)
             }
             TriggerSubshellBootstrap => self.trigger_subshell_bootstrap(None, ctx),
@@ -21398,32 +20844,6 @@ impl TypedActionView for TerminalView {
                 self.open_block_filter_editor(*block_index, OpenedFromClick::Yes, ctx)
             }
             VimModeBanner(action) => self.handle_vim_banner_action(*action, ctx),
-            OnboardingFlow(version) => {
-                if ChannelState::channel() == Channel::Oss {
-                    return;
-                }
-
-                match version {
-                    OnboardingVersion::Legacy => {
-                        if self.block_onboarding_active {
-                            return;
-                        }
-
-                        // We might want to consider marking the user as onboarded here,
-                        // but it's probably fair to assume they have already been onboarded
-                        // by the time they're manually triggering the onboarding flow.
-                        self.add_agentic_suggestions_block(ctx);
-                    }
-                    OnboardingVersion::Agent(agent_version) => {
-                        // The MeetTerminalInput step expects terminal mode. If the
-                        // default session mode is Agent (e.g. cloud-synced settings),
-                        // the tab may already be in agent view — exit it first.
-                        // This also removes any zero-state welcome blocks.
-                        self.exit_agent_view(ctx);
-                        self.start_agent_onboarding_tutorial(*agent_version, ctx);
-                    }
-                }
-            }
             ImportSettings => {
                 #[cfg(feature = "local_fs")]
                 {
@@ -21600,13 +21020,6 @@ impl TypedActionView for TerminalView {
                 selected_range,
             } => self.set_marked_text_on_terminal(marked_text, selected_range, ctx),
             ClearMarkedText => self.clear_marked_text_on_terminal(ctx),
-            SelectAgenticSuggestion(index) => {
-                if let Some(block) = self.onboarding_agentic_suggestions_block.as_ref() {
-                    block.update(ctx, |block, ctx| {
-                        block.handle_key_pressed(*index, ctx);
-                    });
-                }
-            }
             ShowInitializationBlock => self.show_initialization_block(),
             GenerateCodebaseIndex => {
                 self.generate_codebase_index(ctx);
@@ -21983,9 +21396,6 @@ impl View for TerminalView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // Grab this here, before we take the terminal model lock.
-        let menu_positioning = self.input.as_ref(app).menu_positioning(app);
-
         let appearance = Appearance::as_ref(app);
         let semantic_selection = SemanticSelection::as_ref(app);
         let model = self.model.lock();
@@ -21999,13 +21409,6 @@ impl View for TerminalView {
         };
         let viewport = self.viewport_state(model.block_list(), input_mode, app);
         let is_alt_screen_active = { model.is_alt_screen_active() };
-        // Compute callout positioning early while we have the model lock.
-        // For UpdatedAgentInput state, always position relative to the input box,
-        // even when the zero state is visible.
-        let should_position_callout_above_zero_state = self
-            .onboarding_callout_view
-            .as_ref()
-            .is_some_and(|v| v.as_ref(app).should_position_above_zero_state(app));
         let is_long_running_command = {
             model
                 .block_list()
@@ -22077,13 +21480,6 @@ impl View for TerminalView {
         if self.is_any_tooltip_open() {
             self.render_grid_tooltip(&mut stack, &model, appearance, app);
         }
-
-        self.maybe_render_onboarding_callout(
-            menu_positioning,
-            should_position_callout_above_zero_state,
-            &mut stack,
-            app,
-        );
 
         match &self.context_menu_state.map(|c| c.menu_type) {
             Some(ContextMenuType::BlockList { menu_source }) => match menu_source {
@@ -22499,21 +21895,6 @@ impl View for TerminalView {
 
         if AISettings::as_ref(app).is_any_ai_enabled(app) {
             context.set.insert(flags::IS_ANY_AI_ENABLED);
-        }
-
-        if self
-            .rich_content_views
-            .last()
-            .and_then(|content| content.metadata())
-            .is_some_and(|metadata| {
-                matches!(
-                    metadata,
-                    RichContentMetadata::OnboardingAgenticSuggestions { .. }
-                )
-            })
-            && self.block_onboarding_active
-        {
-            context.set.insert("OnboardingAgenticSuggestionsBlock");
         }
 
         if self.current_repo_path.is_some() {

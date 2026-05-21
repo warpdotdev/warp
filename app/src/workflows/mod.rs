@@ -13,13 +13,13 @@ pub mod workflow;
 pub mod workflow_enum;
 
 use crate::notebooks::{NotebookId, NotebookLocation};
-use warp_server_client::ids::ServerId;
+use warp_server_client::ids::{HashableId, SyncId};
 
 pub use categories::{CategoriesView, CategoriesViewEvent};
 
 pub fn init(_app: &mut AppContext) {}
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
 pub enum WorkflowSource {
     Global,
     Local,
@@ -84,9 +84,50 @@ impl WorkflowViewMode {
     }
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub struct WorkflowId(ServerId);
-warp_server_client::server_id_traits! { WorkflowId, "Workflow" }
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct WorkflowId(String);
+
+#[cfg(any(test, feature = "test-util"))]
+impl From<i64> for WorkflowId {
+    fn from(id: i64) -> Self {
+        Self(format!("test_uid{}", id.abs()))
+    }
+}
+
+impl From<String> for WorkflowId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl From<WorkflowId> for String {
+    fn from(id: WorkflowId) -> String {
+        id.0
+    }
+}
+
+impl std::fmt::Display for WorkflowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl HashableId for WorkflowId {
+    fn to_hash(&self) -> String {
+        format!("Workflow-{}", self)
+    }
+
+    fn from_hash(hash: &str) -> Option<Self> {
+        hash.strip_prefix("Workflow-")
+            .map(|id| Self(id.to_string()))
+    }
+}
+
+impl From<WorkflowId> for SyncId {
+    fn from(id: WorkflowId) -> Self {
+        Self::LegacyObjectId(id.0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AIWorkflowOrigin {
@@ -124,10 +165,6 @@ impl WorkflowType {
             WorkflowType::AIGenerated { workflow, .. } => workflow,
             WorkflowType::Notebook(workflow) => workflow,
         }
-    }
-
-    pub fn server_id(&self) -> Option<WorkflowId> {
-        None
     }
 }
 

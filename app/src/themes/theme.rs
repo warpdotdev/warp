@@ -40,13 +40,6 @@ const THUMBNAIL_MARGIN: f32 = 10.;
 )]
 #[schemars(description = "The color theme.", rename_all = "snake_case")]
 pub enum ThemeKind {
-    // Need an alias for backwards-compatibility: Originally we only had a single reward theme
-    // so it was named `ReferralReward`.
-    #[serde(alias = "ReferralReward")]
-    #[schemars(skip)]
-    SentReferralReward,
-    #[schemars(skip)]
-    ReceivedReferralReward,
     #[schemars(description = "Adeberry")]
     Adeberry,
     #[schemars(description = "Phenomenon")]
@@ -133,8 +126,6 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::Phenomenon => "Phenomenon",
             ThemeKind::SolarFlare => "Solar Flare",
             ThemeKind::Adeberry => "Adeberry",
-            ThemeKind::SentReferralReward => "Warp Referral",
-            ThemeKind::ReceivedReferralReward => "Referred to Warp",
             ThemeKind::Custom(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::CustomBase16(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::InMemory(in_memory_theme) => in_memory_theme.name.as_str(),
@@ -295,11 +286,6 @@ impl WarpThemeConfig {
     pub fn new() -> Self {
         // preload with built-in themes
         let theme_map: HashMap<ThemeKind, WarpTheme> = HashMap::from_iter([
-            (ThemeKind::SentReferralReward, sent_referral_reward()),
-            (
-                ThemeKind::ReceivedReferralReward,
-                received_referral_reward(),
-            ),
             (ThemeKind::Dark, dark_theme()),
             (ThemeKind::Light, light_theme()),
             (ThemeKind::SolarizedDark, solarized_dark()),

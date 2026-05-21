@@ -1036,11 +1036,6 @@ impl BlocklistAIActionModel {
         reason: Option<CancellationReason>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if matches!(
-            pending_action.action,
-            AIAgentActionType::RequestComputerUse(_)
-        ) {}
-
         let result = Arc::new(AIAgentActionResult {
             id: pending_action.id,
             task_id: pending_action.task_id,

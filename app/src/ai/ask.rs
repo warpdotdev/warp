@@ -5,6 +5,7 @@ use warp_core::command::ExitCode;
 use crate::terminal::model::terminal_model::BlockIndex;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum AskAIType {
     /// Covers all possible origins of text selection, including the block list
     /// terminal, the alt-screen terminal, and the input area. Not all instances

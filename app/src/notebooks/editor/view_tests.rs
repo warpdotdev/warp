@@ -1,6 +1,5 @@
 use crate::features::FeatureFlag;
 use async_channel::TryRecvError;
-use std::sync::Arc;
 use string_offset::CharOffset;
 use warp_editor::render::{
     element::RichTextAction,

@@ -1,8 +1,0 @@
-name: "Create GH pull request to release a feature."
-command: open 'https://github.com/warpdotdev/warp-internal/compare/{{branch_name}}?expand=1&template=feature_flag.md'
-description: "Creates a templated pull request that we use when releasing a feature (e.g. flipping a feature flag)."
-arguments:
-  - name: branch_name
-    description: The name of the branch that enables the feature.
-author: Warp Team
-shells: []

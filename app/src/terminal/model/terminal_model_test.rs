@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::model::ansi::{Handler, Processor};
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;

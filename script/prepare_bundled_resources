@@ -12,8 +12,8 @@
 #   destination_directory:  The directory where resources should be installed.
 #                           Resources will be copied to subdirectories within
 #                           this path (e.g., $DEST_DIR/skills).
-#   channel:                (Optional) Release channel (local, dev, preview,
-#                           stable). Used to include channel-gated skills.
+#   channel:                (Optional) Release channel, passed through to
+#                           generated metadata such as the settings schema.
 #   cargo_profile:          (Optional) Cargo build profile to use when
 #                           generating the settings schema. Reusing the same
 #                           profile as the main build avoids recompiling deps.
@@ -65,18 +65,6 @@ if [ -n "$GIT_RELEASE_TAG" ]; then
   printf '{\n  "warp_version": "%s"\n}\n' "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
 fi
 
-# Copy channel-gated skills matching the current release channel.
-GATED_SRC="$REPO_ROOT/resources/channel-gated-skills"
-DEST_SKILLS="$DEST_DIR/bundled/skills"
-
-if [ -n "$CHANNEL" ] && [ -d "$GATED_SRC" ]; then
-  echo "Copying channel-gated skills for channel '$CHANNEL'..."
-  "$SCRIPT_DIR/copy_conditional_skills" \
-    "$CHANNEL" \
-    "$GATED_SRC" \
-    "$DEST_SKILLS"
-fi
-
 # Generate third-party license attribution.
 #
 # Additional (non-Cargo) third-party license files to include in the output.
@@ -87,7 +75,6 @@ ADDITIONAL_LICENSES=(
     "Hack Font|MIT|app/assets/bundled/fonts/hack/LICENSE.md"
     "Roboto Font|SIL Open Font License|app/assets/bundled/fonts/roboto/LICENSE.txt"
     "bash-preexec|MIT|app/assets/bundled/bootstrap/bash-preexec-LICENSE.md"
-    "Claude API Skill|Apache-2.0|resources/bundled/skills/claude-api/LICENSE.txt"
     "Windows Terminal|MIT|app/assets/windows/LICENSE-WINDOWS-TERMINAL"
     "GitHub Desktop|MIT|app/src/code_review/GITHUB-DESKTOP-LICENSE"
 )

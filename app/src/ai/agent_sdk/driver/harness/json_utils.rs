@@ -1,6 +1,6 @@
 //! Shared JSON read/merge/write helpers for third-party harness config prep.
 //!
-//! Third-party CLIs like Claude Code and Gemini CLI persist onboarding, trust,
+//! Third-party CLIs like Claude Code and Gemini CLI persist setup, trust,
 //! and auth state in JSON files. The harness preparation step
 //! needs to set a few keys on those files without clobbering
 //! user-owned state. These helpers allow us to read and merge with existing

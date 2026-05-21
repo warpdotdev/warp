@@ -79,7 +79,7 @@ pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
                     return;
                 };
 
-                model_clone.lock().block_list_mut().active_block_mut().set_cloud_workflow_state(event.workflow_id);
+                model_clone.lock().block_list_mut().active_block_mut().set_cloud_workflow_state(event.workflow_id.clone());
                 controller.update(ctx, |controller, ctx| {
                     controller.write_command(&event.command, shell_type, event.source.clone(), ctx)
                 });

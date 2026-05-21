@@ -1991,7 +1991,7 @@ impl View for GlobalSearchView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         match self.enablement {
-            CodingPanelEnablementState::RemoteSession { .. } => {
+            CodingPanelEnablementState::RemoteSession => {
                 return self.render_remote_state(app);
             }
             CodingPanelEnablementState::UnsupportedSession => {

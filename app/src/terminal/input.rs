@@ -5300,7 +5300,7 @@ impl Input {
             .active_block_mut()
             .set_home_dir(home_dir);
 
-        let env_var_collection_id = self.env_var_collection_state.selected_env_vars;
+        let env_var_collection_id = self.env_var_collection_state.selected_env_vars.clone();
         self.model
             .lock()
             .block_list_mut()
@@ -5315,8 +5315,7 @@ impl Input {
             .active_block_mut()
             .set_nld_overridden(nld_overridden);
 
-        let did_execute: bool;
-        if self
+        let did_execute = if self
             .model
             .lock()
             .block_list()
@@ -5343,13 +5342,13 @@ impl Input {
             }
 
             self.start_block_and_write_command_to_pty(command, source, ctx);
-            did_execute = true;
+            true
         } else {
             // We don't want to submit the command if precmd has not
             // been received. Instead, we want the user to be aware
             // that the prompt might not be up to date.
-            did_execute = false;
-        }
+            false
+        };
 
         // Close the workflows info box if it was open.
         self.clear_selected_workflow(ctx);
@@ -5490,7 +5489,7 @@ impl Input {
                 workflow,
                 workflow_source,
             } => {
-                let workflow_source = *workflow_source;
+                let workflow_source = workflow_source.clone();
 
                 self.show_workflows_info_box_on_workflow_selection(
                     *workflow.clone(),
@@ -5735,7 +5734,7 @@ impl Input {
             }
         };
 
-        self.env_var_collection_state.selected_env_vars = selected_env_vars;
+        self.env_var_collection_state.selected_env_vars = selected_env_vars.clone();
 
         // Ensure the env var selector dropdown is consistent with the selected env vars.
         if let Some(more_info_view) = self
@@ -5810,7 +5809,7 @@ impl Input {
     ) {
         match event {
             WorkflowsInfoBoxViewEvent::PrefixCommandWithEnvironmentVariables(env_vars) => {
-                self.reset_workflow_state(*env_vars, ctx);
+                self.reset_workflow_state(env_vars.clone(), ctx);
             }
         }
     }

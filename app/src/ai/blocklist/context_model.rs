@@ -185,6 +185,7 @@ pub fn block_context_from_terminal_model(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::terminal::model::TerminalModel;

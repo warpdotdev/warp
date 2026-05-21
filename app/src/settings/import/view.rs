@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use warp_core::{settings::Setting, ui::appearance::Appearance};
 
 use warpui::{
@@ -1056,11 +1055,6 @@ impl TypedActionView for SettingsImportView {
                 ctx.notify();
             }
             SettingsImportAction::SetSelectedConfig(idx) => {
-                let old_selected_idx = self
-                    .configs
-                    .iter()
-                    .find_position(|config| config.expanded)
-                    .map(|(position, _item)| position);
                 // Collapse all other configs.
                 self.configs
                     .iter_mut()
@@ -1069,8 +1063,6 @@ impl TypedActionView for SettingsImportView {
                     .for_each(|(_, config)| config.expanded = false);
                 // Set the current config to expand.
                 self.configs[*idx].expanded = true;
-                // Only send the telemetry event if the new selected item is different.
-                if old_selected_idx.is_none_or(|old_idx| old_idx != *idx) {}
                 // The radio button state already updates, since each element is a child of a RadioButtonItem.
                 ctx.notify();
             }

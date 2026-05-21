@@ -799,7 +799,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         fi
         # Note that we DO NOT unset the PS1 here, since we want to pass it along as a "hidden left prompt" for 
         # prompt preview purposes, if the Warp prompt is being used. Specifically, we want to show this prompt preview
-        # for the Edit Prompt modal and onboarding prompt block.
+        # for the Edit Prompt modal.
       fi
 
       if [[ -n "$PS1" ]]; then

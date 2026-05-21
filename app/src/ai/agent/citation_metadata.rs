@@ -1,28 +1,12 @@
 use serde::Serialize;
 
-use crate::ai::llms::LLMId;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
-
 use super::conversation::AIConversationId;
 use super::{AIAgentExchangeId, EntrypointType, PassiveSuggestionTriggerType, ServerOutputId};
+use crate::ai::llms::LLMId;
 
 impl EntrypointType {
     pub fn entrypoint(&self) -> String {
         match self {
-            Self::Onboarding { chip_type } => {
-                format!(
-                    "ONBOARDING.{}",
-                    match chip_type {
-                        OnboardingChipType::FixAnIssue => "FIX_AN_ISSUE",
-                        OnboardingChipType::PullCloudLogs => "PULL_CLOUD_LOGS",
-                        OnboardingChipType::StartAFeature => "START_A_FEATURE",
-                        OnboardingChipType::PythonSnakeGame => "PYTHON_SNAKE_GAME",
-                        OnboardingChipType::ExploreGitHistory => "EXPLORE_GIT_HISTORY",
-                        OnboardingChipType::MatrixThemePicker => "MATRIX_THEME_PICKER",
-                        OnboardingChipType::Other => "OTHER",
-                    }
-                )
-            }
             Self::PromptSuggestion {
                 is_static,
                 is_coding,

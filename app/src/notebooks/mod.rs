@@ -9,16 +9,51 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use warpui::AppContext;
 
-use warp_server_client::ids::{ServerId, SyncId};
+use warp_server_client::ids::{HashableId, SyncId};
 
 /// This is the notebook_id in the database associated with this notebook.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct NotebookId(ServerId);
-warp_server_client::server_id_traits! { NotebookId, "Notebook" }
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct NotebookId(String);
+
+#[cfg(any(test, feature = "test-util"))]
+impl From<i64> for NotebookId {
+    fn from(id: i64) -> Self {
+        Self(format!("test_uid{}", id.abs()))
+    }
+}
+
+impl From<String> for NotebookId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl From<NotebookId> for String {
+    fn from(id: NotebookId) -> String {
+        id.0
+    }
+}
+
+impl std::fmt::Display for NotebookId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl HashableId for NotebookId {
+    fn to_hash(&self) -> String {
+        format!("Notebook-{}", self)
+    }
+
+    fn from_hash(hash: &str) -> Option<Self> {
+        hash.strip_prefix("Notebook-")
+            .map(|id| Self(id.to_string()))
+    }
+}
 
 impl From<NotebookId> for SyncId {
     fn from(id: NotebookId) -> Self {
-        Self::ServerId(id.into())
+        Self::LegacyObjectId(id.0)
     }
 }
 

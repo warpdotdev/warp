@@ -123,7 +123,6 @@ impl PassiveSuggestionsModel {
                 prompt_suggestion: suggestion.clone(),
                 block_id: block_id.clone(),
             });
-            return;
         }
     }
 }

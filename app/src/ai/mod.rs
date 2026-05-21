@@ -20,7 +20,6 @@ pub(crate) mod conversation_utils;
 pub(crate) mod document;
 pub(crate) mod get_relevant_files;
 pub(crate) mod llms;
-pub mod onboarding;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
 pub(crate) mod restored_conversations;

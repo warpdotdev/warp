@@ -104,7 +104,7 @@ impl SyncDataSource for WorkflowsDataSource {
                                     identity: WorkflowIdentity::Local(Box::new(
                                         WorkflowType::Local(workflow),
                                     )),
-                                    source,
+                                    source: source.clone(),
                                     fuzzy_matched_workflow: match_result,
                                 }
                                 .into()

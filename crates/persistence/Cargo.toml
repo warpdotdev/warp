@@ -12,6 +12,7 @@ local_fs = []
 chrono.workspace = true
 diesel = { workspace = true, features = [
     "chrono",
+    "sqlite",
     "32-column-tables",
 ] }
 # Ideally, we'd make this an optional dependency, but due to the

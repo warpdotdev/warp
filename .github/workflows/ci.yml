@@ -54,7 +54,6 @@ jobs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
       macos-runner: ${{ steps.mac_runner_type.outputs.value }}
-      wasm-runner: ${{ steps.wasm_runner_type.outputs.value }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -73,20 +72,15 @@ jobs:
       - name: Determine macOS runner type
         id: mac_runner_type
         run: |
-          RUNNER_TYPE='["namespace-profile-mac-ci"]'
-          echo "value=$RUNNER_TYPE" >> $GITHUB_OUTPUT
-
-      - name: Determine wasm runner type
-        id: wasm_runner_type
-        run: |
-          # Use a larger (16 core, 64GB ram) runner on Linux to speed up execution time.
-          # https://github.com/warpdotdev/warp-internal/settings/actions/runners
-          RUNNER_TYPE='["ubuntu-latest-large"]'
+          RUNNER_TYPE='["macos-latest"]'
           echo "value=$RUNNER_TYPE" >> $GITHUB_OUTPUT
 
   tests:
     name: Run ${{ matrix.name }} tests
     timeout-minutes: 25
+    # Full OS test coverage is expensive, so only run it when a maintainer
+    # explicitly starts this workflow.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     env:
       # When CI runs on a PR from a fork, the GCP OIDC auth used by
       # `google-github-actions/auth` fails because our Workload Identity
@@ -110,16 +104,14 @@ jobs:
 
           - os: "linux"
             name: "Linux"
-            # Use a larger (16 core, 64GB ram) runner on Linux to speed up execution time.
-            # https://github.com/warpdotdev/warp-internal/settings/actions/runners
-            runner: ubuntu-latest-large
+            runner: ubuntu-latest
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
             extra_test_args: ""
 
           - os: "windows"
             name: "Windows"
-            runner: windows-latest-large
+            runner: windows-latest
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
             extra_test_args: "--exclude command-signatures-v2 --exclude warp_js"
@@ -484,9 +476,7 @@ jobs:
 
           - os: "linux"
             name: "Linux"
-            # Use a larger (16 core, 64GB ram) runner on Linux to speed up execution time.
-            # https://github.com/warpdotdev/warp-internal/settings/actions/runners
-            runner: ubuntu-latest-large
+            runner: ubuntu-latest
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
             null_device: "/dev/null"
@@ -494,7 +484,7 @@ jobs:
 
           - os: "windows"
             name: "Windows"
-            runner: windows-latest-large
+            runner: windows-latest
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
             null_device: "NUL"
@@ -589,38 +579,6 @@ jobs:
       - name: Validate repo-sync markers
         uses: warpdotdev/repo-sync/actions/validate-markers@main
 
-  wasm-lint:
-    name: Formatting + Clippy (wasm)
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-    runs-on: ${{ fromJSON(needs.params.outputs.wasm-runner) }}
-    needs: params
-    steps:
-      - name: Compute IS_SELF_HOSTED
-        id: is_self_hosted
-        run: |
-          IS_SELF_HOSTED="${{ contains(fromJSON(needs.params.outputs.wasm-runner), 'self-hosted') }}"
-          echo "value=$IS_SELF_HOSTED" >> $GITHUB_OUTPUT
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - uses: ./.github/actions/prepare_environment
-        with:
-          target_os: wasm
-          is_self_hosted: ${{ steps.is_self_hosted.outputs.value }}
-
-      - name: Ensure cargo.lock is up-to-date
-        run:
-          cargo metadata --locked --format-version=1 >/dev/null || (echo "::error::Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
-
-      - name: Run cargo fmt
-        run: cargo fmt --check
-
-      - name: Run cargo clippy
-        run: |
-          cargo clippy --locked --target wasm32-unknown-unknown --profile release-wasm-debug_assertions -- -D warnings
-
   check-release-compilation:
     name: Verify compilation with release flags (${{ matrix.name }})
     timeout-minutes: 15
@@ -636,25 +594,17 @@ jobs:
 
           - os: "linux"
             name: "Linux"
-            # Use a larger (16 core, 64GB ram) runner on Linux to speed up execution time.
-            # https://github.com/warpdotdev/warp-internal/settings/actions/runners
-            runner: ubuntu-latest-large
+            runner: ubuntu-latest
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
             null_device: "/dev/null"
 
           - os: "windows"
             name: "Windows"
-            runner: windows-latest-large
+            runner: windows-latest
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
             null_device: "NUL"
-
-          - os: "wasm"
-            name: "wasm"
-            runner: ${{ fromJSON(needs.params.outputs.wasm-runner) }}
-            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.wasm-runner), 'self-hosted') }}
-            null_device: "/dev/null"
     runs-on: ${{ matrix.runner }}
     needs: params
     steps:
@@ -667,12 +617,7 @@ jobs:
 
       - name: Verify compilation with release flags
         shell: bash
-        run: |
-          if ${{ matrix.os == 'wasm' }}; then
-            ./script/wasm/bundle --channel oss --nouniversal --check-only
-          else
-            ./script/bundle --channel oss --nouniversal --check-only
-          fi
+        run: ./script/bundle --channel oss --nouniversal --check-only
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving
@@ -691,25 +636,28 @@ jobs:
     runs-on: ubuntu-latest
     # Always run this job, as it needs to check the results of all of the other
     # jobs. If we skipped CI checks (e.g. on a draft PR), also skip this one.
-    if: ${{ !cancelled() && needs.params.result != 'skipped' }}
+    if: ${{ always() && !cancelled() && needs.params.result != 'skipped' }}
     needs:
       - params
       - database-migration
       - tests
       - lints
-      - wasm-lint
       - general-lint
       - check-release-compilation
     steps:
       - name: Check CI results
         run: |
           # Convert needs context to JSON and check required jobs
-          echo '${{ toJSON(needs) }}' | jq -r '
-            # Get all jobs except database-migration
-            to_entries | 
+          echo '${{ toJSON(needs) }}' | jq -r --arg event_name '${{ github.event_name }}' '
+            # Get all jobs except database-migration, which has conditional
+            # validation below. The expensive tests job is allowed to be
+            # skipped outside of manual workflow_dispatch runs.
+            to_entries |
             map(select(.key != "database-migration")) |
             .[] |
-            if .value.result != "success" then
+            if .key == "tests" and $event_name != "workflow_dispatch" and .value.result == "skipped" then
+              empty
+            elif .value.result != "success" then
               "::error::Required job \(.key) failed or was skipped (status: \(.value.result))"
             else
               empty

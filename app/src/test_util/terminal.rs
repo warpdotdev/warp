@@ -12,7 +12,6 @@ use crate::ai::skills::SkillManager;
 use crate::code_review::git_status_update::GitStatusUpdateModel;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use warpui::SingletonEntity;
 use warpui::{platform::WindowStyle, App, ViewHandle, WindowId};
 use watcher::HomeDirectoryWatcher;
 

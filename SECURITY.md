@@ -1,14 +1,7 @@
 # Security Policy
 
-We take security seriously at Warp and appreciate the efforts of security researchers who help keep our users safe.
+If you believe you've found a security vulnerability in Warper, please don't open a public GitHub issue. Public issues are indexed and searchable, and a vulnerability disclosed there is exposed before a fix is available.
 
-## Reporting a Vulnerability
+Instead, open a private [GitHub Security Advisory](https://github.com/ruslanvakhitov/warper/security/advisories/new) on this repository. We'll acknowledge the report and work with you to resolve the issue.
 
-If you believe you've found a security vulnerability, please follow responsible disclosure practices and **do not** open a public GitHub issue, as this could expose the vulnerability before a fix is available.
-
-Instead, please report it through one of the following channels:
-
-- **Email:** [security@warp.dev](mailto:security@warp.dev)
-- **GitHub Security Advisory:** [Open a private advisory](https://github.com/warpdotdev/Warp/security/advisories/new)
-
-We will acknowledge your report promptly and work with you to understand and resolve the issue as quickly as possible.
+Warper is an independent hard fork. If a vulnerability you found also reproduces in upstream [Warp](https://github.com/warpdotdev/Warp), please report it to them separately — we don't have a pipeline into Warp.dev's security process, and a fix on our side doesn't fix theirs.

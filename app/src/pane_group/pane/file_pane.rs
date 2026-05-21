@@ -145,7 +145,7 @@ impl PaneContent for FilePane {
                 FileNotebookEvent::RunWorkflow { workflow, source } => {
                     ctx.emit(crate::pane_group::Event::RunWorkflow {
                         workflow: workflow.clone(),
-                        workflow_source: *source,
+                        workflow_source: source.clone(),
                         workflow_selection_source: WorkflowSelectionSource::Notebook,
                         argument_override: None,
                     });

@@ -3,7 +3,6 @@ pub(crate) mod codex_modal;
 mod crash_recovery;
 pub mod global_search;
 pub(crate) mod left_panel;
-pub(crate) mod onboarding;
 pub(crate) mod right_panel;
 mod startup_directory;
 #[cfg(test)]
@@ -17,8 +16,6 @@ use self::vertical_tabs::{
     render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
     VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
-pub(crate) use onboarding::OnboardingTutorial;
-
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
@@ -49,7 +46,7 @@ use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
-use crate::terminal::view::{ConversationRestorationInNewPaneType, OnboardingIntention};
+use crate::terminal::view::ConversationRestorationInNewPaneType;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::OpenConversationPreference;
 use crate::workspace::toast_stack::ToastStack;
@@ -631,16 +628,6 @@ struct RightPanelUpdateParams<'a> {
 struct PendingSessionConfigReplacement {
     old_pane_group_id: EntityId,
 }
-enum PendingSessionConfigTabConfigChipTutorial {
-    WhenBootstrapped {
-        has_project: bool,
-        intention: OnboardingIntention,
-    },
-    AfterSetupCommands {
-        intention: OnboardingIntention,
-    },
-}
-
 pub struct TransferredTab {
     pub pane_group: ViewHandle<PaneGroup>,
     pub color: Option<AnsiColorIdentifier>,
@@ -691,13 +678,8 @@ pub struct Workspace {
     tab_config_params_modal: ModalViewState<Modal<TabConfigParamsModal>>,
     session_config_modal: ModalViewState<Modal<SessionConfigModal>>,
     pending_session_config_replacement: Option<PendingSessionConfigReplacement>,
-    /// When set, the guided onboarding tutorial will start after the session
-    /// config modal is closed (submitted or dismissed).
-    pending_onboarding_intention: Option<OnboardingIntention>,
     pending_session_config_tab_config_chip: bool,
     show_session_config_tab_config_chip: bool,
-    pending_session_config_tab_config_chip_tutorial:
-        Option<PendingSessionConfigTabConfigChipTutorial>,
     new_worktree_modal: ModalViewState<Modal<NewWorktreeModal>>,
     rewind_confirmation_dialog: ViewHandle<RewindConfirmationDialog>,
     delete_conversation_confirmation_dialog: ViewHandle<DeleteConversationConfirmationDialog>,
@@ -1444,51 +1426,8 @@ impl Workspace {
     ) {
         match event {
             SessionConfigModalEvent::Completed(selection) => {
-                let pending_intention = self.pending_onboarding_intention.take();
                 self.close_session_config_modal(ctx);
-                let has_worktree = selection.enable_worktree;
-                let has_params = {
-                    use crate::tab_configs::session_config::build_tab_config;
-                    let config = build_tab_config(
-                        &selection.session_type,
-                        &selection.directory,
-                        selection.enable_worktree,
-                        selection.autogenerate_worktree_branch_name,
-                    );
-                    !config.params.is_empty()
-                };
                 self.handle_session_config_completed(selection, ctx);
-
-                if let Some(intention) = pending_intention {
-                    if has_worktree && has_params {
-                        // Worktree with params modal: the tab hasn't been
-                        // created yet. Keep the intention so the params modal
-                        // handler can queue the tutorial after it closes.
-                        self.pending_onboarding_intention = Some(intention);
-                    } else if has_worktree {
-                        self.queue_onboarding_tutorial_after_session_config_tab_config_chip(
-                            PendingSessionConfigTabConfigChipTutorial::AfterSetupCommands {
-                                intention,
-                            },
-                            ctx,
-                        );
-                    } else {
-                        // No worktree: tab is ready. Start the tutorial after
-                        // the tab-config chip is dismissed.
-                        // TODO(roland): We do have a directory in this case so we could consider passing has_project = true
-                        // which has an optional /init flow. But the behavior of /init needs to be revisited:
-                        // 1. Sends /init as a query which differs in behavior from /init slash command
-                        // 2. Sends /init even if not in a git repo - unclear if this should happen (depends on desired behavior from 1)
-                        // 3. With no free AI, /init will not work.
-                        self.queue_onboarding_tutorial_after_session_config_tab_config_chip(
-                            PendingSessionConfigTabConfigChipTutorial::WhenBootstrapped {
-                                has_project: false,
-                                intention,
-                            },
-                            ctx,
-                        );
-                    }
-                }
 
                 // Show the chip only when no params modal followed.
                 if !self.current_workspace_state.is_tab_config_params_modal_open {
@@ -1496,16 +1435,9 @@ impl Workspace {
                 }
             }
             SessionConfigModalEvent::Dismissed => {
-                let pending_intention = self.pending_onboarding_intention.take();
-
                 // No tab config was created, so don't show the chip.
                 self.pending_session_config_tab_config_chip = false;
                 self.close_session_config_modal(ctx);
-
-                // Start the onboarding tutorial without project context.
-                if let Some(intention) = pending_intention {
-                    self.dispatch_tutorial_when_bootstrapped(false, intention, ctx);
-                }
             }
         }
     }
@@ -1579,7 +1511,7 @@ impl Workspace {
 
         self.session_config_modal.open();
         self.current_workspace_state.is_session_config_modal_open = true;
-        self.pending_session_config_tab_config_chip = self.pending_onboarding_intention.is_some();
+        self.pending_session_config_tab_config_chip = false;
         self.show_session_config_tab_config_chip = false;
         ctx.focus(&self.session_config_modal.view);
         ctx.notify();
@@ -1614,41 +1546,9 @@ impl Workspace {
             && !self.current_workspace_state.is_tab_config_params_modal_open
     }
 
-    fn queue_onboarding_tutorial_after_session_config_tab_config_chip(
-        &mut self,
-        pending_tutorial: PendingSessionConfigTabConfigChipTutorial,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if matches!(
-            pending_tutorial,
-            PendingSessionConfigTabConfigChipTutorial::AfterSetupCommands { .. }
-        ) {
-            if let Some(terminal_view) = self.active_session_view(ctx) {
-                terminal_view.update(ctx, |view, _| {
-                    view.clear_enter_agent_view_after_pending_commands();
-                });
-            }
-        }
-        self.pending_session_config_tab_config_chip_tutorial = Some(pending_tutorial);
-    }
-
     fn dismiss_session_config_tab_config_chip(&mut self, ctx: &mut ViewContext<Self>) {
         self.pending_session_config_tab_config_chip = false;
         self.show_session_config_tab_config_chip = false;
-        if let Some(pending_tutorial) = self.pending_session_config_tab_config_chip_tutorial.take()
-        {
-            match pending_tutorial {
-                PendingSessionConfigTabConfigChipTutorial::WhenBootstrapped {
-                    has_project,
-                    intention,
-                } => {
-                    self.dispatch_tutorial_when_bootstrapped(has_project, intention, ctx);
-                }
-                PendingSessionConfigTabConfigChipTutorial::AfterSetupCommands { intention } => {
-                    self.dispatch_tutorial_after_setup_commands(intention, ctx);
-                }
-            }
-        }
         ctx.notify();
     }
 
@@ -2113,10 +2013,8 @@ impl Workspace {
             tab_config_params_modal,
             session_config_modal,
             pending_session_config_replacement: None,
-            pending_onboarding_intention: None,
             pending_session_config_tab_config_chip: false,
             show_session_config_tab_config_chip: false,
-            pending_session_config_tab_config_chip_tutorial: None,
             new_worktree_modal,
             rewind_confirmation_dialog,
             delete_conversation_confirmation_dialog,
@@ -2479,8 +2377,8 @@ impl Workspace {
                     });
 
                 if self.tab_count() == 0 {
-                    if self.should_trigger_get_started_onboarding(ctx) {
-                        self.trigger_get_started_onboarding(ctx);
+                    if self.should_open_get_started_tab(ctx) {
+                        self.open_get_started_tab(ctx);
                         return;
                     }
                     // If we still haven't created any tabs after attempting to restore, create a new tab
@@ -2498,11 +2396,9 @@ impl Workspace {
                 }
 
                 self.activate_tab_internal(active_tab_index, ctx);
-                self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
                 self.open_launch_config_window(window_template, ctx);
-                self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::Session { options } => {
                 self.add_tab_with_pane_layout(
@@ -2511,7 +2407,6 @@ impl Workspace {
                     None,
                     ctx,
                 );
-                self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::AgentSession {
                 options,
@@ -2527,7 +2422,6 @@ impl Workspace {
                 self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                     pane_group.start_agent_mode_in_new_pane(initial_query.as_deref(), None, ctx);
                 });
-                self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::NotebookFromFilePath { file_path } => {
                 self.add_tab_for_file_notebook(file_path, ctx);
@@ -2695,8 +2589,8 @@ impl Workspace {
     ) {
         let show_warp_home = !ContextFlag::CreateNewSession.is_enabled();
         if !show_warp_home {
-            if self.should_trigger_get_started_onboarding(ctx) {
-                self.trigger_get_started_onboarding(ctx);
+            if self.should_open_get_started_tab(ctx) {
+                self.open_get_started_tab(ctx);
             } else if FeatureFlag::WelcomeTab.is_enabled() {
                 self.add_welcome_tab(ctx);
             } else {
@@ -2708,7 +2602,6 @@ impl Workspace {
                     false, /* hide_homepage */
                     ctx,
                 );
-                self.check_and_trigger_onboarding(ctx);
             }
         } else {
             let home_pane = super::home::create_home_pane(ctx);
@@ -4598,7 +4491,7 @@ impl Workspace {
             })
     }
 
-    fn should_trigger_get_started_onboarding(&self, ctx: &mut ViewContext<Self>) -> bool {
+    fn should_open_get_started_tab(&self, ctx: &mut ViewContext<Self>) -> bool {
         if !FeatureFlag::GetStartedTab.is_enabled() {
             return false;
         }
@@ -4607,30 +4500,8 @@ impl Workspace {
         false
     }
 
-    fn trigger_get_started_onboarding(&mut self, ctx: &mut ViewContext<Self>) {
+    fn open_get_started_tab(&mut self, ctx: &mut ViewContext<Self>) {
         self.add_get_started_tab(ctx);
-    }
-
-    /// If the user is new and therefore has not seen the in app onboarding,
-    /// triggers the welcome block to be shown after bootstrapping is completed.
-    fn check_and_trigger_onboarding(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let _ = ctx;
-        false
-    }
-
-    fn dispatch_onboarding(&self, action: TerminalAction, ctx: &mut ViewContext<Self>) {
-        if let Some(pane_group_handle) = self.get_pane_group_view(self.active_tab_index) {
-            pane_group_handle.update(ctx, |pane_group, ctx| {
-                if let Some(terminal_view_handle) = pane_group.active_session_view(ctx) {
-                    let window_id = ctx.window_id();
-                    ctx.dispatch_typed_action_for_view(
-                        window_id,
-                        terminal_view_handle.id(),
-                        &action,
-                    );
-                }
-            });
-        }
     }
 
     fn open_settings_pane(
@@ -6117,14 +5988,9 @@ impl Workspace {
     /// Cleans up pending state and closes the tab-config params modal without
     /// creating a tab config. Used when the modal is dismissed or cancelled.
     fn cancel_tab_config_params_modal(&mut self, ctx: &mut ViewContext<Self>) {
-        let pending_intention = self.pending_onboarding_intention.take();
         self.pending_session_config_replacement = None;
         self.pending_session_config_tab_config_chip = false;
         self.close_tab_config_params_modal(ctx);
-
-        if let Some(intention) = pending_intention {
-            self.dispatch_tutorial_when_bootstrapped(false, intention, ctx);
-        }
     }
 
     fn handle_tab_config_params_modal_body_event(
@@ -6134,7 +6000,6 @@ impl Workspace {
     ) {
         match event {
             TabConfigParamsModalEvent::Submit { config, params } => {
-                let pending_intention = self.pending_onboarding_intention.take();
                 let should_track_existing_config_open =
                     self.pending_session_config_replacement.is_none();
                 let worktree_name = self.maybe_generate_worktree_name(config);
@@ -6144,19 +6009,9 @@ impl Workspace {
                     worktree_name.as_deref(),
                     ctx,
                 );
-                if should_track_existing_config_open {}
+                let _ = should_track_existing_config_open;
                 self.close_tab_config_params_modal(ctx);
                 self.complete_pending_session_config_replacement(ctx);
-
-                // The new tab has setup commands (worktree creation); wait for
-                // them to finish before starting the onboarding tutorial, but
-                // only after the tab-config chip is dismissed.
-                if let Some(intention) = pending_intention {
-                    self.queue_onboarding_tutorial_after_session_config_tab_config_chip(
-                        PendingSessionConfigTabConfigChipTutorial::AfterSetupCommands { intention },
-                        ctx,
-                    );
-                }
 
                 // Params modal is now closed; show the chip if it was pending.
                 self.promote_session_config_tab_config_chip(ctx);
@@ -7380,7 +7235,7 @@ impl Workspace {
         }
         // Docker sandboxes are inherently local — sbx resolution and the
         // `AvailableShell::new_docker_sandbox_shell` constructor both require
-        // `local_tty`. Other builds (e.g. wasm/remote_tty) log and bail.
+        // `local_tty`. Other builds log and bail.
         #[cfg(feature = "local_tty")]
         {
             // Resolve sbx via the user's interactive shell PATH (same mechanism
@@ -9358,12 +9213,6 @@ impl Workspace {
                 self.process_sync_event_for_all_synced_pane_groups(input_type, ctx);
             }
             pane_group::Event::TerminalViewStateChanged => ctx.notify(),
-            pane_group::Event::OnboardingTutorialCompleted => {
-                self.pending_session_config_tab_config_chip = false;
-                self.show_session_config_tab_config_chip = false;
-                self.pending_session_config_tab_config_chip_tutorial = None;
-                ctx.notify();
-            }
             pane_group::Event::InvalidatedActiveConversation => {
                 self.handle_task_status_reset(pane_group.id(), ctx);
             }
@@ -9464,7 +9313,7 @@ impl Workspace {
             } => {
                 self.run_workflow_in_active_input(
                     workflow,
-                    *workflow_source,
+                    workflow_source.clone(),
                     *workflow_selection_source,
                     argument_override.clone(),
                     TerminalSessionFallbackBehavior::default(),
@@ -10201,8 +10050,6 @@ impl Workspace {
                     input_handle.read(ctx, |input, ctx| input.menu_positioning(ctx))
                 });
 
-            if !self.current_workspace_state.is_command_search_open {}
-
             // Make sure we close any already-open input suggestions panel.
             if let Some(input_handle) = &active_input_handle {
                 input_handle.update(ctx, |input, ctx| {
@@ -10690,7 +10537,7 @@ impl Workspace {
                         let (workflow, workflow_source) = match accepted {
                             AcceptedWorkflow::Local {
                                 workflow, source, ..
-                            } => ((**workflow).clone(), *source),
+                            } => ((**workflow).clone(), source.clone()),
                         };
                         active_input_handle.update(ctx, |input, ctx| {
                             input.show_workflows_info_box_on_workflow_selection(
@@ -12433,10 +12280,8 @@ impl Workspace {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .with_uniform_padding(2.);
 
-            if state.is_mouse_over_element() {
-                if !state.is_clicked() {
-                    container = container.with_background(appearance.theme().surface_2());
-                }
+            if state.is_mouse_over_element() && !state.is_clicked() {
+                container = container.with_background(appearance.theme().surface_2());
             }
             stack.add_child(container.finish());
             stack.finish()
@@ -13964,9 +13809,6 @@ impl TypedActionView for Workspace {
             AddGetStartedTab => self.add_get_started_tab(ctx),
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
-            StartAgentOnboardingTutorial(tutorial) => {
-                self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
-            }
             OpenNewSessionMenu { position } => self.open_new_session_dropdown_menu(*position, ctx),
             ToggleTabConfigsMenu => self.toggle_tab_configs_menu(ctx),
             ShowSessionConfigModal => self.show_session_config_modal(ctx),
@@ -14698,7 +14540,7 @@ impl TypedActionView for Workspace {
                 argument_override,
             } => self.run_workflow_in_active_input(
                 workflow,
-                *workflow_source,
+                workflow_source.clone(),
                 *workflow_selection_source,
                 argument_override.clone(),
                 TerminalSessionFallbackBehavior::default(),

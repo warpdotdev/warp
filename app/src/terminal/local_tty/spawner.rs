@@ -1,10 +1,11 @@
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::terminal::local_tty::{
-    self,
-    shell::{ShellStarter, ShellStarterSourceOrWslName},
-};
+use crate::terminal::local_tty;
+#[cfg(unix)]
+use crate::terminal::local_tty::shell::{ShellStarter, ShellStarterSourceOrWslName};
 
 #[cfg(target_os = "windows")]
 use super::PseudoConsoleChild;

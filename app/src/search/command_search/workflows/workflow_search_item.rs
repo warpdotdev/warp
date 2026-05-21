@@ -233,7 +233,7 @@ impl SearchItem for WorkflowSearchItem {
         let accepted = match &self.identity {
             WorkflowIdentity::Local(workflow_type) => AcceptedWorkflow::Local {
                 workflow: workflow_type.clone(),
-                source: self.source,
+                source: self.source.clone(),
             },
         };
         CommandSearchItemAction::AcceptWorkflow(accepted)

@@ -543,11 +543,8 @@ async fn extract_suggestion_from_stream(
         let Ok(response_event) = event else {
             continue;
         };
-        match response_event.r#type {
-            Some(api::response_event::Type::ClientActions(actions)) => {
-                client_actions.extend(actions.actions);
-            }
-            _ => {}
+        if let Some(api::response_event::Type::ClientActions(actions)) = response_event.r#type {
+            client_actions.extend(actions.actions);
         }
     }
 

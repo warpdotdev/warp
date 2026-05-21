@@ -64,6 +64,7 @@ pub enum LeftPanelAction {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
@@ -790,9 +791,7 @@ impl LeftPanelView {
         match action {
             LeftPanelAction::ProjectExplorer => {
                 active_view_state::set(self, ToolPanelView::ProjectExplorer, ctx);
-                if force_open {
-                } else {
-                }
+                let _ = force_open;
             }
             LeftPanelAction::GlobalSearch { entry_focus } => {
                 let was_active = self.active_view.get()

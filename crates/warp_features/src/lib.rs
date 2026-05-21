@@ -86,8 +86,7 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
-    /// Enables the settings import onboarding block and pre-parsing
-    /// configs on app startup.
+    /// Enables settings import pre-parsing on app startup.
     SettingsImport,
 
     /// Enables rect selection.
@@ -163,8 +162,6 @@ pub enum FeatureFlag {
 
     ImeMarkedText,
 
-    AIGeneratedOnboardingSuggestions,
-
     /// Enables iTerm image rendering
     ITermImages,
 
@@ -194,9 +191,6 @@ pub enum FeatureFlag {
 
     /// Enables the XML output system prompt for the pre-plan agent in Agent Mode.
     AgentModePrePlanXML,
-
-    /// Enables Agent Mode onboarding.
-    AgentOnboarding,
 
     /// Enables suggested rules.
     SuggestedRules,
@@ -535,7 +529,6 @@ pub enum FeatureFlag {
     BundledSkills,
 
     /// Enables the OpenWarp launch modal announcing Warp going open-source.
-    /// When enabled, the HOA onboarding flow is suppressed.
     OpenWarpLaunchModal,
 
     /// Updated tab styling (background colors, border, close button positioning, margins).
@@ -648,10 +641,6 @@ pub enum FeatureFlag {
 
     /// Replaces the in-block warpification banner with a warpify footer.
     WarpifyFooter,
-
-    /// Guided onboarding flow for existing users introducing HOA features
-    /// (vertical tabs, agent inbox, tab configs).
-    HOAOnboardingFlow,
 
     /// Enables commit, push, and create-PR actions in the code review panel.
     GitOperationsInCodeReview,

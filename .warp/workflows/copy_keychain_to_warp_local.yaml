@@ -1,6 +1,0 @@
----
-name: "Copy WarpDev Keychain to Warp local"
-command: "security add-generic-password -a User -U -s warp -w \"$(security find-generic-password -a User -s dev.warp.Warp-Dev -w)\""
-description: "Copies the refresh token from WarpDev into the local warp app so that it can authenticate."
-author: Warp Team
-shells: []

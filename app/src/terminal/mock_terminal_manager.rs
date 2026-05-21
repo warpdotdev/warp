@@ -125,7 +125,7 @@ impl TerminalManager for MockTerminalManager {
 
 #[cfg(test)]
 mod testing {
-    use warpui::{platform::WindowStyle, App, Element, SingletonEntity};
+    use warpui::{platform::WindowStyle, App, Element};
 
     use crate::terminal::{
         shell::{ShellName, ShellType},

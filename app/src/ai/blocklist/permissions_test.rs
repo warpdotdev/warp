@@ -12,14 +12,11 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::{
     ai::{
         agent::conversation::AIConversationId,
-        blocklist::{
-            permissions::{
-                CommandExecutionPermission, CommandExecutionPermissionDeniedReason,
-                FileReadPermission, FileReadPermissionAllowedReason,
-                FileReadPermissionDeniedReason, FileWritePermission,
-                FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
-            },
-            CommandExecutionPermissionAllowedReason,
+        blocklist::permissions::{
+            CommandExecutionPermission, CommandExecutionPermissionAllowedReason,
+            CommandExecutionPermissionDeniedReason, FileReadPermission,
+            FileReadPermissionAllowedReason, FileReadPermissionDeniedReason, FileWritePermission,
+            FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
         },
         execution_profiles::{
             profiles::AIExecutionProfilesModel, ActionPermission, WriteToPtyPermission,

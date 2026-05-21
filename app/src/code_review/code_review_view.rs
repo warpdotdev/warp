@@ -3131,10 +3131,7 @@ impl CodeReviewView {
     ) -> Box<dyn Element> {
         match self.session_env(app) {
             Some(state)
-                if matches!(
-                    state.enablement,
-                    CodingPanelEnablementState::RemoteSession { .. }
-                ) =>
+                if matches!(state.enablement, CodingPanelEnablementState::RemoteSession) =>
             {
                 self.render_remote_state_with_buttons(appearance)
             }

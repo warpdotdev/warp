@@ -50,7 +50,9 @@ impl InlinePromptsMenuView {
 
         ctx.subscribe_to_view(&menu_view, |_, _, event, ctx| {
             if let InlineMenuEvent::AcceptedItem { item, .. } = event {
-                ctx.emit(InlinePromptsMenuEvent::SelectedPrompt { id: item.id });
+                ctx.emit(InlinePromptsMenuEvent::SelectedPrompt {
+                    id: item.id.clone(),
+                });
             }
         });
 

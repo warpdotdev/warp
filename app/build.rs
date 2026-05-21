@@ -141,75 +141,7 @@ fn main() -> Result<()> {
         copy_async_assets();
     }
 
-    generate_channel_config_if_needed(&target_family, &target_os);
-
     Ok(())
-}
-
-/// If `warp-channel-config` is available on PATH and the `release_bundle` feature is enabled,
-/// invoke the config generator binary and write the JSON output to `OUT_DIR` so it can be
-/// embedded via `include_str!` in the binary entry points.
-fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
-    if env::var("CARGO_FEATURE_RELEASE_BUNDLE").is_err() {
-        // For non-bundled builds, config is loaded at runtime — nothing to embed.
-        return;
-    }
-
-    let config_bin = "warp-channel-config";
-
-    // Check if the config binary is available on PATH. If not, we can't generate embedded
-    // configs. This is expected for external contributors building Warp OSS.
-    if Command::new(config_bin)
-        .arg("--help")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_err()
-    {
-        return;
-    }
-
-    // Only track these for bundled builds, where they affect the embedded config.
-    // For non-bundled builds these are runtime variables and should not trigger recompilation.
-    println!("cargo:rerun-if-env-changed=WITH_LOCAL_SERVER");
-    println!("cargo:rerun-if-env-changed=WITH_LOCAL_SESSION_SHARING_SERVER");
-    println!("cargo:rerun-if-env-changed=WITH_SANDBOX_TELEMETRY");
-    println!("cargo:rerun-if-env-changed=SERVER_ROOT_URL");
-    println!("cargo:rerun-if-env-changed=WS_SERVER_URL");
-
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR must be set");
-    let family_arg = if target_family == "wasm" {
-        "wasm"
-    } else {
-        "native"
-    };
-
-    // Generate config for all internal channels. The build script runs once per crate (not
-    // once per binary), so we generate all configs here and each binary's include_str! picks
-    // up its own file.
-    for channel in ["local", "dev", "stable", "preview"] {
-        let output = Command::new(config_bin)
-            .arg("--channel")
-            .arg(channel)
-            .arg("--target-family")
-            .arg(family_arg)
-            .arg("--target-os")
-            .arg(target_os)
-            .output()
-            .unwrap_or_else(|err| {
-                panic!("Failed to execute config generator at '{config_bin}': {err}")
-            });
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!("Config generator failed for channel '{channel}':\n{stderr}");
-        }
-
-        let config_path = Path::new(&out_dir).join(format!("{channel}_config.json"));
-        fs::write(&config_path, &output.stdout).unwrap_or_else(|err| {
-            panic!("Failed to write config to {}: {err}", config_path.display())
-        });
-    }
 }
 
 fn get_build_profile_name() -> String {
@@ -337,10 +269,14 @@ fn embed_resource_file(target_dir: &Path) {
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
     let app_name = env::var("WARP_APP_NAME").unwrap_or("Warp".to_owned());
-    let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("local".to_owned());
+    let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("warp-oss".to_owned());
+    let channel_name = match bin_name.as_str() {
+        "warp-oss" => "oss",
+        name => name,
+    };
 
     let icon_path = Path::new("channels")
-        .join(bin_name)
+        .join(channel_name)
         .join("icon")
         .join("no-padding")
         .join("icon.ico");

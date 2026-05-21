@@ -25,9 +25,8 @@ use crate::{
     system::SystemStats,
     terminal::history::History,
     terminal::{
-        alt_screen_reporting::AltScreenReporting,
-        keys::TerminalKeybindings,
-        local_tty::{spawner::PtySpawner, TerminalManager},
+        alt_screen_reporting::AltScreenReporting, keys::TerminalKeybindings,
+        local_tty::spawner::PtySpawner,
     },
     test_util::settings::initialize_settings_for_tests,
     undo_close::UndoCloseStack,
@@ -42,7 +41,7 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -158,6 +157,23 @@ fn mock_pane_group(app: &mut App, options: MockOptions) -> ViewHandle<PaneGroup>
     pane_group
 }
 
+#[test]
+fn template_startup_directory_preserves_nonexistent_path() {
+    let temp_dir = tempfile::tempdir().expect("Should create temp dir");
+    let missing_dir = temp_dir.path().join("worktree-not-created-yet");
+    assert!(!missing_dir.exists());
+
+    assert_eq!(
+        startup_directory_from_template_cwd(missing_dir.clone()),
+        Some(missing_dir)
+    );
+}
+
+#[test]
+fn template_startup_directory_ignores_empty_path() {
+    assert_eq!(startup_directory_from_template_cwd(PathBuf::new()), None);
+}
+
 fn get_newly_created_pane_id(panes: &PaneGroup, existing_ids: &[PaneId]) -> PaneId {
     panes
         .pane_ids()
@@ -165,6 +181,7 @@ fn get_newly_created_pane_id(panes: &PaneGroup, existing_ids: &[PaneId]) -> Pane
         .unwrap()
 }
 
+#[allow(dead_code)]
 fn split_pane_state(panes: &PaneGroup, pane_id: PaneId, ctx: &AppContext) -> SplitPaneState {
     panes
         .focus_state_handle()
@@ -172,6 +189,7 @@ fn split_pane_state(panes: &PaneGroup, pane_id: PaneId, ctx: &AppContext) -> Spl
         .split_pane_state_for(pane_id)
 }
 
+#[allow(dead_code)]
 fn is_active_session(panes: &PaneGroup, pane_id: PaneId, ctx: &AppContext) -> bool {
     panes.active_session_id(ctx).map(Into::into) == Some(pane_id)
 }

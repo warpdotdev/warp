@@ -588,7 +588,7 @@ impl TerminalView {
             conversation
                 .title()
                 .filter(|title| !title.is_empty())
-                .unwrap_or_else(|| default_agent_conversation_title())
+                .unwrap_or_else(default_agent_conversation_title)
         } else {
             conversation
                 .title()
@@ -601,9 +601,7 @@ impl TerminalView {
     pub fn selected_conversation_status(&self, ctx: &AppContext) -> Option<ConversationStatus> {
         let long_running = self.is_long_running();
 
-        let Some(conversation) = self.selected_conversation_for_user_facing_chrome(ctx) else {
-            return None;
-        };
+        let conversation = self.selected_conversation_for_user_facing_chrome(ctx)?;
 
         if long_running {
             return Some(ConversationStatus::InProgress);

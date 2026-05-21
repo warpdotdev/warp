@@ -481,7 +481,7 @@ impl AgentDriver {
             AgentRunPrompt::Local(text) => (Cow::Borrowed(text), None),
         };
 
-        // Prepare harness config files (onboarding, trust dialog, API-key approval, etc.).
+        // Prepare harness config files for trust dialogs, API-key approval, etc.
         let secrets = foreground
             .spawn(|me, _| Arc::clone(&me.secrets))
             .await

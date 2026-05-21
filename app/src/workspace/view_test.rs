@@ -53,7 +53,7 @@ use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
-use pane_group::{PaneState, SplitPaneState, TerminalPaneId};
+use pane_group::{SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 use warpui::AddSingletonModel;
@@ -472,6 +472,7 @@ impl Drop for TabConfigCleanupGuard {
 
 /// Disable the warn-before-quit setting. Because we don't fully bootstrap the shell in tests, this
 /// is generally needed in tests that close tabs.
+#[allow(dead_code)]
 fn disable_quit_warning(app: &mut AppContext) {
     GeneralSettings::handle(app).update(app, |settings, ctx| {
         settings
@@ -481,6 +482,7 @@ fn disable_quit_warning(app: &mut AppContext) {
     });
 }
 
+#[allow(dead_code)]
 fn get_newly_created_pane_id(panes: &PaneGroup, existing_ids: &[PaneId]) -> PaneId {
     panes
         .pane_ids()
@@ -488,6 +490,7 @@ fn get_newly_created_pane_id(panes: &PaneGroup, existing_ids: &[PaneId]) -> Pane
         .unwrap()
 }
 
+#[allow(dead_code)]
 fn split_pane_state(
     panes: &PaneGroup,
     pane_id: impl Into<PaneId>,
@@ -500,6 +503,7 @@ fn split_pane_state(
         .split_pane_state_for(pane_id.into())
 }
 
+#[allow(dead_code)]
 fn active_session_state(
     panes: &PaneGroup,
     pane_id: TerminalPaneId,

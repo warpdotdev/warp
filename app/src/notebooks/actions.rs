@@ -15,14 +15,14 @@ pub enum ActionEntrypoint {
     Menu,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "object_type")]
 pub enum EmbeddedObjectInfo {
     Workflow { workflow_id: Option<WorkflowId> },
 }
 
 /// Information about a block in the notebook.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "block_type")]
 pub enum BlockInfo {
     /// A workflow embedded in the notebook.

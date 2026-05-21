@@ -37,7 +37,6 @@ use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
 use crate::ui_components::icons::Icon as WarpUIIcon;
 
 use crate::ai::agent::{PassiveSuggestionTrigger, StaticQueryType};
-use warp_server_client::ids::ServerId;
 
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
@@ -293,7 +292,7 @@ fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<St
 pub enum PromptSuggestionsEvent {
     OpenBillingAndUsagePage,
     OpenPrivacyPage,
-    OpenBillingPortal { team_uid: ServerId },
+    OpenBillingPortal { team_uid: String },
 }
 
 pub struct PromptSuggestionsView {
@@ -338,7 +337,7 @@ impl PromptSuggestionsView {
             }
             PromptAlertEvent::OpenBillingPortal { team_uid } => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingPortal {
-                    team_uid: *team_uid,
+                    team_uid: team_uid.clone(),
                 });
             }
         }
@@ -441,7 +440,7 @@ impl TypedActionView for PromptSuggestionsView {
             }
             PromptSuggestionsEvent::OpenBillingPortal { team_uid } => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingPortal {
-                    team_uid: *team_uid,
+                    team_uid: team_uid.clone(),
                 });
             }
         }

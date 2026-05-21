@@ -34,10 +34,6 @@ pub fn hashed_asset_path(asset_path: &Path, sha256_hash: &[u8]) -> PathBuf {
 
 /// Returns a domain-relative URL of an async asset based on it's hashed asset path.
 pub fn hashed_asset_url(hashed_asset_path: &Path) -> String {
-    // This needs to be kept in sync with:
-    // - The local asset server in the serve-wasm dir.
-    // - The staging load balancer paths: https://console.cloud.google.com/net-services/loadbalancing/edit/http/serverless-lb?hl=en&project=warp-server-staging
-    // - The prod load balancer paths: https://console.cloud.google.com/net-services/loadbalancing/edit/http/app-warp-dev-lb?hl=en&project=astral-field-294621
     format!(
         "/assets/client/static/{}",
         hashed_asset_path.to_str().unwrap()

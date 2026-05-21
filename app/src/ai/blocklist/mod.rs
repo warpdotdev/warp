@@ -68,6 +68,4 @@ pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
 pub use permissions::BlocklistAIPermissions;
-#[cfg(any(test, feature = "integration_tests"))]
-pub(crate) use permissions::CommandExecutionPermissionAllowedReason;
 pub use view_util::error_color;

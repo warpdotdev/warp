@@ -73,7 +73,6 @@ where
 
 /// Renders session type pills with an optional background color override.
 /// When `bg` is `Some`, text and border colors are computed against that background
-/// (used for the accent-tinted onboarding callout).
 pub fn render_session_type_pills_with_background<F>(
     session_types: &[SessionType],
     selected_index: usize,

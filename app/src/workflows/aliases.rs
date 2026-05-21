@@ -100,7 +100,7 @@ impl WorkflowAliases {
         let mut aliases = self.aliases.clone();
         for alias in aliases.iter_mut() {
             if alias.workflow_id == old_workflow_id {
-                alias.workflow_id = new_workflow_id;
+                alias.workflow_id = new_workflow_id.clone();
             }
         }
         self.aliases.set_value(aliases, ctx)

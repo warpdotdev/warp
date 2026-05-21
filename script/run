@@ -72,13 +72,6 @@ while (( "$#" )); do
   esac
 done
 
-for cloud_feature in with_local_server with_local_session_sharing_server with_sandbox_telemetry; do
-    if [[ ",$FEATURES," =~ ,"$cloud_feature", ]]; then
-        echo "Error: '$cloud_feature' is a Warp cloud/telemetry compatibility option and is not supported by Warper." >&2
-        exit 1
-    fi
-done
-
 export FEATURES
 export WARP_BIN_NAME
 export WARP_CHANNEL

@@ -257,7 +257,7 @@ use warpui::{AppContext, SingletonEntity, WindowId};
 #[cfg_attr(target_family = "wasm", exclude = "async/**")]
 // Excludes take precedence.
 // Standalone CLI builds are headless and never render the
-// onboarding/theme imagery in `async/`, so we exclude those bytes from the
+// theme imagery in `async/`, so we exclude those bytes from the
 // embedded asset set to keep the CLI binary small — mirroring the carve-out
 // already applied for the WASM target above.
 #[cfg_attr(feature = "standalone", exclude = "async/**")]
@@ -1053,11 +1053,7 @@ fn initialize_app(
             });
         }
 
-        ctx.add_singleton_model(|ctx| {
-            let model = RepoMetadataModel::new(ctx);
-
-            model
-        });
+        ctx.add_singleton_model(RepoMetadataModel::new);
     }
 
     {
@@ -1086,7 +1082,6 @@ fn initialize_app(
     terminal::init(ctx);
     input::init(ctx);
     editor::init(ctx);
-    onboarding::init(ctx);
     menu::init(ctx);
     tips::tip_view::init(ctx);
     launch_configs::init(ctx);
@@ -1790,8 +1785,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModePrimaryXML,
         #[cfg(feature = "agent_mode_pre_plan_xml")]
         FeatureFlag::AgentModePrePlanXML,
-        #[cfg(feature = "agent_onboarding")]
-        FeatureFlag::AgentOnboarding,
         #[cfg(feature = "suggested_rules")]
         FeatureFlag::SuggestedRules,
         #[cfg(feature = "suggested_agent_mode_workflows")]
@@ -2054,8 +2047,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WarpifyFooter,
         #[cfg(feature = "solo_user_byok")]
         FeatureFlag::SoloUserByok,
-        #[cfg(feature = "hoa_onboarding_flow")]
-        FeatureFlag::HOAOnboardingFlow,
         #[cfg(feature = "git_operations_in_code_review")]
         FeatureFlag::GitOperationsInCodeReview,
         #[cfg(feature = "hoa_remote_control")]

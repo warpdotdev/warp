@@ -1,4 +1,4 @@
-use warpui::{App, SingletonEntity};
+use warpui::App;
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::ActionPermission;
@@ -17,7 +17,7 @@ fn install_singletons(app: &mut App) {
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
-/// Regression test for logged-out onboarding edits to the local default profile.
+/// Regression test for logged-out edits to the local default profile.
 #[test]
 fn edits_persist_on_unsynced_default_profile_when_logged_out() {
     App::test((), |mut app| async move {

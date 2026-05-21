@@ -114,8 +114,9 @@ impl TypedActionView for WorkflowsMoreInfoView {
             WorkflowsInfoBoxViewAction::CollapseOrExpand => {
                 self.info_box_expanded = !self.info_box_expanded;
             }
-            WorkflowsInfoBoxViewAction::SelectEnvironmentVariables(env_vars) => ctx
-                .emit(WorkflowsInfoBoxViewEvent::PrefixCommandWithEnvironmentVariables(*env_vars)),
+            WorkflowsInfoBoxViewAction::SelectEnvironmentVariables(env_vars) => ctx.emit(
+                WorkflowsInfoBoxViewEvent::PrefixCommandWithEnvironmentVariables(env_vars.clone()),
+            ),
         }
     }
 }

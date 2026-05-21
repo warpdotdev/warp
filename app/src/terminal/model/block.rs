@@ -2625,7 +2625,7 @@ impl Block {
     }
 
     pub fn cloud_env_var_collection_state(&self) -> Option<SyncId> {
-        self.cloud_env_var_collection_id
+        self.cloud_env_var_collection_id.clone()
     }
 
     pub fn set_cloud_workflow_state(&mut self, workflow_id: Option<SyncId>) {
@@ -2633,7 +2633,7 @@ impl Block {
     }
 
     pub fn cloud_workflow_state(&self) -> Option<SyncId> {
-        self.cloud_workflow_id
+        self.cloud_workflow_id.clone()
     }
 
     pub fn server_pwd(&self) -> Option<Cow<'_, str>> {

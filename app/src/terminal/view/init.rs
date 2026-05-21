@@ -1,7 +1,4 @@
-use super::{
-    AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
-    TerminalAction,
-};
+use super::{AskAISource, ContextMenuAction, TerminalAction};
 
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
 use crate::terminal::metadata::ToggleBlockFilterSource;
@@ -776,90 +773,6 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal"))]);
     }
 
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "terminal:onboarding_flow",
-            "Setup Guide",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-        )
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        // UniversalInput callout debug bindings
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_legacy_terminal",
-            "[Debug] Onboarding Callout: WarpInput - Terminal",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_universal_input_project",
-            "[Debug] Onboarding Callout: WarpInput - Project",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
-                AgentOnboardingVersion::UniversalInput { has_project: true },
-            )),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_universal_input_no_project",
-            "[Debug] Onboarding Callout: WarpInput - No Project",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
-                AgentOnboardingVersion::UniversalInput { has_project: false },
-            )),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        // AgentModality callout debug bindings
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_modality_project",
-            "[Debug] Onboarding Callout: Modality - Project",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
-                AgentOnboardingVersion::AgentModality {
-                    has_project: true,
-                    intention: OnboardingIntention::AgentDrivenDevelopment,
-                },
-            )),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_modality_no_project",
-            "[Debug] Onboarding Callout: Modality - No Project",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
-                AgentOnboardingVersion::AgentModality {
-                    has_project: false,
-                    intention: OnboardingIntention::AgentDrivenDevelopment,
-                },
-            )),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_modality_terminal",
-            "[Debug] Onboarding Callout: Modality - Terminal",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
-                AgentOnboardingVersion::AgentModality {
-                    has_project: false,
-                    intention: OnboardingIntention::Terminal,
-                },
-            )),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(id!("Terminal") & id!("TerminalLocalSession")),
-    ]);
-
     app.register_editable_bindings([EditableBinding::new(
         "workspace:open_settings_import_page",
         "Import External Settings",
@@ -912,29 +825,6 @@ pub fn init(app: &mut AppContext) {
             FeatureFlag::FullSourceCodeEmbedding.is_enabled()
                 && ChannelState::enable_debug_features()
         }),
-    ]);
-
-    app.register_fixed_bindings(vec![
-        FixedBinding::new(
-            "cmdorctrl-1",
-            TerminalAction::SelectAgenticSuggestion(1),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-2",
-            TerminalAction::SelectAgenticSuggestion(2),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-3",
-            TerminalAction::SelectAgenticSuggestion(3),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-4",
-            TerminalAction::SelectAgenticSuggestion(4),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
     ]);
 
     app.register_editable_bindings([EditableBinding::new(
