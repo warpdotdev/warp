@@ -1,10 +1,14 @@
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{App, SingletonEntity};
 
-use super::{has_completed_local_onboarding, RootView, HAS_COMPLETED_ONBOARDING_KEY};
+use super::{
+    has_completed_local_onboarding, select_primary_window_action, PrimaryWindowAction, RootView,
+    HAS_COMPLETED_ONBOARDING_KEY,
+};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::server::server_api::ServerApiProvider;
+use warpui::WindowId;
 
 fn initialize_app(app: &mut App) {
     app.update(crate::settings::init_and_register_user_preferences);
@@ -119,4 +123,56 @@ fn test_sync_noop_when_already_onboarded_on_server() {
             );
         });
     });
+}
+
+#[test]
+fn show_primary_window_chooses_quake_mode_when_enabled() {
+    let normal_window_id = WindowId::from_usize(1);
+    let quake_window_id = WindowId::from_usize(2);
+
+    assert_eq!(
+        select_primary_window_action(
+            true,
+            Some(quake_window_id),
+            Some(normal_window_id),
+            [normal_window_id],
+        ),
+        PrimaryWindowAction::ShowQuakeWindow
+    );
+}
+
+#[test]
+fn show_primary_window_focuses_existing_normal_window_before_opening_new_one() {
+    let normal_window_id = WindowId::from_usize(1);
+
+    assert_eq!(
+        select_primary_window_action(false, None, Some(normal_window_id), []),
+        PrimaryWindowAction::FocusNormalWindow(normal_window_id)
+    );
+
+    assert_eq!(
+        select_primary_window_action(false, None, None, [normal_window_id]),
+        PrimaryWindowAction::FocusNormalWindow(normal_window_id)
+    );
+}
+
+#[test]
+fn show_primary_window_excludes_quake_window_from_normal_path() {
+    let quake_window_id = WindowId::from_usize(1);
+    let normal_window_id = WindowId::from_usize(2);
+
+    assert_eq!(
+        select_primary_window_action(
+            false,
+            Some(quake_window_id),
+            Some(quake_window_id),
+            [quake_window_id, normal_window_id],
+        ),
+        PrimaryWindowAction::FocusNormalWindow(normal_window_id)
+    );
+
+    assert_eq!(
+        select_primary_window_action(false, Some(quake_window_id), Some(quake_window_id), []),
+        PrimaryWindowAction::OpenNormalWindow
+    );
 }

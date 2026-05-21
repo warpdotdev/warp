@@ -27,7 +27,7 @@ use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::server::telemetry::InputUXChangeOrigin;
 use crate::settings::{
     active_theme_kind,
-    app_icon::{AppIcon, AppIconSettings},
+    app_icon::{AppIcon, AppIconSettings, ShowDockIconState},
     respect_system_theme, AIFontName, AppEditorSettings, CursorBlink, CursorBlinkEnabled,
     EnforceMinimumContrast, FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, InputBoxType,
     InputModeSettings, InputModeState, MonospaceFontName, PaneSettings, ShouldDimInactivePanes,
@@ -435,6 +435,7 @@ pub enum AppearancePageAction {
     },
     SetInputType(InputBoxType),
     SetAppIcon(AppIcon),
+    ToggleShowDockIcon,
     SetCursorType(CursorDisplayType),
     SetWorkspaceDecorationVisibility(WorkspaceDecorationVisibility),
     ToggleWorkspaceDecorationVisibility,
@@ -580,6 +581,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             } => self.set_input_mode(*new_mode, *from_binding, ctx),
             SetInputType(input_type) => self.set_input_type(*input_type, ctx),
             SetAppIcon(new_icon) => self.set_app_icon(*new_icon, ctx),
+            ToggleShowDockIcon => self.toggle_show_dock_icon(ctx),
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
             BlurSliderDragged(val) => self.set_blur(*val, false, ctx),
@@ -2236,6 +2238,12 @@ impl AppearanceSettingsPageView {
         });
     }
 
+    fn toggle_show_dock_icon(&mut self, ctx: &mut ViewContext<Self>) {
+        AppIconSettings::handle(ctx).update(ctx, |app_icon_settings, ctx| {
+            report_if_error!(app_icon_settings.show_dock_icon.toggle_and_save_value(ctx));
+        });
+    }
+
     fn set_cursor_type(&mut self, new_cursor_type: CursorDisplayType, ctx: &mut ViewContext<Self>) {
         AppEditorSettings::handle(ctx).update(ctx, |app_editor_settings, ctx| {
             report_if_error!(app_editor_settings
@@ -2783,20 +2791,22 @@ impl SettingsWidget for ThemeSelectWidget {
 }
 
 #[derive(Default)]
-struct CustomAppIconWidget {}
+struct CustomAppIconWidget {
+    show_dock_icon_switch_state: SwitchStateHandle,
+}
 
 impl SettingsWidget for CustomAppIconWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "customize custom app icon icons"
+        "customize custom app icon icons dock cmd tab app switcher menu bar status bar"
     }
 
     fn render(
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         #[allow(unused_mut)]
         let show_bundle_warning = {
@@ -2828,12 +2838,35 @@ impl SettingsWidget for CustomAppIconWidget {
             &view.app_icon_dropdown,
         );
 
+        let show_dock_icon_toggle = render_body_item::<AppearancePageAction>(
+            "Show Warp in Dock".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowDockIconState::storage_key(),
+                ShowDockIconState::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.show_dock_icon_switch_state.clone())
+                .check(*AppIconSettings::as_ref(app).show_dock_icon)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleShowDockIcon);
+                })
+                .finish(),
+            None,
+        );
+
         #[cfg(target_os = "macos")]
         {
             use crate::appearance::AppearanceManager;
 
-            let app_icon_at_startup = AppearanceManager::as_ref(_app).app_icon_at_startup();
-            let current_icon = *AppIconSettings::as_ref(_app).app_icon;
+            let app_icon_at_startup = AppearanceManager::as_ref(app).app_icon_at_startup();
+            let current_icon = *AppIconSettings::as_ref(app).app_icon;
             if current_icon == AppIcon::Default
                 && ChannelState::channel() != Channel::Local
                 && app_icon_at_startup != AppIcon::Default
@@ -2858,11 +2891,15 @@ impl SettingsWidget for CustomAppIconWidget {
                             .build()
                             .finish(),
                     )
+                    .with_child(show_dock_icon_toggle)
                     .finish();
             }
         }
 
-        dropdown
+        Flex::column()
+            .with_child(dropdown)
+            .with_child(show_dock_icon_toggle)
+            .finish()
     }
 }
 

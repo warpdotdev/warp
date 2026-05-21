@@ -598,7 +598,6 @@ pub enum FeaturesPageAction {
     QuakeEditorSetHeightPercentage,
     QuakeEditorResetWidthHeight,
     QuakeEditorTogglePinWindow,
-    QuakeEditorToggleHideDockIcon,
     OpenUrl(String),
     SetExtraMetaKeys(ExtraMetaKeys),
     ToggleLeftMetaKey,
@@ -914,10 +913,6 @@ impl FeaturesPageAction {
                         .hide_window_when_unfocused,
                 ),
             },
-            Self::QuakeEditorToggleHideDockIcon => TelemetryEvent::FeaturesPageAction {
-                action: "QuakeEditorToggleHideDockIcon".to_string(),
-                value: to_string(KeysSettings::as_ref(ctx).quake_mode_settings.hide_dock_icon),
-            },
             Self::ToggleLongRunningNotifications => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleLongRunningNotifications".to_string(),
                 value: to_string(
@@ -1173,8 +1168,6 @@ struct MouseStateHandles {
     quake_mode_cancel: MouseStateHandle,
     quake_mode_width_height_reset: MouseStateHandle,
     quake_mode_pin_window_check: MouseStateHandle,
-    #[cfg(target_os = "macos")]
-    quake_mode_hide_dock_icon_check: MouseStateHandle,
     long_running_notifications_checkbox: MouseStateHandle,
     agent_task_completed_notifications_checkbox: MouseStateHandle,
     agent_needs_attention_notifications_checkbox: MouseStateHandle,
@@ -1462,12 +1455,6 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_hide_quake_mode_window_when_unfocused_and_write_to_user_defaults(
                             ctx,
                         )
-                });
-            }
-            QuakeEditorToggleHideDockIcon => {
-                KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
-                    keys_settings
-                        .toggle_hide_dock_icon_when_using_quake_mode_and_write_to_user_defaults(ctx)
                 });
             }
             SetExtraMetaKeys(extra_meta_keys) => {
@@ -3616,47 +3603,6 @@ impl FeaturesPageView {
         .finish()
     }
 
-    #[cfg(target_os = "macos")]
-    fn render_quake_mode_hide_dock_icon_row(
-        &self,
-        quake_mode_settings: &QuakeModeSettings,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        Container::new(
-            Flex::row()
-                .with_child(
-                    appearance
-                        .ui_builder()
-                        .checkbox(
-                            self.button_mouse_states
-                                .quake_mode_hide_dock_icon_check
-                                .clone(),
-                            None,
-                        )
-                        .check(quake_mode_settings.hide_dock_icon)
-                        .build()
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(
-                                FeaturesPageAction::QuakeEditorToggleHideDockIcon,
-                            )
-                        })
-                        .finish(),
-                )
-                .with_child(
-                    appearance
-                        .ui_builder()
-                        .span("Hide Warp from the Dock while a dedicated hotkey is configured (also removes Warp from Cmd-Tab)")
-                        .build()
-                        .with_margin_left(5.)
-                        .finish(),
-                )
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .finish(),
-        )
-        .with_margin_bottom(2.)
-        .finish()
-    }
-
     fn render_quake_mode_position_row(
         &self,
         quake_mode_settings: &QuakeModeSettings,
@@ -5501,14 +5447,6 @@ impl SettingsWidget for GlobalHotkeyWidget {
                         } else {
                             Empty::new().finish()
                         },
-                        // Hiding the Dock icon depends on macOS NSApplicationActivationPolicy.
-                        #[cfg(target_os = "macos")]
-                        view.render_quake_mode_hide_dock_icon_row(
-                            KeysSettings::as_ref(app).quake_mode_settings.value(),
-                            appearance,
-                        ),
-                        #[cfg(not(target_os = "macos"))]
-                        Empty::new().finish(),
                     ],
                     appearance,
                 ));

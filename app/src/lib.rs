@@ -805,7 +805,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // When the SettingsFile feature flag is enabled, public settings live in
     // the TOML-backed store. When disabled, they live in the platform-native
     // store (same backend as private). Use the correct one for pre-app reads.
-    #[cfg_attr(not(any(enable_crash_recovery, target_os = "linux")), expect(unused))]
+    #[cfg_attr(
+        not(any(enable_crash_recovery, target_os = "linux", target_os = "macos")),
+        expect(unused)
+    )]
     let prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences =
         if FeatureFlag::SettingsFile.is_enabled() {
             public_preferences.as_ref()
@@ -850,8 +853,14 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         let dev_icon = ASSETS.get("bundled/png/local.png")?;
         app_builder.set_dev_icon(dev_icon);
 
+        let show_dock_icon = crate::settings::app_icon::ShowDockIconState::read_from_preferences(
+            prefs_for_public_settings,
+        )
+        .unwrap_or_else(crate::settings::app_icon::ShowDockIconState::default_value);
+        app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
+        app_builder.set_status_item_menu_builder(app_menus::status_item_menu);
     }
 
     #[cfg(target_os = "linux")]

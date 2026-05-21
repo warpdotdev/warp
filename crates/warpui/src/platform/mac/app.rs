@@ -110,10 +110,20 @@ pub trait AppExt {
 
     /// Sets the macOS dock menu constructor function.
     fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static);
+
+    /// Sets the macOS status item menu constructor function.
+    fn set_status_item_menu_builder(
+        &mut self,
+        value: impl FnOnce(&mut AppContext) -> Menu + 'static,
+    );
+
+    /// Sets whether the application should show its Dock icon on launch.
+    fn set_show_dock_icon_on_launch(&mut self, value: bool);
 }
 
 type MenuBarBuilderFn = Box<dyn FnOnce(&mut AppContext) -> MenuBar>;
 type DockMenuBuilderFn = Box<dyn FnOnce(&mut AppContext) -> Menu>;
+type StatusItemMenuBuilderFn = Box<dyn FnOnce(&mut AppContext) -> Menu>;
 
 /// The actual application, from the perspective of the platform and the
 /// main event loop.  This is the true owner of all application state.
@@ -121,8 +131,10 @@ pub struct App {
     callbacks: AppCallbackDispatcher,
     activate_on_launch: bool,
     dev_icon: Option<Cow<'static, [u8]>>,
+    show_dock_icon_on_launch: bool,
     menu_bar_builder: Option<MenuBarBuilderFn>,
     dock_menu_builder: Option<DockMenuBuilderFn>,
+    status_item_menu_builder: Option<StatusItemMenuBuilderFn>,
     init_fn: Option<platform::app::AppInitCallbackFn>,
 }
 
@@ -162,8 +174,10 @@ impl App {
             callbacks: AppCallbackDispatcher::new(callbacks, ui_app),
             activate_on_launch: true,
             dev_icon: None,
+            show_dock_icon_on_launch: true,
             menu_bar_builder: None,
             dock_menu_builder: None,
+            status_item_menu_builder: None,
             init_fn: None,
         }
     }
@@ -243,6 +257,25 @@ impl AppExt for AppBuilder {
             AppBackend::Headless(_) => (),
         }
     }
+
+    fn set_status_item_menu_builder(
+        &mut self,
+        value: impl FnOnce(&mut AppContext) -> Menu + 'static,
+    ) {
+        match self.as_inner_mut() {
+            AppBackend::CurrentPlatform(app) => {
+                app.status_item_menu_builder = Some(Box::new(value))
+            }
+            AppBackend::Headless(_) => (),
+        }
+    }
+
+    fn set_show_dock_icon_on_launch(&mut self, value: bool) {
+        match self.as_inner_mut() {
+            AppBackend::CurrentPlatform(app) => app.show_dock_icon_on_launch = value,
+            AppBackend::Headless(_) => (),
+        }
+    }
 }
 
 unsafe fn get_app(object: &mut Object) -> &mut App {
@@ -316,6 +349,21 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
         let nsmenu = make_dock_menu(dock_menu);
         let _: () = msg_send![app_delegate, setDockMenu: nsmenu];
     }
+
+    if let Some(status_item_menu_builder) = app.status_item_menu_builder.take() {
+        let status_item_menu = app
+            .callbacks
+            .with_mutable_app_context(status_item_menu_builder);
+        let nsmenu = make_dock_menu(status_item_menu);
+        let _: () = msg_send![app_delegate, setStatusItemMenu: nsmenu];
+    }
+
+    let show_dock_icon = if app.show_dock_icon_on_launch {
+        YES
+    } else {
+        NO
+    };
+    let _: BOOL = msg_send![app_delegate, setDockIconVisible: show_dock_icon];
 }
 
 #[no_mangle]
