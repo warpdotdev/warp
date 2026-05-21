@@ -33,12 +33,15 @@ use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
-    Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer,
-    CodebaseIndexLimits, CodebaseIndexStatus, CodebaseIndexStatusUpdated,
-    CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile, DeleteFileResponse,
-    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
-    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
-    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    client_message, delete_file_response, discard_files_response, get_diff_state_response,
+    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
+    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
+    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits,
+    CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
+    CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
+    DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
+    FailedFileRead, FileContextProto, FileOperationError,
+    FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -48,10 +51,7 @@ use super::proto::{
     ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
     RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
     SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
-    UploadHandoffSnapshotResponse, WriteFile, WriteFileResponse, WriteFileSuccess,
-    client_message, delete_file_response, discard_files_response,
-    get_diff_state_response, get_fragment_metadata_from_hash_response, resolve_conflict_response,
-    run_command_response, save_buffer_response, server_message, write_file_response,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -70,6 +70,7 @@ const MAX_BRANCH_COUNT_CAP: usize = 500;
 pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
+use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::features::FeatureFlag;
@@ -2464,7 +2465,19 @@ impl ServerModel {
         let ai_client = server_api.as_ref(ctx).get_ai_client();
         let http = server_api.as_ref(ctx).get_http_client();
 
-        let paths = msg.paths;
+        // Convert proto strings → StandardizedPath at the boundary; invalid
+        // entries are logged and dropped.
+        let paths: Vec<StandardizedPath> = msg
+            .paths
+            .into_iter()
+            .filter_map(|raw| match StandardizedPath::try_new(&raw) {
+                Ok(sp) => Some(sp),
+                Err(e) => {
+                    log::warn!("UploadHandoffSnapshot: skipping invalid path: {e}");
+                    None
+                }
+            })
+            .collect();
         let request_id_for_response = request_id.clone();
 
         let handle = self.spawn_request_handler(
@@ -2474,41 +2487,7 @@ impl ServerModel {
                     .await
             },
             move |me, result, _ctx| {
-                let response = match result {
-                    Ok(Some(token)) => {
-                        log::info!(
-                            "Handoff snapshot upload succeeded \
-                             (request_id={request_id_for_response})"
-                        );
-                        UploadHandoffSnapshotResponse {
-                            initial_snapshot_token: Some(token.as_str().to_string()),
-                            success: true,
-                            error: None,
-                        }
-                    }
-                    Ok(None) => {
-                        log::info!(
-                            "Handoff snapshot upload completed with no token \
-                             (request_id={request_id_for_response})"
-                        );
-                        UploadHandoffSnapshotResponse {
-                            initial_snapshot_token: None,
-                            success: true,
-                            error: None,
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Handoff snapshot upload failed \
-                             (request_id={request_id_for_response}): {e:#}"
-                        );
-                        UploadHandoffSnapshotResponse {
-                            initial_snapshot_token: None,
-                            success: false,
-                            error: Some(format!("{e:#}")),
-                        }
-                    }
-                };
+                let response = upload_result_to_proto(result);
                 me.send_server_message(
                     Some(conn_id),
                     Some(&request_id_for_response),

@@ -46,17 +46,15 @@ use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    derive_touched_workspace, extract_paths_from_conversation,
-};
+use crate::ai::blocklist::handoff;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::touched_repos::extract_paths_from_conversation;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
@@ -120,6 +118,8 @@ use crate::workspace::view::left_panel::{
     LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
 };
 use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 #[cfg(feature = "local_fs")]
@@ -192,8 +192,6 @@ use crate::search::command_palette::view::NavigationMode;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::server::server_api::ai::InitialSnapshotToken;
 use crate::server::server_api::auth::AuthClient;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
@@ -333,11 +331,11 @@ use crate::terminal::session_settings::{
 };
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::shell::ShellType;
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
-    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
+    HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
 };
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
 use crate::terminal::{self, SizeInfo, TerminalView};
@@ -5895,7 +5893,12 @@ impl Workspace {
             FileTarget::MarkdownViewer(layout) => {
                 let session = self.get_active_session(ctx);
 
-                self.open_file_notebook(path.clone(), session, layout, ctx);
+                self.open_file_notebook(
+                    LocalOrRemotePath::Local(path.clone()),
+                    session,
+                    layout,
+                    ctx,
+                );
             }
             FileTarget::EnvEditor => {
                 let editor_value: Option<String> = self
@@ -7376,7 +7379,7 @@ impl Workspace {
     #[cfg(feature = "local_fs")]
     fn open_file_notebook(
         &mut self,
-        path: PathBuf,
+        path: LocalOrRemotePath,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
@@ -13217,25 +13220,25 @@ impl Workspace {
             .terminal_view_working_directories(ctx)
             .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let code_local_paths: Vec<(EntityId, String)> = pane_group
+        let code_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
-            .code_view_local_paths(ctx)
+            .code_view_paths(ctx)
             .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let code_diff_local_paths: Vec<(EntityId, String)> = pane_group
+        let code_diff_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
-            .code_diff_view_local_paths(ctx)
+            .code_diff_view_paths(ctx)
             .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let notebook_local_paths: Vec<(EntityId, String)> = pane_group
+        let notebook_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
-            .file_notebook_local_paths(ctx)
-            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
+            .file_notebook_paths(ctx)
+            .filter_map(|(id, path)| path.map(|p| (id, p)))
             .collect();
-        let local_paths: Vec<(EntityId, String)> = code_local_paths
+        let local_paths: Vec<(EntityId, LocalOrRemotePath)> = code_paths
             .into_iter()
-            .chain(notebook_local_paths)
-            .chain(code_diff_local_paths)
+            .chain(notebook_paths)
+            .chain(code_diff_paths)
             .collect();
 
         // Get the focused terminal ID to prioritize it in the repo_to_terminal map
@@ -13519,155 +13522,6 @@ impl Workspace {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn maybe_auto_submit_handoff(
-        _target_view: &ViewHandle<TerminalView>,
-        model_handle: &ModelHandle<AmbientAgentViewModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let launch = model_handle.update(ctx, |model, ctx| model.maybe_auto_submit_handoff(ctx));
-        let Some(launch) = launch else {
-            return;
-        };
-        model_handle.update(ctx, |model, ctx| {
-            model.submit_handoff(launch.prompt, launch.attachments.request_attachments, ctx);
-        });
-    }
-
-    /// Settle the snapshot upload status on the model from an upload result.
-    ///
-    /// Shared by both local and remote handoff paths. Maps
-    /// `Ok(Some(token))` → `Uploaded`, `Ok(None)` → `SkippedEmptyWorkspace`,
-    /// and `Err` → `record_handoff_snapshot_upload_failed`.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn settle_handoff_snapshot_result(
-        model: &mut AmbientAgentViewModel,
-        result: Result<Option<InitialSnapshotToken>, anyhow::Error>,
-        model_ctx: &mut warpui::ModelContext<AmbientAgentViewModel>,
-    ) {
-        match result {
-            Ok(Some(token)) => {
-                model.set_pending_handoff_snapshot_upload(
-                    SnapshotUploadStatus::Uploaded(token),
-                    model_ctx,
-                );
-            }
-            Ok(None) => {
-                model.set_pending_handoff_snapshot_upload(
-                    SnapshotUploadStatus::SkippedEmptyWorkspace,
-                    model_ctx,
-                );
-            }
-            Err(err) => {
-                log::warn!("Handoff snapshot upload failed: {err:#}");
-                model.record_handoff_snapshot_upload_failed(format!("{err}"), model_ctx);
-            }
-        }
-    }
-
-    /// Spawns the async snapshot upload pipeline for a handoff pane. Derives the
-    /// touched workspace from `paths`, uploads repo patches + orphan files, sets
-    /// environment overlap, and settles the snapshot status on the model. Shared
-    /// by both the conversation-fork and fresh-launch handoff paths.
-    ///
-    /// `paths` are raw path strings (not `PathBuf`) because for remote SSH
-    /// sessions they represent paths on the remote host and must not be
-    /// interpreted through the local OS's path encoding.
-    ///
-    /// For remote SSH sessions, delegates the gather+upload work to the remote
-    /// server daemon via `UploadHandoffSnapshot` instead of doing it locally.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn spawn_handoff_snapshot_upload(
-        paths: Vec<String>,
-        pane_view: ViewHandle<TerminalView>,
-        model_handle: ModelHandle<AmbientAgentViewModel>,
-        session_id: SessionId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Check if this session has a connected remote server daemon.
-        // If so, delegate the snapshot work to the daemon; otherwise run locally.
-        let remote_client = RemoteServerManager::as_ref(ctx)
-            .client_for_session(session_id)
-            .cloned();
-        if let Some(client) = remote_client {
-            ctx.spawn(
-                async move { client.upload_handoff_snapshot(paths).await },
-                move |_workspace, result, ctx| {
-                    model_handle.update(ctx, |model, model_ctx| {
-                        if !model.is_local_to_cloud_handoff() {
-                            return;
-                        }
-                        // The remote daemon handled workspace derivation internally;
-                        // set an empty workspace so the auto-submit gate
-                        // (`touched_workspace.is_some()`) is satisfied.
-                        model.set_pending_handoff_workspace(Default::default(), model_ctx);
-                        // Map the proto response into Result<Option<InitialSnapshotToken>>
-                        // so the shared settle helper can handle it.
-                        let mapped =
-                            match result {
-                                Ok(resp) if resp.success => {
-                                    if let Some(token) = resp.initial_snapshot_token {
-                                        match serde_json::from_value::<InitialSnapshotToken>(
-                                            serde_json::Value::String(token),
-                                        ) {
-                                            Ok(token) => Ok(Some(token)),
-                                            Err(e) => Err(anyhow::anyhow!(
-                                                "Failed to parse InitialSnapshotToken: {e}"
-                                            )),
-                                        }
-                                    } else {
-                                        Ok(None)
-                                    }
-                                }
-                                Ok(resp) => {
-                                    let error_msg = resp.error.unwrap_or_default();
-                                    Err(anyhow::anyhow!(
-                                        "Remote handoff snapshot failed: {error_msg}"
-                                    ))
-                                }
-                                Err(err) => Err(anyhow::anyhow!(err)
-                                    .context("Remote handoff snapshot RPC failed")),
-                            };
-                        Self::settle_handoff_snapshot_result(model, mapped, model_ctx);
-                    });
-                    Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
-                },
-            );
-            return;
-        }
-
-        // Local path: convert strings back to PathBuf for local filesystem operations.
-        let local_paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        let server_api_provider = ServerApiProvider::as_ref(ctx);
-        let ai_client = server_api_provider.get_ai_client();
-        let http = server_api_provider.get_http_client();
-        ctx.spawn(
-            async move {
-                let workspace = derive_touched_workspace(local_paths).await;
-                let repo_paths: Vec<_> =
-                    workspace.repos.iter().map(|r| r.git_root.clone()).collect();
-                let upload_result = upload_snapshot_for_handoff(
-                    repo_paths,
-                    workspace.orphan_files.clone(),
-                    ai_client,
-                    http.as_ref(),
-                )
-                .await;
-                (workspace, upload_result)
-            },
-            move |_workspace, (derived_workspace, upload_result), ctx| {
-                model_handle.update(ctx, |model, model_ctx| {
-                    if !model.is_local_to_cloud_handoff() {
-                        return;
-                    }
-                    model.set_pending_handoff_workspace(derived_workspace, model_ctx);
-                    Self::settle_handoff_snapshot_result(model, upload_result, model_ctx);
-                });
-                Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
-            },
-        );
-    }
-
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn show_handoff_success_toast(ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -13745,7 +13599,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let handoff_target = self.prepare_handoff_target(&source_view, ctx);
-        let Some((new_pane_view, model_handle)) =
+        let Some((_new_pane_view, model_handle)) =
             handoff_target.update(ctx, |view, view_ctx| view.start_cloud_mode(None, view_ctx))
         else {
             log::warn!(
@@ -13793,8 +13647,14 @@ impl Workspace {
             .as_ref(ctx)
             .active_block_session_id()
             .unwrap_or_default();
-        let paths: Vec<String> = source_pwd.into_iter().collect();
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, session_id, ctx);
+        let mut paths: Vec<StandardizedPath> = Vec::new();
+        if let Some(ref pwd) = source_pwd {
+            if let Ok(sp) = StandardizedPath::try_new(pwd) {
+                paths.push(sp);
+            }
+        }
+        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
+        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
     }
 
     /// Opens a local-to-cloud handoff pane in place over the active local pane.
@@ -14210,13 +14070,14 @@ impl Workspace {
             .as_ref(ctx)
             .active_block_session_id()
             .unwrap_or_default();
-        // extract_paths_from_conversation now returns Vec<String> with
-        // platform-aware StandardizedPath validation internally.
         let mut paths = extract_paths_from_conversation(&source_conversation);
         if let Some(ref pwd) = source_pwd {
-            paths.push(pwd.clone());
+            if let Ok(sp) = StandardizedPath::try_new(pwd) {
+                paths.push(sp);
+            }
         }
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, session_id, ctx);
+        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
+        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
     }
 
     pub(crate) fn handle_file_tree_event(
@@ -22389,6 +22250,15 @@ impl TypedActionView for Workspace {
             }
             CopySharedSessionLinkFromTab { tab_index } => {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
+            }
+            OpenSharedSessionQrCode { session_id } => {
+                use terminal::shared_session::manager::Manager;
+                let manager = Manager::as_ref(ctx);
+                if let Some(terminal_view) = manager.shared_view_by_session_id(session_id, ctx) {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.open_shared_session_qr_code(ctx);
+                    });
+                }
             }
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());

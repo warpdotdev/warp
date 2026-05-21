@@ -19,34 +19,25 @@ use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 
 /// Gather the workspace snapshot from the given absolute paths and upload it.
 ///
-/// 1. Validates each path as a [`StandardizedPath`] (absolute, normalized).
-///    Invalid entries are logged and skipped.
-/// 2. Runs [`derive_touched_workspace`] to discover git roots and orphan files.
-/// 3. Calls [`upload_snapshot_for_handoff`] to build patches, allocate a token,
+/// `paths` must already be validated [`StandardizedPath`] values (the caller
+/// converts proto `Vec<String>` at the boundary). This function converts them
+/// to local `PathBuf` for filesystem I/O.
+///
+/// 1. Runs [`derive_touched_workspace`] to discover git roots and orphan files.
+/// 2. Calls [`upload_snapshot_for_handoff`] to build patches, allocate a token,
 ///    and upload everything to GCS.
 ///
 /// Returns `Ok(Some(token))` when the upload succeeds and a token was minted,
 /// `Ok(None)` when the workspace was empty or the manifest failed, and `Err`
 /// for hard failures (auth, network).
 pub(crate) async fn gather_and_upload_handoff_snapshot(
-    paths: Vec<String>,
+    paths: Vec<StandardizedPath>,
     ai_client: Arc<dyn AIClient>,
     http: &http_client::Client,
 ) -> Result<Option<InitialSnapshotToken>> {
     let resolved_paths: Vec<PathBuf> = paths
         .into_iter()
-        .filter_map(|raw| {
-            if raw.is_empty() {
-                return None;
-            }
-            match StandardizedPath::try_new(&raw) {
-                Ok(sp) => Some(sp.to_local_path_lossy()),
-                Err(e) => {
-                    log::warn!("Skipping invalid path in handoff snapshot: {e}");
-                    None
-                }
-            }
-        })
+        .map(|sp| sp.to_local_path_lossy())
         .collect();
 
     if resolved_paths.is_empty() {

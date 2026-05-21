@@ -279,22 +279,23 @@ pub(crate) fn pick_handoff_overlap_env(
 /// write actions (plus the cwd of every exchange that ran shell commands),
 /// capped to the most recent [`MAX_TOOL_CALLS_TO_SCAN`] action results.
 ///
-/// Returns path strings (not `PathBuf`) because the conversation may reference
-/// paths on a remote host with a different OS encoding than the client.
-/// [`StandardizedPath`] is used internally for platform-aware absolute-path
-/// validation so that e.g. a POSIX remote path like `/home/user/project` is
-/// recognised as absolute even when the client is Windows.
+/// Returns [`StandardizedPath`] values — every surviving path has been validated
+/// as absolute via [`StandardizedPath::try_new`], which handles both Unix and
+/// Windows encodings so remote POSIX paths are recognised correctly even on
+/// a Windows client.
 ///
-/// The returned vec is deduplicated and may contain both absolute and
+/// The returned vec is deduplicated and may contain both directly-absolute and
 /// resolved-against-`working_directory` paths. Per-path filesystem checks
 /// (does the path exist? does it have a `.git` ancestor?) happen later in
 /// [`derive_touched_workspace`].
-pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> Vec<String> {
+pub(crate) fn extract_paths_from_conversation(
+    conversation: &AIConversation,
+) -> Vec<StandardizedPath> {
     // Walk exchanges newest-first so we can stop once we've consumed the cap.
     // Within each exchange we count every `Action` message against the budget
     // and bail early if we hit it mid-exchange.
-    let mut paths: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut paths: Vec<StandardizedPath> = Vec::new();
+    let mut seen: HashSet<StandardizedPath> = HashSet::new();
     let mut tool_calls_remaining = MAX_TOOL_CALLS_TO_SCAN;
 
     for exchange in conversation.all_exchanges().into_iter().rev() {
@@ -306,8 +307,10 @@ pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> 
         // Track the per-exchange cwd unconditionally (it doesn't count as a tool
         // call). Covers `RunShellCommand` cwds without walking action results.
         if let Some(cwd) = cwd {
-            if StandardizedPath::try_new(cwd).is_ok() && seen.insert(cwd.to_string()) {
-                paths.push(cwd.to_string());
+            if let Ok(sp) = StandardizedPath::try_new(cwd) {
+                if seen.insert(sp.clone()) {
+                    paths.push(sp);
+                }
             }
         }
 
@@ -336,8 +339,8 @@ pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> 
 fn extract_action_paths(
     action: &AIAgentAction,
     cwd: Option<&str>,
-    paths: &mut Vec<String>,
-    seen: &mut HashSet<String>,
+    paths: &mut Vec<StandardizedPath>,
+    seen: &mut HashSet<StandardizedPath>,
 ) {
     match &action.action {
         // Write actions: the agent authored or replaced these files. Safe to
@@ -390,8 +393,8 @@ fn extract_action_paths(
 fn push_resolved(
     raw: Option<&str>,
     cwd: Option<&str>,
-    paths: &mut Vec<String>,
-    seen: &mut HashSet<String>,
+    paths: &mut Vec<StandardizedPath>,
+    seen: &mut HashSet<StandardizedPath>,
 ) {
     let Some(raw) = raw else { return };
     let raw = raw.trim();
@@ -400,21 +403,20 @@ fn push_resolved(
     }
     // Try to validate as an absolute path using StandardizedPath, which
     // correctly handles both Unix and Windows path encodings.
-    let resolved = if StandardizedPath::try_new(raw).is_ok() {
-        raw.to_string()
+    let sp = if let Ok(sp) = StandardizedPath::try_new(raw) {
+        sp
     } else if let Some(cwd) = cwd {
         // Relative path — resolve against the exchange cwd.
         let joined = format!("{cwd}/{raw}");
-        if StandardizedPath::try_new(&joined).is_ok() {
-            joined
-        } else {
-            return;
+        match StandardizedPath::try_new(&joined) {
+            Ok(sp) => sp,
+            Err(_) => return,
         }
     } else {
         return;
     };
-    if seen.insert(resolved.clone()) {
-        paths.push(resolved);
+    if seen.insert(sp.clone()) {
+        paths.push(sp);
     }
 }
 
