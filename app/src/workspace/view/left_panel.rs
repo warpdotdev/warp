@@ -306,9 +306,7 @@ impl LeftPanelView {
                     active_pane_group.as_ref(ctx).left_panel_open && me.is_file_tree_active();
                 file_tree_view.update(ctx, |view, ctx| {
                     view.set_root_directories(local_directories, ctx);
-                    if !remote_repos.is_empty() {
-                        view.set_remote_root_directories(&remote_repos, ctx);
-                    }
+                    view.set_remote_root_directories(&remote_repos, ctx);
                     view.set_has_terminal_session(has_terminal_session, ctx);
                     view.set_is_active(is_visible, ctx);
 
@@ -642,9 +640,7 @@ impl LeftPanelView {
         let is_visible = left_panel_open && self.is_file_tree_active();
         file_tree_view.update(ctx, |view, ctx| {
             view.set_root_directories(local_directories, ctx);
-            if !remote_repos.is_empty() {
-                view.set_remote_root_directories(&remote_repos, ctx);
-            }
+            view.set_remote_root_directories(&remote_repos, ctx);
             view.set_has_terminal_session(has_terminal_session, ctx);
             view.set_active_file_model(active_file_model, ctx);
             view.set_is_active(is_visible, ctx);
