@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(feature = "local_fs")]
 use std::path::Path;
+#[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 #[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;

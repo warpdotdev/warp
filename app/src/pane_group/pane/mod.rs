@@ -55,7 +55,6 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warpui::{
     elements::{DispatchEventResult, EventHandler, MouseInBehavior},
