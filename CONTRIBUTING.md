@@ -114,6 +114,16 @@ After you push changes that address Oz's feedback, comment `/oz-review` on the P
 
 **You must include proof of [manual testing](#manual-testing)**. For small, isolated, and visual changes, you should include **before and after screenshots**. For larger, broad, or interactive changes, you should also include a **narrated screen recording**.
 
+### PRs opened without a linked issue
+
+We ask that PRs start from an issue discussion. That's where problems get scoped, [readiness labels](#readiness-labels) get applied, and features go through a [spec phase](#opening-a-spec-pr) before any code is written. See the [Contribution Flow](#contribution-flow) for the full picture.
+
+That said, if you open a PR ahead of the standard issue workflow, here's what to do:
+
+1. **Search for a related issue.** Due to the volume of issues we receive, there's often an existing issue for a given feature or bug fix. If you find one, link it in your PR description. Ideally, this issue will have been reviewed by a maintainer with a [readiness label](#readiness-labels) applied. If you do not find a related issue, file an issue describing what your PR resolves. For especially trivial bug fixes, you can proceed without an issue. Just note your reasoning in the PR description.
+2. **Ensure your PR passes code review and includes relevant tests** per our [Opening a Code PR guide.](#opening-a-code-pr) 
+3. **If the automated checks flag a missing or unready issue** ahead of tagging a maintainer, allow our maintainers time to triage and review your work. If code review passes and relevant tests are present, that's high signal for us to review your work sooner.
+
 ## Using a Coding Agent
 
 You can use **any coding agent** to implement a contribution — for example, Warp's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
