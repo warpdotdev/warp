@@ -1,6 +1,3 @@
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{StartAgentExecutionMode, StartAgentResult};
-use crate::BlocklistAIHistoryModel;
 use ai::agent::action_result::StartAgentVersion;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
@@ -13,6 +10,10 @@ use super::{
     start_agent_error_prefix, start_agent_in_progress_prefix, start_agent_success_suffix,
     transcript_metadata, ChildConversationCardData, OrchestrationAvatar, OrchestrationParticipant,
 };
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{StartAgentExecutionMode, StartAgentResult};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
+use crate::BlocklistAIHistoryModel;
 
 #[test]
 fn child_conversation_card_data_for_success_result_returns_conversation_id_and_title() {
@@ -217,6 +218,7 @@ fn agent_display_name_from_id_returns_unknown_fallback() {
 #[test]
 fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
     App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         history_model.update(&mut app, |history_model, ctx| {
             let terminal_view_id = EntityId::new();

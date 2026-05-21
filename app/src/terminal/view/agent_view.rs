@@ -1,32 +1,29 @@
-use warp_core::{features::FeatureFlag, send_telemetry_from_ctx, ui::appearance::Appearance};
-use warpui::{keymap::Keystroke, EntityId, SingletonEntity, ViewContext};
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warpui::keymap::Keystroke;
+use warpui::{EntityId, SingletonEntity, ViewContext};
 
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        blocklist::{
-            agent_view::{
-                AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams,
-                AgentViewEntryOrigin, AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError,
-                EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
-            },
-            history_model::CloudConversationData,
-            BlocklistAIHistoryModel,
-        },
-    },
-    global_resource_handles::GlobalResourceHandlesProvider,
-    persistence::ModelEvent,
-    server::telemetry::TelemetryAgentViewEntryOrigin,
-    terminal::{
-        input::message_bar::{Message, MessageItem},
-        model::rich_content::RichContentType,
-        view::{AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata},
-        TerminalView,
-    },
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-    TelemetryEvent,
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::{
+    AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams, AgentViewEntryOrigin,
+    AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError, EphemeralMessage,
+    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
+use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::persistence::ModelEvent;
+use crate::server::telemetry::TelemetryAgentViewEntryOrigin;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::view::{
+    AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata,
+};
+use crate::terminal::TerminalView;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::TelemetryEvent;
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 

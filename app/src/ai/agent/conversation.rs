@@ -1,34 +1,14 @@
-use crate::ai::agent::comment::CodeReview;
-use crate::ai::agent::linearization::compute_task_depths;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::{RequestInput, ResponseStreamId, SerializedBlockListItem};
-use crate::ai::skills::SkillDescriptor;
-use crate::code_review::CodeReviewTelemetryEvent;
-use crate::notebooks::NotebookId;
-use crate::persistence::model::{ConversationUsageMetadata, ModelTokenUsage, ToolUsageMetadata};
-use crate::server::ids::ServerId;
-use crate::terminal::general_settings::GeneralSettings;
-use crate::terminal::model::block::{
-    AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
-};
-use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 
-use crate::ai::agent::api::convert_conversation::{
-    compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
-    ConvertToExchanges,
-};
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::{collections::HashMap, fmt::Display};
-use warp_cli::agent::Harness;
-
-use super::task_store::TaskStore;
 use uuid::Uuid;
 use vec1::{Size0Error, Vec1};
+use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
@@ -37,46 +17,60 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
 use warp_multi_agent_api::response_event::stream_finished;
-use warp_multi_agent_api::{self as api, response_event::stream_finished::TokenUsage};
+use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
+use warp_multi_agent_api::{self as api};
 use warpui::color::ColorU;
 use warpui::{EntityId, ModelContext, SingletonEntity};
 
-use crate::ai::agent::{AIIdentifiers, CancellationReason};
-use crate::{
-    ai::{
-        agent::{
-            icons::{
-                failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
-            },
-            todos::AIAgentTodoList,
-            AIAgentOutputMessage, AIAgentOutputMessageType, MessageToAIAgentOutputMessageError,
-        },
-        blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate},
-    },
-    persistence::{
-        model::{AgentConversationData, PersistedAutoexecuteMode},
-        ModelEvent,
-    },
-    ui_components::icons::Icon,
-    BlocklistAIHistoryModel, GlobalResourceHandlesProvider,
+use super::api::ServerConversationToken;
+use super::task::helper::*;
+use super::task::transaction::{SavedTask, Transaction};
+use super::task::{
+    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, UpdateTaskError,
+    UpgradeOptimisticTaskError,
 };
-
-use super::task::{ExtractMessagesError, UpdateTaskError, UpgradeOptimisticTaskError};
+use super::task_store::TaskStore;
 use super::{
-    api::ServerConversationToken,
-    task::{
-        derive_todo_lists_from_root_task,
-        helper::*,
-        transaction::{SavedTask, Transaction},
-        Task, TaskId,
-    },
     AIAgentAction, AIAgentActionId, AIAgentContext, AIAgentExchange, AIAgentExchangeId,
-    AIAgentInput, AIAgentOutputStatus, AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput,
-    MessageId, RenderableAIError, RequestCost,
+    AIAgentInput, AIAgentOutput, AIAgentOutputStatus, AIAgentTodo, AIAgentTodoId,
+    FinishedAIAgentOutput, MessageId, OutputModelInfo, RenderableAIError, RequestCost,
+    ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
 };
-use super::{
-    AIAgentOutput, OutputModelInfo, ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
+use crate::ai::agent::api::convert_conversation::{
+    compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
+    ConvertToExchanges,
 };
+use crate::ai::agent::comment::CodeReview;
+use crate::ai::agent::icons::{
+    failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
+};
+use crate::ai::agent::linearization::compute_task_depths;
+use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::{
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationReason,
+    MessageToAIAgentOutputMessageError,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, ConversationStatusUpdate, RequestInput, ResponseStreamId,
+    SerializedBlockListItem,
+};
+use crate::ai::skills::SkillDescriptor;
+use crate::code_review::CodeReviewTelemetryEvent;
+use crate::notebooks::NotebookId;
+use crate::persistence::model::{
+    AgentConversationData, ConversationUsageMetadata, ModelTokenUsage, PersistedAutoexecuteMode,
+    ToolUsageMetadata,
+};
+use crate::persistence::ModelEvent;
+use crate::server::ids::ServerId;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::model::block::{
+    AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
+};
+use crate::ui_components::icons::Icon;
+use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
@@ -324,6 +318,10 @@ impl AIConversation {
         tasks: Vec<api::Task>,
         conversation_data: Option<AgentConversationData>,
     ) -> Result<Self, RestoreConversationError> {
+        let root_task_is_optimistic = conversation_data
+            .as_ref()
+            .and_then(|data| data.root_task_is_optimistic)
+            .unwrap_or_default();
         let api_tasks_by_id: HashMap<String, api::Task> =
             tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
 
@@ -369,7 +367,11 @@ impl AIConversation {
                     );
                 }
             } else if root_task.is_none() {
-                root_task = Some(Task::new_restored_root(task, exchanges.into_iter()));
+                root_task = Some(if root_task_is_optimistic {
+                    Task::new_restored_optimistic_root(task.id.clone(), exchanges.into_iter())
+                } else {
+                    Task::new_restored_root(task, exchanges.into_iter())
+                });
             }
         }
 
@@ -3042,11 +3044,13 @@ impl AIConversation {
             }
         };
 
+        let root_task_is_optimistic = self.get_root_task().map(Task::is_optimistic_root_task);
+
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
             updated_tasks: self
                 .all_tasks()
-                .filter_map(|task| task.source().cloned())
+                .filter_map(|task| task.source_for_persistence())
                 .collect(),
             conversation_data: AgentConversationData {
                 server_conversation_token: self
@@ -3065,6 +3069,7 @@ impl AIConversation {
                 orchestration_harness_type: self.orchestration_harness_type.clone(),
                 parent_conversation_id: self.parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: self.is_remote_child,
+                root_task_is_optimistic,
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,

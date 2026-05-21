@@ -1,4 +1,5 @@
-use std::{pin, task, time::Duration};
+use std::time::Duration;
+use std::{pin, task};
 
 use futures_lite::{ready, Stream};
 use pin::Pin;

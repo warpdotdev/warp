@@ -1,57 +1,50 @@
+use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::path::Path;
+use std::sync::Arc;
+
 use itertools::Itertools as _;
 use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
 use parking_lot::FairMutex;
 use settings::Setting;
-use std::{borrow::Cow, cmp::Reverse, path::Path, sync::Arc};
-use warp_core::{features::FeatureFlag, report_if_error, ui::Icon};
+use warp_core::features::FeatureFlag;
+use warp_core::report_if_error;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::prelude::{
+    Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition,
+};
+use warpui::scene::Border;
 use warpui::{
-    elements::{
-        Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
-        Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::Keystroke,
-    prelude::{Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition},
-    scene::Border,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::{
-        active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId},
-        agent::conversation::AIConversationId,
-        blocklist::{
-            agent_view::{
-                agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
-                ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-                ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-            },
-            history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-        },
-        conversation_navigation::ConversationNavigationData,
-    },
-    appearance::Appearance,
-    changelog_model::{self, ChangelogModel},
-    settings::{AISettings, AISettingsChangedEvent},
-    terminal::{
-        self,
-        event::BlockType,
-        input::message_bar::{common::render_standard_message, Message, MessageItem},
-        model::{
-            blocks::BlockHeightItem,
-            session::{BootstrapSessionType, Session, SessionType, Sessions},
-        },
-        model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher},
-        prompt,
-        view::{
-            ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-            TerminalAction,
-        },
-        TerminalModel,
-    },
-    util::time_format::format_approx_duration_from_now_utc,
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::{
+    agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
+    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
+use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::appearance::Appearance;
+use crate::changelog_model::{self, ChangelogModel};
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::terminal::event::BlockType;
+use crate::terminal::input::message_bar::common::render_standard_message;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::model::blocks::BlockHeightItem;
+use crate::terminal::model::session::{BootstrapSessionType, Session, SessionType, Sessions};
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::view::TerminalAction;
+use crate::terminal::{self, prompt, TerminalModel};
+use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";

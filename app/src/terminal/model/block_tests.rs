@@ -1,20 +1,19 @@
-use std::{collections::HashMap, pin::pin, time::Duration};
+use std::collections::HashMap;
+use std::pin::pin;
+use std::time::Duration;
 
-use super::*;
-use crate::{
-    ai::blocklist::agent_view::AgentViewState,
-    terminal::model::{
-        ansi::{Attr, Handler},
-        cell::Flags,
-        header_grid::PromptEndPoint,
-        session::SessionInfo,
-        test_utils::{create_test_block_with_grids, TestBlockBuilder},
-    },
-    test_util::mock_blockgrid,
-};
 use chrono::TimeZone;
 use float_cmp::assert_approx_eq;
 use futures_lite::stream::StreamExt;
+
+use super::*;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::model::ansi::{Attr, Handler};
+use crate::terminal::model::cell::Flags;
+use crate::terminal::model::header_grid::PromptEndPoint;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::test_utils::{create_test_block_with_grids, TestBlockBuilder};
+use crate::test_util::mock_blockgrid;
 
 impl float_cmp::ApproxEq for BlockSection {
     type Margin = float_cmp::F64Margin;
@@ -287,6 +286,38 @@ pub fn test_long_running_block_bottom_padding() {
     });
 }
 
+#[test]
+pub fn empty_pre_bootstrap_block_is_not_long_running() {
+    warpui::r#async::block_on(async {
+        let mut block = TestBlockBuilder::new()
+            .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+            .build();
+
+        block.start();
+
+        let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
+        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+
+        assert!(!block.is_active_and_long_running());
+    });
+}
+
+#[test]
+pub fn non_empty_pre_bootstrap_block_can_be_long_running() {
+    warpui::r#async::block_on(async {
+        let mut block = TestBlockBuilder::new()
+            .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+            .build();
+
+        block.start();
+        block.input('x');
+
+        let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
+        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+
+        assert!(block.is_active_and_long_running());
+    });
+}
 // Tests that the command grid has a non-zero height even if `preexec` is never called.
 #[test]
 pub fn test_precmd_no_preexec() {

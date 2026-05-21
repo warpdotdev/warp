@@ -1,10 +1,8 @@
 //! ContextFlag flags are for behaviors that need to be conditionally enabled or disabled based
 //! on where the app is being run and are a permanent part of the app.
 
-use std::{
-    str::FromStr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
 

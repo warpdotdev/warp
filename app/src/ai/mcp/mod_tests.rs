@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+
+use serde_json;
+use warp_managed_secrets::ManagedSecretValue;
+
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
 use crate::ai::mcp::parsing::resolve_json;
@@ -7,9 +12,6 @@ use crate::ai::mcp::{
     TemplatableMCPServer, TemplatableMCPServerInstallation, TemplateVariable, TransportType,
     VariableType, VariableValue,
 };
-use serde_json;
-use std::collections::HashMap;
-use warp_managed_secrets::ManagedSecretValue;
 
 #[test]
 fn mcp_provider_from_file_path_recognizes_warp_home_path() {

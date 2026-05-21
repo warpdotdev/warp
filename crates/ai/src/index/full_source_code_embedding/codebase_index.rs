@@ -1,39 +1,38 @@
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::anyhow;
 use async_channel;
 use chrono::{DateTime, Utc};
 use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use repo_metadata::entry::IgnoredPathStrategy;
 use repo_metadata::Repository;
-use std::{path::Path, sync::Arc};
 use warp_core::safe_error;
 use warpui::{Entity, ModelContext, ModelHandle};
 
+use super::fragment_metadata::{
+    FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
+};
+use super::manager::{
+    CodebaseIndexFinishedStatus, CodebaseIndexStatus, FragmentMetadataLookupError,
+    RetrieveFileError,
+};
+use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
+use super::store_client::StoreClient;
+use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{
-    fragment_metadata::{FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates},
-    manager::{
-        CodebaseIndexFinishedStatus, CodebaseIndexStatus, FragmentMetadataLookupError,
-        RetrieveFileError,
-    },
-    merkle_tree::{MerkleTree, SerializedCodebaseIndex},
-    store_client::StoreClient,
-    sync_client::{FlushFragmentResult, SyncOperationError},
     CodebaseContextConfig, ContentHash, EmbeddingConfig, Error, Fragment, NodeHash, RepoMetadata,
 };
-use crate::{
-    index::locations::{CodeContextLocation, FileFragmentLocation},
-    telemetry::{AITelemetryEvent, CodebaseContextSyncType},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
-use instant::Instant;
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
+use crate::telemetry::{AITelemetryEvent, CodebaseContextSyncType};
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -319,7 +318,9 @@ pub enum CodebaseIndexEvent {
         retrieval_id: RetrievalID,
         error: Error,
     },
-    SyncStateUpdated,
+    SyncStateUpdated {
+        root_path: PathBuf,
+    },
     IndexMetadataUpdated {
         root_path: PathBuf,
         event: WorkspaceMetadataEvent,
@@ -501,6 +502,13 @@ impl CodebaseIndex {
         store_client: Arc<dyn StoreClient>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .pending_file_changes
+            .as_ref()
+            .is_none_or(|changed_files| changed_files.is_empty())
+        {
+            return;
+        }
         let last_server_synced_root_node = self.last_server_synced_root_node();
         let old_state = self.update_tree_sync_state(
             TreeSourceSyncState::Syncing {
@@ -879,7 +887,9 @@ impl CodebaseIndex {
         ctx: &mut ModelContext<Self>,
     ) -> TreeSourceSyncState {
         let old_state = std::mem::replace(&mut self.tree_sync_state, new_state);
-        ctx.emit(CodebaseIndexEvent::SyncStateUpdated);
+        ctx.emit(CodebaseIndexEvent::SyncStateUpdated {
+            root_path: self.repo_path.clone(),
+        });
         old_state
     }
 
@@ -888,7 +898,9 @@ impl CodebaseIndex {
         if let TreeSourceSyncState::Syncing { sync_progress, .. } = &mut self.tree_sync_state {
             *sync_progress = Some(progress);
 
-            ctx.emit(CodebaseIndexEvent::SyncStateUpdated);
+            ctx.emit(CodebaseIndexEvent::SyncStateUpdated {
+                root_path: self.repo_path.clone(),
+            });
         }
     }
 
@@ -1371,11 +1383,18 @@ impl CodebaseIndex {
     pub(super) fn codebase_index_status(&self) -> CodebaseIndexStatus {
         let root_hash = self.last_server_synced_root_node();
         let has_synced_version = root_hash.is_some();
+        #[cfg(feature = "local_fs")]
+        let has_pending_file_changes = self
+            .pending_file_changes
+            .as_ref()
+            .is_some_and(|changes| !changes.is_empty());
+        #[cfg(not(feature = "local_fs"))]
+        let has_pending_file_changes = false;
         match &self.tree_sync_state {
             TreeSourceSyncState::Synced {
                 server_sync_result, ..
             } => CodebaseIndexStatus {
-                has_pending: false,
+                has_pending: has_pending_file_changes,
                 has_synced_version,
                 last_sync_successful: Some(match server_sync_result {
                     ServerSyncResult::Success => CodebaseIndexFinishedStatus::Completed,

@@ -1,6 +1,9 @@
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use warp_core::SessionId;
+use warpui::r#async::executor;
 
+use super::*;
 use crate::proto::{
     client_message, get_fragment_metadata_from_hash_response, run_command_response, server_message,
     ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
@@ -10,10 +13,6 @@ use crate::proto::{
     MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
 };
 use crate::protocol;
-use warp_core::SessionId;
-use warpui::r#async::executor;
-
-use super::*;
 
 /// Generic mock server: loops reading ClientMessages and responds using the
 /// provided closure. Exits cleanly on EOF.
@@ -153,6 +152,7 @@ async fn initialize_round_trip() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -183,6 +183,7 @@ async fn initialize_sends_empty_auth_token_when_none() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -211,6 +212,7 @@ async fn initialize_sends_auth_token_when_provided() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -274,6 +276,7 @@ async fn resync_codebase_round_trip() {
             Some(client_message::Message::ResyncCodebase(request)) => {
                 assert_eq!(request.repo_path, "/repo");
                 assert_eq!(request.auth_token, "auth-token");
+                assert_eq!(request.mode, CodebaseResyncMode::Full as i32);
             }
             other => panic!("Expected ResyncCodebase, got {other:?}"),
         }
@@ -290,6 +293,29 @@ async fn resync_codebase_round_trip() {
     assert_eq!(status.repo_path, "/repo");
 }
 
+#[tokio::test]
+async fn trigger_codebase_incremental_sync_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::ResyncCodebase(request)) => {
+                assert_eq!(request.repo_path, "/repo");
+                assert_eq!(request.auth_token, "auth-token");
+                assert_eq!(request.mode, CodebaseResyncMode::Incremental as i32);
+            }
+            other => panic!("Expected incremental ResyncCodebase, got {other:?}"),
+        }
+        server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
+            status: Some(not_enabled_codebase_status("/repo")),
+        })
+    });
+
+    let status = client
+        .trigger_codebase_incremental_sync("/repo".to_string(), "auth-token".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(status.repo_path, "/repo");
+}
 #[tokio::test]
 async fn get_fragment_metadata_from_hash_error_maps_to_typed_client_error() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
@@ -371,6 +397,7 @@ async fn disconnected_on_closed_stream() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await;
@@ -435,6 +462,7 @@ async fn concurrent_in_flight_requests() {
                     user_id: String::new(),
                     user_email: String::new(),
                     crash_reporting_enabled: true,
+                    codebase_index_limits: None,
                 },
             )
             .await

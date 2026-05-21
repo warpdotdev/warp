@@ -1,5 +1,6 @@
-use futures::stream::AbortHandle;
 use std::time::Duration;
+
+use futures::stream::AbortHandle;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext};
 

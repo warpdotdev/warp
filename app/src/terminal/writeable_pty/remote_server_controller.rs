@@ -1,29 +1,27 @@
-use crate::auth::auth_state::AuthStateProvider;
-use crate::remote_server::auth_context::server_api_auth_context;
-use instant::Instant;
-use remote_server::auth::RemoteServerAuthContext;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use instant::Instant;
+use remote_server::auth::RemoteServerAuthContext;
+use remote_server::setup::{
+    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
+};
+use remote_server::transport::Error;
+use settings::Setting;
 use warp_core::SessionId;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
-use settings::Setting;
-
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-
+use super::pty_controller::{EventLoopSender, PtyController};
+use crate::auth::auth_state::AuthStateProvider;
+use crate::remote_server::auth_context::server_api_auth_context;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
 use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
-use remote_server::setup::{
-    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
-};
-use remote_server::transport::Error;
-
-use super::pty_controller::{EventLoopSender, PtyController};
 
 /// Per-SSH-init state machine. Encoding the state as an enum makes invalid
 /// transitions unrepresentable and ensures the `SessionInfo` stash cannot be
@@ -146,6 +144,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+            | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::ClientRequestFailed { .. }
             | RemoteServerManagerEvent::ServerMessageDecodingError { .. }

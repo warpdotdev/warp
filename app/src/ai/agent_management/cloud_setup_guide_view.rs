@@ -1,3 +1,25 @@
+use std::collections::HashMap;
+
+use serde::Serialize;
+use string_offset::CharCounter;
+use warp_completer::signatures::CommandRegistry;
+use warp_completer::util::parse_current_commands_and_tokens;
+use warp_completer::ParsedTokensSnapshot;
+use warp_core::report_error;
+use warp_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, NewScrollable};
+use warpui::elements::{
+    Align, Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Element, Empty, Expanded, Flex, Highlight, HighlightedRange,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::prelude::ChildView;
+use warpui::text_layout::TextStyle;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, SetupGuideStep};
 use crate::ai::blocklist::code_block::{
     render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
@@ -8,26 +30,6 @@ use crate::send_telemetry_from_ctx;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::WorkflowType;
-use serde::Serialize;
-use std::collections::HashMap;
-use string_offset::CharCounter;
-use warp_completer::signatures::CommandRegistry;
-use warp_completer::{util::parse_current_commands_and_tokens, ParsedTokensSnapshot};
-use warp_core::report_error;
-use warp_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
-    new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, NewScrollable},
-    Align, Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Expanded, Flex, Highlight, HighlightedRange,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::prelude::ChildView;
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ViewHandle;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 const DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const ENV_DOCS_URL: &str =

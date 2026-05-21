@@ -6,24 +6,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use instant::Instant;
-
-use crate::server::ids::SyncId;
-use crate::server::telemetry::ImageProtocol;
-use crate::terminal::model::block::BlockMetadata;
-use crate::terminal::model::block::SerializedBlock;
-use crate::terminal::model::completions::ShellCompletion;
-use crate::terminal::model::terminal_model::HandlerEvent;
-use crate::terminal::shell::ShellType;
-use crate::terminal::ClipboardType;
-use crate::util::AsciiDebug;
+pub use remote_server::setup::RemoteServerSetupState;
 
 use super::history::HistoryEntry;
 use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
 use super::model::block::BlockId;
 use super::model::session::{SessionId, SessionInfo};
 use super::model::terminal_model::{BlockIndex, ExitReason, TmuxInstallationState};
-
-pub use remote_server::setup::RemoteServerSetupState;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::ImageProtocol;
+use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
+use crate::terminal::model::completions::ShellCompletion;
+use crate::terminal::model::terminal_model::HandlerEvent;
+use crate::terminal::shell::ShellType;
+use crate::terminal::ClipboardType;
+use crate::util::AsciiDebug;
 
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.

@@ -1,8 +1,7 @@
 use chrono::{DateTime, Utc};
 
-use crate::{ChannelVersion, ChannelVersions};
-
 use super::*;
+use crate::{ChannelVersion, ChannelVersions};
 
 #[test]
 fn test_only_first_override_is_applied() {

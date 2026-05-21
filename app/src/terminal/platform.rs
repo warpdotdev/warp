@@ -1,5 +1,3 @@
-#[allow(unused_imports)]
-use crate::{Assets, ASSETS};
 use anyhow::Result;
 
 pub fn init() -> Result<()> {
@@ -12,16 +10,15 @@ pub fn init() -> Result<()> {
 mod mac {
     #![allow(clippy::let_unit_value)]
 
-    use super::*;
-    use libc::{setlocale, LC_ALL, LC_CTYPE};
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-    use std::{
-        env,
-        ffi::{CStr, CString},
-        str,
-    };
+    use std::ffi::{CStr, CString};
+    use std::{env, str};
 
+    use libc::{setlocale, LC_ALL, LC_CTYPE};
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
     use warpui::platform::mac::utils::nsstring_as_str;
+
+    use super::*;
 
     const FALLBACK_LOCALE: &str = "UTF-8";
 

@@ -1,10 +1,12 @@
-use super::*;
-use crate::editor::EditorView;
-use itertools::Itertools;
 use std::collections::HashSet;
+
+use itertools::Itertools;
 use unindent::Unindent;
 use warpui::platform::WindowStyle;
 use warpui::{App, ViewHandle};
+
+use super::*;
+use crate::editor::EditorView;
 
 /// Helper function for testing vim mode commands.
 /// This creates an editor with the given content and enters Vim Normal mode,

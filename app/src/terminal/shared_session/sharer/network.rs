@@ -3,10 +3,11 @@
 //! Currently there is no way to share a session from wasm.
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::editor::ReplicaId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
-use crate::terminal::shared_session::{connect_endpoint, max_session_size};
+use std::collections::HashMap;
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_channel::Receiver;
 use byte_unit::{Byte, UnitType};
 use futures_util::stream::AbortHandle;
@@ -24,32 +25,15 @@ use session_sharing_protocol::common::{
     WriteToPtyRequestId,
 };
 use session_sharing_protocol::sharer::{
-    AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, LinkAccessLevelUpdateResponse,
-    ReconnectPayload, ReconnectToken, RemoveGuestResponse, RoleUpdateReason,
-    SessionTerminatedReason, TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
-    UpstreamMessage,
+    AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, FailedToInitializeSessionReason,
+    LinkAccessLevelUpdateResponse, ReconnectPayload, ReconnectToken, RemoveGuestResponse,
+    RoleUpdateReason, SessionEndedReason, SessionTerminatedReason, TeamAccessLevelUpdateResponse,
+    UpdatePendingUserRoleResponse, UpstreamMessage,
 };
-use session_sharing_protocol::sharer::{FailedToInitializeSessionReason, SessionEndedReason};
-use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
-
-use std::pin::pin;
-use std::sync::Arc;
-use std::time::Duration;
-
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
-
-use crate::editor::CrdtOperation;
-use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::{
-    EventNumber, SharedSessionScrollbackType, SELECTION_THROTTLE_PERIOD,
-};
-use crate::terminal::TerminalModel;
-use crate::throttle::throttle;
-
 #[cfg(not(any(test, feature = "integration_tests")))]
 use {
     crate::{report_error, server::telemetry::telemetry_context},
@@ -57,6 +41,18 @@ use {
     session_sharing_protocol::sharer::SessionSourceType,
     session_sharing_protocol::sharer::{InitPayload, Lifetime},
 };
+
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::editor::{CrdtOperation, ReplicaId};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
+use crate::terminal::shared_session::{
+    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
+    SELECTION_THROTTLE_PERIOD,
+};
+use crate::terminal::TerminalModel;
+use crate::throttle::throttle;
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);

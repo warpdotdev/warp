@@ -11,12 +11,17 @@ use warpui::elements::{
     MouseStateHandle, Radius, Text,
 };
 use warpui::fonts::{Properties, Style, Weight};
-use warpui::platform::Cursor;
+use warpui::keymap::Keystroke;
+use warpui::platform::{Cursor, OperatingSystem};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
+use super::model_spec_scores::{
+    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
+    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+};
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
     is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
@@ -30,19 +35,12 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    default_navigation_message_items, styles as inline_styles, DetailsRenderConfig,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
 };
-use crate::terminal::input::inline_menu::{styles as inline_styles, DetailsRenderConfig};
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
-
-use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
-};
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {

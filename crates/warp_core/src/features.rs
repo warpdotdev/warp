@@ -1,5 +1,4 @@
 pub use warp_features::*;
-
 use warpui::platform::menu::{CustomMenuItem, MenuItem, MenuItemPropertyChanges};
 fn feature_flag_menu_item(flag: FeatureFlag) -> MenuItem {
     MenuItem::Custom(CustomMenuItem::new(

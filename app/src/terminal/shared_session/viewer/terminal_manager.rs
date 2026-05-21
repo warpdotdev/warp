@@ -1,3 +1,6 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use async_broadcast::InactiveReceiver;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
@@ -10,16 +13,20 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
-use std::any::Any;
-
-use std::sync::Arc;
-
 use warpui::{
     AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use super::event_loop::SharedSessionInitialLoadMode;
+use super::network::{
+    agent_prompt_failure_reason_string, command_execution_failure_reason_string,
+    control_action_failure_reason_string, session_ended_reason_string,
+    viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
+};
+use super::orchestration_viewer_model::OrchestrationViewerModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
@@ -29,23 +36,19 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
 use crate::features::FeatureFlag;
-use crate::pane_group::pane::DetachType;
-
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-
+use crate::pane_group::pane::DetachType;
+use crate::pane_group::TerminalViewResources;
 use crate::settings::{DebugSettings, InputModeSettings, WarpPromptSeparator};
-use crate::terminal::event_listener::ChannelEventListener;
-
-use crate::terminal::input::CommandExecutionSource;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::terminal::PTY_READS_BROADCAST_CHANNEL_SIZE;
-
-use crate::terminal::session_settings::SessionSettings;
-
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::shared_handlers::{
@@ -55,20 +58,12 @@ use crate::terminal::shared_session::shared_handlers::{
 };
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list};
-
-use super::event_loop::SharedSessionInitialLoadMode;
-use super::network::{
-    agent_prompt_failure_reason_string, command_execution_failure_reason_string,
-    control_action_failure_reason_string, session_ended_reason_string,
-    viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
-};
-use super::orchestration_viewer_model::OrchestrationViewerModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
-use crate::terminal::{Event as TerminalViewEvent, TerminalModel, TerminalView};
+use crate::terminal::{
+    Event as TerminalViewEvent, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+};
 use crate::view_components::ToastFlavor;
-use crate::{pane_group::TerminalViewResources, terminal::model::session::Sessions};
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the

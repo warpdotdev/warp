@@ -1,16 +1,16 @@
-use crate::auth::auth_state::AuthState;
-use crate::code_review::diff_state::DiffMode;
-use crate::remote_server::diff_state_tracker::DiffModelKey;
 use std::collections::HashMap;
 use std::sync::Arc;
+
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
-
 use super::super::proto::{Authenticate, Initialize};
 use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{PendingFileOps, ServerModel};
+use crate::auth::auth_state::AuthState;
+use crate::code_review::diff_state::DiffMode;
+use crate::remote_server::diff_state_tracker::DiffModelKey;
 
 fn test_model(app: &mut App) -> ServerModel {
     ServerModel {
@@ -57,6 +57,7 @@ fn initialize_with_auth_token_stores_token() {
             user_id: "test-user-id".to_string(),
             user_email: "test@example.com".to_string(),
             crash_reporting_enabled: true,
+            codebase_index_limits: None,
         });
 
         assert_eq!(model.auth_token().as_deref(), Some("initial-token"));
@@ -80,6 +81,7 @@ fn empty_initialize_clears_auth_context() {
             user_id: "test-user-id".to_string(),
             user_email: "test@example.com".to_string(),
             crash_reporting_enabled: true,
+            codebase_index_limits: None,
         });
 
         model.apply_initialize_auth(&Initialize {
@@ -87,6 +89,7 @@ fn empty_initialize_clears_auth_context() {
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
+            codebase_index_limits: None,
         });
 
         assert_eq!(model.auth_token().as_deref(), None);
@@ -104,6 +107,7 @@ fn authenticate_with_auth_token_replaces_auth_token() {
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
+            codebase_index_limits: None,
         });
 
         model.handle_authenticate(Authenticate {
@@ -123,6 +127,7 @@ fn empty_authenticate_clears_auth_token() {
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
+            codebase_index_limits: None,
         });
 
         model.handle_authenticate(Authenticate {

@@ -24,18 +24,17 @@ mod event_loop;
 mod logging;
 mod protocol;
 
-use command::blocking::Command;
-use std::{collections::HashSet, os::unix::prelude::*, sync::Arc};
+use std::collections::HashSet;
+use std::os::unix::prelude::*;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use command::blocking::Command;
 use cvt::cvt;
 use nix::sys::socket;
 use parking_lot::Mutex;
 
-use crate::init_feature_flags;
-
 pub use self::client::TerminalServerClient;
-
 use super::spawner::PtyHandle;
 
 /// The file descriptor of the Unix domain socket where the terminal server will
@@ -61,7 +60,7 @@ pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
     // We initialize context-independent feature flags early, as the terminal
     // server process may need to reference them. User-controlled flags are overridden
     // soon after.
-    init_feature_flags();
+    crate::features::init_feature_flags();
     let event_loop = event_loop::EventLoop::new(args);
     event_loop.run()
 }

@@ -26,37 +26,238 @@ mod terminal_message_bar;
 mod universal;
 pub mod user_query;
 
-pub use self::handoff_compose::{HandoffComposeState, HandoffComposeStateEvent};
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Write;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
+use ai::skills::SkillReference;
+use async_channel::Sender;
+use base64::Engine as _;
+#[cfg(feature = "local_fs")]
+use diesel::SqliteConnection;
+use futures::stream::AbortHandle;
+use futures::FutureExt as _;
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use ordered_float::Float;
+use parking_lot::FairMutex;
+#[cfg(feature = "local_fs")]
+use parking_lot::Mutex;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
+use settings::{Setting as _, ToggleableSetting};
+use string_offset::{ByteOffset, CharOffset};
+use vec1::Vec1;
+use vim::vim::{VimHandler, VimMode};
+use warp_cli::agent::Harness;
+use warp_completer::completer::{
+    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
+    MatchStrategy, MatchType, PathSeparators, SuggestionResults,
+};
+use warp_completer::meta::{HasSpan, Spanned};
+use warp_completer::parsers::simple::command_at_cursor_position;
+use warp_completer::parsers::LiteCommand;
+use warp_completer::signatures::CommandRegistry;
+use warp_completer::util::parse_current_commands_and_tokens;
+use warp_core::context_flag::ContextFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::user_preferences::GetUserPreferences as _;
+use warp_editor::editor::NavigationKey;
+use warp_util::path::ShellFamily;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::clipboard::{ClipboardContent, ImageData};
+use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
+use warpui::color::ColorU;
+use warpui::elements::{
+    resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
+    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
+    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
+    ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
+};
+pub use warpui::elements::{ParentElement as _, Stack};
+pub use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
+use warpui::platform::OperatingSystem;
+use warpui::presenter::ChildView;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warpui::r#async::FutureExt as _;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::text_layout::TextStyle;
+use warpui::ui_components::chip::Chip;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::IntoPixels;
+pub use warpui::WindowId;
+use warpui::{
+    end_trace, start_trace, AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle,
+    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+};
+
+use self::decorations::InputBackgroundJobOptions;
+pub use self::handoff_compose::{HandoffComposeState, HandoffComposeStateEvent};
+use super::alias::is_expandable_alias;
+use super::block_list_viewport::InputMode;
+use super::event::{BlockCompletedEvent, BlockType, UserBlockCompleted};
+use super::ligature_settings::LigatureSettings;
+use super::model::block::{
+    AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata,
+};
+use super::model::session::{Session, SessionId, SessionType, Sessions};
+use super::prompt_render_helper::{
+    should_render_prompt_on_same_line, should_render_prompt_using_editor_decorator_elements,
+    PromptRenderHelper, SameLinePromptElements,
+};
+use super::safe_mode_settings::{
+    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+};
+use super::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use super::settings::{SpacingMode, TerminalSettings, TerminalSettingsChangedEvent};
+use super::shared_session::presence_manager::PresenceManager;
+use super::shared_session::viewer::history_model::SharedSessionHistoryModel;
+use super::shared_session::SharedSessionStatus;
+use super::shell::ShellType;
+use super::universal_developer_input::{
+    UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
+};
+use super::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use super::view::inline_banner::{
+    PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
+    ZeroStatePromptSuggestionType,
+};
+use super::view::{
+    ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
+};
+use super::warpify::SubshellSource;
+use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentExchangeId, CancellationReason};
+use crate::ai::agent::{AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType};
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
+use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::ai::block_context::BlockContext;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
-use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EphemeralMessageModel};
+use crate::ai::blocklist::agent_view::{
+    is_in_cloud_context, AgentInputFooter, AgentInputFooterEvent, AgentViewController,
+    AgentViewEntryOrigin, EphemeralMessageModel,
+};
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
-use crate::ai::blocklist::{
-    ai_brand_color, ai_indicator_height, BlocklistAIActionModel, SlashCommandRequest,
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::touched_repos::{
+    pick_handoff_overlap_env, resolve_repo_for_path, TouchedWorkspace,
 };
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::PendingAttachment;
+use crate::ai::blocklist::{
+    ai_brand_color, ai_indicator_height, render_ai_agent_mode_icon, render_ai_follow_up_icon,
+    AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
+    SlashCommandRequest, BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
+    DRIVE_OBJECT_ATTACHMENT_REGEX,
+};
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::predict::next_command_model::{
+    is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
+    NextCommandSuggestionState, ZeroStateSuggestionInfo,
+};
+use crate::ai::predict::predict_am_queries::PredictAMQueriesRequest;
 use crate::ai::predict::prompt_suggestions::{
     has_pending_code_or_unit_test_prompt_suggestion,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai::skills::SkillManager;
-use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
+use crate::ai::skills::{SkillManager, SkillOpenOrigin, SkillTelemetryEvent};
+use crate::ai::AIRequestUsageModel;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::appearance::{Appearance, AppearanceEvent};
+use crate::channel::{Channel, ChannelState};
+use crate::cloud_object::model::actions::ObjectActionType;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::{CloudObject, Space};
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::code_review::diff_state::DiffMode;
+use crate::completer::SessionContext;
+use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
+use crate::context_chips::display_chip::DisplayChipConfig;
+use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
+use crate::debounce::debounce;
+use crate::editor::{
+    default_cursor_colors, position_id_for_cached_point, position_id_for_cursor,
+    position_id_for_first_cursor, AttachedImage as AttachedImageRawData, AutosuggestionLocation,
+    AutosuggestionType, BaselinePositionComputationMethod, CommandXRayAnchor, CrdtOperation,
+    CursorColors, DisplayPoint, EditOrigin, EditorAction, EditorDecoratorElements, EditorOptions,
+    EditorSnapshot, EditorView, Event as EditorEvent, ImageContextOptions, InteractionState,
+    PathTransformerFn, PlainTextEditorViewAction, Point as BufferPoint, PropagateAndNoOpEscapeKey,
+    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
+    TextRun, MAX_IMAGES_PER_CONVERSATION,
+};
+use crate::features::FeatureFlag;
+use crate::input_suggestions::{
+    Event as InputSuggestionsEvent, HistoryInputSuggestion, InputSuggestions,
+    TabCompletionsPreselectOption,
+};
+use crate::network::NetworkStatus;
 use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::PaneGroupAction;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::prefix::longest_common_prefix;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
+use crate::resource_center::{
+    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipHint, TipsCompleted,
+};
+use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
+use crate::search::ai_context_menu::search::is_valid_search_query;
+use crate::search::ai_context_menu::view::AIContextMenuAction;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-
-use crate::server::telemetry::{PaletteSource, SlashCommandAcceptedDetails, SlashMenuSource};
-use crate::settings::PrivacySettings;
+use crate::search::QueryFilter;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::SyncId;
+use crate::server::server_api::ai::AttachmentFileInfo;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::server_api::ai::AttachmentInput;
+use crate::server::server_api::ServerApi;
+use crate::server::telemetry::{
+    AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
+    AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
+    EnvVarTelemetryMetadata, PaletteSource, SlashCommandAcceptedDetails, SlashMenuSource,
+    TelemetryEvent, WorkflowTelemetryMetadata,
+};
+use crate::session_management::SessionNavigationPromptElements;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
+    AppEditorSettingsChangedEvent, InputModeSettings, InputSettings, InputSettingsChangedEvent,
+    PrivacySettings, MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT,
+};
+use crate::settings_view::{flags, SettingsSection};
 use crate::suggestions::ignored_suggestions_model::{
     IgnoredSuggestionsModel, IgnoredSuggestionsModelEvent, SuggestionType,
 };
@@ -96,297 +297,49 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::package_installers::command_at_cursor_has_common_package_installer_prefix;
 use crate::terminal::prompt_render_helper::should_render_ps1_prompt;
 use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
-use crate::terminal::view::CodeDiffAction;
-use crate::terminal::CLIAgent;
-use crate::util::bindings::keybinding_name_to_normalized_string;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor;
-use crate::util::truncation::truncate_from_end;
-#[allow(unused_imports)]
-use crate::ASSETS;
-
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
-#[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
-
-use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
-use crate::ai::block_context::BlockContext;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
-use crate::ai::blocklist::agent_view::{
-    is_in_cloud_context, AgentInputFooter, AgentInputFooterEvent, AgentViewController,
-};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    pick_handoff_overlap_env, resolve_repo_for_path, TouchedWorkspace,
-};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
-use crate::ai::blocklist::AttachmentType;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::PendingAttachment;
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::server::server_api::ai::AttachmentFileInfo;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::server::server_api::ai::AttachmentInput;
 use crate::terminal::view::ambient_agent::{
     AuthSecretFtuxView, AuthSecretFtuxViewEvent, AuthSecretSelector, AuthSecretSelectorEvent,
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
+use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
+use crate::terminal::view::CodeDiffAction;
+use crate::terminal::CLIAgent;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::user_config::WarpConfig;
+use crate::util::bindings::{self, keybinding_name_to_normalized_string, CustomAction};
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor;
+use crate::util::image::MAX_IMAGE_COUNT_FOR_QUERY;
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::{DismissibleToast, ToastFlavor};
+use crate::voltron::{
+    Voltron, VoltronEvent, VoltronFeatureView, VoltronFeatureViewHandle, VoltronFeatureViewMeta,
+    VoltronItem, VoltronMetadata,
+};
+use crate::workflows::aliases::WorkflowAliases;
+use crate::workflows::command_parser::{
+    compute_workflow_display_data, compute_workflow_display_data_for_history_command,
+    compute_workflow_display_data_with_overrides, WorkflowArgumentIndex, WorkflowDisplayData,
+};
+use crate::workflows::info_box::{
+    WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView, WORKFLOW_PARAMETER_HIGHLIGHT_COLOR,
+};
+use crate::workflows::local_workflows::LocalWorkflows;
+use crate::workflows::workflow_enum::EnumVariants;
+use crate::workflows::{self, WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::{
+    CommandSearchOptions, ForkFromExchange, ForkedConversationDestination, InitContent,
+    RestoreConversationLayout, ToastStack, WorkspaceAction,
+};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+#[allow(unused_imports)]
+use crate::ASSETS;
 use crate::{
-    ai::{
-        agent::{AIAgentContext, EntrypointType},
-        blocklist::{
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            render_ai_agent_mode_icon, render_ai_follow_up_icon,
-            telemetry_banner::should_collect_ai_ugc_telemetry,
-            BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-            BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-            BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-            BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
-            DRIVE_OBJECT_ATTACHMENT_REGEX,
-        },
-        llms::{LLMPreferences, LLMPreferencesEvent},
-        predict::{
-            next_command_model::{
-                is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
-                NextCommandSuggestionState, ZeroStateSuggestionInfo,
-            },
-            predict_am_queries::PredictAMQueriesRequest,
-        },
-        AIRequestUsageModel,
-    },
-    ai_assistant::execution_context::WarpAiExecutionContext,
-    appearance::{Appearance, AppearanceEvent},
-    channel::{Channel, ChannelState},
-    cloud_object::{
-        model::{actions::ObjectActionType, persistence::CloudModel, view::CloudViewModel},
-        CloudObject, Space,
-    },
-    cmd_or_ctrl_shift,
-    code_review::diff_state::DiffMode,
-    completer::SessionContext,
-    context_chips::{
-        display::{PromptDisplay, PromptDisplayEvent},
-        display_chip::DisplayChipConfig,
-        prompt_type::PromptType,
-    },
-    debounce::debounce,
-    editor::{
-        default_cursor_colors, position_id_for_cached_point, position_id_for_cursor,
-        position_id_for_first_cursor, AttachedImage as AttachedImageRawData,
-        AutosuggestionLocation, AutosuggestionType, BaselinePositionComputationMethod,
-        CommandXRayAnchor, CrdtOperation, CursorColors, DisplayPoint, EditOrigin, EditorAction,
-        EditorDecoratorElements, EditorOptions, EditorSnapshot, EditorView, Event as EditorEvent,
-        ImageContextOptions, InteractionState, PathTransformerFn, PlainTextEditorViewAction,
-        Point as BufferPoint, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
-        PropagateHorizontalNavigationKeys, ReplicaId, TextColors, TextRun,
-        MAX_IMAGES_PER_CONVERSATION,
-    },
-    features::FeatureFlag,
-    input_suggestions::{
-        Event as InputSuggestionsEvent, HistoryInputSuggestion, InputSuggestions,
-        TabCompletionsPreselectOption,
-    },
-    network::NetworkStatus,
-    pane_group::PaneGroupAction,
-    prefix::longest_common_prefix,
-    report_if_error,
-    resource_center::{
-        mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipHint, TipsCompleted,
-    },
-    search::{
-        ai_context_menu::{
-            mixer::AIContextMenuSearchableAction, search::is_valid_search_query,
-            view::AIContextMenuAction,
-        },
-        QueryFilter,
-    },
-    send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::UpdateManager,
-        ids::SyncId,
-        server_api::ServerApi,
-        telemetry::{
-            AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
-            AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
-            EnvVarTelemetryMetadata, TelemetryEvent, WorkflowTelemetryMetadata,
-        },
-    },
-    session_management::SessionNavigationPromptElements,
-    settings::{
-        AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
-        AppEditorSettingsChangedEvent, InputModeSettings, InputSettings, InputSettingsChangedEvent,
-        MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT,
-    },
-    settings_view::{flags, SettingsSection},
-    terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView},
-    ui_components::{blended_colors, icons::Icon},
-    user_config::WarpConfig,
-    util::bindings::{self, CustomAction},
-    util::image::MAX_IMAGE_COUNT_FOR_QUERY,
-    view_components::{DismissibleToast, ToastFlavor},
-    voltron::{
-        Voltron, VoltronEvent, VoltronFeatureView, VoltronFeatureViewHandle,
-        VoltronFeatureViewMeta, VoltronItem, VoltronMetadata,
-    },
-    workflows::{
-        self,
-        aliases::WorkflowAliases,
-        command_parser::{
-            compute_workflow_display_data, compute_workflow_display_data_for_history_command,
-            compute_workflow_display_data_with_overrides, WorkflowArgumentIndex,
-            WorkflowDisplayData,
-        },
-        info_box::{
-            WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView, WORKFLOW_PARAMETER_HIGHLIGHT_COLOR,
-        },
-        local_workflows::LocalWorkflows,
-        workflow_enum::EnumVariants,
-        WorkflowSelectionSource, WorkflowSource, WorkflowType,
-    },
-    workspace::{
-        sync_inputs::SyncedInputState, CommandSearchOptions, ForkFromExchange,
-        ForkedConversationDestination, InitContent, RestoreConversationLayout, ToastStack,
-        WorkspaceAction,
-    },
-    workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-    AgentModeEntrypoint, ServerApiProvider,
+    cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx, AgentModeEntrypoint,
+    ServerApiProvider,
 };
-use warp_cli::agent::Harness;
-
-use ai::skills::SkillReference;
-use base64::Engine as _;
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
-use futures::FutureExt as _;
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use ordered_float::Float;
-use regex::Regex;
-use serde_json::json;
-use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
-use settings::{Setting as _, ToggleableSetting};
-use std::{
-    any::Any,
-    borrow::Cow,
-    collections::HashMap,
-    fmt::Write,
-    ops::Range,
-    path::{Path, PathBuf},
-    rc::Rc,
-    time::Duration,
-};
-use string_offset::CharOffset;
-use vec1::Vec1;
-use vim::vim::{VimHandler, VimMode};
-use warp_completer::util::parse_current_commands_and_tokens;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warpui::r#async::FutureExt as _;
-
-use warp_completer::{
-    completer::{
-        self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
-        MatchStrategy, MatchType, PathSeparators, SuggestionResults,
-    },
-    meta::{HasSpan, Spanned},
-    parsers::{simple::command_at_cursor_position, LiteCommand},
-    signatures::CommandRegistry,
-};
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_core::{
-    context_flag::ContextFlag,
-    ui::theme::{color::internal_colors, AnsiColorIdentifier},
-};
-use warp_editor::editor::NavigationKey;
-use warp_util::path::ShellFamily;
-use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    clipboard::{ClipboardContent, ImageData},
-    clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES,
-    color::ColorU,
-    elements::{
-        resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element,
-        EventHandler, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-        OffsetType, ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis,
-        Radius, ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor,
-        YAxisAnchor,
-    },
-    end_trace,
-    keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke},
-    platform::OperatingSystem,
-    presenter::ChildView,
-    r#async::SpawnedFutureHandle,
-    start_trace,
-    text_layout::TextStyle,
-    ui_components::{
-        chip::Chip,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    units::IntoPixels,
-    AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
-};
-pub use warpui::{
-    elements::{ParentElement as _, Stack},
-    geometry::vector::{vec2f, Vector2F},
-    WindowId,
-};
-
-use self::decorations::InputBackgroundJobOptions;
-use super::{
-    alias::is_expandable_alias,
-    block_list_viewport::InputMode,
-    event::{BlockCompletedEvent, BlockType, UserBlockCompleted},
-    ligature_settings::LigatureSettings,
-    model::{
-        block::{AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata},
-        session::{Session, SessionId, SessionType, Sessions},
-    },
-    prompt,
-    prompt_render_helper::{
-        should_render_prompt_on_same_line, should_render_prompt_using_editor_decorator_elements,
-        PromptRenderHelper, SameLinePromptElements,
-    },
-    safe_mode_settings::{
-        get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
-    },
-    session_settings::{SessionSettings, SessionSettingsChangedEvent},
-    settings::{SpacingMode, TerminalSettings, TerminalSettingsChangedEvent},
-    shared_session::{
-        presence_manager::PresenceManager, viewer::history_model::SharedSessionHistoryModel,
-        SharedSessionStatus,
-    },
-    shell::ShellType,
-    universal_developer_input::{
-        UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
-    },
-    view::{
-        ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-        inline_banner::{
-            PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
-            ZeroStatePromptSuggestionType,
-        },
-        ExecuteCommandEvent, SyncInputType, TerminalAction,
-        PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
-    },
-    warpify::SubshellSource,
-    History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig,
-};
-use async_channel::Sender;
-use futures::stream::AbortHandle;
-use parking_lot::FairMutex;
-#[cfg(feature = "local_fs")]
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use string_offset::ByteOffset;
 
 /// Drop target data for dropping content on the [`Input`].
 #[derive(Debug, Clone)]
@@ -5221,7 +5174,7 @@ impl Input {
         // Resolve the skill from SkillManager
         let skill = match SkillManager::handle(ctx)
             .as_ref(ctx)
-            .skill_by_reference(&reference)
+            .active_skill_by_reference(&reference, ctx)
         {
             Some(skill) => skill.clone(),
             None => {
@@ -5280,9 +5233,10 @@ impl Input {
         filename_arg: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use chrono::Local;
         use std::fs;
         use std::path::PathBuf;
+
+        use chrono::Local;
 
         let history = BlocklistAIHistoryModel::handle(ctx);
         let Some(conversation) = history

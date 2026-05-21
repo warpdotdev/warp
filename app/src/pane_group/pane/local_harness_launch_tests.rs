@@ -1,7 +1,10 @@
-use std::{ffi::OsString, fs, sync::Arc};
+use std::ffi::OsString;
+use std::fs;
+use std::sync::Arc;
 
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 
 use super::{
     build_local_claude_child_command, build_local_codex_child_command,
@@ -11,7 +14,6 @@ use super::{
 use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, HarnessConfig};
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
-use warp_core::features::FeatureFlag;
 
 struct EnvVarGuard {
     key: &'static str,

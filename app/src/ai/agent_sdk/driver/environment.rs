@@ -1,25 +1,27 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
-use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
-use crate::terminal::shell::ShellType;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
-use futures::{channel::oneshot, future::join_all};
+use futures::channel::oneshot;
+use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_completer::completer::CommandExitStatus;
-use warp_core::{command::ExitCode, safe_info, safe_warn};
-use warpui::{r#async::FutureExt, ModelContext, ModelSpawner, SingletonEntity};
-
-use super::{terminal::TerminalDriver, AgentDriverError};
 use warp_cli::agent::Harness;
+use warp_completer::completer::CommandExitStatus;
+use warp_core::command::ExitCode;
+use warp_core::{safe_info, safe_warn};
+use warpui::r#async::FutureExt;
+use warpui::{ModelContext, ModelSpawner, SingletonEntity};
+
+use super::terminal::TerminalDriver;
+use super::AgentDriverError;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
+use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -172,20 +174,10 @@ async fn prepare_environment_impl(
     }
 
     if !github_repos.is_empty() {
-        // Wait for codebase indexing for all repositories after running setup commands.
-        // We skip this if running in Docker sandboxes since they don't have a cache volume.
-        // We also skip this in Namespace to reduce startup time.
-        #[cfg(not(target_family = "wasm"))]
-        let should_wait_for_indexing = !matches!(
-            warp_isolation_platform::detect(),
-            Some(
-                warp_isolation_platform::IsolationPlatformType::DockerSandbox
-                    | warp_isolation_platform::IsolationPlatformType::Namespace
-            )
-        );
-        #[cfg(target_family = "wasm")]
-        let should_wait_for_indexing = true;
-
+        // We need to skip this if running in Docker sandboxes since they don't have a cache volume.
+        // For now, we're also skipping for self hosted and Namespace to reduce startup time, since
+        // we should only wait for indexing if there's an optimized cache volume and it's quick.
+        let should_wait_for_indexing = false;
         if should_wait_for_indexing {
             let repos_indexed = join_all(codebase_context_receivers);
             if repos_indexed
@@ -345,7 +337,10 @@ async fn subscribe_to_codebase_index_events(
             ctx.subscribe_to_model(
                 &CodebaseIndexManager::handle(ctx),
                 move |_, event, ctx| {
-                    if !matches!(event, CodebaseIndexManagerEvent::SyncStateUpdated) {
+                    if !matches!(
+                        event,
+                        CodebaseIndexManagerEvent::SyncStateUpdated { .. }
+                    ) {
                         return;
                     }
 

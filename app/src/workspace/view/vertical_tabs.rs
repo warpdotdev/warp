@@ -1,64 +1,15 @@
 pub mod telemetry;
 
-use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
-use crate::ai::agent_management::AgentNotificationsModel;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::conversation_status_ui::render_status_element;
-use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::code::editor::{add_color, remove_color};
-use crate::code::icon_from_file_path;
-use crate::safe_triangle::SafeTriangle;
-use crate::send_telemetry_from_app_ctx;
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::view::TerminalViewState;
-use crate::terminal::CLIAgent;
-use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
-use crate::workspace::view::vertical_tabs::telemetry::{
-    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
-};
-use crate::FeatureFlag;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::appearance::Appearance;
-use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType};
-use crate::editor::EditorView;
-use crate::pane_group::pane::IPaneType;
-use crate::pane_group::TerminalPane;
-use crate::pane_group::{
-    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, WorkflowPane,
-};
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::session_settings::SessionSettings;
-use crate::terminal::TerminalView;
-use crate::themes::theme::Fill as ThemeFill;
-use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icons::Icon as UiIcon;
-use crate::util::bindings::keybinding_name_to_display_string;
-use crate::util::color::Opacity;
-use crate::workspace::action::WorkspaceAction;
-use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-use crate::workspace::hoa_onboarding::HoaOnboardingStep;
-use crate::workspace::tab_settings::{
-    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
-    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
-    VerticalTabsPaneDropTargetData, Workspace,
-};
 use languages::language_by_local_filename;
-
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting as _;
-use std::path::{Path, PathBuf};
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_core::ui::color::blend::Blend;
@@ -66,13 +17,12 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
 use warp_core::ui::Icon as WarpIcon;
-use warpui::elements::DispatchEventResult;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
-    DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
-    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
+    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
     Shrinkable, Stack, Text,
@@ -84,6 +34,53 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
+
+use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
+use crate::ai::agent_management::AgentNotificationsModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_status_ui::render_status_element;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::code::editor::{add_color, remove_color};
+use crate::code::icon_from_file_path;
+use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::github_pr_display_text_from_url;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::editor::EditorView;
+use crate::pane_group::pane::IPaneType;
+use crate::pane_group::{
+    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
+};
+use crate::safe_triangle::SafeTriangle;
+use crate::tab::{tab_position_id, SelectedTabColor, TabData};
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::view::TerminalViewState;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::themes::theme::Fill as ThemeFill;
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
+use crate::ui_components::buttons::combo_inner_button;
+use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icons::Icon as UiIcon;
+use crate::util::bindings::keybinding_name_to_display_string;
+use crate::util::color::Opacity;
+use crate::workspace::action::WorkspaceAction;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
+use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::tab_settings::{
+    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
+    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use crate::workspace::view::vertical_tabs::telemetry::{
+    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
+    VerticalTabsPaneDropTargetData, Workspace,
+};
+use crate::{send_telemetry_from_app_ctx, FeatureFlag};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;

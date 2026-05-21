@@ -1,18 +1,18 @@
-use crate::elements::Fill;
-use crate::geometry::vector::vec2f;
-use crate::image_cache::StaticImage;
-use crate::{
-    elements::Point,
-    fonts::{FontId, GlyphId},
-    rendering,
-};
+use std::sync::Arc;
+
 use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use rstar::{primitives::Rectangle, RTree};
-use std::sync::Arc;
+use rstar::primitives::Rectangle;
+use rstar::RTree;
 use vec1::{vec1, Vec1};
+
+use crate::elements::{Fill, Point};
+use crate::fonts::{FontId, GlyphId};
+use crate::geometry::vector::vec2f;
+use crate::image_cache::StaticImage;
+use crate::rendering;
 
 #[derive(Clone)]
 pub struct Scene {

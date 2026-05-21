@@ -3,15 +3,20 @@
 //! active pane to that agent's conversation.
 
 use std::cell::RefCell;
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
+use warp_core::channel::ChannelState;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -27,7 +32,7 @@ use warpui::text_layout::{
     ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
 };
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
@@ -42,7 +47,9 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
     OrchestrationPillBarEvent, OrchestrationPillBarModel,
 };
-use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::agent_view::{
+    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
+};
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
@@ -59,9 +66,6 @@ use crate::ui_components::icon_with_status::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::EntityId;
 
 const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
@@ -252,6 +256,8 @@ pub enum OrchestrationPillBarAction {
     OpenInNewPane(AIConversationId),
     /// Menu item: open this child in a new tab.
     OpenInNewTab(AIConversationId),
+    /// Menu item: open this child's run in the Oz web app.
+    ViewInOz(AIConversationId),
     /// Menu item: stop the in-progress task.
     Stop(AIConversationId),
     /// Menu item: cancel and remove from local history.
@@ -445,6 +451,13 @@ impl OrchestrationPillBar {
                 ),
             ]
         };
+        if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
+            items.push(item(
+                "View in Oz",
+                Icon::Oz,
+                OrchestrationPillBarAction::ViewInOz(conversation_id),
+            ));
+        }
         // Stop is shown only while the agent is in progress; Kill becomes
         // Delete once the agent's run has finished (Success / Error /
         // Cancelled). Blocked is treated as not-yet-finished (the agent
@@ -493,6 +506,17 @@ impl OrchestrationPillBar {
         }
         self.menu_open_for = None;
         ctx.notify();
+    }
+
+    fn oz_run_url_for_conversation(
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> Option<String> {
+        let run_id = BlocklistAIHistoryModel::as_ref(app)
+            .conversation(&conversation_id)?
+            .run_id()?;
+        let oz_root_url = ChannelState::oz_root_url();
+        Some(format!("{oz_root_url}/runs/{run_id}"))
     }
 
     fn set_hovered_pill(
@@ -885,6 +909,18 @@ impl TypedActionView for OrchestrationPillBar {
                         },
                     ),
                 );
+            }
+            OrchestrationPillBarAction::ViewInOz(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::ViewInOz,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
+                self.close_menu(ctx);
+                if let Some(url) = Self::oz_run_url_for_conversation(*id, ctx) {
+                    ctx.open_url(&url);
+                }
             }
             OrchestrationPillBarAction::Stop(id) => {
                 self.emit_pill_bar_interaction(
@@ -1681,6 +1717,17 @@ fn render_pill(
     let status = spec.status;
     let is_remote_child = spec.is_remote_child;
 
+    // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
+    // the agent-view surface. Pre-blend to a solid so the avatar cutout ring
+    // matches the painted pill exactly.
+    let pill_rest_bg = Fill::from(agent_view_bg_color(app))
+        .blend(&internal_colors::fg_overlay_2(theme))
+        .into_solid();
+    let pill_hover_bg = Fill::from(agent_view_bg_color(app))
+        .blend(&internal_colors::fg_overlay_3(theme))
+        .into_solid();
+    let pill_text_color = internal_colors::text_main(theme, theme.background());
+
     // `Hoverable::new`'s build closure is `FnOnce` (see
     // `crates/warpui_core/src/elements/hoverable.rs`). We can therefore move
     // `label` into the closure by value rather than cloning it on every
@@ -1697,15 +1744,9 @@ fn render_pill(
                 theme.background().into_solid(),
             )
         } else if hover_state.is_hovered() || hover_state.is_clicked() || menu_is_open_for_this {
-            (
-                warp_core::ui::theme::color::internal_colors::neutral_3(theme),
-                warp_core::ui::theme::color::internal_colors::text_main(theme, theme.background()),
-            )
+            (pill_hover_bg, pill_text_color)
         } else {
-            (
-                warp_core::ui::theme::color::internal_colors::neutral_2(theme),
-                warp_core::ui::theme::color::internal_colors::text_main(theme, theme.background()),
-            )
+            (pill_rest_bg, pill_text_color)
         };
 
         let show_dots = show_overflow_button && (hover_state.is_hovered() || menu_is_open_for_this);

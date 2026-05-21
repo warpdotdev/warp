@@ -1,18 +1,17 @@
 //! A UI sample demonstrating how the SelectableArea element can be used.
 
 use markdown_parser::{parse_markdown, FormattedTextFragment, FormattedTextLine};
-use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
-use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Flex, FormattedTextElement, HeadingFontSizeMultipliers,
-        ParentElement, Rect, SelectableArea, SelectionHandle, Stack, Text,
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
 use warpui::color::ColorU;
-use warpui::elements::{Align, HighlightedHyperlink, HyperlinkLens};
+use warpui::elements::{
+    Align, ChildView, ConstrainedBox, Flex, FormattedTextElement, HeadingFontSizeMultipliers,
+    HighlightedHyperlink, HyperlinkLens, ParentElement, Rect, SelectableArea, SelectionHandle,
+    Stack, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 pub struct RootView {
     sub_view: ViewHandle<FormattedTextView>,

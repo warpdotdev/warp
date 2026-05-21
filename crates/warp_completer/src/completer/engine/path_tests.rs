@@ -1,8 +1,7 @@
 use warp_command_signatures::IconType;
 
-use crate::completer::testing::MockPathCompletionContext;
-
 use super::*;
+use crate::completer::testing::MockPathCompletionContext;
 
 #[cfg(windows)]
 mod windows_constants {

@@ -1,7 +1,5 @@
-use std::{
-    collections::{btree_map, BTreeMap},
-    ops::RangeFrom,
-};
+use std::collections::{btree_map, BTreeMap};
+use std::ops::RangeFrom;
 
 use get_size::GetSize;
 use string_offset::ByteOffset;

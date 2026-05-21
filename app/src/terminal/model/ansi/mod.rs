@@ -13,46 +13,41 @@ mod ansi_c_decoder;
 mod dcs_hooks;
 mod handler;
 
+use std::collections::HashMap;
+use std::fmt::Write;
+use std::str::FromStr as _;
+use std::time::Duration;
+use std::{io, str};
+
 use ansi_c_decoder::*;
+use byte_unit::{Byte, Unit as ByteUnit};
 pub use dcs_hooks::*;
 pub use handler::*;
+use hex;
 use instant::Instant;
 use itertools::Itertools;
+use lazy_static::lazy_static;
+use log::debug;
+use vte::{Params, Parser as VteParser, Perform as VtePerform};
 pub use warp_terminal::model::ansi::control_sequence_parameters::*;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warpui::color::ColorU;
 
+use super::kitty::parse_kitty_chunk;
+use super::terminal_model::TmuxInstallationState;
 use crate::features::FeatureFlag;
 use crate::terminal::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
-
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-
-use crate::terminal::model::tmux::{
-    commands::{parse_command, TmuxCommandResponse},
-    format_input,
-    parser::{TmuxControlModeHandler, TmuxControlModeParser, TmuxMessage},
+use crate::terminal::model::tmux::commands::{parse_command, TmuxCommandResponse};
+use crate::terminal::model::tmux::parser::{
+    TmuxControlModeHandler, TmuxControlModeParser, TmuxMessage,
 };
-
-use crate::terminal::model::tmux::ControlModeEvent;
+use crate::terminal::model::tmux::{format_input, ControlModeEvent};
 use crate::{safe_debug, safe_error};
-use byte_unit::{Byte, Unit as ByteUnit};
-use hex;
-use lazy_static::lazy_static;
-use log::debug;
-use std::collections::HashMap;
-use std::fmt::Write;
-
-use std::str::FromStr as _;
-use std::time::Duration;
-use std::{io, str};
-use vte::{Params, Parser as VteParser, Perform as VtePerform};
-use warpui::color::ColorU;
-
-use super::kitty::parse_kitty_chunk;
-use super::terminal_model::TmuxInstallationState;
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///

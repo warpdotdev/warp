@@ -1,28 +1,24 @@
-use std::{collections::HashMap, ffi::OsString, path::PathBuf, sync::Arc};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
-use crate::ai::{
-    agent_sdk::{
-        driver::{
-            harness::{
-                claude_code::prepare_claude_environment_config, harness_kind,
-                harness_model_env_vars, HarnessKind,
-            },
-            AgentDriverError,
-        },
-        task_env_vars, validate_cli_installed,
-    },
-    ambient_agents::{
-        task::{normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig},
-        AgentConfigSnapshot, AmbientAgentTaskId,
-    },
-};
-use crate::server::server_api::ai::AIClient;
-use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
-use crate::terminal::shell::ShellType;
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+
+use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
+use crate::ai::agent_sdk::driver::harness::{harness_kind, harness_model_env_vars, HarnessKind};
+use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::{task_env_vars, validate_cli_installed};
+use crate::ai::ambient_agents::task::{
+    normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig,
+};
+use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
+use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
+use crate::server::server_api::ai::AIClient;
+use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
+use crate::terminal::shell::ShellType;
 
 #[derive(Clone)]
 pub(super) struct PreparedLocalHarnessLaunch {

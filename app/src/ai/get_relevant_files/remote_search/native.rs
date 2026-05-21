@@ -1,28 +1,28 @@
-use ::ai::index::full_source_code_embedding::{
-    store_client::StoreClient, ContentHash, Fragment, RepoMetadata,
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use ::ai::index::full_source_code_embedding::store_client::StoreClient;
+use ::ai::index::full_source_code_embedding::{ContentHash, Fragment, RepoMetadata};
 use itertools::Itertools;
 use remote_server::proto::{
     file_context_proto, FragmentMetadata, LineRange, ReadFileContextFile, ReadFileContextRequest,
     ReadFileContextResponse,
 };
-use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 use string_offset::ByteOffset;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult},
-        blocklist::SessionContext,
-    },
-    features::FeatureFlag,
-    remote_server::codebase_index_model::{
-        RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
-    },
-    server::server_api::{ServerApi, ServerApiProvider},
+use crate::ai::agent::{
+    AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult,
 };
-
+use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::features::FeatureFlag;
+use crate::remote_server::codebase_index_model::{
+    RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
+};
+use crate::server::server_api::{ServerApi, ServerApiProvider};
 
 pub(super) enum RemoteSearchRequest {
     Pending(futures_util::stream::AbortHandle),
@@ -73,6 +73,18 @@ pub(super) fn send_request(
                     message: "Remote codebase search is unavailable because the remote server is not connected.".to_string(),
                 });
             };
+            if search_context.is_stale {
+                let remote_path = search_context.remote_path.clone();
+                let sync_requested = remote_server::manager::RemoteServerManager::handle(ctx)
+                    .update(ctx, |manager, ctx| {
+                        manager.trigger_codebase_incremental_sync(remote_path, ctx)
+                    });
+                if !sync_requested {
+                    log::warn!(
+                        "Remote codebase search is using a stale index because incremental sync could not be requested"
+                    );
+                }
+            }
             let store_client = ServerApiProvider::as_ref(ctx).get();
             let abort_handle = ctx
                 .spawn(
@@ -129,7 +141,7 @@ async fn execute_remote_codebase_search(
         .codebase_context_config()
         .await?
         .embedding_config;
-    log::info!(
+    log::debug!(
         "[Remote codebase indexing] Remote codebase search using embedding config: repo_path={repo_path} embedding_config={embedding_config:?}"
     );
     let candidate_hashes = store_client

@@ -1,41 +1,3 @@
-use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
-use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
-use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
-use crate::appearance::Appearance;
-use crate::drive::settings::WarpDriveSettings;
-use crate::features::FeatureFlag;
-use crate::pane_group::SplitPaneState;
-use crate::settings::{
-    AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
-};
-use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
-use crate::terminal::block_list_viewport::AutoscrollBehavior;
-use crate::terminal::input::inline_menu::InlineMenuPositioner;
-use crate::terminal::model::block::{Block, BlockSection};
-use crate::terminal::model::blocks::{
-    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
-};
-use crate::terminal::model::index::Point as IndexPoint;
-use crate::terminal::model::selection::{SelectAction, SelectionPoint};
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::view::TerminalAction;
-use crate::terminal::{grid_renderer, SizeInfo};
-use crate::themes::theme::{Fill, WarpTheme};
-use crate::ui_components::{self, icons as UIIcon};
-use crate::util::color::Opacity;
-use enum_iterator::Sequence;
-use itertools::Itertools;
-use parking_lot::FairMutex;
-use vec1::Vec1;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warp_util::user_input::UserInput;
-use warpui::platform::Cursor;
-use warpui::text::SelectionType;
-
-use pathfinder_color::ColorU;
-use session_sharing_protocol::common::{ParticipantId, Selection};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
@@ -43,31 +5,42 @@ use std::ops::{Deref, Range, RangeInclusive};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use enum_iterator::Sequence;
+use itertools::Itertools;
+use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
+use session_sharing_protocol::common::{ParticipantId, Selection};
+use vec1::Vec1;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_core::ui::builder::UiBuilder;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_util::user_input::UserInput;
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
     Axis, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Point, Radius, ScrollData, ScrollableElement, Stack, Text, ZIndex,
+    Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Point, Radius, SavePosition, ScrollData, ScrollableElement, Stack, Text,
+    ZIndex,
 };
-use warpui::event::{KeyState, ModifiersState};
+use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::platform::keyboard::KeyCode;
+use warpui::platform::Cursor;
+use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
-use warpui::{elements::Icon, ClipBounds};
 use warpui::{
-    elements::SavePosition, event::DispatchedEvent, AfterLayoutContext, AppContext, Element, Event,
-    EventContext, LayoutContext, PaintContext, SizeConstraint,
+    AfterLayoutContext, AppContext, ClipBounds, Element, EntityId, Event, EventContext,
+    LayoutContext, ModelHandle, PaintContext, SingletonEntity as _, SizeConstraint,
 };
-use warpui::{EntityId, ModelHandle, SingletonEntity as _};
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
 use super::blockgrid_renderer::GridRenderParams;
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
-
 use super::meta_shortcuts::handle_keystroke_despite_composing;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
@@ -86,15 +59,38 @@ use super::view::{
     SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
-use super::TerminalModel;
-use super::{heights_approx_eq, HEIGHT_FUDGE_FACTOR_LINES};
+use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
+use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
+use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
+use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
+use crate::appearance::Appearance;
+use crate::drive::settings::WarpDriveSettings;
+use crate::features::FeatureFlag;
+use crate::pane_group::SplitPaneState;
+use crate::settings::{
+    AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
+};
+use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
+use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
-use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::warpify::SubshellSource;
-
+use crate::terminal::input::inline_menu::InlineMenuPositioner;
+use crate::terminal::model::block::{Block, BlockSection};
+use crate::terminal::model::blocks::{
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
+};
 use crate::terminal::model::escape_sequences::{
     maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
 };
+use crate::terminal::model::index::Point as IndexPoint;
+use crate::terminal::model::selection::{SelectAction, SelectionPoint};
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::TerminalAction;
+use crate::terminal::warpify::SubshellSource;
+use crate::terminal::{grid_renderer, SizeInfo};
+use crate::themes::theme::{Fill, WarpTheme};
+use crate::ui_components::{self, icons as UIIcon};
+use crate::util::color::Opacity;
 
 /// The number of pixels at the bottom of padding where selection scrolling is performed.
 const BOTTOM_VERTICAL_MARGIN: f32 = 10.0;

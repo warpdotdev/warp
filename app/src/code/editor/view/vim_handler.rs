@@ -1,27 +1,24 @@
-use super::{CodeEditorEvent, CodeEditorView};
-use crate::code::editor::{
-    find::view::Event as FindViewEvent,
-    model::{CaseTransform, CodeEditorModel, LineBound},
-};
-use crate::{
-    view_components::find::FindDirection,
-    vim_registers::{RegisterContent, VimRegisters},
-};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
     InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectType, VimHandler, VimMode,
     VimMotion, VimOperand, VimOperator, VimTextObject, WordMotion,
 };
-use warp_editor::{
-    content::buffer::{
-        AutoScrollBehavior, BufferEditAction, EditOrigin, SelectionOffsets,
-        ToBufferCharOffset as _, VimInsertPoint,
-    },
-    model::{CoreEditorModel, PlainTextEditorModel},
-    render::model::AutoScrollMode,
-    selection::{TextDirection, TextUnit},
+use warp_editor::content::buffer::{
+    AutoScrollBehavior, BufferEditAction, EditOrigin, SelectionOffsets, ToBufferCharOffset as _,
+    VimInsertPoint,
 };
-use warpui::{text::point::Point, units::IntoPixels, SingletonEntity, ViewContext};
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::render::model::AutoScrollMode;
+use warp_editor::selection::{TextDirection, TextUnit};
+use warpui::text::point::Point;
+use warpui::units::IntoPixels;
+use warpui::{SingletonEntity, ViewContext};
+
+use super::{CodeEditorEvent, CodeEditorView};
+use crate::code::editor::find::view::Event as FindViewEvent;
+use crate::code::editor::model::{CaseTransform, CodeEditorModel, LineBound};
+use crate::view_components::find::FindDirection;
+use crate::vim_registers::{RegisterContent, VimRegisters};
 
 impl VimHandler for CodeEditorView {
     fn insert_char(&mut self, c: char, ctx: &mut ViewContext<Self>) {

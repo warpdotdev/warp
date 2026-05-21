@@ -1,14 +1,23 @@
-use crate::terminal::shell::ShellType;
-use remote_server::proto::OpenBufferSuccess;
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use ::ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
+    FragmentMetadataLookupError as LocalFragmentMetadataLookupError,
+};
+use ::ai::index::full_source_code_embedding::{
+    ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
+};
+use remote_server::proto::OpenBufferSuccess;
+use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
+use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
-use warp_core::safe_error;
-use warp_core::SessionId;
+use warp_core::{safe_error, SessionId};
+use warp_files::{FileModel, FileModelEvent};
+use warp_util::content_version::ContentVersion;
+use warp_util::file::FileId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
@@ -19,18 +28,6 @@ use super::codebase_index_status::{
     not_enabled_codebase_index_status, queued_codebase_index_status,
     unavailable_codebase_index_status,
 };
-use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
-use ::ai::index::full_source_code_embedding::manager::{
-    CodebaseIndexManager, CodebaseIndexManagerEvent,
-    FragmentMetadataLookupError as LocalFragmentMetadataLookupError,
-};
-use ::ai::index::full_source_code_embedding::{
-    ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
-};
-use warp_files::{FileModel, FileModelEvent};
-use warp_util::content_version::ContentVersion;
-use warp_util::file::FileId;
-
 use super::diff_state_proto;
 use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
@@ -39,11 +36,12 @@ use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
     get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
     save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
-    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexStatus,
-    CodebaseIndexStatusState, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
-    DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
-    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits,
+    CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
+    CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
+    DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
+    FailedFileRead, FileContextProto, FileOperationError,
+    FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -56,8 +54,9 @@ use super::proto::{
     WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
-
+use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
 use crate::code_review::diff_state::{DiffMode, FileStatusInfo};
+use crate::terminal::shell::ShellType;
 
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -790,56 +789,41 @@ impl ServerModel {
         }
 
         match event {
-            CodebaseIndexManagerEvent::SyncStateUpdated
-            | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. }
-            | CodebaseIndexManagerEvent::NewIndexCreated => {
-                self.push_all_codebase_index_statuses(ctx);
+            CodebaseIndexManagerEvent::SyncStateUpdated { root_path }
+            | CodebaseIndexManagerEvent::NewIndexCreated { root_path } => {
+                self.push_codebase_index_status(root_path, ctx);
             }
             CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
                 for repo_path in expired_metadata.iter() {
-                    self.send_server_message(
-                        None,
-                        None,
-                        server_message::Message::CodebaseIndexStatusUpdated(
-                            CodebaseIndexStatusUpdated {
-                                status: Some(disabled_codebase_index_status(
-                                    repo_path.to_string_lossy().to_string(),
-                                )),
-                            },
-                        ),
-                    );
+                    self.push_codebase_index_status_update(disabled_codebase_index_status(
+                        repo_path.to_string_lossy().to_string(),
+                    ));
                 }
             }
             CodebaseIndexManagerEvent::RetrievalRequestCompleted { .. }
-            | CodebaseIndexManagerEvent::RetrievalRequestFailed { .. } => {}
+            | CodebaseIndexManagerEvent::RetrievalRequestFailed { .. }
+            | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {}
         }
     }
+    fn push_codebase_index_status(&mut self, repo_path: &Path, ctx: &mut ModelContext<Self>) {
+        let Some(status) = self.codebase_index_status(repo_path, ctx) else {
+            return;
+        };
+        self.push_codebase_index_status_update(status);
+    }
 
-    fn push_all_codebase_index_statuses(&self, ctx: &mut ModelContext<Self>) {
-        let snapshot = self.codebase_index_statuses_snapshot(ctx);
-        let status_count = snapshot.statuses.len();
-        log::info!(
-            "[Remote codebase indexing] Daemon pushing codebase index status updates: status_count={status_count}"
+    fn push_codebase_index_status_update(&mut self, status: CodebaseIndexStatus) {
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
+                status: Some(status),
+            }),
         );
-        for status in snapshot.statuses {
-            log::debug!(
-                "[Remote codebase indexing] Daemon pushing codebase index status update: repo_path={} state={:?}",
-                status.repo_path,
-                CodebaseIndexStatusState::try_from(status.state)
-                    .unwrap_or(CodebaseIndexStatusState::Unspecified),
-            );
-            self.send_server_message(
-                None,
-                None,
-                server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
-                    status: Some(status),
-                }),
-            );
-        }
     }
 
     fn push_codebase_index_statuses_snapshot(
-        &self,
+        &mut self,
         conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -851,7 +835,7 @@ impl ServerModel {
         }
         let snapshot = self.codebase_index_statuses_snapshot(ctx);
         let status_count = snapshot.statuses.len();
-        log::info!(
+        log::debug!(
             "[Remote codebase indexing] Daemon pushing bootstrap codebase index statuses snapshot: conn_id={conn_id} bootstrap_status_count={status_count}"
         );
         self.send_server_message(
@@ -871,6 +855,18 @@ impl ServerModel {
             .map(|(repo_path, status)| codebase_index_status_to_proto(repo_path.as_path(), &status))
             .collect();
         CodebaseIndexStatusesSnapshot { statuses }
+    }
+
+    fn codebase_index_status(
+        &self,
+        repo_path: &Path,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<CodebaseIndexStatus> {
+        let index_manager = CodebaseIndexManager::handle(ctx);
+        index_manager
+            .as_ref(ctx)
+            .get_codebase_index_status_for_path(repo_path, ctx)
+            .map(|status| codebase_index_status_to_proto(repo_path, &status))
     }
 
     fn handle_index_codebase(
@@ -906,8 +902,37 @@ impl ServerModel {
                     Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
                 },
                 |manager, repo_path, ctx| {
-                    manager.index_directory(repo_path.to_path_buf(), ctx);
-                    queued_codebase_index_status(repo_path.to_string_lossy().to_string())
+                    if !manager.is_indexing_enabled() {
+                        log::info!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase because indexing is disabled: repo_path={}",
+                            repo_path.display()
+                        );
+                        not_enabled_codebase_index_status(repo_path.to_string_lossy().to_string())
+                    } else if !manager.can_create_new_indices() {
+                        let failure_message = "Cannot index remote codebase because the maximum number of codebase indexes has been reached.".to_string();
+                        log::warn!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
+                            repo_path.display()
+                        );
+                        unavailable_codebase_index_status(
+                            repo_path.to_string_lossy().to_string(),
+                            failure_message,
+                        )
+                    } else if manager.index_directory(repo_path.to_path_buf(), ctx) {
+                        Self::current_codebase_index_status_or_queued(manager, repo_path, ctx)
+                    } else {
+                        let failure_message =
+                            "Cannot index remote codebase because indexing did not start."
+                                .to_string();
+                        log::warn!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
+                            repo_path.display()
+                        );
+                        unavailable_codebase_index_status(
+                            repo_path.to_string_lossy().to_string(),
+                            failure_message,
+                        )
+                    }
                 },
                 ctx,
             )
@@ -930,7 +955,14 @@ impl ServerModel {
         let ResyncCodebase {
             repo_path,
             auth_token,
+            mode,
         } = msg;
+        let mode = match CodebaseResyncMode::try_from(mode) {
+            Ok(mode) => mode,
+            Err(_) => {
+                return invalid_request_response(format!("Invalid ResyncCodebase mode: {mode}"));
+            }
+        };
         let request = match self.prepare_codebase_index_request(
             CodebaseIndexRequestParams {
                 operation_name: "ResyncCodebase",
@@ -950,7 +982,21 @@ impl ServerModel {
             manager.with_indexed_codebase(
                 &repo_path,
                 |manager, indexed_repo_path, ctx| {
-                    manager.try_manual_resync_codebase(indexed_repo_path, ctx);
+                    match mode {
+                        CodebaseResyncMode::Full => {
+                            manager.try_manual_resync_codebase(indexed_repo_path, ctx);
+                        }
+                        CodebaseResyncMode::Incremental => {
+                            if let Err(error) =
+                                manager.trigger_incremental_sync_for_path(indexed_repo_path, ctx)
+                            {
+                                log::warn!(
+                                    "Failed to trigger remote codebase incremental sync: repo_path={} error={error}",
+                                    indexed_repo_path.display()
+                                );
+                            }
+                        }
+                    }
                     Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
                 },
                 |_, repo_path, _| {
@@ -1231,6 +1277,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
         self.apply_initialize_auth(&msg);
+        Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
 
         // Update crash reporting based on client-supplied preferences.
         #[cfg(feature = "crash_reporting")]
@@ -1261,6 +1308,31 @@ impl ServerModel {
         );
     }
 
+    fn apply_codebase_index_limits(
+        limits: Option<&CodebaseIndexLimits>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(limits) = limits else {
+            return;
+        };
+        let max_indices_allowed = limits.max_indices_allowed.map(|limit| limit as usize);
+        let max_files_per_repo = usize::try_from(limits.max_files_per_repo).unwrap_or(usize::MAX);
+        let embedding_generation_batch_size =
+            usize::try_from(limits.embedding_generation_batch_size).unwrap_or(usize::MAX);
+
+        log::info!(
+            "[Remote codebase indexing] Daemon applying codebase index limits: max_indices_allowed={max_indices_allowed:?} max_files_per_repo={max_files_per_repo} embedding_generation_batch_size={embedding_generation_batch_size}"
+        );
+        CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.update_max_limits(
+                max_indices_allowed,
+                max_files_per_repo,
+                embedding_generation_batch_size,
+                ctx,
+            );
+        });
+    }
+
     /// Sets the Sentry user identity from the stored `AuthState`.
     /// Called both during `Initialize` and when re-enabling crash reporting
     /// via `UpdatePreferences`.
@@ -1282,6 +1354,7 @@ impl ServerModel {
             "Handling UpdatePreferences: crash_reporting_enabled={}",
             msg.crash_reporting_enabled
         );
+        Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
         #[cfg(feature = "crash_reporting")]
         {
             if msg.crash_reporting_enabled {

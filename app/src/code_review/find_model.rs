@@ -1,9 +1,6 @@
-use crate::code::local_code_editor::LocalCodeEditorView;
-use crate::code_review::code_review_view::CodeReviewView;
-use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
-use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 use std::collections::HashMap;
 use std::ops::Range;
+
 use string_offset::CharOffset;
 #[cfg(not(target_family = "wasm"))]
 use warp_core::channel::ChannelState;
@@ -13,10 +10,13 @@ use warp_editor::content::find::SearchConfig;
 #[cfg(not(target_family = "wasm"))]
 use warp_editor::search::Searcher;
 use warp_editor::search::{RestorableSearchResults, SelectedResult};
-use warpui::WeakViewHandle;
-use warpui::{
-    r#async::SpawnedFutureHandle, AppContext, Entity, EntityId, ModelContext, ViewHandle,
-};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHandle};
+
+use crate::code::local_code_editor::LocalCodeEditorView;
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
+use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchMatch {

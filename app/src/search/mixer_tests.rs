@@ -1,14 +1,16 @@
+use std::collections::HashSet;
+use std::time::Duration;
+
+use ordered_float::OrderedFloat;
+use warpui::r#async::Timer;
+use warpui::{App, AppContext, Element};
+
 use super::*;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::search::item::SearchItem;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use ordered_float::OrderedFloat;
-use std::collections::HashSet;
-use std::time::Duration;
-use warpui::r#async::Timer;
-use warpui::{App, AppContext, Element};
 
 #[derive(Clone, Debug, PartialEq)]
 struct TestAction {

@@ -1,8 +1,9 @@
+use tests::buffer::RangesWhenEditing;
+use warpui::App;
+
 use super::*;
 use crate::editor::tests::{sample_text, RandomCharIter};
 use crate::editor::EditOrigin;
-use tests::buffer::RangesWhenEditing;
-use warpui::App;
 
 #[test]
 fn test_basic_folds() -> Result<()> {
@@ -125,8 +126,9 @@ fn test_merging_folds_via_edit() -> Result<()> {
 
 #[test]
 fn test_random_folds() -> Result<()> {
-    use super::super::buffer::ToPoint;
     use rand::prelude::*;
+
+    use super::super::buffer::ToPoint;
 
     for seed in 0..100 {
         println!("{seed:?}");

@@ -56,6 +56,7 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
@@ -69,12 +70,12 @@ vim = { path = "crates/vim" }
 virtual-fs = { path = "crates/virtual_fs" }
 voice_input = { path = "crates/voice_input" }
 warp = { path = "app" }
+warp_assets = { path = "crates/warp_assets" }
 warp_cli = { path = "crates/warp_cli" }
 warp_completer = { path = "crates/warp_completer" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_features = { path = "crates/warp_features" }
-remote_server = { path = "crates/remote_server" }
 warp_files = { path = "crates/warp_files" }
 warp_graphql = { path = "crates/graphql" }
 warp_graphql_schema = { path = "crates/warp_graphql_schema" }
@@ -116,6 +117,7 @@ bitflags = { version = "2.4.0", features = ["serde"] }
 bitflags-serde-legacy = "0.1.1"
 block = "0.1.6"
 blocking = "1.6.2"
+bounded-vec-deque = "0.1"
 bytemuck = { version = "1.13.1" }
 bytes = { version = "1.11.1", features = ["serde"] }
 command-corrections = { git = "https://github.com/warpdotdev/command-corrections.git", rev = "eae08c8c51d9bc9741fcb17eef2c21f696aebbeb" }
@@ -184,7 +186,7 @@ mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
-notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
+notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
@@ -209,6 +211,7 @@ prost = "0.14.3"
 prost-build = "0.14.3"
 prost-reflect = "0.16.3"
 prost-types = "0.14.3"
+qrcode = { version = "0.14.1", default-features = false }
 rand = "0.8.6"
 rangemap = "1.3.0"
 reqwest = { version = "0.13", features = [

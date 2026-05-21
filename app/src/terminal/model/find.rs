@@ -9,11 +9,9 @@ use regex_automata::util::syntax::Config;
 use regex_automata::{Anchored, Input};
 use warp_terminal::model::grid::CellType;
 
-use crate::terminal::model::index::Direction;
-use crate::terminal::model::index::Point;
-
 use super::grid::grapheme_cursor;
 use super::grid::grid_handler::GridHandler;
+use crate::terminal::model::index::{Direction, Point};
 
 pub type Match = RangeInclusive<Point>;
 

@@ -1,19 +1,21 @@
 mod renderer;
 mod renderer_manager;
 
-use crate::rendering::wgpu::Resources;
-use crate::{platform::mac::rendering::Device, rendering::GPUPowerPreference};
-use anyhow::{anyhow, Result};
-pub use renderer_manager::RendererManager;
-
-use crate::rendering::OnGPUDeviceSelected;
-use cocoa::{appkit::NSView, base::id};
-use pathfinder_geometry::vector::vec2f;
 use std::ptr::NonNull;
+
+use anyhow::{anyhow, Result};
+use cocoa::appkit::NSView;
+use cocoa::base::id;
+use pathfinder_geometry::vector::vec2f;
+pub use renderer_manager::RendererManager;
 use wgpu::rwh::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
     HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
+
+use crate::platform::mac::rendering::Device;
+use crate::rendering::wgpu::Resources;
+use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 
 impl Device {
     /// Constructs a new [`Device`] to render using WGPU.

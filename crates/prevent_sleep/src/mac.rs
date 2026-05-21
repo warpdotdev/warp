@@ -1,4 +1,5 @@
-use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSActivityOptions, NSObjectProtocol, NSProcessInfo, NSString};
 
 /// A guard object that prevents system sleep while it remains in scope.

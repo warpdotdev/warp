@@ -35,8 +35,15 @@ mod websockets;
 mod workflows;
 mod workspace;
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::Duration;
+
 pub use agent_mode::*;
 pub use ai_assistant::*;
+use anyhow::{anyhow, Result};
 pub use block_filtering::*;
 pub use bootstrapping::*;
 pub use code_review::*;
@@ -50,200 +57,141 @@ pub use keyboard_protocol::*;
 pub use launch_configs::*;
 pub use notebooks::*;
 pub use pane_restoration::*;
+use parking_lot::Mutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
 pub use remote_server::*;
 pub use rules::*;
+use rust_embed::RustEmbed;
 pub use secrets::*;
 pub use session_restoration::*;
+use settings::Setting as _;
 pub use settings_file_errors::*;
 pub use settings_file_hot_reload::*;
 pub use settings_file_migration::*;
 pub use settings_private::*;
+use shell::ShellType;
 pub use ssh::*;
 pub use subshell::*;
+use sum_tree::SeekBias;
 pub use sync_inputs::*;
+use sysinfo::{Pid, ProcessesToUpdate, System};
 pub use typeahead::*;
+use version_compare::Cmp;
 pub use video_recording::*;
+use warp::appearance::Appearance;
+use warp::features::FeatureFlag;
+use warp::integration_testing::assertions::{
+    assert_binding_display_string, go_offline, go_online, join_a_workspace,
+};
+use warp::integration_testing::block::{
+    assert_block_visible, assert_bottom_of_block_approx_at, assert_num_blocks_in_model,
+    BlockPosition, LinePosition,
+};
+use warp::integration_testing::clipboard::assert_clipboard_contains_string;
+use warp::integration_testing::command_palette::{
+    close_command_palette, open_command_palette, open_command_palette_and_run_action, TestStepsExt,
+};
+use warp::integration_testing::context_chips::assert_working_dir_is_present;
+use warp::integration_testing::find::{Find, FindWithinBlockState};
+use warp::integration_testing::input::{
+    input_contains_string, input_is_empty, open_input_context_menu,
+};
+use warp::integration_testing::navigation_palette::{
+    check_recency, navigate_to_other_session_step, open_navigation_palette_step, RecentSession,
+};
+use warp::integration_testing::pane_group::assert_focused_pane_index;
+use warp::integration_testing::settings::{
+    assert_theme_chooser_contains, set_window_custom_size, toggle_setting,
+};
+use warp::integration_testing::step::{
+    assert_no_pending_model_events, new_step_with_default_assertions,
+    new_step_with_default_assertions_for_pane,
+};
+use warp::integration_testing::tab::{assert_pane_title, assert_tab_title, tab_title_step};
+use warp::integration_testing::terminal::util::{
+    current_shell_starter_and_version, ExactLine, ExpectedExitStatus,
+};
+use warp::integration_testing::terminal::{
+    assert_active_block_output, assert_active_block_output_for_single_terminal_in_tab,
+    assert_active_block_received_precmd, assert_alt_grid_active, assert_alt_screen_output,
+    assert_command_executed_for_single_terminal_in_tab, assert_context_menu_is_open,
+    assert_focused_editor_in_tab, assert_gap_exists, assert_input_at_bottom_of_terminal,
+    assert_input_at_top_of_terminal, assert_input_mode,
+    assert_input_not_at_either_edge_of_terminal, assert_long_running_block_executing,
+    assert_long_running_block_executing_for_single_terminal_in_tab, assert_model_term_mode,
+    assert_pane_group_has_state, assert_scroll_position,
+    assert_selected_block_index_is_first_renderable,
+    assert_selected_block_index_is_last_renderable, assert_single_terminal_in_tab_bootstrapped,
+    assert_snackbar_is_not_visible, assert_snackbar_is_visible, assert_terminal_bootstrapped,
+    assert_terminal_bootstrapping, assert_view_has_text_selection,
+    assert_waterfall_gap_empty_background_rendered, clear_blocklist_to_remove_bootstrapped_blocks,
+    execute_command_for_single_terminal_in_tab, execute_echo, execute_long_running_command,
+    execute_long_running_command_for_pane, execute_python_interpreter_in_tab,
+    open_context_menu_for_selected_block, performance_test, run_alt_grid_program, run_completer,
+    validate_git_branch, wait_until_bootstrapped_pane, wait_until_bootstrapped_single_pane_for_tab,
+};
+use warp::integration_testing::view_getters::{
+    pane_group_view, single_input_suggestions_view_for_tab, single_input_view_for_tab,
+    single_terminal_pane_view_for_tab, single_terminal_view, single_terminal_view_for_tab,
+    workspace_view,
+};
+use warp::integration_testing::warp_drive::{
+    assert_is_left_panel_open, assert_warp_drive_is_closed, assert_warp_drive_is_open,
+};
+use warp::integration_testing::window::{
+    add_and_save_window, add_window, add_window_and_check_bounds, close_window,
+    save_active_window_id,
+};
+use warp::integration_testing::workspace::assert_tab_count;
+use warp::integration_testing::{self, view_of_type};
+use warp::pane_group::AGENT_MODE_PANE_DEFAULT_MINIMUM_WIDTH;
+use warp::settings::{
+    CompletionsOpenWhileTyping, CtrlTabBehavior, MonospaceFontSize, TabBehavior, INPUT_MODE,
+};
+use warp::settings_view::keybindings::KeybindingsView;
+use warp::settings_view::{FeaturesPageAction, SettingsAction, SettingsSection, SettingsView};
+use warp::terminal::alt_screen_reporting::MouseReportingEnabled;
+use warp::terminal::available_shells::AvailableShells;
+use warp::terminal::block_list_viewport::{InputMode, ScrollLines, ScrollPosition};
+use warp::terminal::find::TerminalFindModel;
+use warp::terminal::input::{Input, InputSuggestionsMode};
+use warp::terminal::keys_settings::KeysSettings;
+use warp::terminal::model::ansi::{Handler, InitShellValue};
+use warp::terminal::model::blocks::{BlockHeightItem, BlockHeightSummary, TotalIndex};
+use warp::terminal::model::grid::grid_handler::TermMode;
+use warp::terminal::model::grid::Dimensions;
+use warp::terminal::model::terminal_model::BlockIndex;
+use warp::terminal::session_settings::{HonorPS1, SessionSettings, StartupShellOverride};
+use warp::terminal::view::{
+    BlockVisibilityMode, TerminalAction, TerminalViewState, ALIAS_EXPANSION_BANNER_SEEN_KEY,
+};
+use warp::terminal::{shell, TerminalView};
+use warp::util::bindings::CustomAction;
+use warp::workflows::categories::CategoriesView;
+use warp::workspace::{
+    Workspace, WorkspaceAction, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
+};
+use warp::{cmd_or_ctrl_shift, AgentModeEntrypoint};
+use warpui::event::KeyState;
+use warpui::integration::{AssertionOutcome, StepData, TestStep};
+use warpui::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::{OperatingSystem, TerminationMode};
+use warpui::units::Lines;
+use warpui::windowing::WindowManager;
+use warpui::{
+    async_assert, async_assert_eq, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
+};
 pub use websockets::*;
 pub use workflows::*;
 pub use workspace::*;
 
-use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc, time::Duration};
-
-use anyhow::{anyhow, Result};
-use parking_lot::Mutex;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
-use rust_embed::RustEmbed;
-use settings::Setting as _;
-use shell::ShellType;
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionOutcome, StepData, TestStep},
-    keymap::{Keystroke, Trigger},
-    platform::{OperatingSystem, TerminationMode},
-    windowing::WindowManager,
-    AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
-};
-
-use warp::{terminal::find::TerminalFindModel, util::bindings::CustomAction, AgentModeEntrypoint};
-
-use sysinfo::{Pid, ProcessesToUpdate, System};
-use version_compare::Cmp;
-use warpui::units::Lines;
-
-use crate::util::{skip_if_powershell_core_2303, ShellRcType};
-
 use crate::builder::cargo_target_tmpdir;
-use crate::user_defaults;
-use crate::Builder;
-use sum_tree::SeekBias;
-use warp::integration_testing::terminal::assert_focused_editor_in_tab;
-use warp::integration_testing::{
-    settings::assert_theme_chooser_contains,
-    tab::{assert_pane_title, assert_tab_title},
-};
-use warp::settings::CtrlTabBehavior;
-use warp::terminal::keys_settings::KeysSettings;
-use warp::terminal::{
-    model::{blocks::BlockHeightSummary, terminal_model::BlockIndex},
-    view::TerminalViewState,
-};
-use warp::workflows::categories::CategoriesView;
-use warp::{
-    appearance::Appearance,
-    cmd_or_ctrl_shift,
-    integration_testing::{
-        assertions::{assert_binding_display_string, go_offline, go_online},
-        block::{
-            assert_block_visible, assert_bottom_of_block_approx_at, assert_num_blocks_in_model,
-            BlockPosition, LinePosition,
-        },
-        clipboard::assert_clipboard_contains_string,
-        context_chips::assert_working_dir_is_present,
-        input::open_input_context_menu,
-        navigation_palette::{
-            check_recency, navigate_to_other_session_step, open_navigation_palette_step,
-            RecentSession,
-        },
-        settings::toggle_setting,
-        step::{
-            assert_no_pending_model_events, new_step_with_default_assertions,
-            new_step_with_default_assertions_for_pane,
-        },
-        tab::tab_title_step,
-        terminal::{
-            assert_active_block_output_for_single_terminal_in_tab,
-            assert_active_block_received_precmd,
-            assert_command_executed_for_single_terminal_in_tab, assert_context_menu_is_open,
-            assert_gap_exists, assert_input_at_bottom_of_terminal, assert_input_at_top_of_terminal,
-            assert_input_mode, assert_input_not_at_either_edge_of_terminal,
-            assert_long_running_block_executing_for_single_terminal_in_tab, assert_model_term_mode,
-            assert_pane_group_has_state, assert_scroll_position,
-            assert_selected_block_index_is_first_renderable,
-            assert_selected_block_index_is_last_renderable,
-            assert_single_terminal_in_tab_bootstrapped, assert_snackbar_is_not_visible,
-            assert_snackbar_is_visible, assert_view_has_text_selection,
-            assert_waterfall_gap_empty_background_rendered,
-            execute_command_for_single_terminal_in_tab, execute_echo, execute_long_running_command,
-            execute_python_interpreter_in_tab, performance_test, run_alt_grid_program,
-            run_completer, util::current_shell_starter_and_version, util::ExpectedExitStatus,
-            validate_git_branch, wait_until_bootstrapped_pane,
-            wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::{
-            single_input_suggestions_view_for_tab, single_input_view_for_tab,
-            single_terminal_view_for_tab,
-        },
-        view_of_type,
-        window::{add_window, add_window_and_check_bounds, close_window, save_active_window_id},
-    },
-    settings::{TabBehavior, INPUT_MODE},
-    settings_view::FeaturesPageAction,
-    terminal::{
-        alt_screen_reporting::MouseReportingEnabled,
-        block_list_viewport::{InputMode, ScrollPosition},
-        model::grid::grid_handler::TermMode,
-        session_settings::SessionSettings,
-        session_settings::{HonorPS1, StartupShellOverride},
-        view::BlockVisibilityMode,
-    },
-};
-
-use warp::terminal::view::ALIAS_EXPANSION_BANNER_SEEN_KEY;
-use warp::{
-    features::FeatureFlag,
-    integration_testing::{
-        find::{Find, FindWithinBlockState},
-        pane_group::assert_focused_pane_index,
-        settings::set_window_custom_size,
-        terminal::assert_terminal_bootstrapping,
-        view_getters::pane_group_view,
-        window::add_and_save_window,
-    },
-};
-use warp::{
-    integration_testing::warp_drive::{
-        assert_is_left_panel_open, assert_warp_drive_is_closed, assert_warp_drive_is_open,
-    },
-    settings::CompletionsOpenWhileTyping,
-};
-use warp::{
-    integration_testing::{
-        self,
-        input::{input_contains_string, input_is_empty},
-        terminal::{
-            clear_blocklist_to_remove_bootstrapped_blocks, open_context_menu_for_selected_block,
-        },
-    },
-    settings::MonospaceFontSize,
-};
-use warp::{
-    integration_testing::{assertions::join_a_workspace, view_getters::single_terminal_view},
-    terminal::view::TerminalAction,
-};
-use warp::{
-    integration_testing::{
-        command_palette::{
-            close_command_palette, open_command_palette, open_command_palette_and_run_action,
-            TestStepsExt,
-        },
-        view_getters::single_terminal_pane_view_for_tab,
-    },
-    pane_group::AGENT_MODE_PANE_DEFAULT_MINIMUM_WIDTH,
-};
-use warp::{
-    integration_testing::{terminal::util::ExactLine, workspace::assert_tab_count},
-    terminal::available_shells::AvailableShells,
-};
-use warp::{
-    integration_testing::{
-        terminal::{
-            assert_active_block_output, assert_alt_grid_active, assert_alt_screen_output,
-            assert_long_running_block_executing, assert_terminal_bootstrapped,
-            execute_long_running_command_for_pane,
-        },
-        view_getters::workspace_view,
-    },
-    workspace::WorkspaceAction,
-};
-use warp::{settings_view::SettingsAction, terminal::block_list_viewport::ScrollLines};
-use warp::{
-    settings_view::{keybindings::KeybindingsView, SettingsSection, SettingsView},
-    terminal::{
-        input::{Input, InputSuggestionsMode},
-        model::{
-            ansi::{Handler, InitShellValue},
-            blocks::{BlockHeightItem, TotalIndex},
-            grid::Dimensions,
-        },
-        shell, TerminalView,
-    },
-    workspace::{Workspace, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID},
-};
-use warpui::event::KeyState;
-use warpui::keymap::PerPlatformKeystroke;
-use warpui::platform::keyboard::KeyCode;
+use crate::util::{skip_if_powershell_core_2303, ShellRcType};
+use crate::{user_defaults, Builder};
 
 const ADD_NEXT_OCCURRENCE_KEYBINDING: &str = "ctrl-g";
 

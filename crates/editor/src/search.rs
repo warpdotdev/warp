@@ -3,19 +3,16 @@ use std::ops::Range;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::Fill;
-use warpui::{Entity, ModelContext, ModelHandle, r#async::SpawnedFutureHandle};
-
-use crate::{
-    content::{
-        anchor::Anchor,
-        buffer::{Buffer, BufferEvent},
-        find::{Query, SearchConfig, SearchResults},
-        selection_model::BufferSelectionModel,
-    },
-    render::model::Decoration,
-};
 use string_offset::CharOffset;
+use warp_core::ui::theme::Fill;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, ModelContext, ModelHandle};
+
+use crate::content::anchor::Anchor;
+use crate::content::buffer::{Buffer, BufferEvent};
+use crate::content::find::{Query, SearchConfig, SearchResults};
+use crate::content::selection_model::BufferSelectionModel;
+use crate::render::model::Decoration;
 
 #[cfg(test)]
 #[path = "search_tests.rs"]

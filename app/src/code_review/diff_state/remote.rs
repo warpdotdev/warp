@@ -10,9 +10,6 @@
 
 use std::sync::Arc;
 
-use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
-use crate::remote_server::proto;
-use crate::util::git::{BranchEntry, Commit, PrInfo};
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use warp_core::{HostId, SessionId};
 use warp_util::remote_path::RemotePath;
@@ -23,6 +20,9 @@ use super::{
     DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, DiffStats, FileDiffAndContent,
     GitDiffData, GitDiffWithBaseContent,
 };
+use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
+use crate::remote_server::proto;
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 
 // ── Internal state ────────────────────────────────────────────────
 
@@ -255,26 +255,22 @@ impl RemoteDiffStateModel {
 
     // ── Apply methods ──────────────────────────────────────────────────────
 
-    /// Re-emits `NewDiffsComputed` with the currently loaded diff data.
-    /// Called when a view subscribes after the initial snapshot was already processed.
-    pub(crate) fn replay_latest_diffs(&self, ctx: &mut ModelContext<Self>) {
-        match &self.state {
-            InternalRemoteDiffState::Loaded(diffs) => {
-                let base_content = GitDiffWithBaseContent::from(diffs);
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(Some(Arc::new(
-                    base_content,
-                ))));
-            }
-            InternalRemoteDiffState::NotInRepository => {
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
-            }
-            InternalRemoteDiffState::Error(_) => {
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
-            }
-            InternalRemoteDiffState::Loading | InternalRemoteDiffState::Disconnected => {
-                // Nothing to replay yet.
-            }
-        }
+    /// Requests a fresh diff snapshot from the remote server, including file
+    /// content. Unlike the former `replay_latest_diffs` (which reconstructed
+    /// data from cached `GitDiffData` and lost `content_at_head`), this sends
+    /// an actual `GetDiffState` RPC so the server can reload content from disk.
+    ///
+    /// Does NOT transition to `Loading` or emit `NewDiffsComputed(None)` first,
+    /// so existing views subscribed to this model won't flash a loading state.
+    /// The server response arrives as a `DiffStateSnapshotReceived` event and
+    /// flows through `apply_snapshot` normally.
+    pub(crate) fn fetch_fresh_snapshot(&self, ctx: &mut ModelContext<Self>) {
+        let remote_path = self.remote_path.clone();
+        let mode = self.mode.clone();
+        let session_id = self.session_id;
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.get_diff_state(session_id, remote_path, proto::DiffMode::from(&mode), ctx);
+        });
     }
 
     fn apply_snapshot(

@@ -1,21 +1,20 @@
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
+use settings::Setting as _;
 use warp_cli::agent::Harness;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor,
-        ParentElement as _, ParentOffsetBounds, Stack,
-    },
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
-
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-
-use settings::Setting as _;
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Stack,
+};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
 
 use crate::ai::blocklist::agent_view::agent_input_footer::AgentInputButtonTheme;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
@@ -32,7 +31,6 @@ use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
-use warp_editor::editor::NavigationKey;
 
 const ITEM_FONT_SIZE: f32 = 14.;
 
@@ -468,17 +466,18 @@ impl ModelSelector {
             .clone();
 
         let mut auto_choices = Vec::new();
-        let mut custom_choices = Vec::new();
         let mut other_choices = Vec::new();
         for llm in llm_preferences.get_base_llm_choices_for_agent_mode(ctx) {
+            if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
+                continue;
+            }
+
             let display_name = llm.menu_display_name();
             if !query.is_empty() && !display_name.to_lowercase().contains(query) {
                 continue;
             }
             if is_auto(llm) {
                 auto_choices.push(llm);
-            } else if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
-                custom_choices.push(llm);
             } else {
                 other_choices.push(llm);
             }
@@ -486,23 +485,17 @@ impl ModelSelector {
 
         let items: Vec<MenuItem<ModelSelectorAction>> = auto_choices
             .into_iter()
-            .chain(custom_choices)
             .chain(other_choices)
             .map(|llm| {
                 let display_name = llm.menu_display_name();
-                let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
-                let mut fields = MenuItemFields::new(display_name)
+                let fields = MenuItemFields::new(display_name)
+                    .with_icon(llm.provider.icon().unwrap_or(Icon::Oz))
                     .with_icon_size_override(ITEM_ICON_SIZE)
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_override_hover_background_color(hover_background)
                     .with_on_select_action(ModelSelectorAction::SelectModel(llm.id.clone()))
                     .with_disabled(llm.disable_reason.is_some());
-                if is_custom {
-                    fields = fields.with_right_side_icon(Icon::Key);
-                } else {
-                    fields = fields.with_icon(llm.provider.icon().unwrap_or(Icon::Oz));
-                }
                 MenuItem::Item(fields)
             })
             .collect();

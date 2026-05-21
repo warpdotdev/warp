@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{ProfileData as SessionSharingProfileData, Role};
 use warp_graphql::object_permissions::AccessLevel;
 
-use crate::{auth::UserUid, cloud_object::Owner, ids::ServerId};
+use crate::auth::UserUid;
+use crate::cloud_object::Owner;
+use crate::ids::ServerId;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SharingAccessLevel {

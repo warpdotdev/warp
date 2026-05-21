@@ -1,21 +1,18 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{io::BufReader, AsyncRead, AsyncWrite};
+use futures::io::BufReader;
+use futures::{AsyncRead, AsyncWrite};
 use warpui::r#async::executor::{Background, BackgroundTask};
 
-use crate::{
-    platform::server::{ConnectionImpl, ConnectionListenerImpl},
-    service::ServiceImpl,
+use super::protocol::{
+    receive_message, send_message, ConnectionAddress, ProtocolError, Request, Response,
 };
-
-use super::{
-    protocol::{
-        receive_message, send_message, ConnectionAddress, ProtocolError, Request, Response,
-    },
-    service::{service_id, Service, ServiceId},
-};
+use super::service::{service_id, Service, ServiceId};
+use crate::platform::server::{ConnectionImpl, ConnectionListenerImpl};
+use crate::service::ServiceImpl;
 
 /// Helper trait to enable storing a polymorphic collection of `ServiceImpl` implementions in
 /// `Server`.
