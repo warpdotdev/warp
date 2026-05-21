@@ -1,6 +1,9 @@
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use warp_core::SessionId;
+use warpui::r#async::executor;
 
+use super::*;
 use crate::proto::{
     client_message, get_fragment_metadata_from_hash_response, run_command_response, server_message,
     ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
@@ -10,10 +13,6 @@ use crate::proto::{
     MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
 };
 use crate::protocol;
-use warp_core::SessionId;
-use warpui::r#async::executor;
-
-use super::*;
 
 /// Generic mock server: loops reading ClientMessages and responds using the
 /// provided closure. Exits cleanly on EOF.

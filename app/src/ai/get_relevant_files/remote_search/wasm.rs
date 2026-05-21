@@ -2,11 +2,8 @@ use std::path::PathBuf;
 
 use warpui::{AppContext, ModelContext};
 
-use crate::ai::{
-    agent::{AIAgentActionId, SearchCodebaseFailureReason, SearchCodebaseResult},
-    blocklist::SessionContext,
-};
-
+use crate::ai::agent::{AIAgentActionId, SearchCodebaseFailureReason, SearchCodebaseResult};
+use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 
 pub(super) enum RemoteSearchRequest {

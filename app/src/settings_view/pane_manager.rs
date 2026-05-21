@@ -1,12 +1,10 @@
-use crate::pane_group::SettingsPane;
-use crate::{
-    pane_group::{PaneContent, PaneId},
-    PaneViewLocator,
-};
 use std::collections::HashMap;
+
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use super::SettingsView;
+use crate::pane_group::{PaneContent, PaneId, SettingsPane};
+use crate::PaneViewLocator;
 struct SettingsPaneData {
     locator: Option<PaneViewLocator>,
     settings_view: ViewHandle<SettingsView>,

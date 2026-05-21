@@ -1,26 +1,25 @@
 //! Utility functions for working with skills.
 
-use super::{SkillDescriptor, SkillManager};
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::view_util::render_provider_icon_button;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+
 use ai::skills::{
     home_skills_path, provider_rank, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use lazy_static::lazy_static;
 use siphasher::sip::SipHasher;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::path::Path;
-use std::path::PathBuf;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::prelude::MouseStateHandle;
-use warpui::EventContext;
-use warpui::{AppContext, Element, SingletonEntity};
+use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
+use super::{SkillDescriptor, SkillManager};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::view_util::render_provider_icon_button;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;
 
 lazy_static! {

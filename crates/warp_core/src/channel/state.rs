@@ -1,17 +1,16 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
+
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use std::{borrow::Cow, collections::HashSet};
 use url::{Origin, ParseError, Url};
 
-use crate::AppId;
-use crate::{
-    channel::config::{
-        ChannelConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination, WarpServerConfig,
-    },
-    features::FeatureFlag,
-};
-
 use super::Channel;
+use crate::channel::config::{
+    ChannelConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination, WarpServerConfig,
+};
+use crate::features::FeatureFlag;
+use crate::AppId;
 
 lazy_static! {
     static ref CHANNEL_STATE: Mutex<ChannelState> = Mutex::new(ChannelState::init());
@@ -424,10 +423,8 @@ fn app_id_from_bundle() -> Option<AppId> {
     #[cfg(all(target_os = "macos", not(feature = "test-util")))]
     #[allow(deprecated)]
     unsafe {
-        use cocoa::{
-            base::{id, nil},
-            foundation::NSBundle,
-        };
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::NSBundle;
         use objc::{msg_send, sel, sel_impl};
         use warpui::platform::mac::utils::nsstring_as_str;
 

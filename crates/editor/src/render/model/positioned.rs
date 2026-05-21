@@ -3,20 +3,17 @@
 
 use std::sync::Arc;
 
-use sum_tree::{Cursor, Dimension};
-use warpui::{
-    geometry::vector::Vector2F,
-    text_layout::Line,
-    units::{IntoPixels, Pixels},
-};
-
-use crate::render::layout::line_height;
 use string_offset::CharOffset;
+use sum_tree::{Cursor, Dimension};
+use warpui::geometry::vector::Vector2F;
+use warpui::text_layout::Line;
+use warpui::units::{IntoPixels, Pixels};
 
 use super::{
     BlockItem, BlockSpacing, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem,
     LaidOutTable, LayoutSummary, LineCount, Paragraph, ParagraphBlock, RenderContext, bounds,
 };
+use crate::render::layout::line_height;
 
 /// Wrapper to track an item's position, both in the buffer and on the screen.
 #[derive(Debug)]

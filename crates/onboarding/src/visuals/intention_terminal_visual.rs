@@ -2,9 +2,8 @@ use pathfinder_color::ColorU;
 use warpui::elements::Align;
 use warpui::Element;
 
-use crate::visuals::onboarding_visual::Rect;
-
 use super::onboarding_visual::{OnboardingVisual, Pill, RectPct};
+use crate::visuals::onboarding_visual::Rect;
 
 pub(crate) fn intention_terminal_visual(
     panel_background: ColorU,

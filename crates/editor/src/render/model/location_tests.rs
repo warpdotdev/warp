@@ -1,25 +1,25 @@
-use crate::content::text::{FormattedTable, table_cell_offset_maps};
-use crate::{
-    content::text::{BufferBlockStyle, CodeBlockType},
-    render::model::{
-        BlockItem, COMMAND_SPACING, CellLayout, ImageBlockConfig, LaidOutTable, Location,
-        ParagraphBlock, RenderState, TableBlockConfig, TableStyle,
-        location::{HitTestBlockType, HitTestOptions, WrapDirection},
-        table_offset_map,
-        test_utils::{
-            TEST_STYLES, laid_out_paragraph, laid_out_unordered_lists, layout_paragraphs,
-        },
-    },
-};
-use pathfinder_color::ColorU;
-use std::{cell::Cell, sync::Arc};
-use string_offset::CharOffset;
+use std::cell::Cell;
+use std::sync::Arc;
 
+use pathfinder_color::ColorU;
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::fonts::FamilyId;
 use warpui::text_layout::{CaretPosition, TextFrame};
 use warpui::units::IntoPixels;
+
+use crate::content::text::{
+    BufferBlockStyle, CodeBlockType, FormattedTable, table_cell_offset_maps,
+};
+use crate::render::model::location::{HitTestBlockType, HitTestOptions, WrapDirection};
+use crate::render::model::test_utils::{
+    TEST_STYLES, laid_out_paragraph, laid_out_unordered_lists, layout_paragraphs,
+};
+use crate::render::model::{
+    BlockItem, COMMAND_SPACING, CellLayout, ImageBlockConfig, LaidOutTable, Location,
+    ParagraphBlock, RenderState, TableBlockConfig, TableStyle, table_offset_map,
+};
 
 fn test_table_layout() -> LaidOutTable {
     let source = "aaa\tbbb\nccc\tddd\n";

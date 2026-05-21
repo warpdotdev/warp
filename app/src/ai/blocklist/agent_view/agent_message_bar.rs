@@ -25,10 +25,8 @@ use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
-use crate::ai::mcp::{
-    templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent},
-    TemplatableMCPServerManager,
-};
+use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };

@@ -8,9 +8,9 @@
 //! (`code_review::diff_state`, `util::git`) that are not available in the crate.
 use std::sync::Arc;
 
-use super::proto;
 use warp_util::standardized_path::StandardizedPath;
 
+use super::proto;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,

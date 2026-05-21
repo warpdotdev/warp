@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
-use warp_managed_secrets::{client::SecretOwner, ManagedSecretManager, ManagedSecretValue};
+use warp_managed_secrets::client::SecretOwner;
+use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;

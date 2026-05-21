@@ -1,15 +1,13 @@
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+
 use super::{
     AfterLayoutContext, AppContext, Element, EventContext, Fill, LayoutContext, PaintContext,
     Point, SizeConstraint,
 };
 use crate::event::DispatchedEvent;
-pub use crate::scene::Border;
-pub use crate::scene::{CornerRadius, DropShadow};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+pub use crate::scene::{Border, CornerRadius, DropShadow};
 pub struct Rect {
     background: Fill,
     drop_shadow: Option<DropShadow>,

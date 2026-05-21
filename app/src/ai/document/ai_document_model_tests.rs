@@ -1,6 +1,7 @@
+use std::ops::Range;
+
 use ai::diff_validation::DiffDelta;
 use chrono::Local;
-use std::ops::Range;
 use warpui::App;
 
 use super::*;

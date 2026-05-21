@@ -1,8 +1,10 @@
-use crate::notification::NotificationSendError;
-use crate::windowing::winit::{app::CustomEvent, notifications::NotificationInfo};
-use crate::WindowId;
 use tauri_winrt_notification::Toast;
 use winit::event_loop::EventLoopProxy;
+
+use crate::notification::NotificationSendError;
+use crate::windowing::winit::app::CustomEvent;
+use crate::windowing::winit::notifications::NotificationInfo;
+use crate::WindowId;
 
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,

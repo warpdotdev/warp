@@ -11,11 +11,15 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
+use background_task::spawn_find_task;
 use parking_lot::FairMutex;
 use sum_tree::SeekBias;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{EntityId, ModelContext};
+use work_queue::FindWorkQueue;
 
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
+use super::FindOptions;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::find::model::TerminalFindModel;
 use crate::terminal::model::blocks::{
@@ -27,12 +31,6 @@ use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
 use crate::terminal::model::TerminalModel;
 use crate::throttle::throttle;
 use crate::view_components::find::{FindDirection, FindEvent};
-
-use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
-use super::FindOptions;
-
-use background_task::spawn_find_task;
-use work_queue::FindWorkQueue;
 
 /// Status of an async find operation.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]

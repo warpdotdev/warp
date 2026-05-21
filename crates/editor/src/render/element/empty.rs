@@ -1,17 +1,11 @@
-use crate::{
-    content::text::BufferBlockStyle,
-    extract_block,
-    render::{
-        element::paint::CursorData,
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
-
-use super::{
-    RenderContext, RenderableBlock,
-    paragraph::paragraph_placeholder_text,
-    placeholder::{self, BlockPlaceholder},
-};
+use super::paragraph::paragraph_placeholder_text;
+use super::placeholder::{self, BlockPlaceholder};
+use super::{RenderContext, RenderableBlock};
+use crate::content::text::BufferBlockStyle;
+use crate::extract_block;
+use crate::render::element::paint::CursorData;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 /// Renderable representation of invisible rich-text items. This is used for the trailing newline
 /// marker.

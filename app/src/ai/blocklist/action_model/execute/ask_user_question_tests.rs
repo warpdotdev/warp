@@ -1,22 +1,24 @@
+use ai::agent::action::AskUserQuestionItem;
+use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
+use warpui::{App, EntityId, ModelHandle};
+
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionResultType};
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
-use crate::ai::execution_profiles::{
-    profiles::AIExecutionProfilesModel, AskUserQuestionPermission,
-};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
-use crate::server::{cloud_objects::update_manager::UpdateManager, sync_queue::SyncQueue};
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workspaces::{team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::LaunchMode;
-use ai::agent::action::AskUserQuestionItem;
-use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
-use warpui::{App, EntityId, ModelHandle};
 
 fn build_action(action_id: &str) -> AIAgentAction {
     AIAgentAction {

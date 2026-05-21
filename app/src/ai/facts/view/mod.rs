@@ -1,29 +1,29 @@
+use std::path::PathBuf;
+
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CrossAxisAlignment, Expanded, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
+    ScrollbarWidth,
+};
+use warpui::ui_components::components::UiComponent;
+use warpui::{
+    AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
+use super::{AIFact, CloudAIFact, CloudAIFactModel};
 use crate::cloud_object::{
     CloudObject, CloudObjectSyncStatus, GenericStringObjectFormat, JsonObjectType,
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::network::NetworkStatus;
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::{pane::view, BackingView, PaneConfiguration, PaneEvent};
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::SyncQueue;
-use std::path::PathBuf;
-use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        Align, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CrossAxisAlignment, Expanded, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
-        ScrollbarWidth,
-    },
-    ui_components::components::UiComponent,
-    AppContext, Element, Entity, FocusContext, ModelHandle, TypedActionView, View, ViewContext,
-};
-
 use crate::ui_components::icons::Icon;
-use warpui::elements::ChildView;
-use warpui::{SingletonEntity, ViewHandle};
-
-use super::{AIFact, CloudAIFact, CloudAIFactModel};
 
 pub mod rule;
 pub mod rule_editor;

@@ -1,11 +1,12 @@
-use super::blended_colors;
-use crate::appearance::Appearance;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Flex,
     MainAxisAlignment, MainAxisSize, ParentElement, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+
+use super::blended_colors;
+use crate::appearance::Appearance;
 
 const DIALOG_PADDING: f32 = 20.;
 

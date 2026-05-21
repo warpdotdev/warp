@@ -2,20 +2,18 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
-        ParentOffsetBounds, Stack,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
+use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-
-use settings::Setting as _;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Stack,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;

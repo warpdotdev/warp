@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use base64::{engine::general_purpose, Engine};
+use base64::engine::general_purpose;
+use base64::Engine;
 use futures::future::join_all;
 use futures::TryStreamExt as _;
 use mime_guess::from_path;

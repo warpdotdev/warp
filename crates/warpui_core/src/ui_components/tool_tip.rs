@@ -1,8 +1,7 @@
-use crate::{
-    elements::{Border, Container, Element, Flex, ParentElement, Text},
-    ui_components::components::{UiComponent, UiComponentStyles},
-};
 use pathfinder_color::ColorU;
+
+use crate::elements::{Border, Container, Element, Flex, ParentElement, Text};
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
 
 pub struct Tooltip {
     label: String,

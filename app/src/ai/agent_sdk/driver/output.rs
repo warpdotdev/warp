@@ -1,26 +1,22 @@
 pub mod text {
-    use std::{
-        collections::HashSet,
-        fmt,
-        io::{self, Write},
-    };
+    use std::collections::HashSet;
+    use std::fmt;
+    use std::io::{self, Write};
 
     const CANCELLED_MESSAGE: &str = "<cancelled>";
 
     use ai::agent::action_result::{FetchConversationResult, ReadSkillResult, UseComputerResult};
     use itertools::Itertools;
 
-    use crate::{
-        ai::agent::{
-            AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
-            ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
-            ReadFilesResult, ReadMCPResourceResult, RequestCommandOutputResult,
-            RequestFileEditsResult, SearchCodebaseResult, SuggestNewConversationResult,
-            SuggestPromptResult, TodoOperation, UploadArtifactResult, WebFetchStatus,
-            WebSearchStatus, WriteToLongRunningShellCommandResult,
-        },
-        AIAgentActionResultType,
+    use crate::ai::agent::{
+        AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
+        ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
+        ReadFilesResult, ReadMCPResourceResult, RequestCommandOutputResult, RequestFileEditsResult,
+        SearchCodebaseResult, SuggestNewConversationResult, SuggestPromptResult, TodoOperation,
+        UploadArtifactResult, WebFetchStatus, WebSearchStatus,
+        WriteToLongRunningShellCommandResult,
     };
+    use crate::AIAgentActionResultType;
 
     /// Format an agent input as a human-readable string. For action results, it's assumed that
     /// the action is shown immediately before this result.
@@ -564,26 +560,22 @@ pub mod text {
 }
 
 pub mod json {
-    use crate::{
-        ai::agent::{
-            AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-            AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult,
-            FileContext, FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesResult,
-            ReadMCPResourceResult, RequestCommandOutputResult, RequestFileEditsResult,
-            SearchCodebaseResult, SubagentCall, TodoOperation, UploadArtifactResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        AIAgentActionResultType,
-    };
+    use std::borrow::Cow;
+    use std::io::{self, Write};
+    use std::ops::Range;
+
+    use serde::Serialize;
 
     use crate::ai::agent::comment::ReviewComment;
-    use crate::code::buffer_location::LocalOrRemotePath;
-    use serde::Serialize;
-    use std::{
-        borrow::Cow,
-        io::{self, Write},
-        ops::Range,
+    use crate::ai::agent::{
+        AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+        AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult, FileContext,
+        FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesResult, ReadMCPResourceResult,
+        RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, SubagentCall,
+        TodoOperation, UploadArtifactResult, WriteToLongRunningShellCommandResult,
     };
+    use crate::code::buffer_location::LocalOrRemotePath;
+    use crate::AIAgentActionResultType;
 
     /// JSON representation of messages in an agent conversation. This is intentionally not 1:1 with our internal `AIAgent*` types - it's
     /// a stable interface for callers.
@@ -1299,10 +1291,12 @@ pub mod json {
     }
 }
 
+use std::io::{self, BufWriter, Write};
+
+use warp_core::channel::ChannelState;
+
 use crate::ai::agent::{AIAgentText, AIAgentTextSection};
 use crate::code::editor_management::CodeSource;
-use std::io::{self, BufWriter, Write};
-use warp_core::channel::ChannelState;
 
 /// Constructs the Oz dashboard URL for a given run ID.
 fn run_url(run_id: &str) -> String {
@@ -1367,6 +1361,7 @@ fn format_agent_text<W: Write>(text: &AIAgentText, w: &mut W) -> io::Result<()> 
                     Some(CodeSource::AIAction { .. })
                     | Some(CodeSource::New { .. })
                     | Some(CodeSource::FileTree { .. })
+                    | Some(CodeSource::CommandPalette { .. })
                     | Some(CodeSource::Finder { .. })
                     | None => {}
                 }

@@ -3,41 +3,37 @@ mod convert_from;
 mod convert_to;
 mod r#impl;
 
+use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
+
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
     user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
 };
-
-pub use r#impl::generate_multi_agent_output;
-
 use futures_lite::Stream;
+pub use r#impl::generate_multi_agent_output;
 use serde::Serialize;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::{
-    ai::{blocklist::SessionContext, llms::LLMId},
-    server::server_api::AIApiError,
-};
+use warp_core::user_preferences::GetUserPreferences;
+use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
-use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -287,6 +283,9 @@ impl RequestParams {
             != crate::ai::execution_profiles::AskUserQuestionPermission::Never;
 
         let orchestration_enabled = ai_settings.is_orchestration_enabled(app)
+            && BlocklistAIPermissions::as_ref(app)
+                .get_run_agents_setting(app, terminal_view_id)
+                .is_enabled()
             && session_context
                 .session_type()
                 .as_ref()

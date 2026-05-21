@@ -1,59 +1,49 @@
-use super::{
-    flags,
-    settings_page::{
-        render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState,
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-        HEADER_PADDING,
-    },
-    SettingsAction, SettingsSection, ToggleSettingActionPair,
-};
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
-use crate::send_telemetry_from_ctx;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    appearance::Appearance,
-    auth::{auth_state::AuthState, auth_view_modal::AuthViewVariant},
-    report_if_error,
-    settings::cloud_preferences::CloudPreferencesSettings,
-    TelemetryEvent,
-};
-use crate::{auth::auth_manager::AuthManager, server::ids::ServerId};
-use crate::{auth::auth_manager::LoginGatedFeature, workspaces::workspace::CustomerType};
-use crate::{workspace::WorkspaceAction, workspaces::update_manager::TeamUpdateManager};
+use std::sync::{Arc, Mutex};
+
 use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::{Arc, Mutex};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::{channel::ChannelState, context_flag::ContextFlag};
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{Border, Empty, MainAxisAlignment, MainAxisSize},
-    id,
-    platform::Cursor,
-    ui_components::switch::SwitchStateHandle,
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Element, Empty, Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Shrinkable, Text,
 };
+use warpui::fonts::Weight;
+use warpui::keymap::ContextPredicate;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    Action, AppContext,
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
-use warpui::{
-    elements::{CacheOption, Image},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
+
+use super::settings_page::{
+    render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
+    HEADER_PADDING,
 };
-use warpui::{fonts::Weight, keymap::ContextPredicate};
-use warpui::{
-    Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
+use crate::server::ids::ServerId;
+use crate::settings::cloud_preferences::CloudPreferencesSettings;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
 const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";

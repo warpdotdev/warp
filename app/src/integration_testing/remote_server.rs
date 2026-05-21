@@ -1,27 +1,20 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-    time::Duration,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::Duration;
 
 use warp_core::{HostId, SessionId};
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{
-        AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
-    },
-    App, SingletonEntity, WindowId,
+use warpui::integration::{
+    AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
+use warpui::{async_assert, async_assert_eq, App, SingletonEntity, WindowId};
 
-use crate::{
-    integration_testing::view_getters::single_terminal_view_for_tab,
-    remote_server::manager::{
-        RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent,
-        RemoteServerOperation, RemoteSessionState,
-    },
-    terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor,
+use crate::integration_testing::view_getters::single_terminal_view_for_tab;
+use crate::remote_server::manager::{
+    RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent, RemoteServerOperation,
+    RemoteSessionState,
 };
+use crate::terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub type RemoteServerActionCallback = Box<dyn Fn(&mut App, WindowId, &mut StepDataMap) + 'static>;
 
 type RemoteServerNavigationPaths = Rc<RefCell<HashMap<SessionId, String>>>;

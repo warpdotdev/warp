@@ -1,20 +1,23 @@
-use crate::ai::execution_profiles::{
-    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
-};
-use crate::ai::llms::LLMModelHost;
-use crate::{auth::UserUid, server::ids::ServerId, settings::AgentModeCommandExecutionPredicate};
+use std::cmp::Ordering;
+use std::path::PathBuf;
+
 use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, path::PathBuf};
 use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
-
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource,
 };
 
 use super::team::{MembershipRole, Team};
+use crate::ai::execution_profiles::{
+    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
+};
+use crate::ai::llms::LLMModelHost;
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::settings::AgentModeCommandExecutionPredicate;
 
 #[derive(Clone, Copy, Hash, Debug, PartialEq, Eq)]
 pub struct WorkspaceUid(ServerId);
@@ -727,6 +730,12 @@ impl BillingMetadata {
                 .tier
                 .enterprise_credits_auto_reload_policy
                 .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| policy.enabled)
     }
 }
 

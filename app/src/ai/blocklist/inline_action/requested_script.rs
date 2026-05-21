@@ -1,8 +1,9 @@
 //! This module is similar to `requested_actions.rs` but specifically for scripts instead of commands.
 //! Eventually, we'll probably want to refactor the functions here to lean on Views instead.
 
-use pathfinder_geometry::vector::Vector2F;
 use std::rc::Rc;
+
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,

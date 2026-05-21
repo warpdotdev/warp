@@ -1,5 +1,7 @@
+use std::fmt;
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
-use std::{fmt, path::PathBuf};
 
 /// An unique reference to a skill.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]

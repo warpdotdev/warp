@@ -3,18 +3,15 @@ use instant::Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use warpui::{id, keymap::ContextPredicate, AppContext};
+use warpui::keymap::ContextPredicate;
+use warpui::{id, AppContext};
 
-use crate::{
-    channel::{Channel, ChannelState},
-    editor::{InteractionState, ReplicaId},
-    features::FeatureFlag,
-};
-
-use super::{
-    model::{block::SerializedBlock, terminal_model::BlockIndex},
-    GridType, TerminalModel,
-};
+use super::model::block::SerializedBlock;
+use super::model::terminal_model::BlockIndex;
+use super::{GridType, TerminalModel};
+use crate::channel::{Channel, ChannelState};
+use crate::editor::{InteractionState, ReplicaId};
+use crate::features::FeatureFlag;
 
 pub mod ai_agent;
 pub mod manager;
@@ -248,8 +245,9 @@ impl SharedSessionScrollbackType {
 
 #[cfg(not(test))]
 pub fn max_session_size(ctx: &AppContext) -> Byte {
-    use crate::workspaces::user_workspaces::UserWorkspaces;
     use warpui::SingletonEntity;
+
+    use crate::workspaces::user_workspaces::UserWorkspaces;
 
     UserWorkspaces::as_ref(ctx)
         .current_team()

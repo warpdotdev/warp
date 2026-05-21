@@ -1,8 +1,10 @@
 //! A reusable component for displaying text with a copy button that shows
 //! checkmark feedback when clicked.
 
-use instant::Instant;
 use std::time::Duration;
+
+use instant::Instant;
+use warpui::color::ColorU;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Element, Expanded, Flex, MouseStateHandle,
     ParentElement, Shrinkable, Text,
@@ -13,7 +15,6 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
-use warpui::color::ColorU;
 
 /// Duration to show the checkmark after copying.
 pub const COPY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);

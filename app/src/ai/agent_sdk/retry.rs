@@ -6,7 +6,6 @@
 //! without a path change.
 
 pub(crate) use crate::server::retry_strategies::with_bounded_retry;
-
 // Re-export for tests only; the canonical definitions live in retry_strategies.
 #[cfg(test)]
 pub(crate) use crate::server::retry_strategies::{

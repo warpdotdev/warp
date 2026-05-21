@@ -1,27 +1,24 @@
-use pathfinder_color::ColorU;
-use std::{cell::Cell, sync::Arc};
-use string_offset::CharOffset;
-use warpui::{
-    elements::{Axis, scroll_delta_for_pointer_movement},
-    fonts::FamilyId,
-    geometry::{rect::RectF, vector::vec2f},
-    text_layout::TextFrame,
-    units::{IntoPixels, Pixels},
-};
+use std::cell::Cell;
+use std::sync::Arc;
 
-use crate::{
-    content::text::{FormattedTable, table_cell_offset_maps},
-    render::{
-        element::table::{
-            model_table_layout_report, row_geometry_from_layout_report,
-            table_cursor_relative_offset, table_horizontal_scroll_delta, table_scroll_data,
-            table_scrollbar, table_selection_relative_range,
-        },
-        model::{
-            BlockSpacing, CellLayout, LaidOutTable, RenderedSelection, TableBlockConfig,
-            TableStyle, table_offset_map::TableOffsetMap,
-        },
-    },
+use pathfinder_color::ColorU;
+use string_offset::CharOffset;
+use warpui::elements::{Axis, scroll_delta_for_pointer_movement};
+use warpui::fonts::FamilyId;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::TextFrame;
+use warpui::units::{IntoPixels, Pixels};
+
+use crate::content::text::{FormattedTable, table_cell_offset_maps};
+use crate::render::element::table::{
+    model_table_layout_report, row_geometry_from_layout_report, table_cursor_relative_offset,
+    table_horizontal_scroll_delta, table_scroll_data, table_scrollbar,
+    table_selection_relative_range,
+};
+use crate::render::model::table_offset_map::TableOffsetMap;
+use crate::render::model::{
+    BlockSpacing, CellLayout, LaidOutTable, RenderedSelection, TableBlockConfig, TableStyle,
 };
 
 fn test_laid_out_table() -> LaidOutTable {

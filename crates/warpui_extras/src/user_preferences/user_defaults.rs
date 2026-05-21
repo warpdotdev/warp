@@ -3,7 +3,8 @@
 #![allow(deprecated)]
 
 use cocoa::base::{id, nil};
-use objc::{class, msg_send, rc::StrongPtr, sel, sel_impl};
+use objc::rc::StrongPtr;
+use objc::{class, msg_send, sel, sel_impl};
 
 /// A user preferences store backed by macOS user defaults (`NSUserDefaults`).
 pub struct UserDefaultsPreferencesStorage {
@@ -82,7 +83,8 @@ impl super::UserPreferences for UserDefaultsPreferencesStorage {
 }
 
 mod util {
-    use cocoa::{base::nil, foundation::NSString};
+    use cocoa::base::nil;
+    use cocoa::foundation::NSString;
     use objc::rc::StrongPtr;
 
     /// Creates a new `NSString` from the given `&str`, wrapped in a

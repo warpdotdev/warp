@@ -1,16 +1,12 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warpui::elements::ZIndex;
+use warpui::elements::{ScrollData, ScrollableElement, ZIndex};
 use warpui::event::ModifiersState;
 use warpui::units::{IntoLines, IntoPixels, Pixels};
-use warpui::ModelHandle;
-use warpui::{
-    elements::{ScrollData, ScrollableElement},
-    AppContext, Element, EventContext, SizeConstraint,
-};
+use warpui::{AppContext, Element, EventContext, ModelHandle, SizeConstraint};
 
+use super::block_list_element::BlockListMenuSource;
+use super::view::TerminalAction;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
-
-use super::{block_list_element::BlockListMenuSource, view::TerminalAction};
 
 /// An element that renders the input, block_list and "gap" created after a
 /// clear or ctrl-l when in waterfall input mode.

@@ -1,26 +1,24 @@
-use std::{
-    io::ErrorKind,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use settings::Setting as _;
 use tempfile::tempdir;
 use url::Url;
 use warp_util::path::LineAndColumnArg;
 use warpui::{App, ModelHandle, SingletonEntity, WindowId};
 
-use crate::{
-    notebooks::{file::is_markdown_file, link::LinkEvent},
-    terminal::{model::session::Session, shell::ShellType},
-    test_util::settings::initialize_settings_for_tests,
-    util::{file::external_editor::EditorSettings, openable_file_type::FileTarget},
-    workspace::ActiveSession,
-};
-use settings::Setting as _;
-
 use super::{LinkTarget, NotebookLinks, ResolveError, SessionSource};
+use crate::notebooks::file::is_markdown_file;
+use crate::notebooks::link::LinkEvent;
+use crate::terminal::model::session::Session;
+use crate::terminal::shell::ShellType;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::util::file::external_editor::EditorSettings;
+use crate::util::openable_file_type::FileTarget;
+use crate::workspace::ActiveSession;
 
 fn url(s: &str) -> LinkTarget {
     LinkTarget::Url(Url::parse(s).expect("Invalid URL"))

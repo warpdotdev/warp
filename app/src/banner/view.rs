@@ -1,26 +1,25 @@
-use std::{marker::PhantomData, rc::Rc};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 use markdown_parser::{
     FormattedText, FormattedTextFragment, FormattedTextInline, FormattedTextLine,
 };
-use warpui::elements::HyperlinkLens;
+use pathfinder_geometry::vector::Vector2F;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, HyperlinkLens, HyperlinkUrl, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Shrinkable,
+};
+use warpui::fonts::Weight;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, HyperlinkUrl, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Shrinkable,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
     Action, AppContext, Element, Entity, EventContext, SingletonEntity, TypedActionView, View,
     ViewContext,
 };
 
-use crate::{appearance::Appearance, ui_components::icons::Icon};
-use pathfinder_geometry::vector::Vector2F;
+use crate::appearance::Appearance;
+use crate::ui_components::icons::Icon;
 
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
 const INNER_MARGIN: f32 = 12.;
