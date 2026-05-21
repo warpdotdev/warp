@@ -343,6 +343,13 @@ impl WarpTheme {
         fg_overlay_2(self)
     }
 
+    /// Overlay used to dim inactive panes at a caller-specified opacity (0-100).
+    /// `fg_overlay_2` (opacity 10) is the historical default; see
+    /// `InactivePaneDimmingPercentage`.
+    pub fn inactive_pane_overlay_with_opacity(&self, opacity: Opacity) -> Fill {
+        self.foreground().with_opacity(opacity)
+    }
+
     pub fn subshell_background(&self) -> Fill {
         Fill::Solid(neutral_4(self))
     }
