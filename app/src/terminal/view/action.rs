@@ -18,7 +18,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::pane_group::PaneId;
 use crate::server::telemetry::{AgentModeRewindEntrypoint, PaletteSource, ToggleBlockFilterSource};
+use crate::tab::SelectedTabColor;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::shared_session::SharedSessionActionSource;
@@ -209,6 +211,9 @@ pub enum TerminalAction {
     ClearSelectionsWhenShellMode,
     Close,
     ToggleMaximizePane,
+    RenamePane(PaneId),
+    RenameActiveTabWithFallbackTitle(String),
+    SetActiveTabColor(SelectedTabColor),
     SplitRight(Option<AvailableShell>),
     SplitLeft(Option<AvailableShell>),
     SplitDown(Option<AvailableShell>),
@@ -564,6 +569,9 @@ impl fmt::Debug for TerminalAction {
             SplitDown(_) => f.write_str("SplitDown"),
             SplitUp(_) => f.write_str("SplitUp"),
             ToggleMaximizePane => f.write_str("ToggleMaximizeActivePane"),
+            RenamePane(_) => f.write_str("RenamePane"),
+            RenameActiveTabWithFallbackTitle(_) => f.write_str("RenameActiveTabWithFallbackTitle"),
+            SetActiveTabColor(color) => write!(f, "SetActiveTabColor({color:?})"),
             PromptContextMenu {
                 position_offset_from_prompt,
             } => write!(

@@ -25366,6 +25366,18 @@ impl TypedActionView for TerminalView {
             | KillAgentConversation { .. }
             | ToggleCLIAgentRichInput
             | ToggleSessionRecording => Empty,
+            RenamePane(_) => Custom(AccessibilityContent::new_without_help(
+                "Rename pane",
+                WarpA11yRole::UserAction,
+            )),
+            RenameActiveTabWithFallbackTitle(_) => Custom(AccessibilityContent::new_without_help(
+                "Rename tab",
+                WarpA11yRole::UserAction,
+            )),
+            SetActiveTabColor(_) => Custom(AccessibilityContent::new_without_help(
+                "Set tab color",
+                WarpA11yRole::UserAction,
+            )),
         }
     }
 
@@ -25597,6 +25609,17 @@ impl TypedActionView for TerminalView {
                 ctx.emit(Event::Pane(PaneEvent::SplitUp(chosen_shell.to_owned())))
             }
             ToggleMaximizePane => ctx.emit(Event::Pane(PaneEvent::ToggleMaximized)),
+            RenamePane(pane_id) => {
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::RenamePaneById(*pane_id));
+            }
+            RenameActiveTabWithFallbackTitle(fallback_title) => {
+                ctx.dispatch_typed_action_deferred(
+                    WorkspaceAction::RenameActiveTabWithFallbackTitle(fallback_title.clone()),
+                );
+            }
+            SetActiveTabColor(color) => {
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::SetActiveTabColor(*color));
+            }
             PromptContextMenu {
                 position_offset_from_prompt,
             } => self.show_prompt_context_menu(*position_offset_from_prompt, ctx),

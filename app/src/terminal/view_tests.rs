@@ -39,11 +39,13 @@ use crate::ai::llms::LLMId;
 use crate::context_chips::prompt::Prompt;
 use crate::editor::{AutosuggestionLocation, AutosuggestionType, CrdtOperation};
 use crate::features::FeatureFlag;
+use crate::menu::MenuItem;
 use crate::pane_group::focus_state::PaneGroupFocusState;
 use crate::pane_group::{pane::PaneStack, BackingView, TerminalPaneId};
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
+use crate::tab::SelectedTabColor;
 use crate::terminal::alt_screen::should_intercept_mouse;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
@@ -76,6 +78,7 @@ use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::add_window_with_id_and_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
+use crate::themes::theme::AnsiColorIdentifier;
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
 
@@ -114,6 +117,87 @@ fn input_operations_for_buffer_content(app: &mut App, content: &str) -> Vec<Crdt
             .cloned()
             .collect()
     })
+}
+
+#[test]
+fn pane_header_overflow_menu_includes_tab_identification_actions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_pane_id = TerminalPaneId::dummy_terminal_pane_id();
+        let expected_pane_id = terminal_pane_id.into();
+
+        terminal.update(&mut app, |view, ctx| {
+            let focus_state = ctx.add_model(|_| {
+                PaneGroupFocusState::new(expected_pane_id, Some(terminal_pane_id), false)
+            });
+            let focus_handle = PaneFocusHandle::new(expected_pane_id, focus_state);
+            view.set_focus_handle(focus_handle, ctx);
+        });
+
+        terminal.read(&app, |terminal, ctx| {
+            let items = terminal.pane_header_overflow_menu_items(ctx);
+
+            let item_labels = items
+                .iter()
+                .filter_map(|item| match item {
+                    MenuItem::Item(fields) => Some(fields.label()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert!(matches!(
+                items.first(),
+                Some(MenuItem::Item(fields))
+                    if fields.label() == "Rename pane"
+                        && matches!(
+                            fields.on_select_action(),
+                            Some(TerminalAction::RenamePane(action_pane_id))
+                                if *action_pane_id == expected_pane_id
+                        )
+            ));
+            assert!(matches!(
+                items.get(1),
+                Some(MenuItem::Item(fields))
+                    if fields.label() == "Rename tab"
+                        && matches!(
+                            fields.on_select_action(),
+                            Some(TerminalAction::RenameActiveTabWithFallbackTitle(_))
+                        )
+            ));
+            assert!(item_labels.contains(&"Rename pane"));
+            assert!(item_labels.contains(&"Rename tab"));
+
+            let color_actions = items
+                .iter()
+                .find_map(|item| match item {
+                    MenuItem::ItemsRow { items } => Some(
+                        items
+                            .iter()
+                            .filter_map(|fields| match fields.on_select_action() {
+                                Some(TerminalAction::SetActiveTabColor(color)) => Some(*color),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .expect("expected a tab color row");
+
+            assert_eq!(
+                color_actions,
+                vec![
+                    SelectedTabColor::Cleared,
+                    SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                    SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                    SelectedTabColor::Color(AnsiColorIdentifier::Yellow),
+                    SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                    SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                    SelectedTabColor::Color(AnsiColorIdentifier::Cyan),
+                ]
+            );
+        });
+    });
 }
 
 fn exchange_with_inputs(inputs: Vec<AIAgentInput>) -> AIAgentExchange {

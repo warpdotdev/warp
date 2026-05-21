@@ -24,6 +24,7 @@ use crate::pane_group::{pane::view, pane::view::PaneHeaderAction, BackingView, S
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
+use crate::tab::{SelectedTabColor, TAB_COLOR_ICON_PATH, TAB_NO_COLOR_ICON_PATH};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
@@ -33,6 +34,7 @@ use crate::terminal::TerminalView;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons;
 use crate::workspace::tab_settings::TabSettings;
@@ -665,15 +667,64 @@ impl BackingView for TerminalView {
         ctx: &AppContext,
     ) -> Vec<MenuItem<Self::PaneHeaderOverflowMenuAction>> {
         let model = self.model.lock();
+        let appearance = Appearance::as_ref(ctx);
+        let terminal_colors = appearance.theme().terminal_colors().normal;
+        let rename_tab_fallback_title = self
+            .pane_configuration
+            .as_ref(ctx)
+            .title()
+            .trim()
+            .to_owned();
         let mut items = vec![];
+        if let Some(focus_handle) = self.focus_handle() {
+            items.push(
+                MenuItemFields::new("Rename pane")
+                    .with_on_select_action(TerminalAction::RenamePane(focus_handle.pane_id()))
+                    .into_item(),
+            );
+        }
+        items.extend([
+            MenuItemFields::new("Rename tab")
+                .with_on_select_action(TerminalAction::RenameActiveTabWithFallbackTitle(
+                    rename_tab_fallback_title,
+                ))
+                .into_item(),
+            MenuItem::ItemsRow {
+                items: std::iter::once(
+                    MenuItemFields::new_with_icon(
+                        TAB_NO_COLOR_ICON_PATH,
+                        appearance.theme().foreground(),
+                        "None".to_owned(),
+                    )
+                    .no_highlight_on_hover()
+                    .with_on_select_action(TerminalAction::SetActiveTabColor(
+                        SelectedTabColor::Cleared,
+                    )),
+                )
+                .chain(TAB_COLOR_OPTIONS.iter().map(|color_option| {
+                    let color = color_option.to_ansi_color(&terminal_colors);
+                    MenuItemFields::new_with_icon(
+                        TAB_COLOR_ICON_PATH,
+                        color.into(),
+                        color_option.to_string(),
+                    )
+                    .no_highlight_on_hover()
+                    .with_on_select_action(TerminalAction::SetActiveTabColor(
+                        SelectedTabColor::Color(*color_option),
+                    ))
+                }))
+                .collect(),
+            },
+        ]);
         let source = SharedSessionActionSource::PaneHeader;
 
         // Shared-session related items.
+        let mut shared_session_items = vec![];
         let shared_session_status = model.shared_session_status();
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         if shared_session_status.is_sharer_or_viewer() {
             if !is_ambient_agent {
-                items.push(
+                shared_session_items.push(
                     MenuItemFields::new("Copy link")
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })
                         .into_item(),
@@ -681,7 +732,7 @@ impl BackingView for TerminalView {
             }
 
             if shared_session_status.is_sharer() {
-                items.push(
+                shared_session_items.push(
                     MenuItemFields::new("Stop sharing session")
                         .with_on_select_action(TerminalAction::StopSharingCurrentSession { source })
                         .into_item(),
@@ -693,7 +744,7 @@ impl BackingView for TerminalView {
                     .value()
                     == UserAppInstallStatus::Detected
             {
-                items.push(
+                shared_session_items.push(
                     MenuItemFields::new("Open on Desktop")
                         .with_on_select_action(TerminalAction::OpenSharedSessionOnDesktop {
                             source,
@@ -704,11 +755,15 @@ impl BackingView for TerminalView {
         } else if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.push(
+            shared_session_items.push(
                 MenuItemFields::new("Share session")
                     .with_on_select_action(TerminalAction::OpenShareSessionModal { source })
                     .into_item(),
             );
+        }
+        if !shared_session_items.is_empty() {
+            items.push(MenuItem::Separator);
+            items.extend(shared_session_items);
         }
 
         // Split-pane related items.
