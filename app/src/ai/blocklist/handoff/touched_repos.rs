@@ -21,12 +21,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use warp_util::standardized_path::StandardizedPath;
-
 use command::r#async::Command;
 use command::Stdio;
 use futures::future::join_all;
 use tokio::fs as tokio_fs;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::FutureExt as _;
 
 use crate::ai::agent::conversation::AIConversation;
