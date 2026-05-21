@@ -18,7 +18,7 @@ use crate::{
     NetworkStatus, SyncQueue, TeamTesterStatus, UpdateManager, UserProfiles, UserWorkspaces,
 };
 
-use super::{Event, OpenOverlay};
+use super::{should_render_close_button, Event, OpenOverlay, StandardHeaderOptions};
 
 #[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -136,6 +136,26 @@ fn initialize_app(app: &mut App) {
     #[cfg(feature = "voice_input")]
     app.add_singleton_model(voice_input::VoiceInput::new);
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+}
+
+#[test]
+fn test_close_button_visibility_options() {
+    let default_options = StandardHeaderOptions::default();
+    assert!(!should_render_close_button(&default_options, false));
+    assert!(should_render_close_button(&default_options, true));
+
+    let singleton_options = StandardHeaderOptions {
+        show_close_button_when_not_split: true,
+        ..Default::default()
+    };
+    assert!(should_render_close_button(&singleton_options, false));
+
+    let hidden_options = StandardHeaderOptions {
+        hide_close_button: true,
+        show_close_button_when_not_split: true,
+        ..Default::default()
+    };
+    assert!(!should_render_close_button(&hidden_options, true));
 }
 
 #[test]

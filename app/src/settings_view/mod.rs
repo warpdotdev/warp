@@ -2704,7 +2704,21 @@ impl BackingView for SettingsView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Settings")
+        view::HeaderContent::Standard(view::StandardHeader {
+            title: "Settings".to_string(),
+            title_secondary: None,
+            title_style: None,
+            title_clip_config: warpui::text_layout::ClipConfig::start(),
+            title_max_width: None,
+            left_of_title: None,
+            right_of_title: None,
+            left_of_overflow: None,
+            options: view::StandardHeaderOptions {
+                always_show_icons: true,
+                show_close_button_when_not_split: true,
+                ..Default::default()
+            },
+        })
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

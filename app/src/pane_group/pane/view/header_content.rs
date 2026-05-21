@@ -64,6 +64,10 @@ pub struct StandardHeaderOptions {
     /// If true, hides the close button even when in a split pane.
     /// Use for panes that should be closed via other means (e.g., accept/reject buttons).
     pub hide_close_button: bool,
+    /// If true, shows the close button even when this is the only pane in the tab.
+    /// Use for singleton utility panes where closing the pane is the expected way
+    /// to return to the previous workspace context.
+    pub show_close_button_when_not_split: bool,
 }
 
 impl StandardHeaderOptions {

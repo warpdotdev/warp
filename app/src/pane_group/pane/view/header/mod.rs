@@ -375,6 +375,10 @@ enum OpenOverlay {
     None,
 }
 
+fn should_render_close_button(options: &StandardHeaderOptions, is_in_split_pane: bool) -> bool {
+    !options.hide_close_button && (is_in_split_pane || options.show_close_button_when_not_split)
+}
+
 impl<P: BackingView> PaneHeader<P> {
     fn overflow_button_position_id(&self) -> String {
         format!(
@@ -453,11 +457,12 @@ impl<P: BackingView> PaneHeader<P> {
         options: &StandardHeaderOptions,
         app: &AppContext,
     ) -> (Flex, f32) {
-        let can_show_close = !options.hide_close_button
-            && self
-                .focus_handle
+        let can_show_close = should_render_close_button(
+            options,
+            self.focus_handle
                 .as_ref()
-                .is_some_and(|h| h.is_in_split_pane(app));
+                .is_some_and(|h| h.is_in_split_pane(app)),
+        );
         let can_show_overflow = should_display_overflow_menu_button;
         let should_show_close = should_show_on_header && can_show_close;
         let should_show_overflow = should_show_on_header && can_show_overflow;

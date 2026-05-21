@@ -160,7 +160,6 @@ pub struct AIDocumentView {
     links: ModelHandle<NotebookLinks>,
     editor: ViewHandle<RichTextEditorView>,
     pane_configuration: ModelHandle<PaneConfiguration>,
-    focus_handle: Option<PaneFocusHandle>,
     original_terminal_view: Option<ViewHandle<TerminalView>>,
     // Version menu state
     version_menu: ViewHandle<Menu<AIDocumentAction>>,
@@ -414,7 +413,9 @@ impl AIDocumentView {
         let save_action = keybinding_name_to_keystroke(SAVE_FILE_BINDING_NAME, ctx)
             .map(|k| k.displayed())
             .unwrap_or("Click".to_string());
-        let tooltip_text = format!("This plan has changes the agent isn't aware of. {save_action} to stop the agent's current task and send the updated plan");
+        let tooltip_text = format!(
+            "This plan has changes the agent isn't aware of. {save_action} to stop the agent's current task and send the updated plan"
+        );
         let update_plan_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("Update Agent", PrimaryTheme)
                 .with_size(ButtonSize::Small)
@@ -470,7 +471,6 @@ impl AIDocumentView {
             links,
             editor,
             pane_configuration,
-            focus_handle: None,
             original_terminal_view: None,
             version_menu,
             sync_button_mouse_state,
@@ -808,22 +808,12 @@ impl AIDocumentView {
             right_row.add_child(header_buttons);
         }
 
-        let should_show_close_button = self
-            .focus_handle
-            .as_ref()
-            .is_some_and(|h| h.is_in_split_pane(app));
         right_row.add_child(render_pane_header_buttons::<
             AIDocumentAction,
             AIDocumentAction,
-        >(
-            header_ctx,
-            appearance,
-            should_show_close_button,
-            None,
-            None,
-        ));
+        >(header_ctx, appearance, true, None, None));
 
-        let button_count = should_show_close_button as u32 + header_ctx.has_overflow_items as u32;
+        let button_count = 1 + header_ctx.has_overflow_items as u32;
         render_three_column_header(
             left_row,
             render_pane_header_title_text(title, appearance, ClipConfig::start()),
@@ -1303,9 +1293,7 @@ impl BackingView for AIDocumentView {
         ctx.focus(&self.editor);
     }
 
-    fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
-        self.focus_handle = Some(focus_handle);
-    }
+    fn set_focus_handle(&mut self, _focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {}
 
     fn pane_header_overflow_menu_items(
         &self,
