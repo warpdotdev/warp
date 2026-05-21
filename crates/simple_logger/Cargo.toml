@@ -10,9 +10,16 @@ description = "Simple file-based async logger for server stderr output"
 [dependencies]
 async-channel = { workspace = true }
 async-fs = { workspace = true }
-chrono = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror.workspace = true
 warp_core = { workspace = true }
 warpui.workspace = true
+
+[dev-dependencies]
+instant = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

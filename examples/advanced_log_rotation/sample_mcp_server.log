@@ -1,0 +1,97 @@
+2026-05-14 18:00:00.001 | [info] server starting up
+2026-05-14 18:00:00.012 | [info] loaded 14 prompt templates from disk
+2026-05-14 18:00:00.013 | [info] heartbeat scheduler armed: interval=60s
+2026-05-14 18:00:00.014 | [info] OAuth client ready: token expires at 2026-05-15T02:00:00Z
+2026-05-14 18:00:01.105 | [info] tool_call: read_files(paths=["src/main.rs"])
+2026-05-14 18:00:01.214 | [info] tool_call_result: read_files ok bytes=8421
+2026-05-14 18:01:02.301 | [info] heartbeat: ok memory_kb=23488
+2026-05-14 18:02:02.302 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:03:02.291 | [info] heartbeat: ok memory_kb=23644
+2026-05-14 18:04:02.288 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:05:02.290 | [info] heartbeat: ok memory_kb=23601
+2026-05-14 18:06:02.288 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:07:02.291 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:08:02.290 | [info] heartbeat: ok memory_kb=23598
+2026-05-14 18:09:02.289 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:10:02.288 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:11:02.291 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:12:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:13:02.287 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:14:02.289 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:15:02.292 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:16:11.401 | [info] tool_call: run_shell_command(cmd="cargo nextest run -p warp")
+2026-05-14 18:16:12.504 | [info] tool_call_result: run_shell_command ok exit=0 duration_ms=1102
+2026-05-14 18:17:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:18:02.290 | [info] heartbeat: ok memory_kb=23589
+2026-05-14 18:19:02.291 | [info] heartbeat: ok memory_kb=23601
+2026-05-14 18:20:02.289 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:21:02.293 | [warning] cache miss for key=api/products/popular (50ms uncached fetch)
+2026-05-14 18:21:08.491 | [warning] cache miss for key=api/products/popular (52ms uncached fetch)
+2026-05-14 18:21:14.690 | [warning] cache miss for key=api/products/popular (49ms uncached fetch)
+2026-05-14 18:21:20.892 | [warning] cache miss for key=api/products/popular (54ms uncached fetch)
+2026-05-14 18:21:27.094 | [warning] cache miss for key=api/products/popular (51ms uncached fetch)
+2026-05-14 18:21:33.297 | [warning] cache miss for key=api/products/popular (48ms uncached fetch)
+2026-05-14 18:21:39.500 | [warning] cache miss for key=api/products/popular (55ms uncached fetch)
+2026-05-14 18:21:45.704 | [warning] cache miss for key=api/products/recommended (62ms uncached fetch)
+2026-05-14 18:21:51.908 | [warning] cache miss for key=api/products/recommended (58ms uncached fetch)
+2026-05-14 18:21:58.112 | [warning] cache miss for key=api/products/recommended (61ms uncached fetch)
+2026-05-14 18:22:04.316 | [warning] cache miss for key=api/products/related (47ms uncached fetch)
+2026-05-14 18:22:10.520 | [warning] cache miss for key=api/products/related (49ms uncached fetch)
+2026-05-14 18:22:16.724 | [warning] cache miss for key=api/products/related (50ms uncached fetch)
+2026-05-14 18:22:22.928 | [warning] cache miss for key=api/products/trending (58ms uncached fetch)
+2026-05-14 18:22:29.132 | [warning] cache miss for key=api/products/trending (55ms uncached fetch)
+2026-05-14 18:22:35.336 | [warning] cache miss for key=api/products/trending (52ms uncached fetch)
+2026-05-14 18:22:41.540 | [warning] cache miss for key=api/products/featured (49ms uncached fetch)
+2026-05-14 18:22:47.744 | [warning] cache miss for key=api/products/featured (51ms uncached fetch)
+2026-05-14 18:22:53.948 | [warning] cache miss for key=api/products/featured (54ms uncached fetch)
+2026-05-14 18:23:00.151 | [warning] cache miss for key=api/products/popular (48ms uncached fetch)
+2026-05-14 18:23:06.355 | [warning] cache miss for key=api/products/popular (47ms uncached fetch)
+2026-05-14 18:23:12.559 | [warning] cache miss for key=api/products/popular (51ms uncached fetch)
+2026-05-14 18:23:18.763 | [warning] cache miss for key=api/products/popular (50ms uncached fetch)
+2026-05-14 18:23:24.967 | [warning] cache miss for key=api/products/popular (53ms uncached fetch)
+2026-05-14 18:23:31.171 | [warning] cache miss for key=api/products/recommended (62ms uncached fetch)
+2026-05-14 18:23:37.375 | [warning] cache miss for key=api/products/recommended (59ms uncached fetch)
+2026-05-14 18:23:43.579 | [warning] cache miss for key=api/products/recommended (61ms uncached fetch)
+2026-05-14 18:23:49.783 | [warning] cache miss for key=api/products/related (47ms uncached fetch)
+2026-05-14 18:23:55.987 | [warning] cache miss for key=api/products/related (50ms uncached fetch)
+2026-05-14 18:24:02.190 | [info] cache rehydration starting: 4 keys
+2026-05-14 18:24:02.401 | [info] cache rehydration ok: warmed 4 keys in 211ms
+2026-05-14 18:24:02.402 | [info] cache miss rate back to baseline ~3%
+2026-05-14 18:25:02.288 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:26:02.291 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:27:02.287 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:28:02.289 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:29:02.290 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:30:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:31:02.288 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:32:02.288 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:33:02.290 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:34:02.291 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:35:02.288 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:36:11.401 | [info] tool_call: edit_files(path="src/lib.rs")
+2026-05-14 18:36:12.504 | [info] tool_call_result: edit_files ok diffs_applied=2
+2026-05-14 18:37:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:38:02.290 | [info] heartbeat: ok memory_kb=23589
+2026-05-14 18:39:02.291 | [info] heartbeat: ok memory_kb=23601
+2026-05-14 18:40:02.289 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:41:02.293 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:42:11.401 | [warning] transport disconnect: connection reset by peer
+2026-05-14 18:42:11.605 | [info] transport reconnect attempt #1
+2026-05-14 18:42:11.704 | [info] transport reconnect ok (rtt=99ms, queued_tool_calls=0)
+2026-05-14 18:43:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:44:02.290 | [info] heartbeat: ok memory_kb=23589
+2026-05-14 18:45:02.291 | [info] heartbeat: ok memory_kb=23601
+2026-05-14 18:46:02.289 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:47:02.293 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:48:02.291 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:49:02.288 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:50:02.289 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:51:02.290 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:52:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:53:02.288 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:54:02.291 | [info] heartbeat: ok memory_kb=23607
+2026-05-14 18:55:02.290 | [info] heartbeat: ok memory_kb=23615
+2026-05-14 18:56:02.289 | [info] heartbeat: ok memory_kb=23588
+2026-05-14 18:57:02.291 | [info] heartbeat: ok memory_kb=23612
+2026-05-14 18:58:02.290 | [info] heartbeat: ok memory_kb=23629
+2026-05-14 18:59:02.291 | [info] heartbeat: ok memory_kb=23601
