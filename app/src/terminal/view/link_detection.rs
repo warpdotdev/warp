@@ -40,8 +40,10 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 
 /// "@" is a suffix that can be added to symlinks. It appears in Git Bash's default configuration
 /// for `ls`.
+/// "." is a trailing period that appears when a file path is used at the end of a sentence in
+/// natural language, e.g. "Refer to foo.md." — the period is punctuation, not part of the path.
 #[cfg(feature = "local_fs")]
-const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
+const SUFFIXES_TO_REMOVE: [&str; 2] = ["@", "."];
 
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
@@ -631,5 +633,94 @@ impl super::TerminalView {
             ctx.set_cursor_shape(Cursor::PointingHand);
             ctx.notify();
         }
+    }
+}
+
+#[cfg(all(test, feature = "local_fs"))]
+mod tests {
+    use std::ops::RangeInclusive;
+
+    use warp_util::path::CleanPathResult;
+
+    use crate::terminal::model::{
+        grid::grid_handler::PossiblePath,
+        index::Point,
+        terminal_model::WithinModel,
+    };
+
+    use super::{GridHighlightedLink, super::TerminalView};
+
+    /// Build a minimal `PossiblePath` wrapping the given path string with a trivial
+    /// grid range (row 0, col 0 → col len).
+    fn make_possible_path(path: &str) -> WithinModel<PossiblePath> {
+        let range: RangeInclusive<Point> = Point { row: 0, col: 0 }..=Point {
+            row: 0,
+            col: path.len(),
+        };
+        WithinModel::AltScreen(PossiblePath {
+            path: CleanPathResult {
+                path: path.to_string(),
+                line_and_column_num: None,
+            },
+            range,
+        })
+    }
+
+    /// Regression test for warpdotdev/warp#11477.
+    ///
+    /// A file path that ends with a trailing period (e.g. "foo.md." as it would appear
+    /// at the end of a sentence) must produce a valid link after the period is stripped,
+    /// and the returned path must not carry the trailing dot.
+    ///
+    /// Two layers are exercised:
+    ///
+    /// 1. On POSIX: `SUFFIXES_TO_REMOVE` now includes `"."`, so `"foo.md."` produces a
+    ///    `"foo.md"` fallback candidate when the literal name is not found on disk.
+    ///
+    /// 2. On Windows: the NT kernel silently normalizes trailing periods in path lookups,
+    ///    so `fs::metadata("foo.md.")` resolves to `foo.md` and succeeds — but the returned
+    ///    `PathBuf` previously carried the literal trailing dot through to `is_markdown_file`,
+    ///    where `Path::extension()` returned `Some("")` and rejected the file.
+    ///    `absolute_path_if_valid` now strips the trailing dot before returning.
+    ///
+    /// This test asserts both that a link is found **and** that the path in the link does
+    /// not end with a period, catching regressions on either platform.
+    #[test]
+    fn compute_valid_paths_strips_trailing_period() {
+        // Create a real temp file so that `absolute_path_if_valid` can resolve the path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("foo.md");
+        std::fs::write(&file_path, "").expect("write temp file");
+
+        let working_directory = dir
+            .path()
+            .to_str()
+            .expect("temp dir path is valid UTF-8");
+
+        // "foo.md." — the path as it would appear at the end of a sentence.
+        let possible_paths = vec![make_possible_path("foo.md.")];
+
+        let result = TerminalView::compute_valid_paths(
+            working_directory,
+            possible_paths.into_iter(),
+            80,
+            None,
+        );
+
+        let file_link = result.expect(
+            "expected a file link for 'foo.md.' after stripping trailing period, got None",
+        );
+        let GridHighlightedLink::File(within_model) = file_link else {
+            panic!("expected GridHighlightedLink::File, got a URL link");
+        };
+        let abs_path_str = within_model
+            .get_inner()
+            .absolute_path
+            .to_str()
+            .expect("absolute path is valid UTF-8");
+        assert!(
+            !abs_path_str.ends_with('.'),
+            "absolute path must not end with a period after stripping; got: {abs_path_str:?}"
+        );
     }
 }

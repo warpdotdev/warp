@@ -28,6 +28,23 @@ pub enum ShellPathType {
     PlatformNative(PathBuf),
 }
 
+/// On Windows the kernel silently normalizes trailing periods in path lookups,
+/// so `fs::metadata("foo.md.")` resolves `foo.md` and succeeds, but the literal
+/// `PathBuf` still carries the trailing dot. Strip it so downstream callers
+/// (e.g. `is_markdown_file`) see the canonical form.
+#[cfg(windows)]
+fn strip_trailing_dot(path: PathBuf) -> PathBuf {
+    match path.to_str() {
+        Some(s) if s.ends_with('.') => PathBuf::from(s.trim_end_matches('.')),
+        _ => path,
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_trailing_dot(path: PathBuf) -> PathBuf {
+    path
+}
+
 /// Checks if a file path exists and is valid for a file link.
 pub fn absolute_path_if_valid(
     clean_path_result: &CleanPathResult,
@@ -67,12 +84,12 @@ pub fn absolute_path_if_valid(
         .as_ref()
         .is_some_and(|path| is_path_valid(path, clean_path_result))
     {
-        return relative_path;
+        return relative_path.map(strip_trailing_dot);
     } else if maybe_absolute_path
         .as_ref()
         .is_some_and(|path| is_path_valid(path, clean_path_result))
     {
-        return maybe_absolute_path;
+        return maybe_absolute_path.map(strip_trailing_dot);
     }
 
     None
