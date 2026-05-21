@@ -1410,12 +1410,12 @@ impl LocalDiffStateModel {
                 metadata.pr_info = previous_pr_info;
                 self.metadata = Some(metadata);
             }
-            Err(e) => {
+            Err(_) => {
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
                         is_local: Some(true),
                         mode: self.mode.clone(),
-                        error: "Decode metadata update failed".to_string(),
+                        error: "Load metadata failed".to_string(),
                     },
                     ctx
                 );
@@ -1462,12 +1462,12 @@ impl LocalDiffStateModel {
         diffs: DiffsWithBaseContent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Err(e) = &diffs.changes {
+        if diffs.changes.is_err() {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::LoadDiffFailed {
                     is_local: Some(true),
                     mode: self.mode.clone(),
-                    error: "Decode diff data failed".to_string(),
+                    error: "Load diff data failed".to_string(),
                 },
                 ctx
             );
