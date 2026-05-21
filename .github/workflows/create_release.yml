@@ -60,6 +60,10 @@ on:
         description: Build and validate a representative Slack changelog payload without posting it.
         type: boolean
         default: false
+      post_slack_changelog_payload:
+        description: Post the representative Slack changelog format preview to #release.
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -1803,12 +1807,13 @@ jobs:
 
   validate_slack_changelog_payload:
     name: Validate Slack changelog payload
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_slack_changelog_payload == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.validate_slack_changelog_payload == true || inputs.post_slack_changelog_payload == true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Build representative Slack changelog payload
+        id: build_slack_changelog_payload
         shell: bash
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
@@ -1832,13 +1837,13 @@ jobs:
 
           python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
             --input "$CHANGELOG_INPUT" \
-            --release-tag "v0.workflow-validation.stable_00" \
+            --release-tag "FORMAT PREVIEW — not a release" \
             --output "$SLACK_PAYLOAD"
 
           jq -e '
             (.blocks | length) == 2 and
             .blocks[0].type == "header" and
-            .blocks[0].text.text == "Changelog for v0.workflow-validation.stable_00" and
+            .blocks[0].text.text == "Changelog for FORMAT PREVIEW — not a release" and
             .blocks[1].type == "section" and
             .blocks[1].expand == true and
             (.blocks[1].text.text | contains("<https://github.com/warpdotdev/warp/pull/9275|#9275>")) and
@@ -1846,6 +1851,18 @@ jobs:
             (.blocks[1].text.text | contains("<https://github.com/bradleyjames|@bradleyjames>"))
           ' "$SLACK_PAYLOAD" >/dev/null
           cat "$SLACK_PAYLOAD"
+          echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
+          cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
+          echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
+
+      - name: Post Slack changelog format preview to #release
+        if: ${{ inputs.post_slack_changelog_payload == true }}
+        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        with:
+          channel-id: "#release"
+          payload: ${{ steps.build_slack_changelog_payload.outputs.payload }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_CHANGELOG_BOT }}
 
       - name: Upload Slack payload artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
