@@ -11,7 +11,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::{
     elements::{
         ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement,
+        MainAxisSize, MouseStateHandle, ParentElement,
     },
     Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -34,6 +34,10 @@ pub struct CompactibleActionButton {
 pub trait RenderCompactibleActionButton {
     fn render_expanded_button(&self) -> Box<dyn Element>;
     fn render_compact_button(&self) -> Box<dyn Element>;
+
+    fn compact_button_mouse_state_handle(&self, _app: &AppContext) -> Option<MouseStateHandle> {
+        None
+    }
 }
 
 impl CompactibleActionButton {
@@ -166,6 +170,10 @@ impl RenderCompactibleActionButton for CompactibleActionButton {
     }
     fn render_compact_button(&self) -> Box<dyn Element> {
         ChildView::new(self.compact_button()).finish()
+    }
+
+    fn compact_button_mouse_state_handle(&self, app: &AppContext) -> Option<MouseStateHandle> {
+        Some(self.compact_button().as_ref(app).mouse_state_handle())
     }
 }
 

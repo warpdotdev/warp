@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use warpui::elements::{ChildView, Flex, ParentElement, SavePosition};
-use warpui::{Action, Element, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::view_components::action_button::AdjoinedSide;
 use crate::view_components::compactible_action_button::RenderCompactibleActionButton;
@@ -128,5 +128,12 @@ impl RenderCompactibleActionButton for CompactibleSplitActionButton {
     }
     fn render_compact_button(&self) -> Box<dyn Element> {
         self.render_button(false)
+    }
+
+    fn compact_button_mouse_state_handle(
+        &self,
+        app: &AppContext,
+    ) -> Option<warpui::elements::MouseStateHandle> {
+        self.primary_button.compact_button_mouse_state_handle(app)
     }
 }

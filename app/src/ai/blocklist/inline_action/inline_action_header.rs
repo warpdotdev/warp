@@ -96,6 +96,78 @@ impl RightClickConfig {
     }
 }
 
+fn render_compact_action_button_row_with_header_icon(
+    buttons: Vec<&dyn RenderCompactibleActionButton>,
+    header_icon: Option<warpui::elements::Icon>,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut row = Flex::row()
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min);
+
+    for (index, button) in buttons.into_iter().enumerate() {
+        let element = if index == 0 {
+            if let (Some(icon), Some(mouse_state)) = (
+                header_icon.clone(),
+                button.compact_button_mouse_state_handle(app),
+            ) {
+                render_compact_button_with_header_icon(button, icon, mouse_state, appearance, app)
+            } else {
+                button.render_compact_button()
+            }
+        } else {
+            button.render_compact_button()
+        };
+
+        let mut container = Container::new(element);
+        if index != 0 {
+            container = container.with_margin_left(8.);
+        }
+        row.add_child(container.finish());
+    }
+
+    row.finish()
+}
+
+fn render_compact_button_with_header_icon(
+    button: &dyn RenderCompactibleActionButton,
+    header_icon: warpui::elements::Icon,
+    mouse_state: MouseStateHandle,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Hoverable::new(mouse_state, move |mouse_state| {
+        let icon_size = icon_size(app);
+        let icon = Container::new(
+            ConstrainedBox::new(header_icon.clone().finish())
+                .with_width(icon_size)
+                .with_height(icon_size)
+                .finish(),
+        )
+        .with_margin_left(8.)
+        .finish();
+
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(icon)
+            .with_child(button.render_compact_button())
+            .finish();
+
+        let mut container =
+            Container::new(row).with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+        if mouse_state.is_hovered() {
+            container = container.with_background(internal_colors::fg_overlay_2(theme));
+        }
+        container.finish()
+    })
+    .with_defer_events_to_children()
+    .finish()
+}
+
 #[derive(Clone)]
 pub enum InteractionMode {
     /// Renders action buttons.
@@ -191,6 +263,15 @@ impl HeaderConfig {
         app: &AppContext,
         interaction_mode_content: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
+        self.render_header_with_options(app, interaction_mode_content, true)
+    }
+
+    fn render_header_with_options(
+        self,
+        app: &AppContext,
+        interaction_mode_content: Option<Box<dyn Element>>,
+        show_icon: bool,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let header_background = theme.surface_2();
@@ -204,7 +285,7 @@ impl HeaderConfig {
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(icon) = self.icon {
+        if let (true, Some(icon)) = (show_icon, self.icon) {
             left_content_container.add_child(
                 Container::new(
                     ConstrainedBox::new(icon.finish())
@@ -367,11 +448,20 @@ impl HeaderConfig {
                     let button_refs: Vec<&dyn RenderCompactibleActionButton> =
                         action_buttons.iter().map(|b| b.as_ref()).collect();
 
-                    let (regular_row, compact_row) =
+                    let (regular_row, _) =
                         render_compact_and_regular_button_rows(button_refs, None, appearance, app);
+                    let compact_button_refs: Vec<&dyn RenderCompactibleActionButton> =
+                        action_buttons.iter().map(|b| b.as_ref()).collect();
+                    let compact_row = render_compact_action_button_row_with_header_icon(
+                        compact_button_refs,
+                        self.icon.clone(),
+                        appearance,
+                        app,
+                    );
 
                     let regular_header = self.clone().render_header(app, Some(regular_row));
-                    let compact_header = self.render_header(app, Some(compact_row));
+                    let compact_header =
+                        self.render_header_with_options(app, Some(compact_row), false);
 
                     let size_switch_threshold =
                         size_switch_threshold * appearance.monospace_ui_scalar();

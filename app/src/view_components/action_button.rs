@@ -414,6 +414,10 @@ impl ActionButton {
         self.disabled
     }
 
+    pub fn mouse_state_handle(&self) -> MouseStateHandle {
+        self.mouse_state_handle.clone()
+    }
+
     /// Returns the height of the button.
     pub fn height(&self, app: &AppContext) -> f32 {
         let appearance = Appearance::as_ref(app);
