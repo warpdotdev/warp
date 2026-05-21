@@ -59,11 +59,24 @@ struct ChildAgentEntry {
     pane_materialization_requested: bool,
 }
 
+struct ChildConversationUpdate {
+    task_id: AmbientAgentTaskId,
+    name: String,
+    fallback_title: String,
+    harness: Option<warp_cli::agent::Harness>,
+    parent_conversation_id: AIConversationId,
+    status: ConversationStatus,
+}
+
 /// Owns child discovery + status polling for a shared session viewer of an
 /// orchestrated session.
 pub struct OrchestrationViewerModel {
     /// Orchestrator run id; used as the `ancestor_run_id` fetch filter.
     parent_task_id: AmbientAgentTaskId,
+    /// Run id for the shared session the user actually opened. This differs
+    /// from `parent_task_id` when opening a child cloud orchestration agent
+    /// directly.
+    active_task_id: AmbientAgentTaskId,
     /// Owns the child conversations and anchors the orchestrator lookup.
     terminal_view_id: EntityId,
     /// Used to emit `EnsureSharedSessionViewerChildPane` on the parent's
@@ -88,6 +101,7 @@ impl OrchestrationViewerModel {
     /// Kicks off the initial children fetch and schedules the first poll.
     pub fn new(
         parent_task_id: AmbientAgentTaskId,
+        active_task_id: AmbientAgentTaskId,
         terminal_view_id: EntityId,
         terminal_view: WeakViewHandle<TerminalView>,
         ctx: &mut ModelContext<Self>,
@@ -101,6 +115,7 @@ impl OrchestrationViewerModel {
 
         let mut model = Self {
             parent_task_id,
+            active_task_id,
             terminal_view_id,
             terminal_view,
             children: HashMap::new(),
@@ -239,14 +254,26 @@ impl OrchestrationViewerModel {
         // `&mut self.children` borrow.
         let mut to_materialize: Vec<(AIConversationId, SessionId)> = Vec::new();
 
+        let mut parent_task = None;
+        let mut child_tasks = Vec::new();
         for task in tasks {
             // `ancestor_run_id` returns every descendant. Trust it for
             // membership (locally-spawned children may have empty or
             // sibling `parent_run_id`s), only skipping the parent itself.
             if task.task_id == self.parent_task_id {
+                parent_task = Some(task);
                 continue;
             }
+            child_tasks.push(task);
+        }
 
+        let Some(parent_conversation_id) =
+            self.ensure_parent_conversation(parent_task.as_ref(), ctx)
+        else {
+            return;
+        };
+
+        for task in child_tasks {
             let task_id = task.task_id;
             let session_id = task
                 .session_id
@@ -290,13 +317,6 @@ impl OrchestrationViewerModel {
                 continue;
             }
 
-            // New child: register under the orchestrator's local
-            // conversation. Without it, `start_new_child_conversation`
-            // would lose the parent linkage. Retry on the next poll.
-            let Some(parent_conversation_id) = self.find_parent_conversation_id(ctx) else {
-                continue;
-            };
-
             let name = task.display_name().to_string();
             // Trim to stay in sync with `display_name()`, which also trims;
             // the descriptive title flows through `set_fallback_display_title`
@@ -307,34 +327,19 @@ impl OrchestrationViewerModel {
                 .as_ref()
                 .and_then(|c| c.harness.as_ref())
                 .map(|h| h.harness_type);
-            let terminal_view_id = self.terminal_view_id;
             let status_for_initial = conversation_status.clone();
 
-            let conversation_id = history_handle.update(ctx, |history, ctx| {
-                let conversation_id = history.start_new_child_conversation(
-                    terminal_view_id,
+            let conversation_id = self.register_or_update_child_conversation(
+                ChildConversationUpdate {
+                    task_id,
                     name,
-                    parent_conversation_id,
+                    fallback_title,
                     harness,
-                    ctx,
-                );
-                // Suppress server-side status reporting (viewer-side); also
-                // disambiguates viewer-spawned children downstream.
-                history.set_viewing_shared_session_for_conversation(conversation_id, true);
-                if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                    conversation.set_task_id(task_id);
-                    if !fallback_title.is_empty() {
-                        conversation.set_fallback_display_title(fallback_title);
-                    }
-                }
-                history.update_conversation_status(
-                    terminal_view_id,
-                    conversation_id,
-                    status_for_initial,
-                    ctx,
-                );
-                conversation_id
-            });
+                    parent_conversation_id,
+                    status: status_for_initial,
+                },
+                ctx,
+            );
 
             let pane_materialization_requested = session_id.is_some();
             if let Some(sid) = session_id {
@@ -355,6 +360,105 @@ impl OrchestrationViewerModel {
         for (conversation_id, session_id) in to_materialize {
             self.request_child_pane_materialization(conversation_id, session_id, ctx);
         }
+    }
+
+    fn ensure_parent_conversation(
+        &self,
+        parent_task: Option<&AmbientAgentTask>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIConversationId> {
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        history_handle.update(ctx, |history, ctx| {
+            if self.active_task_id == self.parent_task_id {
+                let parent_conversation_id =
+                    history.active_conversation_id(self.terminal_view_id)?;
+                if let Some(conversation) = history.conversation_mut(&parent_conversation_id) {
+                    conversation.set_task_id(self.parent_task_id);
+                    if conversation.agent_name().is_none() {
+                        let name = parent_task
+                            .map(|task| task.display_name().to_string())
+                            .unwrap_or_else(|| "Orchestrator".to_string());
+                        conversation.set_agent_name(name);
+                    }
+                }
+                return Some(parent_conversation_id);
+            }
+
+            if let Some(parent_conversation_id) =
+                history.conversation_id_for_agent_id(&self.parent_task_id.to_string())
+            {
+                return Some(parent_conversation_id);
+            }
+
+            let parent_conversation_id =
+                history.start_new_conversation(self.terminal_view_id, false, true, false, ctx);
+            history.assign_run_id_for_conversation(
+                parent_conversation_id,
+                self.parent_task_id.to_string(),
+                Some(self.parent_task_id),
+                self.terminal_view_id,
+                ctx,
+            );
+            if let Some(conversation) = history.conversation_mut(&parent_conversation_id) {
+                let name = parent_task
+                    .map(|task| task.display_name().to_string())
+                    .unwrap_or_else(|| "Orchestrator".to_string());
+                conversation.set_agent_name(name);
+                if let Some(parent_task) = parent_task {
+                    let fallback_title = parent_task.title.trim().to_string();
+                    if !fallback_title.is_empty() {
+                        conversation.set_fallback_display_title(fallback_title);
+                    }
+                }
+            }
+            Some(parent_conversation_id)
+        })
+    }
+
+    fn register_or_update_child_conversation(
+        &self,
+        update: ChildConversationUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) -> AIConversationId {
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        history_handle.update(ctx, |history, ctx| {
+            let conversation_id = history
+                .conversation_id_for_agent_id(&update.task_id.to_string())
+                .or_else(|| {
+                    (update.task_id == self.active_task_id)
+                        .then(|| history.active_conversation_id(self.terminal_view_id))
+                        .flatten()
+                })
+                .unwrap_or_else(|| {
+                    history.start_new_child_conversation(
+                        self.terminal_view_id,
+                        update.name.clone(),
+                        update.parent_conversation_id,
+                        update.harness,
+                        ctx,
+                    )
+                });
+
+            history.set_parent_for_conversation(conversation_id, update.parent_conversation_id);
+            history.set_viewing_shared_session_for_conversation(conversation_id, true);
+            if let Some(conversation) = history.conversation_mut(&conversation_id) {
+                conversation.set_task_id(update.task_id);
+                conversation.set_agent_name(update.name);
+                if let Some(harness) = update.harness {
+                    conversation.set_orchestration_harness(harness);
+                }
+                if !update.fallback_title.is_empty() {
+                    conversation.set_fallback_display_title(update.fallback_title);
+                }
+            }
+            history.update_conversation_status(
+                self.terminal_view_id,
+                conversation_id,
+                update.status,
+                ctx,
+            );
+            conversation_id
+        })
     }
 
     /// Resolves the orchestrator's local conversation id via the view's

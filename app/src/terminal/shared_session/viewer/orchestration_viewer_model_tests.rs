@@ -17,6 +17,7 @@ use chrono::Utc;
 use warpui::{App, EntityId, SingletonEntity};
 
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, AmbientAgentTask};
+use crate::features::FeatureFlag;
 use crate::test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view};
 
 // ---- Pure-function tests ----------------------------------------------------
@@ -164,6 +165,7 @@ fn setup_model(
 
     let model = OrchestrationViewerModel {
         parent_task_id,
+        active_task_id: parent_task_id,
         terminal_view_id,
         terminal_view: terminal_view.downgrade(),
         children: HashMap::new(),
@@ -230,6 +232,98 @@ fn registers_new_child_conversation() {
 }
 
 #[test]
+fn direct_child_viewer_anchors_pill_tree_on_parent_run() {
+    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let active_child = task_id(CHILD_A_TASK_ID);
+
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal_view.id();
+        let active_child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, true, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                if let Some(conversation) = history.conversation_mut(&id) {
+                    conversation.set_task_id(active_child);
+                    conversation.set_agent_name("Opened child".to_string());
+                }
+                id
+            });
+
+        let model = OrchestrationViewerModel {
+            parent_task_id: parent,
+            active_task_id: active_child,
+            terminal_view_id,
+            terminal_view: terminal_view.downgrade(),
+            children: HashMap::new(),
+            polling_handle: None,
+            fetch_generation: 0,
+        };
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![
+                    make_task(
+                        PARENT_TASK_ID,
+                        AmbientAgentTaskState::InProgress,
+                        "Coordinator",
+                        None,
+                    ),
+                    make_task(
+                        CHILD_A_TASK_ID,
+                        AmbientAgentTaskState::InProgress,
+                        "Opened child",
+                        Some(SESSION_A),
+                    ),
+                    make_task(
+                        CHILD_B_TASK_ID,
+                        AmbientAgentTaskState::Queued,
+                        "Sibling child",
+                        None,
+                    ),
+                ],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let parent_conversation_id = history
+                .conversation_id_for_agent_id(PARENT_TASK_ID)
+                .expect("parent run should get a local orchestrator conversation");
+            assert_eq!(
+                history.active_conversation_id(terminal_view_id),
+                Some(active_child_conversation_id),
+                "opening a child run should keep that child selected"
+            );
+
+            let child_ids = history.child_conversation_ids_of(&parent_conversation_id);
+            assert_eq!(
+                child_ids.len(),
+                2,
+                "parent should own opened child and sibling"
+            );
+            assert!(
+                child_ids.contains(&active_child_conversation_id),
+                "opened child conversation should be reused in the pill tree"
+            );
+            let active_child_conversation = history
+                .conversation(&active_child_conversation_id)
+                .expect("opened child conversation exists");
+            assert_eq!(
+                active_child_conversation.parent_conversation_id(),
+                Some(parent_conversation_id)
+            );
+            assert_eq!(active_child_conversation.agent_name(), Some("Opened child"));
+        });
+    });
+}
+
+#[test]
 fn skips_parent_task_id_as_child() {
     App::test((), |mut app| async move {
         let parent = task_id(PARENT_TASK_ID);
@@ -280,6 +374,7 @@ fn skips_child_when_no_active_parent_conversation() {
         // registration should be deferred to the next poll.
         let model = OrchestrationViewerModel {
             parent_task_id: task_id(PARENT_TASK_ID),
+            active_task_id: task_id(PARENT_TASK_ID),
             terminal_view_id,
             terminal_view: terminal_view.downgrade(),
             children: HashMap::new(),

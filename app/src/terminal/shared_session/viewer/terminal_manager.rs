@@ -20,6 +20,7 @@ use warpui::{
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
@@ -801,11 +802,21 @@ impl TerminalManager {
                             && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
                             && orchestration_viewer_model.lock().is_none()
                         {
+                            let orchestration_root_task_id = AgentConversationsModel::as_ref(ctx)
+                                .get_task_data(&task_id)
+                                .and_then(|task| {
+                                    task.parent_run_id
+                                        .as_deref()
+                                        .filter(|id| !id.is_empty())
+                                        .and_then(|id| id.parse().ok())
+                                })
+                                .unwrap_or(task_id);
                             let weak_view_handle_for_orch = weak_view_handle.clone();
                             let orchestration_viewer_model_slot =
                                 orchestration_viewer_model.clone();
                             let handle = ctx.add_model(|model_ctx| {
                                 OrchestrationViewerModel::new(
+                                    orchestration_root_task_id,
                                     task_id,
                                     terminal_view_id,
                                     weak_view_handle_for_orch,
