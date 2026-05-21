@@ -259,6 +259,8 @@ use crate::workspaces::user_profiles::UserProfiles;
 use anyhow::Context;
 use anyhow::{anyhow, Result};
 use appearance::{Appearance, AppearanceManager};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use channel::Channel;
 use channel::ChannelState;
 use interval_timer::IntervalTimer;
 use itertools::Itertools;
@@ -966,6 +968,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         use warpui::platform::linux::{self, AppBuilderExt};
 
         app_builder.set_window_class(ChannelState::app_id().to_string());
+        match linux_window_icon() {
+            Ok(icon) => app_builder.set_window_icon(icon),
+            Err(err) => log::warn!("Failed to load Linux window icon: {err:#}"),
+        }
 
         let force_x11 = ForceX11::read_from_preferences(prefs_for_public_settings)
             .unwrap_or(ForceX11::default_value());
@@ -1058,6 +1064,32 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         launch(ctx, app_state, launch_mode);
     })
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn linux_window_icon() -> Result<winit::window::Icon> {
+    use anyhow::Context as _;
+
+    let image = image::load_from_memory(linux_window_icon_png())
+        .context("Failed to decode Linux window icon asset")?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+
+    winit::window::Icon::from_rgba(image.into_raw(), width, height)
+        .context("Failed to create Linux window icon")
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn linux_window_icon_png() -> &'static [u8] {
+    match ChannelState::channel() {
+        Channel::Stable => include_bytes!("../channels/stable/icon/no-padding/512x512.png"),
+        Channel::Preview => include_bytes!("../channels/preview/icon/no-padding/512x512.png"),
+        Channel::Dev => include_bytes!("../channels/dev/icon/no-padding/512x512.png"),
+        Channel::Local | Channel::Integration => {
+            include_bytes!("../channels/local/icon/no-padding/512x512.png")
+        }
+        Channel::Oss => include_bytes!("../channels/oss/icon/no-padding/512x512.png"),
+    }
 }
 
 pub struct UpdateQuakeModeEventArg {

@@ -18,6 +18,8 @@ pub trait AppBuilderExt {
     /// This is used to identify the application and link it properly to its
     /// .desktop file and associated resources (like app icons).
     fn set_window_class(&mut self, window_class: String);
+    /// Sets the icon to apply to newly-created native windows.
+    fn set_window_icon(&mut self, icon: winit::window::Icon);
 
     /// Whether or not to force the use of XWayland for users running Wayland.
     fn force_x11(&mut self, force_x11: bool);
@@ -27,6 +29,12 @@ impl AppBuilderExt for super::AppBuilder {
     fn set_window_class(&mut self, window_class: String) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.set_window_class(window_class),
+            AppBackend::Headless(_) => (),
+        }
+    }
+    fn set_window_icon(&mut self, icon: winit::window::Icon) {
+        match self.as_inner_mut() {
+            AppBackend::CurrentPlatform(app) => app.set_window_icon(icon),
             AppBackend::Headless(_) => (),
         }
     }

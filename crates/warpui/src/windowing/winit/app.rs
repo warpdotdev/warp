@@ -128,6 +128,8 @@ pub struct App {
     is_integration_test: bool,
     window_class: Option<String>,
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    window_icon: Option<winit::window::Icon>,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     force_x11: bool,
 }
 
@@ -143,6 +145,8 @@ impl App {
             is_integration_test: test_driver.is_some(),
             window_class: None,
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            window_icon: None,
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11: false,
         }
     }
@@ -152,6 +156,10 @@ impl App {
     #[cfg_attr(any(target_family = "wasm", target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_window_class(&mut self, window_class: String) {
         self.window_class = Some(window_class);
+    }
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub(crate) fn set_window_icon(&mut self, icon: winit::window::Icon) {
+        self.window_icon = Some(icon);
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -168,6 +176,8 @@ impl App {
             assets,
             is_integration_test,
             window_class,
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            window_icon,
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11,
         } = self;
@@ -211,6 +221,8 @@ impl App {
             callbacks,
             init_fn,
             window_class,
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            window_icon,
             event_loop.create_proxy(),
         );
 
