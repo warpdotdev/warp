@@ -857,8 +857,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for AutodetectedBashModeMessageProduc
             input_buffer_model,
             input_model,
             appearance,
-            slash_command_model,
             app,
+            slash_command_model,
             ..
         } = args;
         if input_model.is_ai_input_enabled()
@@ -951,11 +951,14 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
             input_buffer_model,
             input_model,
             appearance,
+            app,
             ..
         } = args;
         if input_model.is_ai_input_enabled() || !input_model.is_input_type_locked() {
             return None;
         }
+        let set_input_mode_agent_keystroke =
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
 
         let (text_color, keystroke_color_override, keystroke_bg_color_override) =
             if input_buffer_model.current_value().is_empty() {
@@ -978,11 +981,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
         Some(
             Message::new(vec![
                 MessageItem::Keystroke {
-                    keystroke: Keystroke {
-                        key: "i".to_owned(),
-                        cmd: true,
-                        ..Default::default()
-                    },
+                    keystroke: set_input_mode_agent_keystroke,
                     color: keystroke_color_override,
                     background_color: keystroke_bg_color_override,
                 },
