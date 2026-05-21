@@ -226,12 +226,12 @@ use crate::ai::{
         BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
         BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
         BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
-        ConversationStatusUpdate, InputConfig, InputType, LegacyPassiveSuggestionsEvent,
-        LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-        PassiveSuggestionsModels, PendingQueryState, RequestFileEditsFormatKind,
-        ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-        StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-        PRE_REWIND_PREFIX,
+        ConversationStatusUpdate, InputConfig, InputType, InputTypeAutoDetectionSource,
+        LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
+        MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingQueryState,
+        RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
+        StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+        ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
     get_relevant_files::controller::GetRelevantFilesController,
@@ -6429,7 +6429,11 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             // Remove the @-trigger text (e.g. "@uncom") that was used to open the context menu.
             input.replace_at_symbol_with_text(&attachment_reference, ctx);
-            input.ensure_agent_mode_for_ai_features(true, ctx);
+            input.ensure_agent_mode_for_ai_features(
+                true,
+                Some(AppLevelOverride::AttachmentForcedAi.into()),
+                ctx,
+            );
         });
 
         // Load the diff data asynchronously and complete the attachment when done
@@ -14297,7 +14301,7 @@ impl TerminalView {
                 OnboardingQuery::AgentPrompt(text) => {
                     input.replace_buffer_content(text, ctx);
                     // Force agent mode, overriding any shell lock
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
+                    input.ensure_agent_mode_for_ai_features(true, None, ctx);
                 }
                 _ => {}
             }

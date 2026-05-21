@@ -15950,7 +15950,7 @@ impl Workspace {
             terminal_view.input().update(ctx, |input, ctx| {
                 input.clear_buffer_and_reset_undo_stack(ctx);
                 input.set_input_mode_agent(true, ctx);
-                input.ensure_agent_mode_for_ai_features(true, ctx);
+                input.ensure_agent_mode_for_ai_features(true, None, ctx);
                 input.replace_buffer_content(&prompt, ctx);
                 input.focus_input_box(ctx);
             });
@@ -16023,7 +16023,7 @@ impl Workspace {
                 }
 
                 if ensure_agent_mode {
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
+                    input.ensure_agent_mode_for_ai_features(true, None, ctx);
                 }
 
                 if should_submit {

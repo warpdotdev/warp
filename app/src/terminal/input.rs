@@ -3094,7 +3094,12 @@ impl Input {
             if let Some(input_config) = input_config_to_restore {
                 let is_buffer_empty = me.editor.as_ref(ctx).buffer_text(ctx).is_empty();
                 me.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_config(*input_config, is_buffer_empty, None, ctx);
+                    ai_input_model.set_input_config(
+                        *input_config,
+                        is_buffer_empty,
+                        Some(AppLevelHeuristic::RestoreSavedConfig.into()),
+                        ctx,
+                    );
                 });
             }
 
@@ -6016,7 +6021,7 @@ impl Input {
 
     fn select_image(&mut self, ctx: &mut ViewContext<Self>) {
         self.focus_input_box(ctx);
-        self.ensure_agent_mode_for_ai_features_with_source(
+        self.ensure_agent_mode_for_ai_features(
             true,
             Some(AppLevelOverride::AttachmentForcedAi.into()),
             ctx,
@@ -6215,7 +6220,11 @@ impl Input {
             UniversalDeveloperInputButtonBarEvent::OpenSlashCommandMenu => {
                 self.focus_input_box(ctx);
                 if !FeatureFlag::AgentView.is_enabled() {
-                    self.ensure_agent_mode_for_ai_features(false, ctx);
+                    self.ensure_agent_mode_for_ai_features(
+                        false,
+                        Some(AppLevelHeuristic::SlashCommand.into()),
+                        ctx,
+                    );
                 }
                 self.toggle_legacy_slash_commands_menu(ctx);
             }
@@ -6238,15 +6247,10 @@ impl Input {
     /// Helper function to ensure agent mode when needed, using the same logic as SelectFile.
     /// This handles the transition from shell mode to agent mode while preserving lock semantics.
     /// Only forces agent mode if the user hasn't explicitly locked the mode to Shell.
+    ///
+    /// Pass `decision_source` to attribute the resulting input type change in NLD telemetry;
+    /// callers without a meaningful source may pass `None`.
     pub fn ensure_agent_mode_for_ai_features(
-        &mut self,
-        should_override_shell_lock: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.ensure_agent_mode_for_ai_features_with_source(should_override_shell_lock, None, ctx);
-    }
-
-    fn ensure_agent_mode_for_ai_features_with_source(
         &mut self,
         should_override_shell_lock: bool,
         decision_source: Option<InputTypeAutoDetectionSource>,
@@ -9516,7 +9520,11 @@ impl Input {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) && edit_origin.is_user() {
                     let buffer_text = self.buffer_text(ctx);
                     if Self::buffer_contains_attachment_patterns(&buffer_text) {
-                        self.ensure_agent_mode_for_ai_features(false, ctx);
+                        self.ensure_agent_mode_for_ai_features(
+                            false,
+                            Some(AppLevelOverride::AttachmentForcedAi.into()),
+                            ctx,
+                        );
                     }
                 }
 
