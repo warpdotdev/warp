@@ -57,6 +57,14 @@ pub struct WindowSnapshot {
     pub left_panel_width: Option<f32>,
     pub right_panel_width: Option<f32>,
     pub agent_management_filters: Option<PersistedAgentManagementFilters>,
+    /// Per-window zoom factor override (None = follows the app-wide default
+    /// `WindowSettings::zoom_level`). Persisted regardless of the
+    /// `appearance.window.zoom_per_window` setting state, but only applied
+    /// at restore time when the setting is enabled. While the setting is
+    /// disabled the in-memory override is cleared, so the next snapshot
+    /// save will write `None` here and any previously dormant value is
+    /// dropped from storage.
+    pub zoom_factor_override: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

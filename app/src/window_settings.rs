@@ -79,6 +79,15 @@ define_settings_group!(WindowSettings, settings: [
         toml_path: "appearance.window.zoom_level",
         description: "The zoom level for the window, as a percentage.",
     },
+    zoom_per_window: ZoomPerWindow {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.window.zoom_per_window",
+        description: "Whether the Zoom commands (Zoom In, Zoom Out, Reset Zoom) are scoped to the active window only. When false (the default), these commands change the zoom level across all windows. When true, each window keeps its own zoom and the commands only affect the current active window.",
+    },
 ]);
 
 impl ZoomLevel {

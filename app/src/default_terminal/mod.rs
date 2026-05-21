@@ -66,6 +66,7 @@ impl DefaultTerminal {
                     }
                 }
             }
+            StateEvent::WindowZoomFactorChanged { .. } => {}
         }
     }
 

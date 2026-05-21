@@ -1178,8 +1178,9 @@ impl AppContext {
         self.event_munger = Box::new(handler)
     }
 
-    /// Sets the zoom factor for the application. Changing the zoom factor adjusts
-    /// the magnification of every element rendered within the application.
+    /// Sets the app-wide default zoom factor. Per-window overrides set via
+    /// [`AppContext::set_window_zoom_factor`] are not affected; windows that
+    /// have no override will follow this new default.
     ///
     /// All views in every window are invalidated when this is invoked.
     ///
@@ -1189,6 +1190,68 @@ impl AppContext {
         let zoom_factor = ZoomFactor::new(zoom_factor.clamp(0.5, 4.0));
         self.zoom_factor = zoom_factor;
         self.invalidate_all_views();
+    }
+
+    /// Returns the effective zoom factor for `window_id`: the per-window
+    /// override if set, otherwise the app-wide default. Falls back to the
+    /// default if `window_id` is not found.
+    pub fn window_zoom_factor(&self, window_id: WindowId) -> ZoomFactor {
+        self.windows
+            .get(&window_id)
+            .and_then(|w| w.zoom_factor_override)
+            .unwrap_or(self.zoom_factor)
+    }
+
+    /// Returns the per-window zoom factor override for `window_id`, or
+    /// `None` if no override has been set or the window is not found.
+    /// Distinct from [`AppContext::window_zoom_factor`], which resolves
+    /// `None` to the app-wide default; this accessor exposes the raw
+    /// override so callers (e.g. session persistence) can distinguish
+    /// "follow the default" from "explicitly overridden to the default".
+    pub fn window_zoom_factor_override(&self, window_id: WindowId) -> Option<ZoomFactor> {
+        self.windows
+            .get(&window_id)
+            .and_then(|w| w.zoom_factor_override)
+    }
+
+    /// Sets a per-window zoom factor override. Only invalidates the views of
+    /// `window_id`; other windows are unaffected.
+    ///
+    /// ## Validation
+    /// The zoom factor is clamped to the range [0.5, 4.0].
+    pub fn set_window_zoom_factor(&mut self, window_id: WindowId, zoom_factor: f32) {
+        let zoom_factor = ZoomFactor::new(zoom_factor.clamp(0.5, 4.0));
+        let did_update = if let Some(window) = self.windows.get_mut(&window_id) {
+            window.zoom_factor_override = Some(zoom_factor);
+            true
+        } else {
+            false
+        };
+
+        if did_update {
+            self.invalidate_all_views_for_window(window_id);
+            WindowManager::handle(self).update(self, |windowing_state, ctx| {
+                windowing_state.emit_window_zoom_factor_changed(window_id, ctx);
+            });
+        }
+    }
+
+    /// Clears the per-window zoom factor override. The window will follow the
+    /// app-wide default returned by [`AppContext::zoom_factor`].
+    pub fn reset_window_zoom_factor(&mut self, window_id: WindowId) {
+        let did_update = if let Some(window) = self.windows.get_mut(&window_id) {
+            window.zoom_factor_override = None;
+            true
+        } else {
+            false
+        };
+
+        if did_update {
+            self.invalidate_all_views_for_window(window_id);
+            WindowManager::handle(self).update(self, |windowing_state, ctx| {
+                windowing_state.emit_window_zoom_factor_changed(window_id, ctx);
+            });
+        }
     }
 
     /// Sets the callback invoked before opening a URL.

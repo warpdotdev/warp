@@ -150,7 +150,9 @@ impl AutoupdateState {
             // Queue a possible update check when the app gets activated, i.e. focused.
             let state_handle = WindowManager::handle(ctx);
             ctx.subscribe_to_model(&state_handle, |me, event, ctx| {
-                let windowing::StateEvent::ValueChanged { current, previous } = event;
+                let windowing::StateEvent::ValueChanged { current, previous } = event else {
+                    return;
+                };
                 if previous.stage == ApplicationStage::Inactive
                     && current.stage == ApplicationStage::Active
                 {

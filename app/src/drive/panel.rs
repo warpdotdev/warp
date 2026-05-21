@@ -111,6 +111,7 @@ impl DrivePanel {
                         ctx.notify();
                     }
                 }
+                StateEvent::WindowZoomFactorChanged { .. } => {}
             }
         });
 

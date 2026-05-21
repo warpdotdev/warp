@@ -141,6 +141,7 @@ impl ResourceCenterView {
                     ctx.notify();
                 }
             }
+            StateEvent::WindowZoomFactorChanged { .. } => {}
         });
 
         let page_views = vec1![main_view, keybindings_view];
