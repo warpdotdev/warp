@@ -1,5 +1,6 @@
 // TODO: restrict what we make public here.
 mod builtins;
+pub(crate) mod cloud_artifact_pr;
 pub mod context_chip;
 pub mod current_prompt;
 pub mod directory_fetcher;

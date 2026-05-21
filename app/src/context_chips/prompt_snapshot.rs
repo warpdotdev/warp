@@ -79,6 +79,27 @@ impl PromptSnapshot {
         })
     }
 
+    pub(crate) fn set_chip_value(
+        &mut self,
+        chip: &ContextChipKind,
+        value: Option<ChipValue>,
+    ) -> bool {
+        let Some(chip_result) = self
+            .chips
+            .iter_mut()
+            .find(|chip_result| chip_result.kind == *chip)
+        else {
+            return false;
+        };
+
+        if chip_result.value == value {
+            return false;
+        }
+
+        chip_result.value = value;
+        true
+    }
+
     pub(crate) fn chips(&self) -> &Vec<ChipResult> {
         &self.chips
     }
