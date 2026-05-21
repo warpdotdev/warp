@@ -294,7 +294,6 @@ impl View for ExternalEditorView {
         let appearance = Appearance::as_ref(app);
 
         let default_editor = render_dropdown_item(
-            app,
             appearance,
             &text(app, "settings.features.external_editor.open_links.label"),
             None,
@@ -310,7 +309,6 @@ impl View for ExternalEditorView {
         );
 
         let code_panels_editor = render_dropdown_item(
-            app,
             appearance,
             &text(app, "settings.features.external_editor.code_panels.label"),
             None,
@@ -326,7 +324,6 @@ impl View for ExternalEditorView {
         );
 
         let default_layout = render_dropdown_item(
-            app,
             appearance,
             &text(app, "settings.features.external_editor.layout.label"),
             None,
@@ -348,7 +345,6 @@ impl View for ExternalEditorView {
 
         if FeatureFlag::TabbedEditorView.is_enabled() {
             column.add_child(render_body_item::<ExternalEditorAction>(
-                app,
                 text(app, "settings.features.external_editor.tabbed_view.label"),
                 None,
                 LocalOnlyIconState::for_setting(
@@ -380,7 +376,6 @@ impl View for ExternalEditorView {
         }
 
         column.add_child(render_body_item::<ExternalEditorAction>(
-            app,
             text(
                 app,
                 "settings.features.external_editor.markdown_viewer.label",

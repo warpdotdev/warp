@@ -7,6 +7,7 @@ use crate::ai::conversation_status_ui::render_status_element;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
+use crate::localization;
 use crate::safe_triangle::SafeTriangle;
 use crate::send_telemetry_from_app_ctx;
 use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
@@ -19,6 +20,7 @@ use crate::workspace::view::vertical_tabs::telemetry::{
     VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
 };
 use crate::FeatureFlag;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -704,6 +706,7 @@ struct PaneRowState {
 }
 
 enum TerminalPrimaryLineData {
+    DefaultText,
     StatusText {
         text: String,
     },
@@ -714,10 +717,14 @@ enum TerminalPrimaryLineData {
 }
 
 impl TerminalPrimaryLineData {
-    fn text(&self) -> &str {
+    fn display_text(&self, app: &AppContext) -> Cow<'_, str> {
         match self {
+            TerminalPrimaryLineData::DefaultText => Cow::Owned(localization::text_for_app(
+                app,
+                "workspace.vertical_tabs.new_session",
+            )),
             TerminalPrimaryLineData::StatusText { text, .. }
-            | TerminalPrimaryLineData::Text { text, .. } => text,
+            | TerminalPrimaryLineData::Text { text, .. } => Cow::Borrowed(text),
         }
     }
 }
@@ -2752,11 +2759,12 @@ fn build_vertical_tabs_summary_data(
                     terminal_title_fallback_font(&agent_text),
                     terminal_view.last_completed_command_text(),
                 );
+                let primary_label_text = primary_label.display_text(app);
                 let status = summary_conversation_status_for_terminal(terminal_view, app);
                 push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
-                    primary_label.text(),
+                    primary_label_text.as_ref(),
                     status,
                 );
 
@@ -3012,8 +3020,8 @@ fn terminal_pane_search_text_fragments(
                 terminal_title_fallback_font(&agent_text),
                 terminal_view.last_completed_command_text(),
             )
-            .text()
-            .to_string()
+            .display_text(app)
+            .into_owned()
         });
     let pull_request_label = terminal_view
         .current_pull_request_url(app)
@@ -3094,10 +3102,7 @@ fn terminal_primary_line_data(
         };
     }
 
-    TerminalPrimaryLineData::Text {
-        text: "New session".to_string(),
-        font: TerminalPrimaryLineFont::Ui,
-    }
+    TerminalPrimaryLineData::DefaultText
 }
 
 fn terminal_kind_badge_label(is_oz_agent: bool, cli_agent: Option<CLIAgent>) -> String {
@@ -4129,6 +4134,7 @@ fn render_terminal_primary_line_for_view(
         terminal_view,
         appearance,
         text_color,
+        app,
     )
 }
 
@@ -4141,6 +4147,7 @@ fn render_terminal_primary_line(
     terminal_view: &TerminalView,
     appearance: &Appearance,
     text_color: WarpThemeFill,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -4169,6 +4176,17 @@ fn render_terminal_primary_line(
             .finish()
     };
     match primary_line {
+        TerminalPrimaryLineData::DefaultText => {
+            let title_el = Text::new_inline(
+                primary_line.display_text(app).into_owned(),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_clip(ClipConfig::ellipsis())
+            .with_color(text_color.into())
+            .finish();
+            wrap_with_error_indicator(title_el)
+        }
         TerminalPrimaryLineData::StatusText { text, .. } => {
             Text::new_inline(text, appearance.ui_font_family(), 12.)
                 .with_clip(ClipConfig::ellipsis())
@@ -5569,8 +5587,10 @@ fn render_terminal_detail_primary_line(
     primary_line: &TerminalPrimaryLineData,
     color: WarpThemeFill,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let font_family = match primary_line {
+        TerminalPrimaryLineData::DefaultText => appearance.ui_font_family(),
         TerminalPrimaryLineData::StatusText { .. } => appearance.ui_font_family(),
         TerminalPrimaryLineData::Text { font, .. } => match font {
             TerminalPrimaryLineFont::Ui => appearance.ui_font_family(),
@@ -5578,10 +5598,14 @@ fn render_terminal_detail_primary_line(
         },
     };
 
-    Text::new(primary_line.text().to_string(), font_family, 12.)
-        .soft_wrap(true)
-        .with_color(color.into())
-        .finish()
+    Text::new(
+        primary_line.display_text(app).into_owned(),
+        font_family,
+        12.,
+    )
+    .soft_wrap(true)
+    .with_color(color.into())
+    .finish()
 }
 
 fn detail_pane_props<'a>(
@@ -5689,6 +5713,7 @@ fn render_terminal_detail_section(
         &primary_line,
         text_colors.sub,
         appearance,
+        app,
     ));
 
     let mut metadata_row = Flex::row()
@@ -6174,10 +6199,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         terminal_view.last_completed_command_text(),
                     );
                     Some(
-                        Text::new_inline(line_data.text().to_string(), font_family, 10.)
-                            .with_clip(ClipConfig::ellipsis())
-                            .with_color(sub_text_color.into())
-                            .finish(),
+                        Text::new_inline(
+                            line_data.display_text(app).into_owned(),
+                            font_family,
+                            10.,
+                        )
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(sub_text_color.into())
+                        .finish(),
                     )
                 }
             };

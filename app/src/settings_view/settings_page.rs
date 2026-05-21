@@ -645,7 +645,6 @@ pub fn render_body_item_label<T: Clone + Action>(
 }
 
 pub fn render_body_item_label_with_icon<T: Clone + Action>(
-    _app: &AppContext,
     label_text: String,
     icon: Icon,
     label_color_override: Option<Fill>,
@@ -784,7 +783,6 @@ pub fn render_page_title(text: &str, size: f32, appearance: &Appearance) -> Box<
 /// Renders a toggle with a label on the left and a toggle on the right,
 /// including bottom padding.
 pub fn render_body_item<T: Clone + Action>(
-    app: &AppContext,
     label_text: String,
     additional_info: Option<AdditionalInfo<T>>,
     local_only_icon_state: LocalOnlyIconState,
@@ -794,9 +792,9 @@ pub fn render_body_item<T: Clone + Action>(
     description_text: Option<String>,
 ) -> Box<dyn Element> {
     build_toggle_element(
-        render_body_item_label(
-            app,
+        render_body_item_label_internal(
             label_text,
+            None,
             None,
             additional_info,
             local_only_icon_state,
@@ -875,6 +873,22 @@ pub fn render_dropdown_item_label(
     color_override: Option<Fill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    render_dropdown_item_label_internal(
+        label_text,
+        secondary_text,
+        local_only_icon_state,
+        color_override,
+        appearance,
+    )
+}
+
+fn render_dropdown_item_label_internal(
+    label_text: String,
+    secondary_text: Option<String>,
+    local_only_icon_state: LocalOnlyIconState,
+    color_override: Option<Fill>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let label = Text::new(label_text, appearance.ui_font_family(), CONTENT_FONT_SIZE)
         .with_color(
             color_override
@@ -931,7 +945,6 @@ pub fn render_dropdown_item_label(
 }
 
 pub(crate) fn render_dropdown_item<T: Clone + Action>(
-    app: &AppContext,
     appearance: &Appearance,
     label: &str,
     secondary_text: Option<&str>,
@@ -942,8 +955,7 @@ pub(crate) fn render_dropdown_item<T: Clone + Action>(
 ) -> Box<dyn Element> {
     let row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-    let dropdown_item_label = Align::new(render_dropdown_item_label(
-        app,
+    let dropdown_item_label = Align::new(render_dropdown_item_label_internal(
         label.to_string(),
         secondary_text.map(|secondary_text| secondary_text.to_string()),
         local_only_icon_state,

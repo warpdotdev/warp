@@ -186,7 +186,6 @@ impl View for UndoCloseView {
         let mut column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(render_body_item::<Action>(
-                app,
                 text(app, "settings.features.undo_close.label"),
                 None,
                 LocalOnlyIconState::for_setting(

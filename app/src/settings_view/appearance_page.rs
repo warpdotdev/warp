@@ -3121,7 +3121,6 @@ impl SettingsWidget for ThemeSelectWidget {
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(render_body_item::<AppearancePageAction>(
-                app,
                 localization::text_for_app(app, "settings.appearance.theme.sync_with_os.label"),
                 None,
                 LocalOnlyIconState::for_setting(
@@ -3207,7 +3206,6 @@ impl SettingsWidget for CustomAppIconWidget {
             localization::text_for_app(app, "settings.appearance.app_icon.bundle_required");
 
         let dropdown = render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.app_icon.label"),
             show_bundle_warning.then_some(bundle_warning.as_str()),
@@ -3279,7 +3277,6 @@ impl SettingsWidget for AppLanguageWidget {
             localization::text_for_app(app, "settings.appearance.language.description");
 
         render_dropdown_item(
-            app,
             appearance,
             &label,
             Some(description.as_str()),
@@ -3320,7 +3317,6 @@ impl SettingsWidget for CustomWindowSizeWidget {
         let row_border_color: Option<Fill> =
             (!view.valid_new_window_rows).then(|| themes::theme::Fill::error().into());
         let mut column = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.window.custom_size.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -3345,7 +3341,6 @@ impl SettingsWidget for CustomWindowSizeWidget {
         if *window_settings.open_windows_at_custom_size.value() {
             column.add_child(
                 Container::new(render_body_item::<AppearancePageAction>(
-                    app,
                     localization::text_for_app(
                         app,
                         "settings.appearance.window.custom_size.columns",
@@ -3385,7 +3380,6 @@ impl SettingsWidget for CustomWindowSizeWidget {
             );
             column.add_child(
                 Container::new(render_body_item::<AppearancePageAction>(
-                    app,
                     localization::text_for_app(app, "settings.appearance.window.custom_size.rows"),
                     None,
                     // We show the local-only icon for this with the toggle, not the individual inputs.
@@ -3488,7 +3482,6 @@ impl SettingsWidget for WindowOpacityWidget {
 
         let opacity_value = *window_settings.background_opacity;
         let mut col = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            app,
             format!(
                 "{}: {opacity_value}",
                 localization::text_for_app(app, "settings.appearance.window.opacity.label")
@@ -3598,7 +3591,6 @@ impl SettingsWidget for WindowBlurWidget {
 
         Flex::column()
             .with_child(render_body_item::<AppearancePageAction>(
-                app,
                 format!(
                     "{}: {blur_value}",
                     localization::text_for_app(app, "settings.appearance.window.blur_radius.label")
@@ -3659,7 +3651,6 @@ impl SettingsWidget for WindowBlurTextureWidget {
         let window_settings = WindowSettings::as_ref(app);
         let use_blur_texture = *window_settings.background_blur_texture;
         let mut col = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.window.blur_texture.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -3727,7 +3718,6 @@ impl SettingsWidget for ToolsPanelStateScopeWidget {
         let is_enabled = *window_settings.left_panel_visibility_across_tabs;
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(
                 app,
                 "settings.appearance.window.tools_panel_visibility_across_tabs.label",
@@ -3813,7 +3803,6 @@ impl SettingsWidget for InputTypeWidget {
             .finish();
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.input.type.label"),
             None,
             LocalOnlyIconState::Hidden,
@@ -3842,7 +3831,6 @@ impl SettingsWidget for InputModeWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.input.mode.label"),
             None,
@@ -3966,7 +3954,6 @@ impl SettingsWidget for DimInactivePanesWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.panes.dim_inactive.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4010,7 +3997,6 @@ impl SettingsWidget for FocusFollowsMouseWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.panes.focus_follows_mouse.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4059,7 +4045,6 @@ impl SettingsWidget for CompactModeWidget {
         );
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.blocks.compact_mode.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4107,7 +4092,6 @@ impl SettingsWidget for JumpToBottomOfBlockWidget {
             .show_jump_to_bottom_of_block_button
             .value();
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.blocks.jump_to_bottom.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4155,7 +4139,6 @@ impl SettingsWidget for ShowBlockDividersWidget {
         let block_list_settings = BlockListSettings::as_ref(app);
         let enabled = block_list_settings.show_block_dividers.value();
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.blocks.show_dividers.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4645,7 +4628,6 @@ impl SettingsWidget for ThinStrokesWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.text.thin_strokes.label"),
             None,
@@ -4679,7 +4661,6 @@ impl SettingsWidget for MinimumContrastWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.text.minimum_contrast.label"),
             None,
@@ -4719,7 +4700,6 @@ impl SettingsWidget for LigaturesWidget {
         let ligature_rendering_enabled = ligature_rendering.value();
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.text.ligatures.label"),
             Some(AdditionalInfo {
                 mouse_state: self.info_mouse_state.clone(),
@@ -4788,7 +4768,6 @@ impl SettingsWidget for CursorTypeWidget {
         let cursor_display_types: Vec<CursorDisplayType> = all::<CursorDisplayType>().collect();
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.cursor.type.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4868,7 +4847,6 @@ impl SettingsWidget for BlinkingCursorWidget {
         let settings = AppEditorSettings::as_ref(app);
         let cursor_blink = &settings.cursor_blink;
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.cursor.blinking.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4910,7 +4888,6 @@ impl SettingsWidget for TabCloseButtonPositionWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(
                 app,
@@ -4951,7 +4928,6 @@ impl SettingsWidget for TabIndicatorWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.tabs.indicators.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4997,7 +4973,6 @@ impl SettingsWidget for CodeReviewButtonWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.tabs.code_review_button.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5043,7 +5018,6 @@ impl SettingsWidget for PreserveActiveTabColorWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.tabs.preserve_active_color.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5089,7 +5063,6 @@ impl SettingsWidget for VerticalTabsWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(app, "settings.appearance.tabs.vertical_layout.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5135,7 +5108,6 @@ impl SettingsWidget for ShowVerticalTabPanelInRestoredWindowsWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(
                 app,
                 "settings.appearance.tabs.restore_vertical_panel.label",
@@ -5188,7 +5160,7 @@ impl SettingsWidget for UseLatestUserPromptAsConversationTitleInTabNamesWidget {
     ) -> Box<dyn Element> {
         let tab_settings = TabSettings::as_ref(app);
 
-        render_body_item::<AppearancePageAction>(app,
+        render_body_item::<AppearancePageAction>(
             localization::text_for_app(
                 app,
                 "settings.appearance.tabs.latest_prompt_title.label",
@@ -5504,7 +5476,6 @@ impl SettingsWidget for ZenModeWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.tabs.tab_bar.label"),
             None,
@@ -5543,7 +5514,6 @@ impl SettingsWidget for AltScreenPaddingWidget {
         let terminal_settings = &TerminalSettings::as_ref(app);
         let theme = appearance.theme();
         let mut column = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            app,
             localization::text_for_app(
                 app,
                 "settings.appearance.full_screen_apps.custom_padding.label",
@@ -5669,7 +5639,6 @@ impl SettingsWidget for ZoomLevelWidget {
         .finish();
 
         render_dropdown_item(
-            app,
             appearance,
             &localization::text_for_app(app, "settings.appearance.zoom.label"),
             Some(&localization::text_for_app(

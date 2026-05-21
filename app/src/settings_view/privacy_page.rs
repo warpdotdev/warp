@@ -1661,7 +1661,6 @@ impl SettingsWidget for CrashReportsWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                app,
                 crate::localization::text_for_app(app, "settings.privacy.crash_reports.title"),
                 None,
                 // Crash report state is always synced to cloud, so no need to show local only icon.
@@ -1779,7 +1778,6 @@ impl SettingsWidget for CloudConversationStorageWidget {
 
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                app,
                 crate::localization::text_for_app(
                     app,
                     "settings.privacy.cloud_conversation_storage.title",
@@ -1846,7 +1844,6 @@ impl SettingsWidget for NetworkLogWidget {
         let ui_builder = appearance.ui_builder();
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                app,
                 crate::localization::text_for_app(app, "settings.privacy.network_log.title"),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.
@@ -1926,7 +1923,6 @@ impl SettingsWidget for DataManagementWidget {
         let ui_builder = appearance.ui_builder();
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                app,
                 crate::localization::text_for_app(app, "settings.privacy.data_management.title"),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.
@@ -2008,7 +2004,6 @@ impl SettingsWidget for PrivacyPolicyWidget {
     ) -> Box<dyn Element> {
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                app,
                 crate::localization::text_for_app(app, "settings.privacy.privacy_policy.title"),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.

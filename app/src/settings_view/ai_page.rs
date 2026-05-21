@@ -4886,7 +4886,6 @@ impl AgentsWidget {
         app: &warpui::AppContext,
     ) -> Box<dyn Element> {
         let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
-            app,
             header_text.into(),
             header_icon,
             Some(styles::header_font_color(
@@ -5122,7 +5121,6 @@ impl AgentsWidget {
         let base_model_description =
             localization::text_for_app(app, "settings.ai.base_model.description");
         render_dropdown_item(
-            app,
             appearance,
             &base_model_label,
             Some(&base_model_description),
@@ -5211,7 +5209,6 @@ impl AgentsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
-            app,
             localization::text_for_app(app, "settings.ai.agents.mcp.label"),
             Icon::Dataflow,
             Some(styles::header_font_color(
@@ -6038,7 +6035,6 @@ impl VoiceWidget {
                 "settings.ai.voice_input.activation_key.description",
             );
             column.add_child(render_dropdown_item(
-                app,
                 appearance,
                 &activation_key_label,
                 Some(&activation_key_description),
@@ -6217,7 +6213,6 @@ impl SettingsWidget for OtherAIWidget {
         let thinking_description =
             localization::text_for_app(app, "settings.ai.other.thinking.description");
         column.add_child(render_dropdown_item(
-            app,
             appearance,
             &thinking_label,
             Some(&thinking_description),
@@ -6241,7 +6236,6 @@ impl SettingsWidget for OtherAIWidget {
             let conversation_layout_label =
                 localization::text_for_app(app, "settings.ai.other.conversation_layout.label");
             column.add_child(render_dropdown_item(
-                app,
                 appearance,
                 &conversation_layout_label,
                 None,

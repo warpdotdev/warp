@@ -2589,7 +2589,6 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
         };
 
         content.add_child(render_body_item::<CodeSettingsPageAction>(
-            app,
             CODEBASE_INDEXING_LABEL.into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2604,7 +2603,6 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
             let auto_indexing_enabled = *CodeSettings::as_ref(app).auto_indexing_enabled;
 
             content.add_child(render_body_item::<CodeSettingsPageAction>(
-                app,
                 AUTO_INDEX_FEATURE_NAME.into(),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -2706,7 +2704,6 @@ impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
     ) -> Box<dyn Element> {
         let general_settings = GeneralSettings::as_ref(app);
         render_body_item::<CodeSettingsPageAction>(
-            app,
             "Auto open code review panel".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2784,7 +2781,6 @@ impl SettingsWidget for CodeReviewPanelToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            app,
             "Show code review button".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2828,7 +2824,6 @@ impl SettingsWidget for CodeReviewDiffStatsToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            app,
             "Show diff stats on code review button".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2871,7 +2866,6 @@ impl SettingsWidget for ProjectExplorerToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            app,
             "Project explorer".into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2915,7 +2909,6 @@ impl SettingsWidget for GlobalSearchToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            app,
             "Global file search".into(),
             None,
             LocalOnlyIconState::Hidden,

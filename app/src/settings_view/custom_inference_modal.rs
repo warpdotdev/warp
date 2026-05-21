@@ -106,7 +106,7 @@ impl CustomEndpointModal {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                &localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.name"),
+                localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.name"),
                 ctx,
             );
             if let Some(ep) = endpoint {
@@ -129,7 +129,7 @@ impl CustomEndpointModal {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                &localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.url"),
+                localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.url"),
                 ctx,
             );
             if let Some(ep) = endpoint {
@@ -153,7 +153,7 @@ impl CustomEndpointModal {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                &localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.api_key"),
+                localization::text_for_app(ctx, "settings.ai.custom_endpoint.placeholder.api_key"),
                 ctx,
             );
             if let Some(ep) = endpoint {
@@ -255,7 +255,7 @@ impl CustomEndpointModal {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                &localization::text_for_app(
+                localization::text_for_app(
                     ctx,
                     "settings.ai.custom_endpoint.placeholder.model_name",
                 ),
@@ -281,7 +281,7 @@ impl CustomEndpointModal {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                &localization::text_for_app(
+                localization::text_for_app(
                     ctx,
                     "settings.ai.custom_endpoint.placeholder.model_alias",
                 ),

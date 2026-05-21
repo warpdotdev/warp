@@ -224,7 +224,6 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 .is_anonymous_or_logged_out();
 
         render_body_item::<WarpDriveSettingsPageAction>(
-            app,
             localization::text_for_app(app, "settings.warp_drive.label"),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),

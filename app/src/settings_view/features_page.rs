@@ -4339,7 +4339,6 @@ impl SettingsWidget for NativeRedirectWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.native_redirect.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -4411,7 +4410,6 @@ impl SettingsWidget for SessionRestorationWidget {
             .finish();
 
         let labeled_switch = render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.session_restoration.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -4503,7 +4501,6 @@ impl SettingsWidget for SnackbarHeaderWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.sticky_command_header.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -4557,7 +4554,6 @@ impl SettingsWidget for LinkTooltipWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.link_tooltip.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4627,7 +4623,6 @@ impl SettingsWidget for QuitWarningModalWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.quit_warning.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -4680,7 +4675,6 @@ impl SettingsWidget for LoginItemWidget {
         #[cfg(not(target_os = "macos"))]
         let label = crate::localization::text_for_app(app, "settings.features.login_item.label");
         render_body_item::<FeaturesPageAction>(
-            app,
             label,
             None,
             LocalOnlyIconState::for_setting(
@@ -4728,7 +4722,6 @@ impl SettingsWidget for QuitWhenAllWindowsClosedWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(
                 app,
                 "settings.features.quit_on_last_window_closed.label",
@@ -4779,7 +4772,6 @@ impl SettingsWidget for ShowChangelogWidget {
         let changelog_settings = ChangelogSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(
                 app,
                 "settings.features.changelog_after_update.label",
@@ -4875,7 +4867,6 @@ impl SettingsWidget for MouseScrollMultiplierWidget {
             .finish();
 
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.mouse_scroll.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -4924,7 +4915,6 @@ impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.auto_open_code_review.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5049,7 +5039,6 @@ impl SettingsWidget for BlockLimitWidget {
             .finish();
 
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.block_limit.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5090,7 +5079,6 @@ impl SettingsWidget for SSHWrapperWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.ssh_wrapper.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -5155,7 +5143,6 @@ impl SettingsWidget for DesktopNotificationsWidget {
         let ui_builder = appearance.ui_builder();
         let mut column = Flex::column();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(app, "settings.features.notifications.desktop.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -5247,7 +5234,6 @@ impl SettingsWidget for DesktopNotificationsWidget {
             let ai_settings = AISettings::as_ref(app);
             let show_agent_notifications = *ai_settings.show_agent_notifications;
             column.add_child(render_body_item::<FeaturesPageAction>(
-                app,
                 crate::localization::text_for_app(
                     app,
                     "settings.features.notifications.in_app_agent.label",
@@ -5467,7 +5453,6 @@ impl SettingsWidget for ConfirmCloseSharedSessionWidget {
         let ui_builder = appearance.ui_builder();
         let session_settings = SessionSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            app,
             crate::localization::text_for_app(
                 app,
                 "settings.features.confirm_close_shared_session.label",
@@ -5524,7 +5509,6 @@ impl SettingsWidget for ExtraMetaKeysWidget {
             .borrow_mut();
         Flex::column()
             .with_child(render_body_item::<FeaturesPageAction>(
-                app,
                 EXTRA_META_KEYS_LEFT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
@@ -5546,7 +5530,6 @@ impl SettingsWidget for ExtraMetaKeysWidget {
                 None,
             ))
             .with_child(render_body_item::<FeaturesPageAction>(
-                app,
                 EXTRA_META_KEYS_RIGHT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
@@ -5591,7 +5574,6 @@ impl SettingsWidget for GlobalHotkeyWidget {
         let ui_builder = appearance.ui_builder();
         if app.is_wayland() {
             column.add_child(render_body_item::<FeaturesPageAction>(
-                app,
                 crate::localization::text_for_app(app, "settings.features.global_hotkey.label"),
                 None,
                 // Fine not to show local only icon state for this, as it's not a supported setting.
@@ -5637,7 +5619,6 @@ impl SettingsWidget for GlobalHotkeyWidget {
                         "settings.features.global_hotkey.label",
                     );
                     render_dropdown_item(
-                        app,
                         appearance,
                         &label,
                         None,
@@ -5750,7 +5731,6 @@ impl SettingsWidget for AutocompleteSymbolsWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.autocomplete_symbols.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5797,7 +5777,6 @@ impl SettingsWidget for ErrorUnderliningWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.error_underlining.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5844,7 +5823,6 @@ impl SettingsWidget for SyntaxHighlightingWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.syntax_highlighting.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5891,7 +5869,6 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.completions_while_typing.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5942,7 +5919,6 @@ impl SettingsWidget for CommandCorrectionsWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.command_corrections.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -5990,7 +5966,6 @@ impl SettingsWidget for AliasExpansionWidget {
         let alias_expansion_settings = AliasExpansionSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.alias_expansion.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6038,7 +6013,6 @@ impl SettingsWidget for MiddleClickPasteWidget {
         let ui_builder = appearance.ui_builder();
         let selection_settings = SelectionSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.middle_click_paste.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6091,7 +6065,6 @@ impl SettingsWidget for VimModeWidget {
         let app_editor_settings = AppEditorSettings::as_ref(app);
         let vim_mode_enabled = *app_editor_settings.vim_mode.value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.vim_mode.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6199,7 +6172,6 @@ impl SettingsWidget for AtContextMenuInTerminalModeWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.at_context_menu.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6256,7 +6228,6 @@ impl SettingsWidget for SlashCommandsInTerminalModeWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.slash_commands.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6309,7 +6280,6 @@ impl SettingsWidget for OutlineCodebaseSymbolsForAtContextMenuWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.outline_codebase_symbols.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6362,7 +6332,6 @@ impl SettingsWidget for ShowTerminalInputMessageLineWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.terminal_input_message_line.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6416,7 +6385,6 @@ impl SettingsWidget for AutosuggestionKeybindingHintWidget {
         let autosuggestion_keybinding_hint =
             *app_editor_settings.autosuggestion_keybinding_hint.value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(
                 app,
                 "settings.features.autosuggestion_keybinding_hint.label",
@@ -6476,7 +6444,6 @@ impl SettingsWidget for AutosuggestionIgnoreButtonWidget {
             .show_autosuggestion_ignore_button
             .value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.autosuggestion_ignore_button.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6686,7 +6653,6 @@ impl SettingsWidget for CtrlTabBehaviorWidget {
             &KeysSettings::as_ref(app).ctrl_tab_behavior,
             || {
                 render_dropdown_item(
-                    app,
                     appearance,
                     &feature_text(app, "settings.features.ctrl_tab_behavior.label"),
                     None,
@@ -6730,7 +6696,7 @@ impl SettingsWidget for MouseReportingWidget {
     ) -> Box<dyn Element> {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(app,
+        render_body_item::<FeaturesPageAction>(
             feature_text(app, "settings.features.mouse_reporting.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -6786,7 +6752,6 @@ impl SettingsWidget for ScrollReportingWidget {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.scroll_reporting.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6845,7 +6810,6 @@ impl SettingsWidget for FocusReportingWidget {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.focus_reporting.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -6893,7 +6857,6 @@ impl SettingsWidget for AudibleBellWidget {
         let ui_builder = appearance.ui_builder();
         let terminal_settings = TerminalSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.audible_bell.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -7004,7 +6967,6 @@ impl SettingsWidget for SmartSelectWidget {
         let selection = SemanticSelection::as_ref(app);
         let mut column = Flex::column();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.smart_select.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -7082,7 +7044,6 @@ impl SettingsWidget for ShowTerminalZeroStateBlockWidget {
         let ui_builder = appearance.ui_builder();
         let terminal_settings = TerminalSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.zero_state_block.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -7125,7 +7086,6 @@ impl SettingsWidget for CopyOnSelectWidget {
         let ui_builder = appearance.ui_builder();
         let copy_on_select_enabled = SelectionSettings::as_ref(app).copy_on_select_enabled();
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.copy_on_select.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -7169,7 +7129,6 @@ impl SettingsWidget for NewTabPlacementWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_dropdown_item(
-            app,
             appearance,
             &feature_text(app, "settings.features.new_tab_placement.label"),
             None,
@@ -7261,7 +7220,6 @@ impl SettingsWidget for WorkflowsInCommandSearch {
         let ui_builder = appearance.ui_builder();
         let workflow_settings = CommandSearchSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.global_workflows.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -7317,7 +7275,6 @@ impl SettingsWidget for LinuxSelectionClipboardWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.linux_selection_clipboard.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -7373,7 +7330,6 @@ impl SettingsWidget for GPUWidget {
     ) -> Box<dyn Element> {
         let gpu_settings = GPUSettings::as_ref(app);
         let mut col = Flex::column().with_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.gpu.low_power.label"),
             None,
             LocalOnlyIconState::for_setting(
@@ -7447,7 +7403,6 @@ impl SettingsWidget for WindowSystemWidget {
         let mut children = Flex::column();
         let force_x11 = *LinuxAppConfiguration::as_ref(app).force_x11.value();
         children.add_child(render_body_item::<FeaturesPageAction>(
-            app,
             feature_text(app, "settings.features.window_system.wayland.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
@@ -7525,7 +7480,6 @@ impl SettingsWidget for GraphicsBackendWidget {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let dropdown = render_dropdown_item(
-            app,
             appearance,
             &feature_text(app, "settings.features.graphics_backend.label"),
             None,

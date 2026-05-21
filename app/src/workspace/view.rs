@@ -182,6 +182,7 @@ use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::drive::export::ExportManager;
 use crate::drive::settings::WarpDriveSettings;
 use crate::launch_configs::launch_config::WindowTemplate;
+use crate::localization;
 use crate::pane_group::{
     AIFactPane, ChildAgentOrigin, CodeReviewPanelArg, Direction as PaneGroupDirection,
     EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, PaneGroup, PaneId,
@@ -1280,7 +1281,10 @@ impl Workspace {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search repos", ctx);
+            editor.set_placeholder_text(
+                localization::text_for_app(ctx, "workspace.placeholder.search_repos"),
+                ctx,
+            );
             editor
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
@@ -1316,7 +1320,10 @@ impl Workspace {
             EditorView::single_line(options, ctx)
         });
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text("Search tabs...", ctx);
+            editor.set_placeholder_text(
+                localization::text_for_app(ctx, "workspace.placeholder.search_tabs"),
+                ctx,
+            );
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
             EditorEvent::Edited(_) => {
@@ -18274,7 +18281,11 @@ impl Workspace {
         Shrinkable::new(1.0, inner).finish()
     }
 
-    fn render_title_bar_search_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_title_bar_search_bar(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
 
@@ -18296,7 +18307,10 @@ impl Workspace {
                         Shrinkable::new(
                             1.,
                             Text::new_inline(
-                                "Search sessions, agents, files...",
+                                localization::text_for_app(
+                                    app,
+                                    "workspace.placeholder.search_sessions_agents_files",
+                                ),
                                 appearance.ui_font_family(),
                                 14.,
                             )
@@ -18485,7 +18499,8 @@ impl Workspace {
                         1.,
                         Clipped::new(
                             Container::new(
-                                Align::new(self.render_title_bar_search_bar(appearance)).finish(),
+                                Align::new(self.render_title_bar_search_bar(appearance, ctx))
+                                    .finish(),
                             )
                             .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
                             .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)

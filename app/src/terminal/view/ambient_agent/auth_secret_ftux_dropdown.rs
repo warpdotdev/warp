@@ -95,7 +95,7 @@ impl AuthSecretFtuxDropdown {
                 ctx,
             );
             editor.set_placeholder_text(
-                &localization::text_for_app(ctx, "terminal.auth_secret.search_placeholder"),
+                localization::text_for_app(ctx, "terminal.auth_secret.search_placeholder"),
                 ctx,
             );
             editor

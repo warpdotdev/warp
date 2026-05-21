@@ -51,6 +51,7 @@ use crate::ai::predict::prompt_suggestions::{
 use crate::ai::skills::SkillManager;
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
 use crate::context_chips::spacing;
+use crate::localization;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -415,9 +416,8 @@ pub const DEBOUNCE_AI_QUERY_PREDICTION_PERIOD: Duration = Duration::from_millis(
 pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_MAX_HEIGHT: f32 = 236.;
 pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_TOP_PADDING: f32 = 10.;
 pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_BOTTOM_PADDING: f32 = 8.;
-pub(super) const CLI_AGENT_RICH_INPUT_HINT_TEXT: &str = "Tell the agent what to build...";
-
-const CLOUD_MODE_V2_HINT_TEXT: &str = "Kick off a cloud agent";
+const CLI_AGENT_RICH_INPUT_HINT_KEY: &str = "terminal.input.hint.tell_agent_what_to_build";
+const CLOUD_MODE_V2_HINT_KEY: &str = "terminal.input.hint.kick_off_cloud_agent";
 const SHORT_CIRCUIT_HIGHLIGHTING_ACTIONS: [Option<PlainTextEditorViewAction>; 7] = [
     Some(PlainTextEditorViewAction::Space),
     Some(PlainTextEditorViewAction::NonExpandingSpace),
@@ -439,60 +439,61 @@ pub fn get_input_box_top_border_width() -> f32 {
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
-pub const INPUT_A11Y_LABEL: &str = "Command Input.";
-pub const INPUT_A11Y_HELPER: &str = "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.";
-pub const AI_COMMAND_SEARCH_HINT_TEXT: &str = "Type '#' for AI command suggestions";
+const INPUT_A11Y_LABEL_KEY: &str = "terminal.input.a11y.label";
+const INPUT_A11Y_HELPER_KEY: &str = "terminal.input.a11y.helper";
+const AI_COMMAND_SEARCH_HINT_KEY: &str = "terminal.input.hint.ai_command_search";
 
-const AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT: &str = "Run commands";
+const AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_KEY: &str =
+    "terminal.input.hint.run_commands";
 
 // Rotating hint text options for new Agent Mode conversations
-const AGENT_MODE_HINT_OPTIONS: &[&str] = &[
-    "Warp anything e.g. Deploy my React app to Vercel and set up environment variables",
-    "Warp anything e.g. Help me debug why my Python tests are failing in CI",
-    "Warp anything e.g. Set up a new microservice with Docker and create the deployment pipeline",
-    "Warp anything e.g. Find and fix the memory leak in my Node.js application",
-    "Warp anything e.g. Create a backup script for my PostgreSQL database and schedule it",
-    "Warp anything e.g. Help me migrate my data from MySQL to PostgreSQL",
-    "Warp anything e.g. Set up monitoring and alerts for my AWS infrastructure",
-    "Warp anything e.g. Build a REST API for my mobile app using FastAPI",
-    "Warp anything e.g. Help me optimize my SQL queries that are running slowly",
-    "Warp anything e.g. Create a GitHub Actions workflow to automatically deploy on merge",
-    "Warp anything e.g. Set up Redis caching for my web application",
-    "Warp anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing",
-    "Warp anything e.g. Build a data pipeline to process CSV files and load them into BigQuery",
-    "Warp anything e.g. Set up SSL certificates and configure HTTPS for my domain",
-    "Warp anything e.g. Help me refactor this legacy code to use modern design patterns",
-    "Warp anything e.g. Create unit tests for my authentication service",
-    "Warp anything e.g. Set up log aggregation with ELK stack for my distributed system",
-    "Warp anything e.g. Help me implement OAuth2 authentication in my Express.js app",
-    "Warp anything e.g. Optimize my Docker images to reduce build times and size",
-    "Warp anything e.g. Set up A/B testing infrastructure for my web application",
+const AGENT_MODE_HINT_OPTION_KEYS: &[&str] = &[
+    "terminal.input.agent_hint.deploy_react_vercel",
+    "terminal.input.agent_hint.help_debug_python_tests",
+    "terminal.input.agent_hint.setup_microservice_docker",
+    "terminal.input.agent_hint.fix_node_memory_leak",
+    "terminal.input.agent_hint.backup_postgres",
+    "terminal.input.agent_hint.migrate_mysql_postgres",
+    "terminal.input.agent_hint.monitor_aws",
+    "terminal.input.agent_hint.build_fastapi",
+    "terminal.input.agent_hint.optimize_sql",
+    "terminal.input.agent_hint.github_actions_deploy",
+    "terminal.input.agent_hint.redis_caching",
+    "terminal.input.agent_hint.troubleshoot_kubernetes",
+    "terminal.input.agent_hint.bigquery_pipeline",
+    "terminal.input.agent_hint.configure_https",
+    "terminal.input.agent_hint.refactor_legacy",
+    "terminal.input.agent_hint.create_auth_tests",
+    "terminal.input.agent_hint.elk_logs",
+    "terminal.input.agent_hint.oauth_express",
+    "terminal.input.agent_hint.optimize_docker",
+    "terminal.input.agent_hint.ab_testing",
 ];
 
-fn get_agent_mode_new_conversation_hint_text() -> &'static str {
+fn get_agent_mode_new_conversation_hint_key() -> &'static str {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static HINT_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-    let index = HINT_INDEX.fetch_add(1, Ordering::Relaxed) % AGENT_MODE_HINT_OPTIONS.len();
-    AGENT_MODE_HINT_OPTIONS[index]
+    let index = HINT_INDEX.fetch_add(1, Ordering::Relaxed) % AGENT_MODE_HINT_OPTION_KEYS.len();
+    AGENT_MODE_HINT_OPTION_KEYS[index]
 }
 
-fn get_stable_agent_mode_hint_text(cached_hint: &mut Option<&'static str>) -> &'static str {
+fn get_stable_agent_mode_hint_key(cached_hint: &mut Option<&'static str>) -> &'static str {
     if let Some(hint) = cached_hint {
         hint
     } else {
-        let new_hint = get_agent_mode_new_conversation_hint_text();
+        let new_hint = get_agent_mode_new_conversation_hint_key();
         *cached_hint = Some(new_hint);
         new_hint
     }
 }
 
-const AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_UDI: &str = "Steer the running agent";
-const AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_CLASSIC: &str =
-    "Steer the running agent, or backspace to exit";
-const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_UDI: &str = "Ask a follow up";
-const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_CLASSIC: &str =
-    "Ask a follow up, or backspace to exit";
+const AGENT_MODE_AI_ENABLED_STEER_HINT_KEY_UDI: &str = "terminal.input.hint.steer_running_agent";
+const AGENT_MODE_AI_ENABLED_STEER_HINT_KEY_CLASSIC: &str =
+    "terminal.input.hint.steer_running_agent_classic";
+const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_KEY_UDI: &str = "terminal.input.hint.ask_follow_up";
+const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_KEY_CLASSIC: &str =
+    "terminal.input.hint.ask_follow_up_classic";
 
 /// Action name for setting input mode to agent mode
 pub const SET_INPUT_MODE_AGENT_ACTION_NAME: &str = "input:set_mode_agent";
@@ -5847,18 +5848,18 @@ impl Input {
     // Returns the appropriate hint/placeholder text to render in an empty input when Agent Mode is
     // enabled (the feature flag, not the specific AI input mode). This method ensures that hint text
     // is cached when needed for new conversations.
-    fn agent_mode_hint_text(&mut self, app: &AppContext) -> &str {
+    fn agent_mode_hint_text(&mut self, app: &AppContext) -> String {
         let input_model = self.ai_input_model.as_ref(app);
         let is_udi_enabled = InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
 
-        match (
+        let key = match (
             input_model.input_type(),
             input_model.should_run_input_autodetection(app),
         ) {
-            (InputType::Shell, false) => AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT,
+            (InputType::Shell, false) => AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_KEY,
             (InputType::Shell, true) => {
                 // Ensure hint text is cached for new conversations
-                get_stable_agent_mode_hint_text(&mut self.cached_agent_mode_hint_text)
+                get_stable_agent_mode_hint_key(&mut self.cached_agent_mode_hint_text)
             }
             (InputType::AI, _) => {
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
@@ -5872,25 +5873,27 @@ impl Input {
                 {
                     Some(status) if status.is_in_progress() => {
                         if is_udi_enabled {
-                            AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_UDI
+                            AGENT_MODE_AI_ENABLED_STEER_HINT_KEY_UDI
                         } else {
-                            AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_CLASSIC
+                            AGENT_MODE_AI_ENABLED_STEER_HINT_KEY_CLASSIC
                         }
                     }
                     Some(_) => {
                         if is_udi_enabled {
-                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_UDI
+                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_KEY_UDI
                         } else {
-                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_CLASSIC
+                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_KEY_CLASSIC
                         }
                     }
                     None => {
                         // Ensure hint text is cached for new conversations
-                        get_stable_agent_mode_hint_text(&mut self.cached_agent_mode_hint_text)
+                        get_stable_agent_mode_hint_key(&mut self.cached_agent_mode_hint_text)
                     }
                 }
             }
-        }
+        };
+
+        localization::text_for_app(app, key)
     }
 
     fn handle_input_settings_event(
@@ -6290,28 +6293,32 @@ impl Input {
     pub fn clear_cached_hint_text(&mut self) {
         self.cached_agent_mode_hint_text = None;
     }
-    fn cli_agent_rich_input_hint_text(&self, ctx: &ViewContext<Self>) -> Cow<'static, str> {
+    fn cli_agent_rich_input_hint_text(&self, ctx: &ViewContext<Self>) -> String {
         if self.is_locked_in_shell_mode(ctx) {
-            return Cow::Borrowed(AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT);
+            return localization::text_for_app(
+                ctx,
+                AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_KEY,
+            );
         }
 
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.terminal_view_id)
             .map(|session| match session.agent {
-                CLIAgent::Unknown => Cow::Borrowed(CLI_AGENT_RICH_INPUT_HINT_TEXT),
-                _ => Cow::Owned(format!(
-                    "Enter prompt for {}...",
-                    session.agent.display_name()
-                )),
+                CLIAgent::Unknown => localization::text_for_app(ctx, CLI_AGENT_RICH_INPUT_HINT_KEY),
+                _ => localization::text_for_app_with_args(
+                    ctx,
+                    "terminal.input.hint.enter_prompt_for_agent",
+                    &[("agent", session.agent.display_name())],
+                ),
             })
-            .unwrap_or(Cow::Borrowed(CLI_AGENT_RICH_INPUT_HINT_TEXT))
+            .unwrap_or_else(|| localization::text_for_app(ctx, CLI_AGENT_RICH_INPUT_HINT_KEY))
     }
 
     pub fn set_zero_state_hint_text(&mut self, ctx: &mut ViewContext<Self>) {
         if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
             let hint = self.cli_agent_rich_input_hint_text(ctx);
             self.editor.update(ctx, |editor, ctx| {
-                editor.set_placeholder_text(hint, ctx);
+                editor.set_placeholder_text(&hint, ctx);
             });
             return;
         }
@@ -6320,14 +6327,23 @@ impl Input {
                 .active_conversation(self.terminal_view_id)
                 .is_none_or(|c| c.is_empty());
             let hint = if conversation_is_empty {
-                CLOUD_MODE_V2_HINT_TEXT.to_owned()
+                localization::text_for_app(ctx, CLOUD_MODE_V2_HINT_KEY)
             } else {
                 self.handoff_compose_state
                     .as_ref(ctx)
                     .selected_environment_id()
                     .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, ctx))
-                    .map(|env| format!("Hand off to {}", env.model().string_model.display_name()))
-                    .unwrap_or_else(|| "Handoff to cloud".to_owned())
+                    .map(|env| {
+                        let display_name = env.model().string_model.display_name();
+                        localization::text_for_app_with_args(
+                            ctx,
+                            "terminal.input.hint.handoff_to_environment",
+                            &[("environment", display_name.as_str())],
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        localization::text_for_app(ctx, "terminal.input.hint.handoff_to_cloud")
+                    })
             };
             self.editor.update(ctx, |editor, ctx| {
                 editor.set_placeholder_text(&hint, ctx);
@@ -6339,7 +6355,10 @@ impl Input {
             let show_hint = *InputSettings::as_ref(ctx).show_hint_text;
             self.editor.update(ctx, |editor, ctx| {
                 if show_hint {
-                    editor.set_placeholder_text(CLOUD_MODE_V2_HINT_TEXT, ctx);
+                    editor.set_placeholder_text(
+                        localization::text_for_app(ctx, CLOUD_MODE_V2_HINT_KEY),
+                        ctx,
+                    );
                 } else {
                     editor.clear_placeholder_text(ctx);
                 }
@@ -6383,13 +6402,16 @@ impl Input {
         if toggled_on && AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
             if FeatureFlag::AgentMode.is_enabled() {
                 // agent_mode_hint_text now handles caching internally
-                let hint_text = self.agent_mode_hint_text(ctx).to_string();
+                let hint_text = self.agent_mode_hint_text(ctx);
                 self.editor.update(ctx, |editor, ctx| {
                     editor.set_placeholder_text(&hint_text, ctx);
                 });
             } else {
                 self.editor.update(ctx, |editor, ctx| {
-                    editor.set_placeholder_text(AI_COMMAND_SEARCH_HINT_TEXT, ctx);
+                    editor.set_placeholder_text(
+                        localization::text_for_app(ctx, AI_COMMAND_SEARCH_HINT_KEY),
+                        ctx,
+                    );
                 });
             }
         } else {
@@ -14784,14 +14806,14 @@ impl TypedActionView for Input {
     fn action_accessibility_contents(
         &mut self,
         action: &InputAction,
-        _: &mut ViewContext<Self>,
+        ctx: &mut ViewContext<Self>,
     ) -> ActionAccessibilityContent {
         match action {
             InputAction::FocusInputBox => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new(
-                    INPUT_A11Y_LABEL,
+                    localization::text_for_app(ctx, INPUT_A11Y_LABEL_KEY),
                     // TODO (a11y) use bindings from user settings
-                    INPUT_A11Y_HELPER,
+                    localization::text_for_app(ctx, INPUT_A11Y_HELPER_KEY),
                     WarpA11yRole::TextareaRole,
                 ))
             }
@@ -14924,9 +14946,10 @@ impl TypedActionView for Input {
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Cannot start a new conversation while agent is monitoring a command.".to_string()
-                            ),
+                            DismissibleToast::error(localization::text_for_app(
+                                ctx,
+                                "terminal.input.toast.cannot_start_conversation_agent_monitoring",
+                            )),
                             window_id,
                             ctx,
                         );
@@ -14998,11 +15021,11 @@ impl View for Input {
         "Input"
     }
 
-    fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
+    fn accessibility_contents(&self, ctx: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            INPUT_A11Y_LABEL,
+            localization::text_for_app(ctx, INPUT_A11Y_LABEL_KEY),
             // TODO (a11y) use bindings from user settings
-            INPUT_A11Y_HELPER,
+            localization::text_for_app(ctx, INPUT_A11Y_HELPER_KEY),
             WarpA11yRole::TextareaRole,
         ))
     }

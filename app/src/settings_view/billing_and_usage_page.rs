@@ -1941,7 +1941,6 @@ impl BillingAndUsagePageView {
         };
 
         let auto_reload_switch = Container::new(render_body_item::<BillingAndUsagePageAction>(
-            app,
             "Auto reload".into(),
             None,
             Default::default(),

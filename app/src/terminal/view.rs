@@ -516,7 +516,7 @@ use crate::terminal::ShellHost;
 use crate::terminal::{
     block_list_element::BlockHoverAction,
     // find::{Event as FindEvent, Find, FindDirection},
-    input::{Event as InputEvent, Input, INPUT_A11Y_HELPER, INPUT_A11Y_LABEL},
+    input::{Event as InputEvent, Input},
     model::block::SerializedBlock,
     shell::ShellType,
     terminal_size_element::TerminalSizeElement,
@@ -25178,17 +25178,17 @@ impl TypedActionView for TerminalView {
             }
             FocusInputAndClearSelection => {
                 Custom(AccessibilityContent::new(
-                    INPUT_A11Y_LABEL,
+                    terminal_text(ctx, "terminal.input.a11y.label"),
                     // TODO (a11y) use bindings from user settings
-                    INPUT_A11Y_HELPER,
+                    terminal_text(ctx, "terminal.input.a11y.helper"),
                     WarpA11yRole::TextareaRole,
                 ))
             }
             KeyDown(key) => {
                 let label = if key.eq("\x1b") {
-                    INPUT_A11Y_LABEL
+                    terminal_text(ctx, "terminal.input.a11y.label")
                 } else {
-                    key
+                    key.to_owned()
                 };
                 Custom(AccessibilityContent::new_without_help(
                     label,

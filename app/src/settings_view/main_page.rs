@@ -721,7 +721,6 @@ impl SettingsWidget for SettingsSyncWidget {
         };
 
         Container::new(render_body_item::<MainPageAction>(
-            app,
             localization::text_for_app(app, "settings.account.settings_sync"),
             Some(label_info),
             // Cloud prefs are always synced, so no need to show the local-only icon.

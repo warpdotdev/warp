@@ -717,7 +717,6 @@ impl SettingsWidget for SSHWidget {
             &WarpifySettings::as_ref(app).enable_ssh_warpification,
             move || {
                 render_body_item::<WarpifyPageAction>(
-                    app,
                     localization::text_for_app(app, "settings.warpify.ssh_sessions.label"),
                     None,
                     LocalOnlyIconState::for_setting(
@@ -752,7 +751,6 @@ impl SettingsWidget for SSHWidget {
                 &WarpifySettings::as_ref(app).ssh_extension_install_mode,
                 move || {
                     Container::new(render_dropdown_item(
-                        app,
                         appearance,
                         &localization::text_for_app(
                             app,
@@ -795,7 +793,6 @@ impl SettingsWidget for SSHWidget {
                 let mut column = Flex::column();
 
                 column.add_child(render_body_item::<WarpifyPageAction>(
-                    app,
                     localization::text_for_app(app, "settings.warpify.tmux.label"),
                     Some(AdditionalInfo {
                         mouse_state: self.additional_info_mouse_state.clone(),
