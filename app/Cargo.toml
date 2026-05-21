@@ -197,6 +197,7 @@ static_assertions.workspace = true
 string-offset.workspace = true
 sum_tree.workspace = true
 tabwriter = "1.4"
+tar = "0.4"
 tempfile.workspace = true
 thiserror.workspace = true
 thousands = "0.2.0"

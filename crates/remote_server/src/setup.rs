@@ -132,6 +132,7 @@ impl UnsupportedReason {
             }
             crate::transport::Error::TimedOut
             | crate::transport::Error::ScriptFailed { .. }
+            | crate::transport::Error::ClientDownloadFailed { .. }
             | crate::transport::Error::Other(_) => None,
         }
     }
