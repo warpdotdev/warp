@@ -6,21 +6,39 @@ use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
-use warp_cli::{agent::OutputFormat, GlobalOptions};
+use warp_cli::{GlobalOptions, agent::OutputFormat};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::ambient_agents::AgentConfigSnapshot;
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgent, ScheduledAgentManager, ScheduledAmbientAgent, UpdateScheduleParams,
 };
-use crate::ai::ambient_agents::AgentConfigSnapshot;
 use crate::cloud_object::CloudObject;
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::output::{self, TableFormat};
+
+/// Checks if an error is caused by a service account (team API key) attempting a schedule
+/// operation that requires a user principal, and returns a user-friendly error message.
+fn report_schedule_error(err: anyhow::Error, ctx: &mut AppContext) {
+    let err_str = format!("{err:#}");
+    if err_str.contains("Expected a user account") {
+        super::report_fatal_error(
+            anyhow::anyhow!(
+                "Creating schedules with team-scoped API keys is not currently supported. \
+                To have a schedule run as a service account, please create one in the Oz \
+                web UI and then assign it to a team-owned agent."
+            ),
+            ctx,
+        );
+    } else {
+        super::report_fatal_error(err, ctx);
+    }
+}
 
 /// Run a scheduled agent command.
 pub fn run(
@@ -157,7 +175,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
-                    super::report_fatal_error(err, ctx);
+                    report_schedule_error(err, ctx);
                 }
             });
         });
@@ -354,7 +372,7 @@ fn pause(ctx: &mut AppContext, args: PauseScheduleArgs) -> anyhow::Result<()> {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
-                    super::report_fatal_error(err, ctx);
+                    report_schedule_error(err, ctx);
                 }
             });
         });
@@ -382,7 +400,7 @@ fn unpause(ctx: &mut AppContext, args: UnpauseScheduleArgs) -> anyhow::Result<()
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
-                    super::report_fatal_error(err, ctx);
+                    report_schedule_error(err, ctx);
                 }
             });
         });
@@ -522,7 +540,7 @@ fn update(ctx: &mut AppContext, args: UpdateScheduleArgs) -> anyhow::Result<()> 
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
-                    super::report_fatal_error(err, ctx);
+                    report_schedule_error(err, ctx);
                 }
             });
         });
@@ -658,7 +676,7 @@ fn delete(ctx: &mut AppContext, args: DeleteScheduleArgs) -> anyhow::Result<()> 
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
-                    super::report_fatal_error(err, ctx);
+                    report_schedule_error(err, ctx);
                 }
             });
         });
