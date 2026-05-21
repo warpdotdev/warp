@@ -1088,6 +1088,10 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Copy workflow text" => "复制工作流文本",
         "Code review panel" => "代码审查面板",
         "Cannot detect diffs for this folder" => "无法检测此文件夹的差异",
+        "Choose a locally set up project and we’ll help you set up an environment based on it" => {
+            "选择一个已在本地设置好的项目，我们会基于它帮你配置环境"
+        }
+        "Choose how you’d like to set up your environment:" => "选择你想如何设置环境：",
         "Create" => "创建",
         "Create New Project" => "新建项目",
         "Create New Tab" => "新建标签页",
@@ -1119,6 +1123,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
             "自动补充已启用。当余额较低时，我们会补充 {credits} 点数。"
         }
         "Auto-reload disabled." => "自动补充已禁用。",
+        "Authorize" => "授权",
         "Buying…" => "购买中…",
         "Additional members are billed at your plan's per-user rate. {prorated_message}" => {
             "新增成员会按你当前方案的每用户价格计费。{prorated_message}"
@@ -1179,11 +1184,18 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Embed" => "嵌入",
         "Enable notifications" => "启用通知",
         "Enter auth token" => "输入认证令牌",
+        "Env ID" => "环境 ID",
         "Environment" => "环境",
+        "Environment deleted successfully" => "环境已成功删除",
+        "Environments" => "环境",
+        "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration." => {
+            "环境定义你的后台智能体在哪里运行。可以通过 GitHub（推荐）、Warp 辅助设置或手动配置在几分钟内完成设置。"
+        }
         "Environment variables" => "环境变量",
         "Executable path" => "可执行文件路径",
         "Expand" => "展开",
         "Failed" => "失败",
+        "Failed to share environment with team" => "无法与团队共享环境",
         "File" => "文件",
         "File explorer" => "文件浏览器",
         "Fill out the arguments in this workflow and copy it to run in your terminal session" => {
@@ -1205,6 +1217,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Hide Rich Input" => "隐藏富输入",
         "Ignore this suggestion" => "忽略此建议",
         "Import" => "导入",
+        "Image" => "镜像",
         "Initialize Project" => "初始化项目",
         "Insert block" => "插入块",
         "Install the Warp plugin to enable rich agent notifications within Warp" => {
@@ -1213,11 +1226,15 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Install nvm" => "安装 nvm",
         "Invite" => "邀请",
         "Last 24 hours" => "过去 24 小时",
+        "Last edited" => "上次编辑",
+        "Last used" => "上次使用",
         "Last week" => "上周",
+        "Launch agent" => "启动智能体",
         "Learn more" => "了解更多",
         "Link (web or file)" => "链接（网页或文件）",
         "Link SSO" => "关联 SSO",
         "Load more" => "加载更多",
+        "No environments match your search." => "没有匹配你搜索的环境。",
         "Loading..." => "正在加载...",
         "Log out" => "退出登录",
         "Looks like you're out of credits. " => "你的点数似乎已用完。",
@@ -1286,6 +1303,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "PR link" => "PR 链接",
         "Profiles" => "配置",
         "Pull Request" => "拉取请求",
+        "Quick setup" => "快速设置",
         "Redact secrets (API keys, passwords, IP addresses, PII etc.)" => {
             "隐藏密钥（API 密钥、密码、IP 地址、个人信息等）"
         }
@@ -1297,11 +1315,13 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Remove Member" => "移除成员",
         "Remove from team" => "从团队中移除",
         "Remove queued prompt" => "移除排队提示",
+        "Repos" => "仓库",
         "Replace all" => "全部替换",
         "Request edit access" => "请求编辑权限",
         "Reset to Warp defaults" => "重置为 Warp 默认值",
         "Reset to default" => "重置为默认值",
         "Restore" => "恢复",
+        "Retry" => "重试",
         "Remote host" => "远程主机",
         "Resume conversation" => "恢复对话",
         "Review changes" => "审查更改",
@@ -1331,6 +1351,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
             "前往 设置 > 键盘快捷键 以配置自定义快捷键"
         }
         "Search" => "搜索",
+        "Search environments..." => "搜索环境...",
         "Search in files" => "在文件中搜索",
         "Search MCP Servers" => "搜索 MCP 服务器",
         "Search sessions, agents, files..." => "搜索会话、智能体、文件...",
@@ -1346,6 +1367,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Share conversation" => "共享对话",
         "Share session" => "共享会话",
         "Share session..." => "共享会话...",
+        "Shared by Warp and your team" => "由 Warp 和你的团队共享",
         "Show" => "显示",
         "Show credit usage details" => "显示点数用量详情",
         "Show file navigation" => "显示文件导航",
@@ -1363,7 +1385,15 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Status" => "状态",
         "Stop sharing" => "停止共享",
         "Stop sharing session" => "停止共享会话",
+        "Successfully created environment" => "环境已成功创建",
+        "Successfully shared environment" => "环境已成功共享",
+        "Successfully updated environment" => "环境已成功更新",
         "Summary" => "摘要",
+        "Suggested" => "建议",
+        "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config" => {
+            "选择你想使用的 GitHub 仓库，我们会建议基础镜像和配置"
+        }
+        "Setup commands" => "设置命令",
         "Split Pane Right" => "向右拆分窗格",
         "Switch to Business" => "切换到 Business",
         "Switch to the Build plan" => "切换到 Build 方案",
@@ -1393,6 +1423,12 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Update" => "更新",
         "Update Agent" => "更新智能体",
         "Update Warp manually" => "手动更新 Warp",
+        "Unable to create environment: not logged in." => "无法创建环境：尚未登录。",
+        "Unable to save: environment no longer exists." => "无法保存：环境已不存在。",
+        "Unable to share environment: environment is not yet synced." => "无法共享环境：环境尚未同步。",
+        "Unable to share environment: you are not currently on a team." => {
+            "无法共享环境：你当前不在团队中。"
+        }
         "Update Warp plugin" => "更新 Warp 插件",
         "Upgrade" => "升级",
         "Upgrade to Build" => "升级到 Build",
@@ -1406,6 +1442,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "bring your own key" => "自带密钥",
         "Use latest codex model" => "使用最新 Codex 模型",
         "Use agent" => "使用智能体",
+        "Use the agent" => "使用智能体",
         "Value (optional)" => "值（可选）",
         "View" => "查看",
         "View as" => "视图显示为",
@@ -1420,6 +1457,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "View pull request" => "查看拉取请求",
         "View this run in the Oz web app" => "在 Oz 网页应用中查看此运行",
         "View agent tasks you created" => "查看你创建的智能体任务",
+        "View my runs" => "查看我的运行",
         "Visit Oz" => "访问 Oz",
         "Visit the repo" => "访问仓库",
         "Viewing" => "查看中",
@@ -1455,6 +1493,8 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Welcome to Warp" => "欢迎使用 Warp",
         "Who has access" => "谁有访问权限",
         "Working" => "运行中",
+        "You haven’t set up any environments yet." => "你还没有设置任何环境。",
+        "never" => "从未",
         "Working Directory" => "工作目录",
         "Branch" => "分支",
         "Command / Conversation" => "命令 / 对话",
