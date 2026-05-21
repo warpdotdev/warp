@@ -5468,7 +5468,7 @@ fn test_input_type_button_explicit_lock() {
         );
         let after_click_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_type_decision_source()
+                ai_input.last_ai_autodetection_source()
             })
         });
         assert_eq!(
@@ -5497,7 +5497,7 @@ fn test_input_type_button_explicit_lock() {
         );
         let final_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_type_decision_source()
+                ai_input.last_ai_autodetection_source()
             })
         });
         assert_eq!(final_source, Some(AppLevelOverride::ManualToggle.into()));
@@ -6174,7 +6174,7 @@ fn test_terminal_prefix_sets_shell_prefix_decision_source() {
                 assert_eq!(input_model.input_type(), InputType::Shell);
                 assert!(input_model.is_input_type_locked());
                 assert_eq!(
-                    input_model.input_type_decision_source(),
+                    input_model.last_ai_autodetection_source(),
                     Some(AppLevelOverride::ShellPrefix.into())
                 );
             });
@@ -6207,7 +6207,7 @@ fn test_source_less_locked_config_clears_decision_source() {
 
         input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |input_model, _| {
-                assert_eq!(input_model.input_type_decision_source(), None);
+                assert_eq!(input_model.last_ai_autodetection_source(), None);
             });
         });
     });
@@ -6313,7 +6313,7 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let locked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_type_decision_source()
+                ai_input.last_ai_autodetection_source()
             })
         });
         assert_eq!(
@@ -6357,7 +6357,7 @@ fn test_image_attachment_preserves_lock_state() {
         );
         let unlocked_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_type_decision_source()
+                ai_input.last_ai_autodetection_source()
             })
         });
         assert_eq!(
@@ -6702,7 +6702,7 @@ fn test_remove_ignored_suggestion_on_ai_query_execution() {
         // Set up AI input mode and execute the query
         input.update(&mut app, |input, ctx| {
             input.ai_input_model.update(ctx, |ai_input, ctx| {
-                ai_input.set_input_type(InputType::AI, ctx);
+                ai_input.set_input_type(InputType::AI, None, ctx);
             });
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert(test_query, ctx);
@@ -6869,7 +6869,7 @@ fn test_terminal_only_escape_locks_shell_mode() {
         assert!(config.is_locked);
         let source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
-                ai_input.input_type_decision_source()
+                ai_input.last_ai_autodetection_source()
             })
         });
         assert_eq!(source, Some(AppLevelOverride::ManualToggle.into()));

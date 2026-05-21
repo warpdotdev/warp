@@ -222,15 +222,16 @@ use crate::ai::{
         inline_action::code_diff_view::{CodeDiffView, FileDiff},
         summarization_cancel_dialog::SummarizationCancelDialog,
         telemetry_banner::{should_collect_ai_ugc_telemetry, TelemetryBanner},
-        AIBlock, AIBlockEvent, AppLevelOverride, BlocklistAIActionEvent, BlocklistAIActionModel,
-        BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-        BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-        BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
-        InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
-        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
-        PendingQueryState, RequestFileEditsFormatKind, ShellCommandExecutor,
-        ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-        ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+        AIBlock, AIBlockEvent, AppLevelHeuristic, AppLevelOverride, BlocklistAIActionEvent,
+        BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+        BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+        BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
+        ConversationStatusUpdate, InputConfig, InputType, LegacyPassiveSuggestionsEvent,
+        LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
+        PassiveSuggestionsModels, PendingQueryState, RequestFileEditsFormatKind,
+        ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+        StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+        PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
     get_relevant_files::controller::GetRelevantFilesController,
@@ -6098,7 +6099,11 @@ impl TerminalView {
 
             // Set input config to AI mode, preserving user's autodetect preference
             self.ai_input_model.update(ctx, |input_model, ctx| {
-                input_model.set_input_type(InputType::AI, ctx);
+                input_model.set_input_type(
+                    InputType::AI,
+                    Some(AppLevelHeuristic::ContinueConversation.into()),
+                    ctx,
+                );
             });
         }
 
@@ -18744,7 +18749,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
-                None,
+                Some(AppLevelHeuristic::AskAi.into()),
                 ctx,
             );
         });
@@ -18801,7 +18806,7 @@ impl TerminalView {
         }
 
         self.ai_input_model.update(ctx, |ai_input, ctx| {
-            ai_input.set_input_type(InputType::AI, ctx);
+            ai_input.set_input_type(InputType::AI, Some(AppLevelHeuristic::AskAi.into()), ctx);
         });
 
         if !context_block_indices.is_empty() {
@@ -21948,7 +21953,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
-                    None,
+                    Some(AppLevelHeuristic::InlineCodeReviewSend.into()),
                     ctx,
                 );
             });

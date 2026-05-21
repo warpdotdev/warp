@@ -28,11 +28,50 @@ pub enum AppLevelOverride {
     SettingDisabled,
 }
 
+/// App-level heuristics that change input type as a side effect of unrelated UI flows.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppLevelHeuristic {
+    /// Inline history menu / history-up suggestion selection set the input type.
+    HistorySelection,
+    /// Inserting a workflow into the input set the input type based on workflow kind.
+    WorkflowInsertion,
+    /// Accepting a shell command autosuggestion forced Shell mode.
+    CommandAutosuggestionAccepted,
+    /// Empty-buffer conversation context render forced AI so conversation context renders.
+    ConversationContextRender,
+    /// "Continue conversation" button forced AI mode.
+    ContinueConversation,
+    /// Ask-AI flow (text/block selection, programmatic Ask-AI lock) forced AI mode.
+    AskAi,
+    /// Detected/composing slash or skill command forced AI mode.
+    SlashCommand,
+    /// Entering inline agent view force-locked AI without an explicit user toggle.
+    InlineAgentViewEntry,
+    /// Activating cloud handoff compose (`&` prefix or programmatic) force-locked AI.
+    CloudHandoffEnter,
+    /// Exiting cloud handoff compose restored AI / unlocked-if-autodetect.
+    CloudHandoffExit,
+    /// Legacy non-AgentView `?` AI prefix path force-locked AI.
+    AgentModePrefix,
+    /// Inline code review send overrode the input mode to AI.
+    InlineCodeReviewSend,
+    /// External input config update from session sharing applied.
+    SessionSharingApply,
+    /// Fullscreen AgentView inline history command cycling force-locked Shell.
+    FullscreenInlineHistoryCycling,
+    /// Closing history suggestions restored the previously saved config.
+    RestoreSavedConfig,
+    /// `set_input_config_for_classic_mode` reset (CtrlC, delete-all-left, etc.).
+    ClassicModeReset,
+}
+
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputTypeAutoDetectionSource {
-    /// App level settings from user actions.
+    /// App level settings from explicit user actions.
     AppLevelOverride(AppLevelOverride),
+    /// App level implicit / side-effect transitions from other UI flows.
+    AppLevelHeuristic(AppLevelHeuristic),
     /// Decision produced by the NLD pipeline.
     NldDecision(NldDecision),
 }
@@ -40,6 +79,12 @@ pub enum InputTypeAutoDetectionSource {
 impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
     fn from(value: AppLevelOverride) -> Self {
         Self::AppLevelOverride(value)
+    }
+}
+
+impl From<AppLevelHeuristic> for InputTypeAutoDetectionSource {
+    fn from(value: AppLevelHeuristic) -> Self {
+        Self::AppLevelHeuristic(value)
     }
 }
 
@@ -169,11 +214,8 @@ pub struct BlocklistAIInputModel {
     /// The timestamp of the last time the input mode was switched, if the switch was to AI mode and
     /// it was autodetected. Else, `None`.
     last_ai_autodetection_ts: Option<Instant>,
-    /// The source of the final input decision upon submission. Populated only
-    /// when the source is an app-level override or originated from the NLD
-    /// pipeline; left `None` for paths that bypass NLD without being one of
-    /// the tracked overrides.
-    input_type_decision_source: Option<InputTypeAutoDetectionSource>,
+    /// the latest input type classification decision source
+    last_ai_autodetection_source: Option<InputTypeAutoDetectionSource>,
 
     /// Timestamp of the last time the input type was explicitly set.
     last_explicit_input_type_set_at: Option<Instant>,
@@ -298,13 +340,15 @@ impl BlocklistAIInputModel {
                     if display_mode.is_inline() {
                         // Entering inline agent view isn't a manual NLD mode toggle
                         // (the user opened the agent view, not the type-switch UI),
-                        // so leave the decision source unset.
+                        // but it does change the input mode as a side effect; attribute
+                        // it as an app-level heuristic so the source is captured on
+                        // submission.
                         me.set_input_config_internal(
                             InputConfig {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
-                            None,
+                            Some(AppLevelHeuristic::InlineAgentViewEntry.into()),
                             ctx,
                         );
                     } else if matches!(origin, AgentViewEntryOrigin::ClearBuffer) {
@@ -394,7 +438,7 @@ impl BlocklistAIInputModel {
             ai_context_model,
             terminal_view_id,
             last_ai_autodetection_ts: None,
-            input_type_decision_source: initial_decision_source,
+            last_ai_autodetection_source: initial_decision_source,
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
             autodetect_abort_handle: None,
@@ -425,8 +469,8 @@ impl BlocklistAIInputModel {
     pub fn input_config(&self) -> InputConfig {
         self.input_config
     }
-    pub fn input_type_decision_source(&self) -> Option<InputTypeAutoDetectionSource> {
-        self.input_type_decision_source
+    pub fn last_ai_autodetection_source(&self) -> Option<InputTypeAutoDetectionSource> {
+        self.last_ai_autodetection_source
     }
 
     pub fn last_ai_autodetection_ts(&self) -> Option<Instant> {
@@ -450,15 +494,30 @@ impl BlocklistAIInputModel {
         if !matches!(input_type, InputBoxType::Classic) {
             return;
         }
-        self.set_input_config_internal(new_config, None, ctx);
+        self.set_input_config_internal(
+            new_config,
+            Some(AppLevelHeuristic::ClassicModeReset.into()),
+            ctx,
+        );
     }
 
     /// Swaps between Agent/Shell input types while preserving lock state. Temporarily disables
-    /// autodetection.
-    pub fn set_input_type(&mut self, input_type: InputType, ctx: &mut ModelContext<Self>) {
+    /// autodetection. Callers should attribute the transition via `decision_source` (typically
+    /// an [`AppLevelHeuristic`]); pass `None` only for paths where attribution is intentionally
+    /// left unset (e.g. tests).
+    pub fn set_input_type(
+        &mut self,
+        input_type: InputType,
+        decision_source: Option<InputTypeAutoDetectionSource>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.temporarily_disable_autodetection();
         let current_config = self.input_config();
-        self.set_input_config_internal(current_config.with_input_type(input_type), None, ctx);
+        self.set_input_config_internal(
+            current_config.with_input_type(input_type),
+            decision_source,
+            ctx,
+        );
     }
 
     /// Does not disable autodetection.
@@ -484,7 +543,7 @@ impl BlocklistAIInputModel {
         }
 
         if self.input_config == new_config {
-            self.input_type_decision_source = decision_source;
+            self.last_ai_autodetection_source = decision_source;
             return false;
         }
 
@@ -506,7 +565,7 @@ impl BlocklistAIInputModel {
         }
 
         self.input_config = new_config;
-        self.input_type_decision_source = decision_source;
+        self.last_ai_autodetection_source = decision_source;
 
         // Emit specific events for what actually changed
         if old_config.input_type != new_config.input_type {

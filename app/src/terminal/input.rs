@@ -144,7 +144,7 @@ use crate::{
             prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             render_ai_agent_mode_icon, render_ai_follow_up_icon,
             telemetry_banner::should_collect_ai_ugc_telemetry,
-            AppLevelOverride, BlocklistAIContextEvent, BlocklistAIContextModel,
+            AppLevelHeuristic, AppLevelOverride, BlocklistAIContextEvent, BlocklistAIContextModel,
             BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
             BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
             InputType, InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
@@ -3183,7 +3183,11 @@ impl Input {
                         me.ai_input_model.update(ctx, |ai_input_model, ctx| {
                             let is_auto_detection_enabled = !ai_input_model.is_input_type_locked();
                             if is_auto_detection_enabled {
-                                ai_input_model.set_input_type(InputType::AI, ctx);
+                                ai_input_model.set_input_type(
+                                    InputType::AI,
+                                    Some(AppLevelHeuristic::ConversationContextRender.into()),
+                                    ctx,
+                                );
                             }
                         });
                     }
@@ -3807,7 +3811,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                None,
+                Some(AppLevelHeuristic::CloudHandoffEnter.into()),
                 ctx,
             );
         });
@@ -3893,7 +3897,7 @@ impl Input {
                 }
                 .unlocked_if_autodetection_enabled(true, ctx),
                 is_input_buffer_empty,
-                None,
+                Some(AppLevelHeuristic::CloudHandoffExit.into()),
                 ctx,
             );
         });
@@ -3961,7 +3965,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                None,
+                Some(AppLevelHeuristic::CloudHandoffEnter.into()),
                 ctx,
             );
         });
@@ -4981,11 +4985,15 @@ impl Input {
                                 is_locked: true,
                             },
                             false,
-                            None,
+                            Some(AppLevelHeuristic::FullscreenInlineHistoryCycling.into()),
                             ctx,
                         );
                     } else {
-                        ai_input_model.set_input_type(InputType::Shell, ctx);
+                        ai_input_model.set_input_type(
+                            InputType::Shell,
+                            Some(AppLevelHeuristic::HistorySelection.into()),
+                            ctx,
+                        );
                     }
                 });
             }
@@ -4995,7 +5003,11 @@ impl Input {
                 });
 
                 self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_type(InputType::AI, ctx);
+                    ai_input_model.set_input_type(
+                        InputType::AI,
+                        Some(AppLevelHeuristic::HistorySelection.into()),
+                        ctx,
+                    );
                 });
             }
             inline_history::InlineHistoryMenuEvent::SelectConversation => {
@@ -7318,7 +7330,11 @@ impl Input {
 
         // Set input type based on whether or not this is a shell or AI workflow.
         self.ai_input_model.update(ctx, |input_model, ctx| {
-            input_model.set_input_type(input_type, ctx);
+            input_model.set_input_type(
+                input_type,
+                Some(AppLevelHeuristic::WorkflowInsertion.into()),
+                ctx,
+            );
         });
 
         // As the first step, clear the existing buffer so that selecting a workflow
@@ -7875,7 +7891,11 @@ impl Input {
                             } else {
                                 InputType::Shell
                             };
-                            ai_input_model.set_input_type(input_type, ctx);
+                            ai_input_model.set_input_type(
+                                input_type,
+                                Some(AppLevelHeuristic::HistorySelection.into()),
+                                ctx,
+                            );
                         });
                     }
                     InputSuggestionsMode::CompletionSuggestions {
@@ -8140,7 +8160,7 @@ impl Input {
                             is_locked: original_input_was_locked,
                         },
                         original_buffer.is_empty(),
-                        None,
+                        Some(AppLevelHeuristic::RestoreSavedConfig.into()),
                         ctx,
                     );
                 });
@@ -9685,7 +9705,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    None,
+                                    Some(AppLevelHeuristic::AgentModePrefix.into()),
                                     ctx,
                                 );
                             });
@@ -10164,7 +10184,11 @@ impl Input {
                     } => {
                         // Switch to shell input mode but preserve current lock state when accepting a command autosuggestion.
                         self.ai_input_model.update(ctx, |input_model, ctx| {
-                            input_model.set_input_type(InputType::Shell, ctx);
+                            input_model.set_input_type(
+                                InputType::Shell,
+                                Some(AppLevelHeuristic::CommandAutosuggestionAccepted.into()),
+                                ctx,
+                            );
                         });
                         if *was_intelligent_autosuggestion {
                             self.was_intelligent_autosuggestion_accepted = true;
@@ -12682,14 +12706,14 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let input_type_decision_source = input_model.input_type_decision_source();
+            let input_type_decision_source = input_model.last_ai_autodetection_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
-                    input_type_decision_source,
+                    input_type_decision_source: input_type_decision_source,
                     was_lock_set_with_empty_buffer,
                     block_id,
                 },
@@ -12803,14 +12827,14 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
-            let input_type_decision_source = input_model.input_type_decision_source();
+            let last_ai_autodetection_source = input_model.last_ai_autodetection_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
             let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
-                    input_type_decision_source,
+                    input_type_decision_source: last_ai_autodetection_source,
                     was_lock_set_with_empty_buffer,
                     block_id,
                 },
@@ -13864,7 +13888,12 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |model, ctx| {
-            model.set_input_config(config, is_input_buffer_empty, None, ctx);
+            model.set_input_config(
+                config,
+                is_input_buffer_empty,
+                Some(AppLevelHeuristic::SessionSharingApply.into()),
+                ctx,
+            );
         });
     }
 
