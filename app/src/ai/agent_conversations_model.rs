@@ -777,6 +777,8 @@ impl AgentConversationsModel {
 
         // Subtract 1 second to give buffer for clock differences with server
         let updated_after = timestamp - chrono::Duration::seconds(1);
+        // Reset `dirty_since` now that we are doing a fetch.
+        self.dirty_since = None;
 
         ctx.spawn_with_retry_on_error(
             move || {

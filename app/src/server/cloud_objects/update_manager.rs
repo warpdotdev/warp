@@ -10,6 +10,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -1123,9 +1124,14 @@ impl UpdateManager {
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        let Ok(task_id) = task_id.parse::<AmbientAgentTaskId>() else {
-            log::warn!("Ignoring AmbientTaskUpdated with unparseable task_id: {task_id}");
-            return;
+        let task_id = match task_id.parse::<AmbientAgentTaskId>() {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                report_error!(anyhow::Error::from(err).context(format!(
+                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
+                )));
+                return;
+            }
         };
         ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
