@@ -41,6 +41,7 @@ use std::{
         atomic::{AtomicI64, Ordering},
         Arc, OnceLock,
     },
+    time::Duration,
 };
 
 use crate::{
@@ -554,6 +555,60 @@ impl<'a> std::ops::Deref for AppContextRefMut<'a> {
 impl std::ops::DerefMut for AppContextRefMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+enum RelayTaskOutputResult {
+    Relayed,
+    TaskMissing,
+    AppDropped,
+}
+
+async fn relay_task_output_when_unborrowed(
+    app: rc::Weak<RefCell<AppContext>>,
+    task_id: usize,
+    output: Box<dyn Any>,
+) -> RelayTaskOutputResult {
+    let mut output = Some(output);
+
+    loop {
+        let Some(app) = app.upgrade() else {
+            return RelayTaskOutputResult::AppDropped;
+        };
+
+        if let Ok(mut app) = app.try_borrow_mut() {
+            return if app
+                .relay_task_output(
+                    task_id,
+                    output.take().expect("output should only be relayed once"),
+                )
+                .is_ok()
+            {
+                RelayTaskOutputResult::Relayed
+            } else {
+                RelayTaskOutputResult::TaskMissing
+            };
+        }
+
+        Timer::after(Duration::from_millis(0)).await;
+    }
+}
+
+async fn stream_completed_when_unborrowed(
+    app: rc::Weak<RefCell<AppContext>>,
+    task_id: usize,
+) -> bool {
+    loop {
+        let Some(app) = app.upgrade() else {
+            return false;
+        };
+
+        if let Ok(mut app) = app.try_borrow_mut() {
+            app.stream_completed(task_id);
+            return true;
+        }
+
+        Timer::after(Duration::from_millis(0)).await;
     }
 }
 
@@ -3894,14 +3949,10 @@ impl AppContext {
             .spawn_boxed(
                 async move {
                     let output = future.await;
-                    if let Some(app) = app.upgrade() {
-                        // Ignore any errors that may occur when relaying task output,
-                        // as there's nothing we can do about the entity no longer
-                        // existing.
-                        let _ = app
-                            .borrow_mut()
-                            .relay_task_output(task_id, Box::new(output));
-                    }
+                    // Ignore any errors that may occur when relaying task output,
+                    // as there's nothing we can do about the entity no longer
+                    // existing.
+                    let _ = relay_task_output_when_unborrowed(app, task_id, Box::new(output)).await;
                 }
                 .boxed_local(),
             )
@@ -3945,24 +3996,25 @@ impl AppContext {
                 loop {
                     match stream.next().await {
                         Some(item) => {
-                            if let Some(app) = app.upgrade() {
-                                let mut app = app.borrow_mut();
-
+                            match relay_task_output_when_unborrowed(
+                                app.clone(),
+                                task_id,
+                                Box::new(item),
+                            )
+                            .await
+                            {
+                                RelayTaskOutputResult::Relayed => {}
                                 // If the entity that spawned the stream no longer exists, terminate
                                 // the stream.
-                                if app.relay_task_output(task_id, Box::new(item)).is_err() {
-                                    app.stream_completed(task_id);
+                                RelayTaskOutputResult::TaskMissing => {
+                                    stream_completed_when_unborrowed(app, task_id).await;
                                     break;
                                 }
-                            } else {
-                                break;
+                                RelayTaskOutputResult::AppDropped => break,
                             }
                         }
                         None => {
-                            if let Some(app) = app.upgrade() {
-                                let mut app = app.borrow_mut();
-                                app.stream_completed(task_id);
-                            }
+                            stream_completed_when_unborrowed(app, task_id).await;
                             let _ = done_tx.send(());
                             break;
                         }
