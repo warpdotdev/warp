@@ -22,10 +22,9 @@ pub use input_classifier::{InputType, NldDecision};
 /// App-level overrides that bypass the NLD pipeline entirely.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppLevelOverride {
-    ManualToggle,
-    ShellPrefix,
-    AttachmentForcedAi,
-    SettingDisabled,
+    
+    ,
+    // SettingDisabled,
 }
 
 /// App-level heuristics that change input type as a side effect of unrelated UI flows.
@@ -78,12 +77,51 @@ pub enum AppLevelHeuristic {
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputTypeAutoDetectionSource {
-    /// App level settings from explicit user actions.
-    AppLevelOverride(AppLevelOverride),
-    /// App level implicit / side-effect transitions from other UI flows.
-    AppLevelHeuristic(AppLevelHeuristic),
-    /// Decision produced by the NLD pipeline.
     NldDecision(NldDecision),
+    ManualToggle,
+    ShellPrefix,
+    AttachmentForcedAi,
+    HistorySelection,
+    /// Inserting a workflow into the input set the input type based on workflow kind.
+    WorkflowInsertion,
+    /// Accepting a shell command autosuggestion forced Shell mode.
+    CommandAutosuggestionAccepted,
+    /// Accepting an Agent Mode query autosuggestion forced AI mode.
+    AgentQueryAutosuggestionAccepted,
+    /// Empty-buffer conversation context render forced AI so conversation context renders.
+    ConversationContextRender,
+    /// "Continue conversation" button forced AI mode.
+    ContinueConversation,
+    /// Onboarding tutorial agent prompt forced AI mode.
+    OnboardingAgentPrompt,
+    /// Starting a new agent conversation forced AI mode.
+    StartNewConversation,
+    /// Ask-AI flow (text/block selection, programmatic Ask-AI lock) forced AI mode.
+    AskAi,
+    /// Detected/composing slash or skill command forced AI mode.
+    SlashCommand,
+    /// Entering inline agent view force-locked AI without an explicit user toggle.
+    InlineAgentViewEntry,
+    /// Activating cloud handoff compose (`&` prefix or programmatic) force-locked AI.
+    CloudHandoffEnter,
+    /// Exiting cloud handoff compose restored AI / unlocked-if-autodetect.
+    CloudHandoffExit,
+    /// Legacy non-AgentView `?` AI prefix path force-locked AI.
+    AgentModePrefix,
+    /// Inline code review send overrode the input mode to AI.
+    InlineCodeReviewSend,
+    /// External input config update from session sharing applied.
+    SessionSharingApply,
+    /// Fullscreen AgentView inline history command cycling force-locked Shell.
+    FullscreenInlineHistoryCycling,
+    /// Closing history suggestions restored the previously saved config.
+    RestoreSavedConfig,
+    /// `set_input_config_for_classic_mode` reset (CtrlC, delete-all-left, etc.).
+    ClassicModeReset,
+    /// Toggling voice input forced AI mode.
+    VoiceInputToggle,
+    /// Inserting from the AI `@` context menu forced AI mode.
+    AtContextMenuInsert,
 }
 
 impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
