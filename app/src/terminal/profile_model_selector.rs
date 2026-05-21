@@ -6,18 +6,18 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use std::sync::Arc;
 use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
+    View, ViewContext, ViewHandle,
     elements::{
         Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
-        ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds,
-        Radius, Rect, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, DropShadow, Empty, Expanded, Flex,
+        Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+        ParentAnchor, ParentElement as _, ParentOffsetBounds, Percentage, PositionedElementAnchor,
+        PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, Stack, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
     ui_components::components::UiComponent,
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
-    View, ViewContext, ViewHandle,
 };
 
 const SIDECAR_HORIZONTAL_GAP: f32 = 8.;
@@ -28,8 +28,8 @@ use warp_cli::agent::Harness;
 use crate::{
     ai::{
         blocklist::{
-            prompt::PromptIconButtonTheme, BlocklistAIController, BlocklistAIControllerEvent,
-            BlocklistAIInputEvent, BlocklistAIInputModel,
+            BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIInputEvent,
+            BlocklistAIInputModel, prompt::PromptIconButtonTheme,
         },
         cloud_agent_settings::CloudAgentSettings,
         execution_profiles::{
@@ -40,8 +40,8 @@ use crate::{
             HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
         },
         llms::{
-            dedupe_model_display_names, is_using_api_key_for_provider, LLMId, LLMInfo,
-            LLMPreferences, LLMPreferencesEvent, LLMSpec,
+            LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
+            dedupe_model_display_names, is_using_api_key_for_provider,
         },
     },
     appearance::Appearance,
@@ -54,21 +54,21 @@ use crate::{
     settings_view::SettingsSection,
     terminal::view::ambient_agent::AmbientAgentViewModel,
     terminal::{
-        input::{MenuPositioning, MenuPositioningProvider},
         TerminalModel,
+        input::{MenuPositioning, MenuPositioningProvider},
     },
     ui_components::icons::Icon,
     view_components::{
-        action_button::{ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme},
         FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel,
+        action_button::{ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme},
     },
     workspace::WorkspaceAction,
 };
 
-use warp_core::ui::theme::{color::internal_colors, Fill};
+use warp_core::ui::theme::{Fill, color::internal_colors};
 use warp_core::{
     features::FeatureFlag,
-    ui::color::{coloru_with_opacity, Opacity},
+    ui::color::{Opacity, coloru_with_opacity},
 };
 
 const MENU_WIDTH: f32 = 280.;
@@ -85,6 +85,7 @@ const VERTICAL_PADDING: f32 = 2.5;
 const MIN_HORIZONTAL_PADDING: f32 = 3.5;
 const ICON_SPACING: f32 = 8.0;
 const MAX_PROFILE_NAME_WIDTH_SCALE_FACTOR: f32 = 10.0;
+const MAX_MODEL_NAME_WIDTH_SCALE_FACTOR: f32 = 14.0;
 
 const PROFILE_SELECTOR_POSITION_ID: &str = "profile_selector";
 
@@ -106,6 +107,12 @@ pub fn calculate_scaled_font_size(appearance: &warp_core::ui::appearance::Appear
 pub fn calculate_max_profile_name_width(appearance: &warp_core::ui::appearance::Appearance) -> f32 {
     let scaled_font_size = calculate_scaled_font_size(appearance);
     scaled_font_size * MAX_PROFILE_NAME_WIDTH_SCALE_FACTOR
+}
+
+/// Calculate the maximum width for model name text (we will clip to this width).
+pub fn calculate_max_model_name_width(appearance: &warp_core::ui::appearance::Appearance) -> f32 {
+    let scaled_font_size = calculate_scaled_font_size(appearance);
+    scaled_font_size * MAX_MODEL_NAME_WIDTH_SCALE_FACTOR
 }
 
 #[derive(Clone, Debug)]
@@ -1684,13 +1691,23 @@ impl ProfileModelSelector {
         };
         let (vertical_padding, horizontal_padding) = self.get_padding_values(scaled_font_size);
 
-        let model_text = Text::new_inline(
-            model_display_name,
-            appearance.ui_font_family(),
-            scaled_font_size,
+        let max_label_width = calculate_max_model_name_width(appearance);
+        let model_text = Shrinkable::new(
+            1.,
+            ConstrainedBox::new(
+                Text::new_inline(
+                    model_display_name,
+                    appearance.ui_font_family(),
+                    scaled_font_size,
+                )
+                .with_color(text_color)
+                .with_line_height_ratio(appearance.line_height_ratio())
+                .with_clip(ClipConfig::end())
+                .finish(),
+            )
+            .with_max_width(max_label_width)
+            .finish(),
         )
-        .with_color(text_color)
-        .with_line_height_ratio(appearance.line_height_ratio())
         .finish();
 
         let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);

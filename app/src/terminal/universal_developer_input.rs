@@ -9,7 +9,8 @@ use crate::{
     cloud_object::model::generic_string_model::StringModel,
     settings::AISettingsChangedEvent,
     terminal::profile_model_selector::{
-        calculate_max_profile_name_width, calculate_scaled_font_size,
+        calculate_max_model_name_width, calculate_max_profile_name_width,
+        calculate_scaled_font_size,
     },
     terminal::view::ambient_agent::AmbientAgentViewModel,
 };
@@ -21,45 +22,45 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use warpui::{
+    AppContext, Element, Entity, EntityId, SingletonEntity as _, TypedActionView, View, ViewAsRef,
+    ViewContext, ViewHandle,
     elements::{
         ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
         MainAxisAlignment, MainAxisSize, ParentElement, Radius, Rect, Shrinkable,
         SizeConstraintCondition, SizeConstraintSwitch,
     },
     ui_components::{components::UiComponentStyles, segmented_control::RenderableOptionConfig},
-    AppContext, Element, Entity, EntityId, SingletonEntity as _, TypedActionView, View, ViewAsRef,
-    ViewContext, ViewHandle,
 };
 
 use warp_core::ui::{
     color::{
-        coloru_with_opacity,
-        contrast::{foreground_color_with_minimum_contrast, MinimumAllowedContrast},
-        Opacity, Rgb,
+        Opacity, Rgb, coloru_with_opacity,
+        contrast::{MinimumAllowedContrast, foreground_color_with_minimum_contrast},
     },
     theme,
 };
 
 use std::boxed::Box;
 use warpui::{
-    ui_components::segmented_control::{SegmentedControl, SegmentedControlEvent},
     ModelHandle,
+    ui_components::segmented_control::{SegmentedControl, SegmentedControlEvent},
 };
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 
-use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 
 use crate::{
+    BlocklistAIHistoryModel,
     ai::{
+        AIRequestUsageModel,
         blocklist::{
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             BlocklistAIInputModel, InputConfig, InputType,
+            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
         },
         execution_profiles::profiles::AIExecutionProfilesModel,
-        AIRequestUsageModel,
     },
     network::NetworkStatus,
     settings::AISettings,
@@ -77,7 +78,6 @@ use crate::{
         ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
     },
     workspaces::user_workspaces::UserWorkspaces,
-    BlocklistAIHistoryModel,
 };
 use warp_core::features::FeatureFlag;
 use warpui::ui_components::segmented_control::TooltipConfig;
@@ -230,7 +230,8 @@ fn calculate_profile_model_selector_threshold(
     let llm_preferences = LLMPreferences::as_ref(ctx);
     let active_llm = llm_preferences.get_active_base_model(ctx, Some(terminal_view_id));
     let model_name_char_count = active_llm.menu_display_name().chars().count() as f32;
-    let model_text_width = model_name_char_count * em_width;
+    let model_text_width =
+        (model_name_char_count * em_width).min(calculate_max_model_name_width(appearance));
 
     let result = if has_multiple_profiles {
         let profile_name_char_count = AIExecutionProfilesModel::as_ref(ctx)
