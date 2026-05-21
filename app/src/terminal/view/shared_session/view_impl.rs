@@ -491,6 +491,15 @@ impl TerminalView {
     pub fn open_share_session_denied_modal(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(Event::OpenShareSessionDeniedModal);
     }
+    pub fn open_shared_session_sharing_dialog(
+        &mut self,
+        source: SharingDialogSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.open_sharing_dialog(source, ctx);
+        });
+    }
 
     /// Focuses the view by telling the parent view to focus this session.
     /// For example, in the common case, the parent pane group would consume

@@ -163,6 +163,7 @@ plist = "1"
 pprof = { workspace = true, optional = true, features = ["protobuf-codec"] }
 prost.workspace = true
 prost-types.workspace = true
+qrcode = { version = "0.14.1", default-features = false }
 rand.workspace = true
 rangemap.workspace = true
 rayon.workspace = true

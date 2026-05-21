@@ -143,6 +143,51 @@ impl<P: BackingView> PaneHeader<P> {
         ctx.notify();
     }
 
+    pub fn open_pane_sharing_dialog(
+        &mut self,
+        source: SharingDialogSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_sharing_dialog_enabled(ctx) {
+            return;
+        }
+
+        if !self
+            .sharing_dialog()
+            .as_ref(ctx)
+            .editability(ctx)
+            .can_edit()
+        {
+            self.sharing_dialog()
+                .update(ctx, |dialog, ctx| dialog.copy_link(ctx));
+            return;
+        }
+
+        let dialog_opened = match self.open_overlay {
+            OpenOverlay::OverflowMenu => {
+                self.open_overlay = OpenOverlay::SharingDialog;
+                ctx.emit(Event::PaneHeaderOverflowMenuToggled(false));
+                ctx.focus(&self.shared_content.sharing_dialog);
+                true
+            }
+            OpenOverlay::SharingDialog => {
+                ctx.focus(&self.shared_content.sharing_dialog);
+                false
+            }
+            OpenOverlay::None => {
+                self.open_overlay = OpenOverlay::SharingDialog;
+                ctx.focus(&self.shared_content.sharing_dialog);
+                true
+            }
+        };
+
+        if dialog_opened {
+            self.sharing_dialog()
+                .update(ctx, |dialog, ctx| dialog.report_open(source, ctx));
+        }
+
+        ctx.notify();
+    }
     fn handle_sharing_dialog_event(
         &mut self,
         event: &SharingDialogEvent,

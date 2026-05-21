@@ -134,6 +134,7 @@ impl Manager {
         self.shared.insert(view_id, state);
         ctx.emit(ManagerEvent::StartedShare {
             session_id,
+            view_id,
             window_id,
         });
     }
@@ -215,6 +216,8 @@ pub enum ManagerEvent {
     /// A shared session was started.
     StartedShare {
         session_id: SessionId,
+        /// The view_id of the terminal that started sharing.
+        view_id: EntityId,
         /// The window that the session resides in.
         window_id: WindowId,
     },
