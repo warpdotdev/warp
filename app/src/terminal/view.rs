@@ -4506,12 +4506,20 @@ impl TerminalView {
                                 )
                             })
                             .unwrap_or((None, None));
+                        let error = result.as_ref().err();
                         send_telemetry_from_ctx!(
                             TelemetryEvent::RemoteServerInstallation {
-                                error: result.as_ref().err().map(|e| e.to_string()),
+                                error: error.map(|e| e.to_string()),
                                 install_source: *install_source,
                                 remote_os,
                                 remote_arch,
+                                is_environment_failure: error
+                                    .is_some_and(|e| e.is_environment_failure()),
+                                counts_as_product_error: error
+                                    .is_some_and(|e| e.counts_as_product_error()),
+                                setup_failure_class: error
+                                    .and_then(|e| e.setup_failure_class())
+                                    .map(str::to_string),
                             },
                             ctx
                         );

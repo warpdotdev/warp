@@ -76,6 +76,7 @@ pub(super) async fn install_binary(socket_path: &Path) -> InstallOutcome {
 /// Runs the install script on the remote host to download and install the
 /// binary directly from the CDN.
 async fn install_on_server(socket_path: &Path) -> Result<(), Error> {
+    run_filesystem_preflight(socket_path).await?;
     let script = remote_server::setup::install_script(None);
     match remote_server::ssh::run_ssh_script(
         socket_path,
@@ -88,9 +89,28 @@ async fn install_on_server(socket_path: &Path) -> Result<(), Error> {
         Ok(output) => {
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Err(Error::ScriptFailed { exit_code, stderr })
+            Err(Error::from_script_failure(exit_code, stderr))
         }
         Err(SshCommandError::TimedOut { .. }) => Err(Error::TimedOut),
         Err(e) => Err(Error::Other(e.into())),
+    }
+}
+
+pub(super) async fn run_filesystem_preflight(socket_path: &Path) -> Result<(), Error> {
+    let script = remote_server::setup::filesystem_preflight_script();
+    match remote_server::ssh::run_ssh_script(
+        socket_path,
+        &script,
+        remote_server::setup::CHECK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Err(Error::from_script_failure(exit_code, stderr))
+        }
+        Err(e) => Err(e.into()),
     }
 }
