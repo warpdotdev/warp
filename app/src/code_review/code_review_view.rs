@@ -5963,6 +5963,7 @@ impl CodeReviewView {
     }
 
     pub(crate) fn set_diff_base(&mut self, diff_mode: DiffMode, ctx: &mut ViewContext<Self>) {
+        self.start_diff_load_timer();
         self.diff_state_model.update(ctx, |diff_state_model, ctx| {
             diff_state_model.set_diff_mode_and_fetch_base(diff_mode, ctx);
         });

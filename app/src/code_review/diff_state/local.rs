@@ -249,7 +249,8 @@ impl LocalDiffStateModel {
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 is_local: Some(true),
-                                error: err.to_string(),
+                                mode: me.mode.clone(),
+                                error: "File invalidation error".to_string(),
                             },
                             ctx
                         );
@@ -1411,9 +1412,10 @@ impl LocalDiffStateModel {
             }
             Err(e) => {
                 send_telemetry_from_ctx!(
-                    CodeReviewTelemetryEvent::CalculateDiffMetadataFailed {
+                    CodeReviewTelemetryEvent::LoadMetadataFailed {
                         is_local: Some(true),
-                        error: e.to_string()
+                        mode: self.mode.clone(),
+                        error: "Decode metadata update failed".to_string(),
                     },
                     ctx
                 );
@@ -1464,7 +1466,8 @@ impl LocalDiffStateModel {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::LoadDiffFailed {
                     is_local: Some(true),
-                    error: e.to_string(),
+                    mode: self.mode.clone(),
+                    error: "Decode diff data failed".to_string(),
                 },
                 ctx
             );

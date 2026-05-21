@@ -8,10 +8,11 @@
 //! from the old `(repo_path, mode)` subscription and re-subscribing with the
 //! new mode.
 
+use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
 use std::sync::Arc;
 
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
-use warp_core::{HostId, SessionId};
+use warp_core::{send_telemetry_from_ctx, HostId, SessionId};
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity};
@@ -215,6 +216,14 @@ impl RemoteDiffStateModel {
             Ok((metadata, state, diffs)) => self.apply_snapshot(metadata, state, diffs, ctx),
             Err(error) => {
                 log::warn!("RemoteDiffStateModel: invalid diff state snapshot: {error}");
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::LoadDiffFailed {
+                        is_local: Some(false),
+                        mode: self.mode.clone(),
+                        error: "Decode snapshot failed".to_string(),
+                    },
+                    ctx
+                );
             }
         }
     }
@@ -234,6 +243,14 @@ impl RemoteDiffStateModel {
             Ok(None) => {}
             Err(error) => {
                 log::warn!("RemoteDiffStateModel: invalid diff state metadata update: {error}");
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::LoadMetadataFailed {
+                        is_local: Some(false),
+                        mode: self.mode.clone(),
+                        error: "Decode metadata update failed".to_string(),
+                    },
+                    ctx
+                );
             }
         }
     }
@@ -249,6 +266,14 @@ impl RemoteDiffStateModel {
             }
             Err(error) => {
                 log::warn!("RemoteDiffStateModel: invalid diff state file delta: {error}");
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::LoadDiffFailed {
+                        is_local: Some(false),
+                        mode: self.mode.clone(),
+                        error: "Decode file delta failed".to_string(),
+                    },
+                    ctx
+                );
             }
         }
     }
@@ -298,14 +323,30 @@ impl RemoteDiffStateModel {
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
             }
             DiffState::Error(msg) => {
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::LoadDiffFailed {
+                        is_local: Some(false),
+                        mode: self.mode.clone(),
+                        error: "Server reported diff error".to_string(),
+                    },
+                    ctx
+                );
                 self.state = InternalRemoteDiffState::Error(msg);
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
             }
             DiffState::Loaded => {
                 let Some(base_content) = diffs else {
-                    self.state = InternalRemoteDiffState::Error(
-                        "Server reported loaded state but no diff data was available".to_string(),
+                    let error =
+                        "Server reported loaded state but no diff data was available".to_string();
+                    send_telemetry_from_ctx!(
+                        CodeReviewTelemetryEvent::LoadDiffFailed {
+                            is_local: Some(false),
+                            mode: self.mode.clone(),
+                            error: "Empty diff data".to_string(),
+                        },
+                        ctx
                     );
+                    self.state = InternalRemoteDiffState::Error(error);
                     ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
                     return;
                 };
