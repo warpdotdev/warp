@@ -2057,7 +2057,7 @@ impl CodeView {
 
             let is_md = local_path
                 .as_ref()
-                .map(|p| is_markdown_file(p))
+                .map(is_markdown_file)
                 .unwrap_or_else(|| {
                     active_location
                         .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))

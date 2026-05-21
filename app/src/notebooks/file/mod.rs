@@ -107,6 +107,8 @@ pub struct FileNotebookView {
     /// This is preserved so we can restore it when toggling between raw and rendered Markdown.
     #[cfg(feature = "local_fs")]
     code_source: Option<CodeSource>,
+    /// Persistent hover state for the header title tooltip.
+    header_title_mouse_state: MouseStateHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +308,7 @@ impl FileNotebookView {
             display_mode_segmented_control,
             #[cfg(feature = "local_fs")]
             code_source: None,
+            header_title_mouse_state: Default::default(),
         }
     }
 
@@ -1172,9 +1175,8 @@ impl BackingView for FileNotebookView {
                 if let Some(display_path) = self.file_state.path().map(|p| p.display_path()) {
                     use pathfinder_geometry::vector::vec2f;
                     use warpui::elements::{ChildAnchor, ParentAnchor, ParentOffsetBounds};
-                    use warpui::elements::{Hoverable, MouseStateHandle, OffsetPositioning, Stack};
-                    let mouse_state = MouseStateHandle::default();
-                    Hoverable::new(mouse_state, move |hover_state| {
+                    use warpui::elements::{Hoverable, OffsetPositioning, Stack};
+                    Hoverable::new(self.header_title_mouse_state.clone(), move |hover_state| {
                         let mut stack = Stack::new();
                         stack.add_child(title_text);
                         if hover_state.is_hovered() {
