@@ -7,6 +7,7 @@ use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
+use crate::memory_store::MemoryStoreCommand;
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
@@ -124,6 +125,119 @@ fn model_list_parses() {
     };
 
     assert!(matches!(model_cmd, crate::model::ModelCommand::List));
+}
+
+#[test]
+fn memory_store_list_parses() {
+    let args = Args::try_parse_from(["warp", "memory-store", "list"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store list` command");
+    };
+    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store` command");
+    };
+
+    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
+}
+
+#[test]
+fn memory_stores_alias_parses() {
+    let args = Args::try_parse_from(["warp", "memory-stores", "list"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-stores list` command");
+    };
+    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-stores` alias to parse as memory-store command");
+    };
+
+    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
+}
+
+#[test]
+fn memory_store_list_memories_parses() {
+    let args =
+        Args::try_parse_from(["warp", "memory-store", "list-memories", "store-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store list-memories` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::ListMemories(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store list-memories` command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+}
+
+#[test]
+fn memory_store_memories_alias_parses() {
+    let args = Args::try_parse_from(["warp", "memory-store", "memories", "store-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store memories` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::ListMemories(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store memories` alias to parse as list-memories command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+}
+
+#[test]
+fn memory_store_create_memory_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory-store",
+        "create-memory",
+        "store-123",
+        "--content",
+        "remember this",
+        "--reason",
+        "manual note",
+        "--version",
+        "v1",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store create-memory` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::CreateMemory(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store create-memory` command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+    assert_eq!(args.content, "remember this");
+    assert_eq!(args.reason, "manual note");
+    assert_eq!(args.version.as_deref(), Some("v1"));
+}
+
+#[test]
+fn memory_store_add_memory_alias_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory-store",
+        "add-memory",
+        "store-123",
+        "-c",
+        "remember this",
+        "-r",
+        "manual note",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store add-memory` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::CreateMemory(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store add-memory` alias to parse as create-memory command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+    assert_eq!(args.content, "remember this");
+    assert_eq!(args.reason, "manual note");
+    assert!(args.version.is_none());
 }
 
 #[test]
