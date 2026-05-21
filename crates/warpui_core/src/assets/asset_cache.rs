@@ -321,10 +321,7 @@ impl AssetCache {
                     assets.insert(key.clone(), AssetStateInternal::loading());
                     self.load_asynchronously::<T>(
                         source.clone(),
-                        Box::pin(async move {
-                            let buffer = async_fs::read(path).await?;
-                            Ok(buffer.into())
-                        }),
+                        Box::pin(load_local_file_bounded(path)),
                     );
                 }
                 AssetSource::Raw { id } => {
@@ -498,3 +495,256 @@ impl Entity for AssetCache {
 }
 
 impl SingletonEntity for AssetCache {}
+
+/// Maximum bytes accepted from a `LocalFile` read for raster (non-SVG) inputs.
+/// Matches `MAX_PREVIEW_FILE_BYTES` in the workspace image-preview arm; the
+/// pre-read metadata stat there should make this cap unreachable in the
+/// happy path, but the asset-cache layer keeps the bound as a defense
+/// against TOCTOU growth and against any future `LocalFile` consumer that
+/// does not pre-stat. See specs/GH9729/tech.md §400.
+const MAX_ASSET_LOCAL_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Tighter byte cap applied to inputs that look like XML/SVG on a 1 KB
+/// content peek. Keyed on content (not extension) so XML hidden under a
+/// non-`.svg` extension is also tightened. See specs/GH9729/tech.md §400.
+const MAX_SVG_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Inner bounded-read entry point that takes the raster and SVG caps as
+/// parameters. Lets tests exercise the cap-selection and over-cap rejection
+/// paths against modest fixtures with small caps. Production callers go
+/// through `load_local_file_bounded` which threads the GH9729 production
+/// constants.
+async fn load_local_file_bounded_inner(
+    path: String,
+    raster_cap: u64,
+    svg_cap: u64,
+) -> Result<Bytes> {
+    use futures_lite::AsyncReadExt as _;
+
+    #[cfg(unix)]
+    use async_fs::unix::OpenOptionsExt as _;
+
+    let mut file = {
+        let mut opts = async_fs::OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        opts.custom_flags(libc::O_NONBLOCK);
+        opts.open(&path).await?
+    };
+
+    let meta = file.metadata().await?;
+    if !meta.file_type().is_file() {
+        anyhow::bail!("local asset is not a regular file");
+    }
+
+    let mut peek = [0u8; 1024];
+    let n = file.read(&mut peek).await?;
+    let cap = if crate::image_cache::looks_like_svg_xml(&peek[..n]) {
+        svg_cap
+    } else {
+        raster_cap
+    };
+
+    let mut buf: Vec<u8> = Vec::with_capacity(n);
+    buf.extend_from_slice(&peek[..n]);
+    let remaining = (cap + 1).saturating_sub(buf.len() as u64);
+    let mut taken = file.take(remaining);
+    taken.read_to_end(&mut buf).await?;
+    if buf.len() as u64 > cap {
+        anyhow::bail!("local asset exceeds size cap");
+    }
+    Ok(Bytes::from(buf))
+}
+
+/// Bounded read of a local file under the GH9729 asset-cache cap.
+///
+/// Closes four surfaces enumerated in tech.md §400:
+///   1. `O_NONBLOCK` on Unix so `open()` of a FIFO returns immediately
+///      rather than blocking indefinitely waiting for a writer. (Read on a
+///      regular file is unaffected by `O_NONBLOCK` on POSIX.)
+///   2. Post-open `is_file()` against the OPENED descriptor (`fstat`, not
+///      path-based stat). Closes the TOCTOU window where the path was
+///      swapped to a FIFO / character device / directory between the
+///      workspace pre-read stat and this open syscall.
+///   3. Content-keyed cap selection: a 1 KB peek runs the same
+///      `looks_like_svg_xml` predicate that gates `usvg::Tree::from_data`,
+///      so an XML payload hidden under any extension is capped at 4 MB.
+///   4. `MAX + 1` bounded read: deterministically rejects a file that
+///      grew past the cap between the workspace stat and this read.
+async fn load_local_file_bounded(path: String) -> Result<Bytes> {
+    load_local_file_bounded_inner(path, MAX_ASSET_LOCAL_FILE_BYTES, MAX_SVG_BYTES).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_lite::future::block_on;
+
+    /// SVG XML body sized to `target_bytes` total. Begins with the standard
+    /// `<svg>` opening tag (so `looks_like_svg_xml` matches on the peek)
+    /// and pads to size with `<g/>` elements.
+    fn svg_payload(target_bytes: usize) -> Vec<u8> {
+        let prelude = b"<svg xmlns=\"http://www.w3.org/2000/svg\">";
+        let suffix = b"</svg>";
+        let pad = b"<g/>";
+        let mut out = Vec::with_capacity(target_bytes);
+        out.extend_from_slice(prelude);
+        while out.len() + suffix.len() + pad.len() <= target_bytes {
+            out.extend_from_slice(pad);
+        }
+        out.extend_from_slice(suffix);
+        // Top up with single bytes if we're still under target.
+        while out.len() < target_bytes {
+            out.push(b' ');
+        }
+        out
+    }
+
+    /// Encode a small valid PNG (200x100 blank RGBA) and return its bytes.
+    fn small_png_bytes() -> Vec<u8> {
+        let img = image::RgbaImage::new(200, 100);
+        let mut out: Vec<u8> = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("PNG encode for test");
+        out
+    }
+
+    #[test]
+    fn local_file_read_passes_under_cap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("ok.bin");
+        std::fs::write(&path, b"hello").unwrap();
+        let bytes = block_on(load_local_file_bounded_inner(
+            path.to_string_lossy().into_owned(),
+            /* raster_cap */ 1024,
+            /* svg_cap */ 1024,
+        ))
+        .expect("under-cap read should succeed");
+        assert_eq!(bytes.as_ref(), b"hello");
+    }
+
+    #[test]
+    fn local_file_read_caps_at_max_bytes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("over.bin");
+        // 200 bytes against a 100-byte raster cap.
+        std::fs::write(&path, vec![0u8; 200]).unwrap();
+        let result = block_on(load_local_file_bounded_inner(
+            path.to_string_lossy().into_owned(),
+            /* raster_cap */ 100,
+            /* svg_cap */ 100,
+        ));
+        assert!(result.is_err(), "over-cap raster read must fail");
+    }
+
+    #[test]
+    fn local_file_read_rejects_post_open_non_regular_file() {
+        // Pass a directory path directly: `open()` succeeds on some platforms
+        // (and `async_fs::open` on a directory reports an error elsewhere).
+        // Either way the load future must NOT yield bytes. The post-open
+        // is_file() rejection is the test target; on platforms where open()
+        // itself fails for directories, the broader contract still holds
+        // ("this never returns Ok").
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = block_on(load_local_file_bounded_inner(
+            dir.path().to_string_lossy().into_owned(),
+            1024,
+            1024,
+        ));
+        assert!(result.is_err(), "directory path must not yield Ok bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_file_read_does_not_block_on_fifo() {
+        // Create a FIFO with no writer attached. Without O_NONBLOCK the
+        // open() syscall would block this test indefinitely; with
+        // O_NONBLOCK, open() returns immediately and the post-open
+        // is_file() check rejects it.
+        let dir = tempfile::TempDir::new().unwrap();
+        let fifo = dir.path().join("test.fifo");
+        let fifo_c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        let mode: libc::mode_t = 0o644;
+        let rc = unsafe { libc::mkfifo(fifo_c.as_ptr(), mode) };
+        assert_eq!(rc, 0, "mkfifo failed");
+
+        let result = block_on(load_local_file_bounded_inner(
+            fifo.to_string_lossy().into_owned(),
+            1024,
+            1024,
+        ));
+        assert!(result.is_err(), "FIFO must not yield Ok bytes");
+    }
+
+    #[test]
+    fn local_file_read_caps_svg_at_smaller_limit() {
+        // SVG XML payload over the SVG cap, under the raster cap. The peek
+        // matches `looks_like_svg_xml` so the SVG cap (small) applies and
+        // the read must fail.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("huge.svg");
+        // 200 bytes of SVG XML against a 50-byte SVG cap.
+        std::fs::write(&path, svg_payload(200)).unwrap();
+        let result = block_on(load_local_file_bounded_inner(
+            path.to_string_lossy().into_owned(),
+            /* raster_cap */ 1024,
+            /* svg_cap */ 50,
+        ));
+        assert!(result.is_err(), "over-SVG-cap read must fail");
+
+        // Same payload renamed `huge.bin`: content-keying still selects
+        // the SVG cap, so this also fails.
+        let path2 = dir.path().join("huge.bin");
+        std::fs::write(&path2, svg_payload(200)).unwrap();
+        let result2 = block_on(load_local_file_bounded_inner(
+            path2.to_string_lossy().into_owned(),
+            /* raster_cap */ 1024,
+            /* svg_cap */ 50,
+        ));
+        assert!(
+            result2.is_err(),
+            "content-keying must apply SVG cap regardless of extension",
+        );
+    }
+
+    #[test]
+    fn local_file_read_caps_svg_content_under_png_extension() {
+        // SVG XML hidden under a `.png` extension. Without content-keying
+        // the raster cap (large) would apply and the bytes would flow to
+        // the parser. With content-keying the SVG cap (small) applies.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("evil.png");
+        std::fs::write(&path, svg_payload(200)).unwrap();
+        let result = block_on(load_local_file_bounded_inner(
+            path.to_string_lossy().into_owned(),
+            /* raster_cap */ 1024,
+            /* svg_cap */ 50,
+        ));
+        assert!(
+            result.is_err(),
+            "content-keyed SVG cap must fire despite .png extension",
+        );
+    }
+
+    #[test]
+    fn local_file_read_uses_raster_cap_for_non_svg_content() {
+        // Real PNG bytes hidden under a `.svg` extension. The peek does
+        // NOT match `looks_like_svg_xml` (PNG starts with 0x89 P N G),
+        // so the raster cap applies and the file passes despite the
+        // misleading extension. This is the symmetric assertion that
+        // content-keying does not over-tighten.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("large.svg");
+        let png = small_png_bytes();
+        let png_len = png.len();
+        std::fs::write(&path, &png).unwrap();
+        let bytes = block_on(load_local_file_bounded_inner(
+            path.to_string_lossy().into_owned(),
+            /* raster_cap */ (png_len as u64) + 1024,
+            /* svg_cap */ 50,
+        ))
+        .expect("PNG bytes must pass under raster cap regardless of extension");
+        assert_eq!(bytes.len(), png_len);
+    }
+}

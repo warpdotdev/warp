@@ -2283,7 +2283,6 @@ fn visual_section_max_width(asset_state: &AssetState<ImageType>, height: f32) ->
                 let frame = image.frames.first()?;
                 (frame.image.width() as f32, frame.image.height() as f32)
             }
-            ImageType::Unrecognized => return None,
         },
         AssetState::Loading { .. } | AssetState::Evicted | AssetState::FailedToLoad(_) => {
             return None;

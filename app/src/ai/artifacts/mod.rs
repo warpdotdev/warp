@@ -358,10 +358,19 @@ fn screenshot_lightbox_image_from_download_result(
             None
         }
         Err(e) => {
+            // GH9729 §696: surface screenshot fetch failures as the
+            // dedicated `Error` variant rather than the legacy
+            // `Loading + "Failed to load"` description workaround. The
+            // sanitized message is rendered inline by `Lightbox::render`
+            // (§182) and dismissal continues to work; the raw error is
+            // logged via `log::warn!` for the operator and never
+            // interpolated into the user-visible message.
             log::warn!("Failed to load screenshot artifact {index}: {e}");
             Some(LightboxImage {
-                source: LightboxImageSource::Loading,
-                description: Some("Failed to load".to_string()),
+                source: LightboxImageSource::Error {
+                    message: "could not load screenshot".to_string(),
+                },
+                description: None,
             })
         }
     }

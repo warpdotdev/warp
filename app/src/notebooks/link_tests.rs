@@ -174,9 +174,19 @@ fn test_resolve_bare_url() {
     });
 }
 
+// GH9729: previously asserted images were routed to FileTarget::SystemGeneric
+// via the bypass at link.rs:355. The bypass was removed in iteration 2 of
+// the GH9729 implementation (specs/GH9729/tech.md §74); supported image
+// extensions now flow through the resolver and surface as
+// FileTarget::ImagePreview. Renamed to reflect the new contract.
 #[test]
-fn test_open_local_image_uses_system_generic_target() {
+fn test_open_local_image_uses_image_preview_target() {
     App::test((), |mut app| async move {
+        // The resolver consults EditorSettings (and its transitive
+        // singletons); previously this test bypassed the resolver for
+        // image files and never needed the settings registered.
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+
         let base = tempdir().unwrap();
         let base_path = base.path();
         let image_path = base_path.join("images/example.png");
@@ -204,7 +214,7 @@ fn test_open_local_image_uses_system_generic_target() {
                 line_col,
             } => {
                 assert_eq!(path, image_path);
-                assert_eq!(target, FileTarget::SystemGeneric);
+                assert_eq!(target, FileTarget::ImagePreview);
                 assert_eq!(line_col, None);
             }
             other => panic!("Expected OpenFileWithTarget event, got {other:?}"),

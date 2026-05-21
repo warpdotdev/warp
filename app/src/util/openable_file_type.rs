@@ -45,6 +45,11 @@ pub enum FileTarget {
     MarkdownViewer(EditorLayout),
     /// Open in Warp's Code Editor.
     CodeEditor(EditorLayout),
+    /// Open in Warp's image-preview Lightbox overlay.
+    ///
+    /// Unit variant; no `EditorLayout` payload because the Lightbox is an
+    /// overlay over the active pane rather than a pane itself.
+    ImagePreview,
     /// Open in an external editor (e.g. VS Code, Emacs).
     #[cfg(feature = "local_fs")]
     ExternalEditor(Editor),
@@ -198,6 +203,15 @@ pub fn resolve_file_target_with_editor_choice(
     default_layout: EditorLayout,
     layout: Option<EditorLayout>,
 ) -> FileTarget {
+    // 0. Image preview takes precedence over text/binary classification so
+    //    SVG (currently text-classified, would otherwise open as raw XML in the
+    //    code editor) and raster formats (currently binary, would otherwise
+    //    fall through to `SystemGeneric`) both land in the Lightbox overlay.
+    //    See specs/GH9729/tech.md §74.
+    if is_supported_image_file(path) {
+        return FileTarget::ImagePreview;
+    }
+
     let is_openable_in_warp = is_file_openable_in_warp(path);
     let is_markdown = matches!(is_openable_in_warp, Some(OpenableFileType::Markdown));
     let layout = layout.unwrap_or(default_layout);
@@ -288,8 +302,10 @@ mod tests {
     #[test]
     #[cfg(feature = "local_fs")]
     fn test_resolve_file_target_binary_is_system_generic() {
+        // Use a non-image binary; image extensions now short-circuit to
+        // `FileTarget::ImagePreview` ahead of the binary fall-through (GH9729 §74).
         let target = resolve_file_target_with_editor_choice(
-            Path::new("image.png"),
+            Path::new("archive.zip"),
             EditorChoice::Warp,
             true, /* prefer_markdown_viewer */
             EditorLayout::SplitPane,
@@ -302,14 +318,95 @@ mod tests {
     #[test]
     #[cfg(feature = "local_fs")]
     fn test_resolve_file_target_binary_uses_env_editor() {
+        // Use a non-image binary; see note in test_resolve_file_target_binary_is_system_generic.
         let target = resolve_file_target_with_editor_choice(
-            Path::new("image.png"),
+            Path::new("archive.zip"),
             EditorChoice::EnvEditor,
             true, /* prefer_markdown_viewer */
             EditorLayout::SplitPane,
             None,
         );
         assert_eq!(target, FileTarget::EnvEditor);
+    }
+
+    // GH9729 §613: image-preview resolver tests.
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn resolve_file_target_image_preview_for_each_supported_extension() {
+        // Each supported extension resolves to ImagePreview regardless of
+        // `prefer_markdown_viewer` and `editor_choice`. We sweep both casings
+        // and a representative cross-product of the orthogonal flags.
+        let extensions = [
+            "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "gif", "GIF", "webp", "WEBP", "svg", "SVG",
+        ];
+        let editor_choices = [
+            EditorChoice::Warp,
+            EditorChoice::EnvEditor,
+            EditorChoice::SystemDefault,
+            EditorChoice::ExternalEditor(Editor::VSCode),
+        ];
+        for ext in extensions {
+            for editor_choice in editor_choices {
+                for prefer_markdown_viewer in [false, true] {
+                    let path_owned = format!("photo.{ext}");
+                    let target = resolve_file_target_with_editor_choice(
+                        Path::new(&path_owned),
+                        editor_choice,
+                        prefer_markdown_viewer,
+                        EditorLayout::SplitPane,
+                        None,
+                    );
+                    assert_eq!(
+                        target,
+                        FileTarget::ImagePreview,
+                        "ext={ext} editor_choice={editor_choice:?} prefer_markdown={prefer_markdown_viewer}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn resolve_file_target_image_preview_takes_precedence_over_markdown() {
+        // SVG is XML at the byte level; without the step-0 short-circuit it
+        // could conceivably route through markdown / code-editor classification.
+        // The short-circuit must beat `prefer_markdown_viewer = true`.
+        let target = resolve_file_target_with_editor_choice(
+            Path::new("icon.svg"),
+            EditorChoice::Warp,
+            true, /* prefer_markdown_viewer */
+            EditorLayout::SplitPane,
+            None,
+        );
+        assert_eq!(target, FileTarget::ImagePreview);
+    }
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn resolve_file_target_non_image_binary_still_system_generic() {
+        // Non-image binaries (including raster/vector formats deliberately
+        // out of v1 scope: bmp, tiff, ico) must still fall through to
+        // SystemGeneric — they are NOT in `is_supported_image_file`.
+        for name in [
+            "archive.zip",
+            "song.mp3",
+            "binary.exe",
+            "report.pdf",
+            "icon.bmp",
+            "scan.tiff",
+            "favicon.ico",
+        ] {
+            let target = resolve_file_target_with_editor_choice(
+                Path::new(name),
+                EditorChoice::Warp,
+                true, /* prefer_markdown_viewer */
+                EditorLayout::SplitPane,
+                None,
+            );
+            assert_eq!(target, FileTarget::SystemGeneric, "name={name}");
+        }
     }
 
     #[test]

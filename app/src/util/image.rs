@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use image::{GenericImageView, ImageError};
+use image::{GenericImageView, ImageDecoder, ImageError, metadata::Orientation};
 use mime_guess::from_path;
 
 /// Max image size is 3.75 MB.
@@ -65,34 +65,73 @@ pub fn is_supported_image_mime_type(mime_type: &str) -> bool {
 /// Resizes an image if it exceeds the maximum pixel count, and ensures
 /// resized outputs also respect the maximum dimension (width or height).
 ///
-/// Returns the original image bytes if the image is already within the
-/// pixel limit; otherwise returns the resized image bytes in the original
+/// Returns the original image bytes when the image is already within the
+/// pixel limit AND has no EXIF orientation to flatten; otherwise returns
+/// the (possibly resized, definitely upright) image bytes in the original
 /// format.
+///
+/// GH9729 §700: applies EXIF orientation. JPEG/HEIC photos from phone
+/// cameras typically use the EXIF Orientation tag rather than rotating
+/// the pixel buffer; sending those bytes verbatim to a vision model
+/// (which often ignores EXIF) makes portraits arrive sideways. We
+/// flatten the orientation into the pixel buffer here so the agent
+/// always receives a visually-upright image.
 pub fn resize_image(image: &[u8]) -> Result<Vec<u8>, ImageError> {
-    let img = image::load_from_memory(image)?;
+    let original_format = image::guess_format(image)?;
+
+    // Decode via `ImageReader::into_decoder()` (rather than the
+    // simpler `image::load_from_memory`) so we can read the EXIF
+    // Orientation tag from the per-format decoder. Decoders that don't
+    // implement orientation extraction get the trait default
+    // (`Orientation::NoTransforms`), making the apply step a no-op
+    // for them.
+    let reader = image::ImageReader::with_format(std::io::Cursor::new(image), original_format);
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
 
     let (current_width, current_height) = img.dimensions();
     let current_pixels = (current_width * current_height) as f64;
 
-    if current_pixels <= MAX_IMAGE_PIXELS {
+    // Fast path: small image AND identity orientation → return original
+    // bytes verbatim, preserving the v1 zero-copy behaviour for the
+    // common case (synthetic PNGs and most non-photo assets have no
+    // EXIF, so `orientation == NoTransforms`).
+    let needs_orientation_flatten = !matches!(orientation, Orientation::NoTransforms);
+    if current_pixels <= MAX_IMAGE_PIXELS && !needs_orientation_flatten {
         return Ok(image.to_vec());
     }
 
-    let original_format = image::guess_format(image)?;
-
-    let scale = (MAX_IMAGE_PIXELS / current_pixels).sqrt();
+    // Otherwise: resize if oversized, otherwise just re-encode the
+    // already-oriented image so the EXIF rotation is flattened into
+    // pixels.
+    let scale = if current_pixels > MAX_IMAGE_PIXELS {
+        (MAX_IMAGE_PIXELS / current_pixels).sqrt()
+    } else {
+        1.0
+    };
 
     let mut new_width = current_width as f64 * scale;
     let mut new_height = current_height as f64 * scale;
 
     let scale_by_width = MAX_IMAGE_DIMENSION / new_width;
     let scale_by_height = MAX_IMAGE_DIMENSION / new_height;
-    let scale = scale_by_width.min(scale_by_height).min(1.0);
+    let final_scale = scale_by_width.min(scale_by_height).min(1.0);
 
-    new_width *= scale;
-    new_height *= scale;
+    new_width *= final_scale;
+    new_height *= final_scale;
 
-    let resized_img = img.thumbnail(new_width.round() as u32, new_height.round() as u32);
+    let resized_img = if (new_width.round() as u32) == current_width
+        && (new_height.round() as u32) == current_height
+    {
+        // Identity-resize path: the orientation flatten alone is the
+        // reason we're re-encoding. Skip the (cheap but pointless)
+        // thumbnail call.
+        img
+    } else {
+        img.thumbnail(new_width.round() as u32, new_height.round() as u32)
+    };
 
     let mut output_bytes: Vec<u8> = Vec::new();
     let mut writer = std::io::Cursor::new(&mut output_bytes);

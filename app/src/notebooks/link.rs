@@ -19,7 +19,7 @@ use warpui::{
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, resolve_file_target, FileTarget};
+use crate::util::openable_file_type::{resolve_file_target, FileTarget};
 use crate::{
     drive::OpenWarpDriveObjectArgs,
     terminal::model::session::Session,
@@ -368,12 +368,12 @@ fn open_file(
 ) {
     #[cfg(feature = "local_fs")]
     {
-        let target = if is_supported_image_file(&path) {
-            FileTarget::SystemGeneric
-        } else {
-            let settings = EditorSettings::as_ref(ctx);
-            resolve_file_target(&path, settings, None)
-        };
+        // The resolver now classifies supported image files as
+        // `FileTarget::ImagePreview` ahead of the binary fall-through
+        // (see specs/GH9729/tech.md §74), so the previous `SystemGeneric`
+        // bypass this site used to apply is no longer needed.
+        let settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target(&path, settings, None);
         ctx.emit(LinkEvent::OpenFileWithTarget {
             path,
             target,
