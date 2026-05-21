@@ -84,7 +84,25 @@ def chunk_lines(lines: list[str]) -> list[str]:
     return chunks
 
 
-def build_payload(changelog: dict, release_tag: str) -> dict:
+def artifact_link_block(markdown_artifact_url: str) -> dict | None:
+    """Build a Slack block linking to the downloadable Markdown artifact."""
+    if not markdown_artifact_url:
+        return None
+    return {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "Raw Markdown changelog: "
+                f"<{markdown_artifact_url}|Download raw Markdown changelog artifact>"
+            ),
+        },
+    }
+
+
+def build_payload(
+    changelog: dict, release_tag: str, markdown_artifact_url: str = ""
+) -> dict:
     """Build a Block Kit message and reject payloads Slack cannot accept."""
     chunks = chunk_lines(slack_lines(changelog))
     if not chunks:
@@ -99,6 +117,9 @@ def build_payload(changelog: dict, release_tag: str) -> dict:
             },
         }
     ]
+    artifact_block = artifact_link_block(markdown_artifact_url)
+    if artifact_block is not None:
+        blocks.append(artifact_block)
     blocks.extend(
         {
             "type": "section",
@@ -122,13 +143,18 @@ def main() -> None:
     )
     parser.add_argument("--input", required=True, help="Path to changelog JSON")
     parser.add_argument("--release-tag", required=True, help="Release tag header text")
+    parser.add_argument(
+        "--markdown-artifact-url",
+        default="",
+        help="Download URL for the raw Markdown changelog artifact",
+    )
     parser.add_argument("--output", required=True, help="Payload JSON output path")
     args = parser.parse_args()
 
     with open(args.input) as f:
         changelog = json.load(f)
 
-    payload = build_payload(changelog, args.release_tag)
+    payload = build_payload(changelog, args.release_tag, args.markdown_artifact_url)
     Path(args.output).write_text(json.dumps(payload, separators=(",", ":")) + "\n")
     print(f"Built Slack payload with {len(payload['blocks'])} blocks", file=sys.stderr)
 

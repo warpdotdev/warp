@@ -1676,6 +1676,14 @@ jobs:
             You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
           warp_api_key: ${{ secrets.WARP_API_KEY }}
           share: team
+      - name: Upload raw Markdown changelog artifact (stable only)
+        if: inputs.channel == 'stable'
+        id: upload_changelog_draft_markdown
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: changelog-draft-markdown
+          path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
+          if-no-files-found: error
 
       - name: Convert draft JSON to release format (stable only)
         if: inputs.channel == 'stable'
@@ -1738,6 +1746,7 @@ jobs:
         env:
           CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -1745,6 +1754,7 @@ jobs:
           python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
             --input "$CHANGELOG_INPUT" \
             --release-tag "$RELEASE_TAG" \
+            --markdown-artifact-url "$MARKDOWN_ARTIFACT_URL" \
             --output "$SLACK_PAYLOAD"
 
           if ! jq -e '.blocks | length > 0' "$SLACK_PAYLOAD" >/dev/null; then
@@ -1838,17 +1848,20 @@ jobs:
           python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
             --input "$CHANGELOG_INPUT" \
             --release-tag "FORMAT PREVIEW — not a release" \
+            --markdown-artifact-url "https://github.com/warpdotdev/warp/actions/runs/123/artifacts/456" \
             --output "$SLACK_PAYLOAD"
 
           jq -e '
-            (.blocks | length) == 2 and
+            (.blocks | length) == 3 and
             .blocks[0].type == "header" and
             .blocks[0].text.text == "Changelog for FORMAT PREVIEW — not a release" and
             .blocks[1].type == "section" and
-            .blocks[1].expand == true and
-            (.blocks[1].text.text | contains("<https://github.com/warpdotdev/warp/pull/9275|#9275>")) and
-            (.blocks[1].text.text | contains("<https://github.com/Akeuuh|@Akeuuh>")) and
-            (.blocks[1].text.text | contains("<https://github.com/bradleyjames|@bradleyjames>"))
+            (.blocks[1].text.text | contains("<https://github.com/warpdotdev/warp/actions/runs/123/artifacts/456|Download raw Markdown changelog artifact>")) and
+            .blocks[2].type == "section" and
+            .blocks[2].expand == true and
+            (.blocks[2].text.text | contains("<https://github.com/warpdotdev/warp/pull/9275|#9275>")) and
+            (.blocks[2].text.text | contains("<https://github.com/Akeuuh|@Akeuuh>")) and
+            (.blocks[2].text.text | contains("<https://github.com/bradleyjames|@bradleyjames>"))
           ' "$SLACK_PAYLOAD" >/dev/null
           cat "$SLACK_PAYLOAD"
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
