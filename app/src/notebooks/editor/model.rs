@@ -1325,7 +1325,14 @@ impl NotebooksEditorModel {
         }
 
         for model in self.child_models.model_handles::<NotebookCommand>() {
-            model.update(ctx, |model, ctx| model.try_apply_cached_highlighting(ctx));
+            model.update(ctx, |model, ctx| {
+                // Invalidate the applied version so colors are re-applied with the
+                // new theme colors, even if the buffer version hasn't changed.
+                if let Some(cache) = &mut model.cached_highlight_delta {
+                    cache.applied_at_buffer_version = None;
+                }
+                model.try_apply_cached_highlighting(ctx);
+            });
         }
     }
 

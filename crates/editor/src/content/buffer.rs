@@ -4873,6 +4873,11 @@ impl Buffer {
             let mut byte_index = ByteOffset::from(0);
             let mut active_color = None;
             let mut is_first_item = true;
+            // Collect text between color boundaries into a buffer and flush in
+            // bulk. This reduces SumTree::push calls from O(block_chars) to
+            // O(color_ranges) and avoids per-character String allocations that
+            // dominated the heap profile.
+            let mut text_buffer = String::new();
             while let Some(item) = buffer_cursor.item() {
                 // If current buffer cursor is at the end of the styling and the current item is not a color marker (taking
                 // into account trailing color end markers). Break out of the loop.
@@ -4886,6 +4891,10 @@ impl Buffer {
                     Some((color_range, _))
                         if color_range.end <= byte_index && active_color.is_some() =>
                     {
+                        if !text_buffer.is_empty() {
+                            new_content.append_str(&text_buffer);
+                            text_buffer.clear();
+                        }
                         new_content.push(BufferText::Color(ColorMarker::End));
                         active_color = None;
                         active_color_index += 1;
@@ -4903,6 +4912,10 @@ impl Buffer {
                     Some((color_range, color))
                         if color_range.start == byte_index && active_color != Some(*color) =>
                     {
+                        if !text_buffer.is_empty() {
+                            new_content.append_str(&text_buffer);
+                            text_buffer.clear();
+                        }
                         new_content.push(BufferText::Color(ColorMarker::Start(*color)));
                         active_color = Some(*color);
                     }
@@ -4911,11 +4924,16 @@ impl Buffer {
 
                 if let Some(c) = buffer_cursor.char() {
                     byte_index += c.len_utf8();
-                    new_content.append_str(&c.to_string());
+                    text_buffer.push(c);
                     buffer_cursor.next_char_position()
                 } else {
                     buffer_cursor.next()
                 }
+            }
+
+            // Flush any remaining buffered text.
+            if !text_buffer.is_empty() {
+                new_content.append_str(&text_buffer);
             }
 
             // Make sure we don't leave any unclosed color ranges.
