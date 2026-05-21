@@ -277,6 +277,7 @@ impl LeftPanelView {
                     .iter()
                     .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
                     .collect();
+                #[allow(unused_variables)]
                 let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = directories
                     .iter()
                     .filter_map(|d| match &d.path {
@@ -613,6 +614,7 @@ impl LeftPanelView {
             .iter()
             .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
             .collect();
+        #[allow(unused_variables)]
         let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = active_directories
             .iter()
             .filter_map(|d| match &d.path {

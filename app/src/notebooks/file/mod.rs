@@ -1167,10 +1167,43 @@ impl BackingView for FileNotebookView {
                 warpui::text_layout::ClipConfig::start(),
             );
 
+            // Wrap the title in a hoverable tooltip showing the full file path.
+            let title_element: Box<dyn Element> =
+                if let Some(display_path) = self.file_state.path().map(|p| p.display_path()) {
+                    use pathfinder_geometry::vector::vec2f;
+                    use warpui::elements::{ChildAnchor, ParentAnchor, ParentOffsetBounds};
+                    use warpui::elements::{Hoverable, MouseStateHandle, OffsetPositioning, Stack};
+                    let mouse_state = MouseStateHandle::default();
+                    Hoverable::new(mouse_state, move |hover_state| {
+                        let mut stack = Stack::new();
+                        stack.add_child(title_text);
+                        if hover_state.is_hovered() {
+                            let tooltip = appearance
+                                .ui_builder()
+                                .tool_tip(display_path.clone())
+                                .build()
+                                .finish();
+                            stack.add_positioned_overlay_child(
+                                tooltip,
+                                OffsetPositioning::offset_from_parent(
+                                    vec2f(0., 4.),
+                                    ParentOffsetBounds::Unbounded,
+                                    ParentAnchor::BottomMiddle,
+                                    ChildAnchor::TopMiddle,
+                                ),
+                            );
+                        }
+                        stack.finish()
+                    })
+                    .finish()
+                } else {
+                    title_text
+                };
+
             view::HeaderContent::Custom {
                 element: render_three_column_header(
                     Empty::new().finish(),
-                    title_text,
+                    title_element,
                     right_row.finish(),
                     CenteredHeaderEdgeWidth {
                         min: buttons_width,
