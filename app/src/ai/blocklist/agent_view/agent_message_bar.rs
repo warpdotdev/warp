@@ -948,7 +948,6 @@ struct ExitBashModeMessageProducer;
 impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
     fn produce_message(&self, args: AgentMessageArgs<'_>) -> Option<Message> {
         let AgentMessageArgs {
-            input_buffer_model,
             input_model,
             appearance,
             app,
@@ -958,28 +957,15 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
             return None;
         }
         let set_input_mode_agent_keystroke =
-            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app).unwrap_or_else(|| Keystroke {
-                key: "backspace".to_owned(),
-                ..Default::default()
-            });
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app).unwrap_or_else(
+                || Keystroke {
+                    key: "backspace".to_owned(),
+                    ..Default::default()
+                },
+            );
 
-        let (text_color, keystroke_color_override, keystroke_bg_color_override) =
-            if input_buffer_model.current_value().is_empty() {
-                (appearance.theme().ansi_fg_blue(), None, None)
-            } else {
-                (
-                    Fill::from(appearance.theme().ansi_fg_blue())
-                        .with_opacity(60)
-                        .into_solid(),
-                    Some(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().background())
-                            .into_solid(),
-                    ),
-                    Some(blended_colors::neutral_1(appearance.theme())),
-                )
-            };
+        let text_color = appearance.theme().ansi_fg_blue();
+        let (keystroke_color_override, keystroke_bg_color_override) = (None, None);
 
         Some(
             Message::new(vec![
