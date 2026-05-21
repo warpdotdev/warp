@@ -5852,9 +5852,9 @@ impl TerminalView {
                 // The conversation has moved to another terminal view. We are
                 // the previous owner (the per-view filter at the top of this
                 // function uses `previous_terminal_view_id`), so drop any
-                // rendered AI blocks tagged to this conversation. Leave the
+                // rendered blocks tagged to this conversation. Leave the
                 // agent-view entry in place so the user can click it to
-                // restore the conversation inline in this pane later.
+                // navigate to the current owner pane later.
                 if *previous_terminal_view_id != self.view_id {
                     return;
                 }
@@ -5878,6 +5878,10 @@ impl TerminalView {
                     self.rich_content_views
                         .retain(|view| view.view_id() != view_id_to_remove);
                 }
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .remove_command_blocks_for_conversation(*conversation_id);
             }
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }

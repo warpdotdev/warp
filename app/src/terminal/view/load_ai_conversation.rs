@@ -540,6 +540,26 @@ impl TerminalView {
     ) {
         let conversation_id = restored.ai_conversation.id();
         log::info!("Restoring conversation after view creation: {conversation_id}",);
+        let already_exists_in_this_view = {
+            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+            history_model.conversation(&conversation_id).is_some()
+                && history_model
+                    .all_live_conversations_for_terminal_view(self.view_id)
+                    .any(|conversation| conversation.id() == conversation_id)
+        };
+        if already_exists_in_this_view {
+            log::info!(
+                "Conversation {conversation_id} already exists in terminal view {}; entering agent view instead of restoring duplicate blocks.",
+                self.view_id
+            );
+            self.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::RestoreExistingConversation,
+                conversation_id,
+                ctx,
+            );
+            return;
+        }
 
         // Insert command blocks into the existing blocklist first, mirroring the
         // quit/restart path where blocks are passed to the TerminalModel constructor.
