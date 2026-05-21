@@ -1945,10 +1945,10 @@ impl CodeView {
                 let mut stack = Stack::new();
                 stack.add_child(title_row.finish());
                 if hover_state.is_hovered() {
-                    let tooltip_relative_path = tab
-                        .and_then(|tab| tab.local_path())
-                        .map(|p| Self::relative_path(p, self.window_id, app));
-                    if let Some(ref path) = tooltip_relative_path {
+                    let tooltip_path = tab
+                        .and_then(|tab| tab.location())
+                        .map(|loc| loc.display_path());
+                    if let Some(ref path) = tooltip_path {
                         let tooltip = appearance
                             .ui_builder()
                             .tool_tip(path.clone())
@@ -2025,25 +2025,45 @@ impl CodeView {
         ];
 
         #[cfg(feature = "local_fs")]
-        if let Some(path) = self.local_path(ctx) {
-            let reveal_label = if cfg!(target_os = "macos") {
-                "Reveal in Finder"
-            } else if cfg!(target_os = "windows") {
-                "Reveal in Explorer"
-            } else {
-                "Reveal in file manager"
-            };
-            items.extend([
-                MenuItem::Separator,
-                MenuItemFields::new("Copy file path")
-                    .with_on_select_action(CodeViewAction::CopyFilePath)
-                    .into_item(),
-                MenuItemFields::new(reveal_label)
-                    .with_on_select_action(CodeViewAction::RevealInFinder)
-                    .into_item(),
-            ]);
+        {
+            let active_location = self
+                .tab_at(self.active_tab_index)
+                .and_then(|t| t.location.as_ref());
+            let local_path = self.local_path(ctx);
 
-            if is_markdown_file(&path) {
+            if active_location.is_some() {
+                items.push(MenuItem::Separator);
+                items.push(
+                    MenuItemFields::new("Copy file path")
+                        .with_on_select_action(CodeViewAction::CopyFilePath)
+                        .into_item(),
+                );
+            }
+
+            if local_path.is_some() {
+                let reveal_label = if cfg!(target_os = "macos") {
+                    "Reveal in Finder"
+                } else if cfg!(target_os = "windows") {
+                    "Reveal in Explorer"
+                } else {
+                    "Reveal in file manager"
+                };
+                items.push(
+                    MenuItemFields::new(reveal_label)
+                        .with_on_select_action(CodeViewAction::RevealInFinder)
+                        .into_item(),
+                );
+            }
+
+            let is_md = local_path
+                .as_ref()
+                .map(|p| is_markdown_file(p))
+                .unwrap_or_else(|| {
+                    active_location
+                        .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+                        .unwrap_or(false)
+                });
+            if is_md {
                 items.push(
                     MenuItemFields::new("View Markdown preview")
                         .with_on_select_action(CodeViewAction::RenderMarkdown)
@@ -2196,9 +2216,12 @@ impl TypedActionView for CodeView {
 
             #[cfg(feature = "local_fs")]
             CodeViewAction::CopyFilePath => {
-                if let Some(path) = self.local_path(ctx) {
+                if let Some(location) = self
+                    .tab_at(self.active_tab_index)
+                    .and_then(|t| t.location.as_ref())
+                {
                     ctx.clipboard()
-                        .write(ClipboardContent::plain_text(path.display().to_string()));
+                        .write(ClipboardContent::plain_text(location.display_path()));
                 }
             }
             #[cfg(feature = "local_fs")]

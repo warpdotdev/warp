@@ -577,6 +577,12 @@ impl WorkingDirectoriesModel {
                 DetectedRepositories::as_ref(ctx).get_root_for_path(&remote_key)
             {
                 new_remote_display_roots.push(repo_root);
+            } else if let Some(parent) = remote_path.path.parent() {
+                // Fall back to the parent directory, matching the local editor path behavior.
+                new_remote_display_roots.push(LocalOrRemotePath::Remote(RemotePath::new(
+                    remote_path.host_id.clone(),
+                    parent,
+                )));
             }
         }
 
