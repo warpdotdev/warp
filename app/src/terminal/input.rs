@@ -1668,6 +1668,11 @@ pub struct Input {
     /// of using this flag.
     is_editor_empty_on_last_edit: bool,
 
+    /// Cached keymap state for whether this terminal has live AI conversations
+    /// with a user query. Keep this off the per-keystroke keymap path because
+    /// large AI history stacks make repeated HashMap lookups visible while typing.
+    has_live_ai_conversation_history: bool,
+
     /// Weak handle to this input view for drop target data
     weak_view_handle: WeakViewHandle<Input>,
 
@@ -3096,7 +3101,7 @@ impl Input {
         // vertical tab progress indicators in sync.
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
-            move |me, _, event, ctx| {
+            move |me, history_model, event, ctx| {
                 let affects_hint = matches!(
                     event,
                     BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
@@ -3110,14 +3115,38 @@ impl Input {
                         | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
                         | BlocklistAIHistoryEvent::RestoredConversations { .. }
                 );
-                if !affects_hint {
-                    return;
-                }
                 if event.terminal_view_id() != Some(terminal_view_id) {
                     return;
                 }
-                me.set_zero_state_hint_text(ctx);
-                ctx.notify();
+
+                let mut should_notify = false;
+                let affects_history_keymap = matches!(
+                    event,
+                    BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                        | BlocklistAIHistoryEvent::AppendedExchange { .. }
+                        | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                        | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                        | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                        | BlocklistAIHistoryEvent::SplitConversation { .. }
+                        | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                        | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                        | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                );
+                if affects_history_keymap {
+                    me.has_live_ai_conversation_history = history_model
+                        .as_ref(ctx)
+                        .has_live_conversation_with_initial_user_query(terminal_view_id);
+                    should_notify = true;
+                }
+
+                if affects_hint {
+                    me.set_zero_state_hint_text(ctx);
+                    should_notify = true;
+                }
+
+                if should_notify {
+                    ctx.notify();
+                }
             },
         );
 
@@ -3490,6 +3519,8 @@ impl Input {
         let completions_menu_height = *input_settings.completions_menu_height.value();
 
         let is_editor_empty = editor.as_ref(ctx).is_empty(ctx);
+        let has_live_ai_conversation_history = BlocklistAIHistoryModel::as_ref(ctx)
+            .has_live_conversation_with_initial_user_query(terminal_view_id);
         let mut input = Self {
             input_suggestions,
             suggestions_mode_model,
@@ -3567,6 +3598,7 @@ impl Input {
             inline_terminal_menu_positioner,
             cached_agent_mode_hint_text: None,
             is_editor_empty_on_last_edit: is_editor_empty,
+            has_live_ai_conversation_history,
             weak_view_handle: ctx.handle(),
             buy_credits_banner,
             agent_status_view,
@@ -15091,10 +15123,7 @@ impl View for Input {
             ctx.set.insert("PromptChipMenuOpen");
         }
 
-        if BlocklistAIHistoryModel::as_ref(app)
-            .all_live_conversations_for_terminal_view(self.terminal_view_id)
-            .any(|conversation| conversation.initial_user_query().is_some())
-        {
+        if self.has_live_ai_conversation_history {
             ctx.set.insert("ActiveAIConversationHasHistory");
         }
 

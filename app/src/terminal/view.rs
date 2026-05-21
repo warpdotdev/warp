@@ -5332,27 +5332,29 @@ impl TerminalView {
         history_model: &BlocklistAIHistoryModel,
         event: &BlocklistAIHistoryEvent,
     ) -> Option<EntityId> {
+        if let Some(terminal_view_id) = event.terminal_view_id() {
+            return Some(terminal_view_id);
+        }
+
         match event {
-            BlocklistAIHistoryEvent::AppendedExchange {
+            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
                 conversation_id, ..
             }
-            | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+            | BlocklistAIHistoryEvent::NewConversationRequestComplete {
                 conversation_id, ..
             }
-            | BlocklistAIHistoryEvent::UpdatedConversationStatus {
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                 conversation_id, ..
             }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                conversation_id, ..
-            }
-            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
                 conversation_id, ..
             } => history_model.terminal_view_id_for_conversation(conversation_id),
-            BlocklistAIHistoryEvent::ReassignedExchange {
-                new_conversation_id,
-                ..
-            } => history_model.terminal_view_id_for_conversation(new_conversation_id),
-            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            BlocklistAIHistoryEvent::AppendedExchange { .. }
+            | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+            | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
@@ -5365,10 +5367,7 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::DeletedConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
-            | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
-            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => None,
         }
     }
 

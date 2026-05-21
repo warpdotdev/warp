@@ -297,6 +297,14 @@ impl BlocklistAIHistoryModel {
             })
     }
 
+    pub fn has_live_conversation_with_initial_user_query(
+        &self,
+        terminal_view_id: EntityId,
+    ) -> bool {
+        self.all_live_conversations_for_terminal_view(terminal_view_id)
+            .any(|conversation| conversation.initial_user_query().is_some())
+    }
+
     /// Returns a flattened and ordered (oldest first) list of exchanges from live conversations (not cleared)
     /// in the given terminal view ID.
     /// This works for terminal views that have been closed.

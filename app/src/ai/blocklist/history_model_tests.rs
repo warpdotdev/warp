@@ -2539,3 +2539,68 @@ fn test_fork_conversation_title_override_replaces_prefix() {
         });
     });
 }
+
+#[test]
+fn has_live_conversation_with_initial_user_query_tracks_live_history() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let terminal_view_id = EntityId::new();
+        let other_terminal_view_id = EntityId::new();
+
+        assert!(!history_model.read(&app, |model, _| {
+            model.has_live_conversation_with_initial_user_query(terminal_view_id)
+        }));
+
+        let conversation_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        assert!(!history_model.read(&app, |model, _| {
+            model.has_live_conversation_with_initial_user_query(terminal_view_id)
+        }));
+
+        history_model.update(&mut app, |model, ctx| {
+            let exchange = create_exchange_with_query("live query", Local::now(), None);
+            let task_id = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task_id()
+                .clone();
+            model
+                .update_conversation_for_new_request_input(
+                    RequestInput {
+                        conversation_id,
+                        input_messages: HashMap::from([(task_id, exchange.input)]),
+                        working_directory: exchange.working_directory,
+                        model_id: exchange.model_id,
+                        coding_model_id: exchange.coding_model_id,
+                        cli_agent_model_id: exchange.cli_agent_model_id,
+                        computer_use_model_id: exchange.computer_use_model_id,
+                        shared_session_response_initiator: exchange.response_initiator,
+                        request_start_ts: exchange.start_time,
+                        supported_tools_override: None,
+                    },
+                    ResponseStreamId::new_for_test(),
+                    terminal_view_id,
+                    ctx,
+                )
+                .expect("request input should update conversation");
+        });
+
+        assert!(history_model.read(&app, |model, _| {
+            model.has_live_conversation_with_initial_user_query(terminal_view_id)
+        }));
+        assert!(!history_model.read(&app, |model, _| {
+            model.has_live_conversation_with_initial_user_query(other_terminal_view_id)
+        }));
+
+        history_model.update(&mut app, |model, ctx| {
+            model.clear_conversations_in_terminal_view(terminal_view_id, ctx);
+        });
+
+        assert!(!history_model.read(&app, |model, _| {
+            model.has_live_conversation_with_initial_user_query(terminal_view_id)
+        }));
+    });
+}
