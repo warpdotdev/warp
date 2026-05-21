@@ -1690,7 +1690,8 @@ impl AgentDriver {
                 .record_result(SetupStep::AgentProfileConfiguration, async {
                     foreground
                         .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
-                        .await?
+                        .await??;
+                    Ok::<(), AgentDriverError>(())
                 })
                 .await?;
 
