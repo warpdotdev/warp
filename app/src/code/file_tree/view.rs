@@ -19,9 +19,9 @@ use warp_util::standardized_path::StandardizedPath;
 use repo_metadata::repositories::DetectedRepositories;
 use warp_core::send_telemetry_from_ctx;
 use warpui::elements::{
-    AcceptedByDropTarget, Align, Clipped, ConstrainedBox, Container, Dismiss, Draggable,
-    DraggableState, Empty, FormattedTextElement, MainAxisAlignment, Percentage, Rect, SavePosition,
-    Scrollable, Shrinkable,
+    AcceptedByDropTarget, Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, Dismiss,
+    Draggable, DraggableState, Empty, FormattedTextElement, MainAxisAlignment, Percentage, Radius,
+    Rect, SavePosition, Scrollable, Shrinkable,
 };
 use warpui::fonts::Style;
 use warpui::keymap::FixedBinding;
@@ -44,7 +44,10 @@ use warpui::{BlurContext, ModelHandle};
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::editor::{EditorOptions, EditorView, TextOptions};
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
+    PropagateHorizontalNavigationKeys, SingleLineEditorOptions, TextOptions,
+};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::terminal::input::InputDropTargetData;
@@ -68,6 +71,7 @@ use crate::{
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::{color::internal_colors, Fill};
 use warp_core::HostId;
+use warp_editor::editor::NavigationKey;
 
 mod editing;
 mod render;
@@ -272,6 +276,10 @@ pub struct FileTreeView {
     pending_edit: Option<PendingEdit>,
     /// Editor view used for editing (renaming, creating) an item in the tree.
     editor_view: ViewHandle<EditorView>,
+    /// Editor view used to filter items in the tree.
+    search_editor: ViewHandle<EditorView>,
+    /// Current file tree search query.
+    search_query: String,
     /// Handle to track the currently focused file
     active_file_model: Option<ModelHandle<ActiveFileModel>>,
     has_terminal_session: bool,
@@ -683,6 +691,27 @@ impl FileTreeView {
             _ => {}
         });
 
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let mut editor = EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: TextOptions::ui_text(Some(ITEM_FONT_SIZE), appearance),
+                    select_all_on_focus: true,
+                    clear_selections_on_blur: true,
+                    propagate_and_no_op_vertical_navigation_keys:
+                        PropagateAndNoOpNavigationKeys::Always,
+                    propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::Always,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            editor.set_placeholder_text("Search files", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&search_editor, |me, _, event, ctx| {
+            me.handle_search_editor_event(event, ctx);
+        });
+
         #[cfg(feature = "local_fs")]
         let repository_metadata_model = RepoMetadataModel::handle(ctx);
 
@@ -704,6 +733,8 @@ impl FileTreeView {
             position_id: format!("file_tree_{}", ctx.view_id()),
             pending_edit: None,
             editor_view,
+            search_editor,
+            search_query: String::new(),
             active_file_model: None,
             has_terminal_session: false,
             explicitly_collapsed: HashMap::new(),
@@ -1535,6 +1566,138 @@ impl FileTreeView {
             .unwrap_or(false)
     }
 
+    fn is_searching(&self) -> bool {
+        !self.search_query.trim().is_empty()
+    }
+
+    fn normalized_search_query(&self) -> Option<String> {
+        let query = self.search_query.trim();
+        (!query.is_empty()).then(|| query.to_lowercase())
+    }
+
+    fn item_matches_search_query(
+        root_path: &StandardizedPath,
+        item_path: &StandardizedPath,
+        query: &str,
+    ) -> bool {
+        let relative_path = item_path
+            .strip_prefix(root_path)
+            .unwrap_or_else(|| item_path.as_str());
+        let file_name = item_path.file_name().unwrap_or_default();
+
+        query.split_whitespace().all(|term| {
+            relative_path.to_lowercase().contains(term)
+                || file_name.to_lowercase().contains(term)
+                || item_path.as_str().to_lowercase().contains(term)
+        })
+    }
+
+    fn first_item_id(&self) -> Option<FileTreeIdentifier> {
+        self.displayed_root_directories()
+            .find(|(_, root_dir)| !root_dir.items.is_empty())
+            .map(|(root, _)| FileTreeIdentifier {
+                root: root.clone(),
+                index: 0,
+            })
+    }
+
+    fn ensure_search_selection_is_valid(&mut self) {
+        if !self.is_searching() {
+            return;
+        }
+
+        let selection_is_valid = self.selected_item.as_ref().is_some_and(|id| {
+            self.root_directories
+                .get(&id.root)
+                .is_some_and(|root_dir| id.index < root_dir.items.len())
+        });
+
+        if !selection_is_valid {
+            self.selected_item = self.first_item_id();
+        }
+    }
+
+    fn update_search_query(&mut self, query: String, ctx: &mut ViewContext<Self>) {
+        if self.search_query == query {
+            return;
+        }
+
+        self.search_query = query;
+        self.rebuild_flattened_items();
+        self.ensure_search_selection_is_valid();
+        if let Some(id) = self.selected_item.clone() {
+            self.perform_scroll(&id);
+        }
+        ctx.notify();
+    }
+
+    fn handle_search_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            EditorEvent::Edited(_)
+            | EditorEvent::BufferReplaced
+            | EditorEvent::BufferReinitialized => {
+                let query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+                self.update_search_query(query, ctx);
+            }
+            EditorEvent::Navigate(NavigationKey::Down) => {
+                self.select_next_item(ctx);
+            }
+            EditorEvent::Navigate(NavigationKey::Up) => {
+                self.select_previous_item(ctx);
+            }
+            EditorEvent::Enter => {
+                if let Some(id) = self.selected_item.clone() {
+                    self.select_and_execute_item_at_id(&id, ctx);
+                }
+            }
+            EditorEvent::Escape => {
+                self.search_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("", ctx);
+                });
+                self.update_search_query(String::new(), ctx);
+                ctx.focus_self();
+            }
+            _ => {}
+        }
+    }
+
+    fn select_previous_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.total_item_count() == 0 {
+            return;
+        }
+
+        let next_id = self
+            .selected_item
+            .as_ref()
+            .and_then(|id| self.identifier_to_global_index(id))
+            .and_then(|global_index| global_index.checked_sub(1))
+            .and_then(|global_index| self.identifier_from_global_index(global_index))
+            .or_else(|| self.first_item_id());
+
+        if let Some(id) = next_id {
+            self.select_id(&id, ctx);
+        }
+    }
+
+    fn select_next_item(&mut self, ctx: &mut ViewContext<Self>) {
+        let item_count = self.total_item_count();
+        if item_count == 0 {
+            return;
+        }
+
+        let next_id = self
+            .selected_item
+            .as_ref()
+            .and_then(|id| self.identifier_to_global_index(id))
+            .map(|global_index| (global_index + 1).min(item_count.saturating_sub(1)))
+            .and_then(|global_index| self.identifier_from_global_index(global_index))
+            .or_else(|| self.first_item_id());
+
+        if let Some(id) = next_id {
+            self.select_id(&id, ctx);
+        }
+    }
+
     /// Ensures a displayed standalone directory is registered with
     /// [`LocalRepoMetadataModel`] as a lazily-loaded path while the file tree is active, then
     /// refreshes this view's directory entry from the model.
@@ -1650,6 +1813,11 @@ impl FileTreeView {
 
         // Clone the ID to preserve so we don't hold a borrow on self.selected_item
         let id_to_preserve = id_to_select.cloned().or_else(|| self.selected_item.clone());
+        let search_query = self.normalized_search_query();
+        let selected_root_was_rebuilt = id_to_preserve
+            .as_ref()
+            .is_some_and(|id| target_root.is_none_or(|target| *target == id.root));
+        let mut preserved_selection_found = false;
 
         // Process displayed directories, optionally filtering to a single root.
         for root_path in self.displayed_directories.clone() {
@@ -1679,6 +1847,7 @@ impl FileTreeView {
                 0,
                 selected_item_path.as_ref(),
                 path_to_remove,
+                search_query.as_deref(),
                 &mut items,
             );
 
@@ -1693,11 +1862,17 @@ impl FileTreeView {
                         root: root_path,
                         index,
                     });
+                    preserved_selection_found = true;
                 }
             }
 
             any_item_removed = any_item_removed || removed_item;
         }
+
+        if search_query.is_some() && selected_root_was_rebuilt && !preserved_selection_found {
+            self.selected_item = None;
+        }
+        self.ensure_search_selection_is_valid();
 
         any_item_removed
     }
@@ -1712,6 +1887,7 @@ impl FileTreeView {
         depth: usize,
         path_of_selected_item: Option<&StandardizedPath>,
         path_of_removed_item: Option<&StandardizedPath>,
+        search_query: Option<&str>,
         items: &mut Vec<FileTreeItem>,
     ) -> (Option<usize>, bool) {
         let mut selected_item_index = None;
@@ -1721,15 +1897,17 @@ impl FileTreeView {
             return (None, true);
         }
 
-        if path_of_selected_item == Some(current_path) {
-            selected_item_index = Some(items.len());
-        }
-
         // Get item_states from the root directory
         let root_dir = self.root_directories.get_mut(root_path);
 
         match entry_map.get(current_path).cloned() {
             Some(FileTreeEntryState::File(file)) => {
+                if search_query.is_some_and(|query| {
+                    !Self::item_matches_search_query(root_path, &file.path, query)
+                }) {
+                    return (selected_item_index, removed_item);
+                }
+
                 let file_std_path = (*file.path).clone();
                 let (mouse_state_handle, draggable_state) = if let Some(root_dir) = root_dir {
                     root_dir
@@ -1741,6 +1919,10 @@ impl FileTreeView {
                     (MouseStateHandle::default(), DraggableState::default())
                 };
 
+                if path_of_selected_item == Some(current_path) {
+                    selected_item_index = Some(items.len());
+                }
+
                 items.push(FileTreeItem::File {
                     metadata: file.clone(),
                     depth,
@@ -1750,6 +1932,9 @@ impl FileTreeView {
             }
             Some(FileTreeEntryState::Directory(dir)) => {
                 let is_expanded = self.is_folder_expanded(root_path, &dir.path);
+                let matches_search = search_query.is_none_or(|query| {
+                    Self::item_matches_search_query(root_path, &dir.path, query)
+                });
                 let dir_std_path = (*dir.path).clone();
                 let (mouse_state_handle, draggable_state) = if let Some(root_dir) =
                     self.root_directories.get_mut(root_path)
@@ -1763,15 +1948,22 @@ impl FileTreeView {
                     (MouseStateHandle::default(), DraggableState::default())
                 };
 
-                items.push(FileTreeItem::DirectoryHeader {
-                    directory: dir.clone(),
-                    depth,
-                    mouse_state_handle,
-                    draggable_state,
-                });
+                if matches_search {
+                    if path_of_selected_item == Some(current_path) {
+                        selected_item_index = Some(items.len());
+                    }
 
-                // Add children if expanded
-                if is_expanded {
+                    items.push(FileTreeItem::DirectoryHeader {
+                        directory: dir.clone(),
+                        depth,
+                        mouse_state_handle,
+                        draggable_state,
+                    });
+                }
+
+                // In search mode, include matching loaded descendants even when their parents are
+                // collapsed. Otherwise preserve normal tree expansion behavior.
+                if search_query.is_some() || is_expanded {
                     for child in entry_map
                         .child_paths(&dir.path)
                         .sorted_by(|a, b| sort_entries_for_file_tree(a, b, entry_map))
@@ -1783,6 +1975,7 @@ impl FileTreeView {
                             depth + 1,
                             path_of_selected_item,
                             path_of_removed_item,
+                            search_query,
                             items,
                         );
 
@@ -2639,7 +2832,7 @@ impl FileTreeView {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let num_items = self.total_item_count();
-        if num_items == 0 {
+        if num_items == 0 && !self.is_searching() {
             return self.render_loading_state(app);
         }
 
@@ -2664,21 +2857,29 @@ impl FileTreeView {
             },
         )
         .finish_scrollable();
+
+        let list_content = if num_items == 0 {
+            self.render_empty_search_state(app)
+        } else {
+            Scrollable::vertical(
+                self.scroll_state.clone(),
+                uniform_list,
+                ScrollbarWidth::Auto,
+                theme.nonactive_ui_detail().into(),
+                theme.active_ui_detail().into(),
+                warpui::elements::Fill::None,
+            )
+            .with_overlayed_scrollbar()
+            .finish()
+        };
+
         let content_column = Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
+            .with_child(self.render_search_input(appearance))
             .with_child(
                 Shrinkable::new(
                     1.,
-                    Scrollable::vertical(
-                        self.scroll_state.clone(),
-                        uniform_list,
-                        ScrollbarWidth::Auto,
-                        theme.nonactive_ui_detail().into(),
-                        theme.active_ui_detail().into(),
-                        warpui::elements::Fill::None,
-                    )
-                    .with_overlayed_scrollbar()
-                    .finish(),
+                    Container::new(list_content).with_margin_top(8.).finish(),
                 )
                 .finish(),
             )
@@ -2708,6 +2909,57 @@ impl FileTreeView {
         }
 
         stack.finish()
+    }
+
+    fn render_search_input(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let search_icon = ConstrainedBox::new(
+            Icon::SearchSmall
+                .to_warpui_icon(theme.active_ui_text_color())
+                .finish(),
+        )
+        .with_width(12.)
+        .with_height(12.)
+        .finish();
+        let editor =
+            Container::new(Clipped::new(ChildView::new(&self.search_editor).finish()).finish())
+                .with_margin_left(6.)
+                .finish();
+        let row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(search_icon)
+            .with_child(Shrinkable::new(1., editor).finish())
+            .finish();
+
+        let input = Container::new(row)
+            .with_horizontal_padding(8.)
+            .with_border(Border::all(1.).with_border_fill(theme.foreground().with_opacity(20)))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .finish();
+
+        ConstrainedBox::new(input).with_height(28.).finish()
+    }
+
+    fn render_empty_search_state(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+
+        Align::new(
+            Container::new(
+                Text::new(
+                    "No matching files",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.disabled_text_color(theme.background()).into())
+                .finish(),
+            )
+            .with_vertical_padding(24.)
+            .finish(),
+        )
+        .top_center()
+        .finish()
     }
 
     fn render_error_state(&self, text: String, app: &AppContext) -> Box<dyn Element> {
@@ -2983,42 +3235,11 @@ impl TypedActionView for FileTreeView {
                 ctx.notify();
             }
             FileTreeAction::SelectPreviousItem => {
-                if let Some(selected_item) = &self.selected_item {
-                    if selected_item.index > 0 {
-                        let new_id = FileTreeIdentifier {
-                            root: selected_item.root.clone(),
-                            index: selected_item.index - 1,
-                        };
-                        self.select_id(&new_id, ctx);
-                    }
-                } else if let Some(first_dir) = self.displayed_directories.first() {
-                    let id = FileTreeIdentifier {
-                        root: first_dir.clone(),
-                        index: 0,
-                    };
-                    self.select_id(&id, ctx);
-                }
-
+                self.select_previous_item(ctx);
                 ctx.notify();
             }
             FileTreeAction::SelectNextItem => {
-                if let Some(selected_item) = &self.selected_item {
-                    if let Some(root_dir) = self.root_directories.get(&selected_item.root) {
-                        let new_index =
-                            (selected_item.index + 1).min(root_dir.items.len().saturating_sub(1));
-                        let new_id = FileTreeIdentifier {
-                            root: selected_item.root.clone(),
-                            index: new_index,
-                        };
-                        self.select_id(&new_id, ctx);
-                    }
-                } else if let Some(first_dir) = self.displayed_directories.first() {
-                    let id = FileTreeIdentifier {
-                        root: first_dir.clone(),
-                        index: 0,
-                    };
-                    self.select_id(&id, ctx);
-                }
+                self.select_next_item(ctx);
                 ctx.notify();
             }
             FileTreeAction::Expand => {

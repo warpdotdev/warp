@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use virtual_fs::{Stub, VirtualFS};
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, ModelHandle};
+use warpui::{App, ModelHandle, platform::WindowStyle};
 
 use crate::auth::AuthStateProvider;
 use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use super::FileTreeView;
@@ -144,12 +144,14 @@ fn repo_transition_unregisters_lazy_loaded_path() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap()
                     )
-                    .unwrap()
-                ));
+                );
                 let displayed_std =
                     warp_util::standardized_path::StandardizedPath::try_from_local(&displayed_root)
                         .unwrap();
@@ -161,13 +163,15 @@ fn repo_transition_unregisters_lazy_loaded_path() {
                 );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
 
             repository_metadata_model.update(&mut app, |model, ctx| {
@@ -195,13 +199,15 @@ fn repo_transition_unregisters_lazy_loaded_path() {
                 );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
         });
     });
@@ -256,18 +262,22 @@ fn repo_backed_unloaded_directory_loads_through_model() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    !view
+                        .root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &source_file
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &source_file
+                            )
+                            .unwrap()
+                        ))
+                );
             });
 
             file_tree_view.update(&mut app, |view, ctx| {
@@ -281,18 +291,21 @@ fn repo_backed_unloaded_directory_loads_through_model() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    view.root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &nested_dir
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &nested_dir
+                            )
+                            .unwrap()
+                        ))
+                );
             });
 
             file_tree_view.update(&mut app, |view, ctx| {
@@ -306,25 +319,30 @@ fn repo_backed_unloaded_directory_loads_through_model() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    view.root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &source_file
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &source_file
+                            )
+                            .unwrap()
+                        ))
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap(),
-                    ctx
-                ));
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap(),
+                        ctx
+                    )
+                );
                 let id = repo_metadata::RepositoryIdentifier::local(
                     warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
                         .unwrap(),
@@ -389,17 +407,21 @@ fn pending_repository_root_does_not_register_lazy_loaded_path() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap()
-                ));
+                assert!(
+                    !view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap()
+                    )
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap(),
-                    ctx
-                ));
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap(),
+                        ctx
+                    )
+                );
                 let id = repo_metadata::RepositoryIdentifier::local(
                     warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
                         .unwrap(),
@@ -429,21 +451,25 @@ fn failed_lazy_loaded_path_registration_is_retried() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap()
                     )
-                    .unwrap()
-                ));
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
 
             vfs.mkdir("late_dir")
@@ -462,13 +488,15 @@ fn failed_lazy_loaded_path_registration_is_retried() {
                 ));
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
         });
     });
@@ -852,9 +880,11 @@ fn cd_into_descendant_absorbs_into_existing_ancestor_root() {
                 assert_eq!(view.displayed_directories, vec![std_path(&tree)]);
                 // Ancestor chain is auto-expanded down to the cwd.
                 let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                assert!(root_dir
-                    .expanded_folders
-                    .contains(&std_path(&tree.join("a"))));
+                assert!(
+                    root_dir
+                        .expanded_folders
+                        .contains(&std_path(&tree.join("a")))
+                );
                 assert!(root_dir.expanded_folders.contains(&std_path(&z)));
             });
         });
@@ -981,6 +1011,110 @@ fn absorbed_descendant_is_unregistered_from_lazy_loaded_paths() {
             });
             repository_metadata_model.read(&app, |model, ctx| {
                 assert!(!model.is_lazy_loaded_path(&std_path(&a), ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn search_filters_loaded_descendants_even_when_collapsed() {
+    VirtualFS::test("file_tree_search_loaded_descendants", |dirs, mut vfs| {
+        vfs.mkdir("repo/.git/objects")
+            .mkdir("repo/packages/app/src")
+            .with_files(vec![
+                Stub::FileWithContent("repo/.git/HEAD", "ref: refs/heads/main"),
+                Stub::FileWithContent("repo/.git/config", "[core]\n\trepositoryformatversion = 0"),
+                Stub::FileWithContent("repo/packages/app/src/main.rs", "fn main() {}\n"),
+                Stub::FileWithContent("repo/packages/app/src/lib.rs", ""),
+                Stub::FileWithContent("repo/README.md", "# repo\n"),
+            ]);
+        let repo = dirs.tests().join("repo");
+        let main_rs = repo.join("packages/app/src/main.rs");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+            repository_metadata_model.update(&mut app, |model, ctx| {
+                model.insert_test_state(canonical_repo_root.clone(), build_repo_state(&repo), ctx);
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![repo.clone()], ctx);
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.update_search_query("main".to_string(), ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root_dir = view.root_directories.get(&std_path(&repo)).unwrap();
+                let paths: Vec<_> = root_dir.items.iter().map(|item| item.path()).collect();
+                assert_eq!(paths, vec![&std_path(&main_rs)]);
+                assert_eq!(
+                    root_dir.items.first().map(|item| item.path()),
+                    Some(&std_path(&main_rs))
+                );
+                let selected = view.selected_item.as_ref().expect("first match selected");
+                assert_eq!(
+                    root_dir.items.get(selected.index).map(|item| item.path()),
+                    Some(&std_path(&main_rs))
+                );
+            });
+        });
+    });
+}
+
+#[test]
+fn clearing_search_restores_tree_items() {
+    VirtualFS::test("file_tree_clear_search", |dirs, mut vfs| {
+        vfs.mkdir("repo/src").with_files(vec![Stub::FileWithContent(
+            "repo/src/main.rs",
+            "fn main() {}\n",
+        )]);
+        let repo = dirs.tests().join("repo");
+        let src = repo.join("src");
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![repo.clone()], ctx);
+                view.update_search_query("does-not-exist".to_string(), ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root_dir = view.root_directories.get(&std_path(&repo)).unwrap();
+                assert!(root_dir.items.is_empty());
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.update_search_query(String::new(), ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root_dir = view.root_directories.get(&std_path(&repo)).unwrap();
+                assert!(
+                    root_dir
+                        .items
+                        .iter()
+                        .any(|item| item.path() == &std_path(&repo))
+                );
+                assert!(
+                    root_dir
+                        .items
+                        .iter()
+                        .any(|item| item.path() == &std_path(&src))
+                );
             });
         });
     });
