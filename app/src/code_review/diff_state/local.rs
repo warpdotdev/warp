@@ -248,6 +248,7 @@ impl LocalDiffStateModel {
                         log::error!("File invalidation error: {err}");
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
+                                is_local: Some(true),
                                 error: err.to_string(),
                             },
                             ctx
@@ -1411,6 +1412,7 @@ impl LocalDiffStateModel {
             Err(e) => {
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::CalculateDiffMetadataFailed {
+                        is_local: Some(true),
                         error: e.to_string()
                     },
                     ctx
@@ -1461,6 +1463,7 @@ impl LocalDiffStateModel {
         if let Err(e) = &diffs.changes {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::LoadDiffFailed {
+                    is_local: Some(true),
                     error: e.to_string(),
                 },
                 ctx

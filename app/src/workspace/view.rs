@@ -8304,6 +8304,10 @@ impl Workspace {
                 }
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::PaneOpened {
+                        is_local: panel_update_params
+                            .review_pane_context
+                            .and_then(|context| context.repo_path.as_ref())
+                            .map(LocalOrRemotePath::is_local),
                         entrypoint: panel_update_params.entrypoint.unwrap_or_default(),
                         is_code_mode_v2: true,
                         cli_agent: panel_update_params.cli_agent.map(Into::into),

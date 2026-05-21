@@ -161,6 +161,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             }
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::GitDialogCompleted {
+                    is_local: Some(true),
                     operation: GitOperationKind::CreatePr,
                     status,
                     error,

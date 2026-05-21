@@ -4523,6 +4523,7 @@ impl AIBlock {
         if !self.model.is_restored() {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::CommentsReceived {
+                    is_local: Some(repo_location.is_local()),
                     raw_count,
                     converted_count,
                     thread_count,
