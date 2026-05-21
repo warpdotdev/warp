@@ -10,6 +10,8 @@ use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
+#[cfg(feature = "local_fs")]
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
 use crate::palette::PaletteMode;
@@ -568,6 +570,10 @@ pub enum WorkspaceAction {
     NavigatePrevPaneOrPanel,
     NavigateNextPaneOrPanel,
     ToggleProjectExplorer,
+    #[cfg(feature = "local_fs")]
+    RevealFileInProjectExplorer {
+        location: LocalOrRemotePath,
+    },
     ToggleGlobalSearch,
     OpenGlobalSearch,
     ToggleConversationListView,
@@ -981,6 +987,8 @@ impl WorkspaceAction {
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,
+            #[cfg(feature = "local_fs")]
+            RevealFileInProjectExplorer { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]

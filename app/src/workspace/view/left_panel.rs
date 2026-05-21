@@ -687,6 +687,20 @@ impl LeftPanelView {
         }
     }
 
+    pub fn reveal_file_in_project_explorer(
+        &mut self,
+        location: &LocalOrRemotePath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        active_view_state::set(self, ToolPanelView::ProjectExplorer, ctx);
+        if let Some(file_tree_view) = self.active_file_tree_view(ctx) {
+            file_tree_view.update(ctx, |view, ctx| {
+                view.reveal_location(location, ctx);
+            });
+            ctx.focus(&file_tree_view);
+        }
+    }
+
     #[cfg(not(feature = "local_fs"))]
     fn handle_global_search_event(
         &mut self,
