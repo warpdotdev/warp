@@ -3,29 +3,7 @@ use crate::anyhow;
 use crate::cloud_object::model::actions::ObjectActionHistory;
 use crate::cloud_object::model::actions::ObjectActionType;
 use crate::cloud_object::model::actions::{ObjectAction, ObjectActionSubtype};
-use crate::cloud_object::{GenericStringObjectUniqueKey, UniquePer};
 use crate::server::ids::{HashedSqliteId, ObjectUid, ServerId, SyncId};
-
-impl From<GenericStringObjectUniqueKey>
-    for warp_graphql::generic_string_object::GenericStringObjectUniqueKey
-{
-    fn from(key: GenericStringObjectUniqueKey) -> Self {
-        use warp_graphql::generic_string_object::GenericStringObjectUniqueKey as GraphQLFormat;
-        GraphQLFormat {
-            key: key.key,
-            unique_per: key.unique_per.into(),
-        }
-    }
-}
-
-impl From<UniquePer> for warp_graphql::generic_string_object::UniquePer {
-    fn from(unique_per: UniquePer) -> Self {
-        use warp_graphql::generic_string_object::UniquePer as GraphQLUniquePer;
-        match unique_per {
-            UniquePer::User => GraphQLUniquePer::User,
-        }
-    }
-}
 
 impl From<ObjectActionType> for warp_graphql::object_actions::ActionType {
     fn from(action: ObjectActionType) -> Self {

@@ -2,7 +2,7 @@
 """Unit tests for file_feedback_issue.py.
 
 Run with:
-    python3 resources/channel-gated-skills/dogfood/feedback/scripts/test_file_feedback_issue.py
+    python3 resources/bundled/skills/feedback/scripts/test_file_feedback_issue.py
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODULE_PATH = SCRIPT_DIR / "file_feedback_issue.py"
+TEST_REPO = "warpdotdev/warp"
 
 
 def load_module():
@@ -36,22 +37,22 @@ ffi = load_module()
 
 class BuildNewIssueUrlTests(unittest.TestCase):
     def test_url_includes_repo_and_title(self):
-        url = ffi.build_new_issue_url("Hello world", None)
-        self.assertTrue(url.startswith(f"https://{ffi.DEFAULT_HOSTNAME}/{ffi.DEFAULT_REPO}/issues/new?"))
+        url = ffi.build_new_issue_url(TEST_REPO, "Hello world", None)
+        self.assertTrue(url.startswith(f"https://{ffi.DEFAULT_HOSTNAME}/{TEST_REPO}/issues/new?"))
         parsed = urllib.parse.urlparse(url)
         qs = urllib.parse.parse_qs(parsed.query)
         self.assertEqual(qs["title"], ["Hello world"])
         self.assertNotIn("body", qs)
 
     def test_url_includes_body_when_provided(self):
-        url = ffi.build_new_issue_url("T", "body text with spaces & symbols?")
+        url = ffi.build_new_issue_url(TEST_REPO, "T", "body text with spaces & symbols?")
         parsed = urllib.parse.urlparse(url)
         qs = urllib.parse.parse_qs(parsed.query)
         self.assertEqual(qs["title"], ["T"])
         self.assertEqual(qs["body"], ["body text with spaces & symbols?"])
 
     def test_special_characters_are_percent_encoded(self):
-        url = ffi.build_new_issue_url("crash: `foo`", "<script>alert(1)</script>")
+        url = ffi.build_new_issue_url(TEST_REPO, "crash: `foo`", "<script>alert(1)</script>")
         # Spaces should be %20, not +, because we use quote_via=quote.
         self.assertIn("%20", url)
         self.assertNotIn("+", url.split("?", 1)[1])
@@ -81,7 +82,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         ):
             buf = io.StringIO()
             with redirect_stdout(buf):
-                rc = ffi.fallback_to_browser(title, body)
+                rc = ffi.fallback_to_browser(TEST_REPO, title, body)
         payload = json.loads(buf.getvalue().strip())
         return rc, payload, open_mock
 
@@ -90,6 +91,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "browser_opened")
         self.assertEqual(payload["method"], "browser")
+        self.assertEqual(payload["repo"], TEST_REPO)
         # Short bodies fit in the URL; no `body` field is surfaced separately.
         self.assertNotIn("body", payload)
         open_mock.assert_called_once()
@@ -124,6 +126,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "created")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertTrue(payload["issue_url"].endswith("/issues/7"))
         self.assertTrue(payload.get("browser_unavailable"))
         self.assertIn("attachment", payload["message"].lower())
@@ -135,6 +138,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["method"], "browser")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertIn("url", payload)
         # Failure messaging must acknowledge attachments so the user understands
         # why the image workflow couldn't complete.
@@ -151,6 +155,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "created")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertTrue(payload["issue_url"].endswith("/issues/8"))
         self.assertTrue(payload.get("browser_unavailable"))
         self.assertIn("No DISPLAY", payload["message"])
@@ -166,6 +171,7 @@ class FallbackToBrowserTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["method"], "browser")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertIn("No DISPLAY", payload["error"])
         self.assertIn("attachment", payload["error"].lower())
         open_mock.assert_not_called()
@@ -218,7 +224,7 @@ class FileWithGhTests(unittest.TestCase):
             for p in patches:
                 stack.enter_context(p)
             with redirect_stdout(buf):
-                rc = ffi.file_with_gh("hello", "body")
+                rc = ffi.file_with_gh(TEST_REPO, "hello", "body")
         return rc, json.loads(buf.getvalue().strip())
 
     def test_reports_unavailable_when_gh_missing(self):
@@ -226,6 +232,7 @@ class FileWithGhTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "unavailable")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertIn("message", payload)
 
     def test_creates_when_gh_available(self):
@@ -239,6 +246,7 @@ class FileWithGhTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "created")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertTrue(payload["issue_url"].endswith("/issues/42"))
 
     def test_reports_failed_when_gh_create_fails(self):
@@ -250,6 +258,7 @@ class FileWithGhTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertEqual(payload["gh_error"], "gh failed to create issue")
 
 
@@ -272,6 +281,8 @@ class MainTests(unittest.TestCase):
             "file_feedback_issue.py",
             "--title",
             "hello",
+            "--repo",
+            TEST_REPO,
             "--body-file",
             str(self.body_file),
             *argv_extras,
@@ -297,6 +308,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "created")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         self.assertTrue(payload["issue_url"].endswith("/issues/999"))
 
     def test_use_gh_reports_unavailable_and_does_not_open_browser(self):
@@ -307,6 +319,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "unavailable")
         self.assertEqual(payload["method"], "gh")
+        self.assertEqual(payload["repo"], TEST_REPO)
         # Critical invariant: --use gh must not silently fall back to the browser.
         open_mock.assert_not_called()
 
@@ -322,6 +335,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload["status"], "browser_opened")
         self.assertEqual(payload["method"], "browser")
+        self.assertEqual(payload["repo"], TEST_REPO)
         open_mock.assert_called_once()
         gh_mock.assert_not_called()
         create_mock.assert_not_called()
@@ -335,12 +349,32 @@ class MainTests(unittest.TestCase):
                 "file_feedback_issue.py",
                 "--title",
                 "hello",
+                "--repo",
+                TEST_REPO,
                 "--body-file",
                 str(self.body_file),
             ],
         ), mock.patch.object(sys, "stderr", stderr), contextlib.suppress(SystemExit):
             ffi.main()
         self.assertIn("--use", stderr.getvalue())
+
+    def test_missing_repo_flag_exits_with_argparse_error(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "file_feedback_issue.py",
+                "--use",
+                "gh",
+                "--title",
+                "hello",
+                "--body-file",
+                str(self.body_file),
+            ],
+        ), mock.patch.object(sys, "stderr", stderr), contextlib.suppress(SystemExit):
+            ffi.main()
+        self.assertIn("--repo", stderr.getvalue())
 
     def test_invalid_use_value_is_rejected(self):
         stderr = io.StringIO()
@@ -353,6 +387,8 @@ class MainTests(unittest.TestCase):
                 "carrier-pigeon",
                 "--title",
                 "hello",
+                "--repo",
+                TEST_REPO,
                 "--body-file",
                 str(self.body_file),
             ],

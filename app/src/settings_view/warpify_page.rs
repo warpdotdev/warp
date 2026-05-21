@@ -56,7 +56,11 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     // Add all of the toggle settings from the Warpify Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![];
 
-    if FeatureFlag::SSHTmuxWrapper.is_enabled() {
+    if FeatureFlag::SSHTmuxWrapper.is_enabled()
+        && WarpifySettings::as_ref(app)
+            .use_ssh_tmux_wrapper
+            .is_value_explicitly_set()
+    {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
             "SSH session detection for Warpification",
             builder(SettingsAction::WarpifyPageToggle(
@@ -734,6 +738,16 @@ impl SettingsWidget for SSHWidget {
                     .finish()
                 },
             );
+        }
+
+        // Only show the tmux warpification toggle if the user has explicitly changed
+        // the setting. We are gradually deprecating tmux warpification, so new users
+        // should not see this option, but existing users who opted in keep it.
+        if !WarpifySettings::as_ref(app)
+            .use_ssh_tmux_wrapper
+            .is_value_explicitly_set()
+        {
+            return column.finish();
         }
 
         add_setting(

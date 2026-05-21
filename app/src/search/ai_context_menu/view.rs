@@ -71,10 +71,6 @@ use warpui::{
 use crate::workspace::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::styles;
 
@@ -404,13 +400,13 @@ impl AIContextMenu {
             #[cfg(not(target_family = "wasm"))]
             {
                 let active_window_id = app.windows().state().active_window;
-                let active_dir = active_window_id
-                    .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id));
-                active_dir.is_some_and(|dir| {
-                    DetectedRepositories::as_ref(app)
-                        .get_root_for_path(&LocalOrRemotePath::Local(Path::new(dir).to_path_buf()))
-                        .is_some()
-                })
+                active_window_id
+                    .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
+                    .is_some_and(|dir| {
+                        DetectedRepositories::as_ref(app)
+                            .get_root_for_path(dir)
+                            .is_some()
+                    })
             }
         };
 

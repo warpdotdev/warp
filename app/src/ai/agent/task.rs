@@ -275,6 +275,20 @@ impl Task {
         }
     }
 
+    pub(super) fn new_restored_optimistic_root(
+        task_id: String,
+        restored_exchanges: impl Iterator<Item = AIAgentExchange>,
+    ) -> Self {
+        let mut restored_exchanges = restored_exchanges.collect_vec();
+        restored_exchanges.sort_by_key(|exchange| exchange.start_time);
+
+        Self {
+            id: TaskId::new(task_id),
+            data: TaskImpl::Optimistic(optimistic::Task::Root),
+            exchanges: restored_exchanges,
+        }
+    }
+
     pub(super) fn new_subtask(
         subtask: api::Task,
         parent_task: &api::Task,
@@ -477,6 +491,10 @@ impl Task {
         }
     }
 
+    pub(super) fn is_optimistic_root_task(&self) -> bool {
+        matches!(&self.data, TaskImpl::Optimistic(optimistic::Task::Root))
+    }
+
     pub fn is_cli_subagent(&self) -> bool {
         match &self.data {
             TaskImpl::Server(server_data) => server_data
@@ -566,6 +584,21 @@ impl Task {
 
     pub fn source(&self) -> Option<&api::Task> {
         self.try_get_source().ok()
+    }
+
+    pub(super) fn source_for_persistence(&self) -> Option<api::Task> {
+        match &self.data {
+            TaskImpl::Server(server_data) => Some(server_data.source.clone()),
+            TaskImpl::Optimistic(optimistic::Task::Root) => Some(api::Task {
+                id: self.id.to_string(),
+                messages: vec![],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            }),
+            TaskImpl::Optimistic(optimistic::Task::CLIAgent(_)) => None,
+        }
     }
 
     pub fn messages(&self) -> impl Iterator<Item = &api::Message> {

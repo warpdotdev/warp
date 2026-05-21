@@ -6,20 +6,21 @@ use crate::{
     cloud_object::{
         CloudModelType, CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult,
         CreateObjectRequest, GenericCloudObject, GenericServerObject, GenericStringObjectFormat,
-        GenericStringObjectUniqueKey, ObjectType, Revision, ServerCloudObject,
-        UpdateCloudObjectResult,
+        GenericStringObjectUniqueKey, ObjectType, Revision, UpdateCloudObjectResult,
     },
     drive::{items::WarpDriveItem, CloudObjectTypeAndId},
     persistence::ModelEvent,
     server::{
-        ids::{ObjectUid, ServerId, SyncId},
+        ids::{ServerId, SyncId},
         server_api::object::ObjectClient,
         sync_queue::{QueueItem, SerializedModel},
     },
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+
+// Re-exported from warp_server_client.
+pub use warp_server_client::ids::GenericStringObjectId;
 
 /// A trait that generic string-based objects should implement.
 pub trait CloudStringObject: CloudObject + Send + Sync {
@@ -107,9 +108,6 @@ pub trait StringModel: Clone + Debug + PartialEq + Send + Sync + 'static {
         revision_ts: Option<Revision>,
         object: &Self::CloudObjectType,
     ) -> QueueItem;
-
-    /// Returns a new instance from a server update, or None if the update should be ignored.
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self>;
 
     /// Returns whether this model type should clear on a unique key conflict.
     fn should_clear_on_unique_key_conflict(&self) -> bool {
@@ -276,12 +274,6 @@ where
         true
     }
 
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        self.string_model
-            .new_from_server_update(server_cloud_object)
-            .map(Self::new)
-    }
-
     fn serialized(&self) -> SerializedModel {
         S::serialize(&self.string_model)
     }
@@ -369,22 +361,5 @@ where
 
     pub fn json_model(&self) -> &M {
         &self.string_model
-    }
-}
-
-/// Object id type that is common for all generic string objects.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct GenericStringObjectId(ServerId);
-crate::server_id_traits! { GenericStringObjectId, "GenericStringObject" }
-
-impl From<GenericStringObjectId> for SyncId {
-    fn from(id: GenericStringObjectId) -> Self {
-        Self::ServerId(id.into())
-    }
-}
-
-impl GenericStringObjectId {
-    pub fn uid(&self) -> ObjectUid {
-        self.0.uid()
     }
 }

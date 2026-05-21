@@ -84,6 +84,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
@@ -102,6 +103,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: metadata
                 .ambient_agent_task_id
                 .map(|task_id| task_id.to_string()),

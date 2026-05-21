@@ -90,12 +90,6 @@ const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str = "Auto reload is 
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
-const CARD_BORDER_COLOR: ColorU = ColorU {
-    r: 43,
-    g: 43,
-    b: 43,
-    a: 255,
-};
 pub(super) const BASE_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 207,
     g: 145,
@@ -118,6 +112,12 @@ pub(super) const AMBIENT_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 99,
     g: 102,
     b: 241,
+    a: 255,
+};
+pub(super) const AGGREGATE_CREDITS_DOT_COLOR: ColorU = ColorU {
+    r: 140,
+    g: 140,
+    b: 140,
     a: 255,
 };
 const DEFAULT_MAX_MONTHLY_SPEND_CENTS: i32 = 20_000;
@@ -659,42 +659,44 @@ impl BillingAndUsagePageV2View {
                     );
                 }
 
-                let team_uid = team.uid;
-                let fg_color = appearance.theme().active_ui_text_color();
-                right_side.add_child(
-                    Container::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Link,
-                                self.plan_mouse_states.open_admin_panel_link.clone(),
-                            )
-                            .with_text_and_icon_label(
-                                TextAndIcon::new(
-                                    TextAndIconAlignment::IconFirst,
-                                    "Open admin panel",
-                                    Icon::Users.to_warpui_icon(fg_color),
-                                    MainAxisSize::Min,
-                                    MainAxisAlignment::Center,
-                                    vec2f(14., 14.),
+                if team.billing_metadata.is_enterprise_plan() {
+                    let team_uid = team.uid;
+                    let fg_color = appearance.theme().active_ui_text_color();
+                    right_side.add_child(
+                        Container::new(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Link,
+                                    self.plan_mouse_states.open_admin_panel_link.clone(),
                                 )
-                                .with_inner_padding(4.),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(fg_color.into()),
-                                ..Default::default()
-                            })
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                );
-                            })
-                            .finish(),
-                    )
-                    .with_margin_left(8.)
-                    .finish(),
-                );
+                                .with_text_and_icon_label(
+                                    TextAndIcon::new(
+                                        TextAndIconAlignment::IconFirst,
+                                        "Open admin panel",
+                                        Icon::Users.to_warpui_icon(fg_color),
+                                        MainAxisSize::Min,
+                                        MainAxisAlignment::Center,
+                                        vec2f(14., 14.),
+                                    )
+                                    .with_inner_padding(4.),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_color: Some(fg_color.into()),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenAdminPanel { team_uid },
+                                    );
+                                })
+                                .finish(),
+                        )
+                        .with_margin_left(8.)
+                        .finish(),
+                    );
+                }
             }
         } else {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
@@ -799,6 +801,8 @@ impl BillingAndUsagePageV2View {
             .with_spacing(8.)
             .with_main_axis_size(MainAxisSize::Max);
 
+        let outline_color = theme.outline().into_solid();
+
         if has_base_credits {
             let reset_str = ai_model
                 .next_refresh_time_local()
@@ -816,7 +820,7 @@ impl BillingAndUsagePageV2View {
                         "Base credits",
                         &reset_str,
                         base_remaining,
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -833,7 +837,7 @@ impl BillingAndUsagePageV2View {
                         "Personal credits",
                         &classified.personal.expiry_label(),
                         classified.personal.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -850,7 +854,7 @@ impl BillingAndUsagePageV2View {
                         "Team credits",
                         &classified.team.expiry_label(),
                         classified.team.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -1443,6 +1447,12 @@ impl BillingAndUsagePageV2View {
                 ])
                 .finish();
             upper_section.add_child(spend_row);
+
+            if let Some(purchased_row) =
+                Self::render_purchased_this_month_row(workspace, appearance)
+            {
+                upper_section.add_child(purchased_row);
+            }
         }
 
         if state.has_admin_permissions || !state.auto_reload_enabled {
@@ -1468,6 +1478,66 @@ impl BillingAndUsagePageV2View {
             .with_padding_top(16.)
             .with_padding_bottom(16.)
             .finish()
+    }
+
+    fn render_purchased_this_month_row(
+        workspace: &Workspace,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let bonus_grants = &workspace.bonus_grants_purchased_this_month;
+        if bonus_grants.total_credits_purchased == 0 {
+            return None;
+        }
+
+        let credits_purchased = bonus_grants.total_credits_purchased;
+        let cost_dollars = bonus_grants.cents_spent as f64 / 100.0;
+        let theme = appearance.theme();
+
+        let label = Text::new_inline("Purchased this month", appearance.ui_font_family(), 12.)
+            .with_color(theme.active_ui_text_color().into())
+            .finish();
+
+        let credits_text = if credits_purchased == 1 {
+            "1 credit".to_string()
+        } else {
+            format!("{} credits", credits_purchased.separate_with_commas())
+        };
+
+        let credits_component = Container::new(
+            Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
+                .with_color(blended_colors::text_disabled(theme, theme.surface_1()))
+                .finish(),
+        )
+        .with_margin_right(8.)
+        .finish();
+
+        let cost_component = Text::new_inline(
+            format!("${cost_dollars:.2}"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        Some(
+            Container::new(
+                Flex::row()
+                    .with_child(label)
+                    .with_child(
+                        Flex::row()
+                            .with_child(credits_component)
+                            .with_child(cost_component)
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish(),
+            )
+            .with_margin_bottom(4.)
+            .finish(),
+        )
     }
 
     fn render_addon_credits_lower_section(
@@ -1517,37 +1587,6 @@ impl BillingAndUsagePageV2View {
             purchase_button = purchase_button.disable();
         }
         let purchase_button = purchase_button.finish();
-
-        let auto_reload_switch_element = {
-            let switch_builder = appearance
-                .ui_builder()
-                .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
-                .check(auto_reload_enabled);
-            if state.auto_reload_switch_disabled {
-                switch_builder.disable().build().finish()
-            } else {
-                switch_builder
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(
-                            BillingAndUsagePageAction::UpdateAutoReloadEnabled {
-                                team_uid,
-                                enabled: !auto_reload_enabled,
-                            },
-                        );
-                    })
-                    .finish()
-            }
-        };
-        let auto_reload_info_icon = render_info_icon(
-            appearance,
-            AdditionalInfo::<BillingAndUsagePageAction> {
-                mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
-                on_click_action: None,
-                secondary_text: None,
-                tooltip_override_text: Some(state.auto_reload_tooltip_text.clone()),
-            },
-        );
         let price_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -1556,9 +1595,41 @@ impl BillingAndUsagePageV2View {
                     .with_style(Properties::default().weight(Weight::Medium))
                     .finish(),
             );
-        let right_group = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_children([
+
+        let mut right_group = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if state.has_admin_permissions {
+            let auto_reload_switch_element = {
+                let switch_builder = appearance
+                    .ui_builder()
+                    .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
+                    .check(auto_reload_enabled);
+                if state.auto_reload_switch_disabled {
+                    switch_builder.disable().build().finish()
+                } else {
+                    switch_builder
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(
+                                BillingAndUsagePageAction::UpdateAutoReloadEnabled {
+                                    team_uid,
+                                    enabled: !auto_reload_enabled,
+                                },
+                            );
+                        })
+                        .finish()
+                }
+            };
+            let auto_reload_info_icon = render_info_icon(
+                appearance,
+                AdditionalInfo::<BillingAndUsagePageAction> {
+                    mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
+                    on_click_action: None,
+                    secondary_text: None,
+                    tooltip_override_text: Some(state.auto_reload_tooltip_text.clone()),
+                },
+            );
+
+            right_group.add_children([
                 Text::new_inline("Auto-reload", appearance.ui_font_family(), 14.)
                     .with_color(fg.into())
                     .with_style(Properties::default().weight(Weight::Semibold))
@@ -1569,17 +1640,19 @@ impl BillingAndUsagePageV2View {
                 Container::new(auto_reload_switch_element)
                     .with_margin_left(8.)
                     .finish(),
-                Container::new(purchase_button)
-                    .with_margin_left(16.)
-                    .finish(),
-            ])
-            .finish();
+            ]);
+        }
+        right_group.add_child(
+            Container::new(purchase_button)
+                .with_margin_left(if state.has_admin_permissions { 16. } else { 0. })
+                .finish(),
+        );
         let lower_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_main_axis_size(MainAxisSize::Max)
             .with_child(price_row.finish())
-            .with_child(right_group);
+            .with_child(right_group.finish());
         let mut lower_children: Vec<Box<dyn Element>> = vec![lower_row.finish()];
 
         if let Some(warning_text) = state.warning_text {

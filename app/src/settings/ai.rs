@@ -1222,6 +1222,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
+    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
+    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
+        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
+    }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
     can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
@@ -1908,6 +1918,10 @@ impl AISettings {
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
+    }
+
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
     }
 
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {

@@ -3225,15 +3225,24 @@ impl PaneGroup {
             return true;
         }
 
-        let parent_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_conversation_id)
-            .and_then(|conversation| conversation.parent_conversation_id())
-            .or_else(|| {
-                RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                    store
-                        .get_conversation(&child_conversation_id)
-                        .and_then(|conversation| conversation.parent_conversation_id())
-                })
+        let parent_conversation_id =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                history_model
+                    .conversation(&child_conversation_id)
+                    .and_then(|conversation| {
+                        history_model.resolved_parent_conversation_id_for_conversation(conversation)
+                    })
+                    .or_else(|| {
+                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                            store.get_conversation(&child_conversation_id).and_then(
+                                |conversation| {
+                                    history_model.resolved_parent_conversation_id_for_conversation(
+                                        conversation,
+                                    )
+                                },
+                            )
+                        })
+                    })
             });
 
         let Some(parent_conversation_id) = parent_conversation_id else {
@@ -7864,6 +7873,17 @@ impl PaneGroup {
         self.panes_of::<TerminalPane>()
             .filter(|p| !self.is_pane_hidden_for_close(p.terminal_pane_id().into()))
             .map(|p| p.terminal_view(ctx))
+            .collect()
+    }
+
+    /// Returns terminal views from layout-tree-visible panes only.
+    /// Unlike `terminal_views()`, this excludes off-tree child agent panes
+    /// and panes hidden for any reason (temporary replacement, child agent, etc.).
+    pub fn visible_terminal_views(&self, ctx: &AppContext) -> Vec<ViewHandle<TerminalView>> {
+        self.panes
+            .visible_pane_ids()
+            .into_iter()
+            .filter_map(|pane_id| self.terminal_view_from_pane_id(pane_id, ctx))
             .collect()
     }
 

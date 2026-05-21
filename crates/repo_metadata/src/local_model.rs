@@ -33,7 +33,8 @@ use crate::{
 };
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
+        use notify_debouncer_full::notify::RecursiveMode;
+        use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui::SingletonEntity as _;
@@ -400,13 +401,9 @@ impl LocalRepoMetadataModel {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
                 watcher.update(ctx, |watcher, _ctx| {
-                    use crate::entry::should_ignore_git_path;
-                    let watch_filter = WatchFilter::with_filter(Arc::new(move |watch_path| {
-                        !should_ignore_git_path(watch_path)
-                    }));
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        watch_filter,
+                        repo_watch_filter(),
                         RecursiveMode::Recursive,
                     ));
                 });

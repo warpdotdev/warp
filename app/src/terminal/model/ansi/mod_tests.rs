@@ -11,6 +11,7 @@ use std::{collections::HashSet, io, io::Write, path::PathBuf};
 const HEX_ENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x64];
 const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];
 const DCS_END: &[u8] = &[0x9c];
+const DCS_END_7BIT: &[u8] = &[0x1b, 0x5c];
 
 struct MockHandler {
     index: CharsetIndex,
@@ -654,6 +655,37 @@ fn parse_dcs_init_shell() {
                 user: "andy".to_owned(),
                 hostname: "ubuntu-test".to_owned(),
                 shell: "zsh".to_string(),
+                ..Default::default()
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
+fn parse_dcs_init_shell_7bit_st() {
+    let payload = r#"{
+                "hook": "InitShell",
+                "value": {
+                    "session_id": 167303092612201,
+                    "user": "andy",
+                    "hostname": "ubuntu-test",
+                    "shell": "bash"
+                }
+            }"#;
+    let encoded = hex::encode(payload).into_bytes();
+    let bytes = [HEX_ENCODED_JSON_DCS_START, &encoded, DCS_END_7BIT].concat();
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::InitShell { value } => assert_eq!(
+            *value,
+            InitShellValue {
+                session_id: SessionId::from(167303092612201),
+                user: "andy".to_owned(),
+                hostname: "ubuntu-test".to_owned(),
+                shell: "bash".to_string(),
                 ..Default::default()
             }
         ),

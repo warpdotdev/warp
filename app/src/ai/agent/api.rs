@@ -287,6 +287,9 @@ impl RequestParams {
             != crate::ai::execution_profiles::AskUserQuestionPermission::Never;
 
         let orchestration_enabled = ai_settings.is_orchestration_enabled(app)
+            && BlocklistAIPermissions::as_ref(app)
+                .get_run_agents_setting(app, terminal_view_id)
+                .is_enabled()
             && session_context
                 .session_type()
                 .as_ref()

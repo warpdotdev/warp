@@ -360,6 +360,9 @@ pub enum WorkspaceAction {
     CopySharedSessionLinkFromTab {
         tab_index: usize,
     },
+    OpenSharedSessionQrCode {
+        session_id: SessionId,
+    },
     AddWindow,
     AddWindowWithShell {
         shell: AvailableShell,
@@ -936,6 +939,7 @@ impl WorkspaceAction {
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }
+            | OpenSharedSessionQrCode { .. }
             | ReopenClosedSession
             | FocusLeftPanel
             | FocusRightPanel

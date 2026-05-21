@@ -27,7 +27,9 @@ use warp_editor::{
 
 use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
 use warp_util::user_input::UserInput;
-use warpui::{elements::Align, platform::Cursor, r#async::SpawnedFutureHandle, AppContext};
+use warpui::{
+    elements::Align, platform::Cursor, r#async::SpawnedFutureHandle, AppContext, AssetProvider as _,
+};
 use warpui::{
     elements::{
         Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
@@ -66,7 +68,7 @@ use crate::{
     },
     view_components::{dropdown::DropdownAction, Dropdown},
     workflows::{workflow::Workflow, WorkflowType},
-    Assets,
+    ASSETS,
 };
 
 use super::{
@@ -229,9 +231,8 @@ impl NotebookCommand {
 
         let syntax_config = {
             let ps = SyntaxSet::load_defaults_newlines();
-            if let Some(asset) = Assets::get("bundled/syntax_theme/base16.tmTheme") {
-                let binary = asset.data;
-                let mut cursor = std::io::Cursor::new(binary);
+            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+                let mut cursor = std::io::Cursor::new(asset);
                 match ThemeSet::load_from_reader(&mut cursor) {
                     Ok(theme) => Some((ps, theme)),
                     Err(e) => {

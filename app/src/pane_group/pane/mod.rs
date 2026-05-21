@@ -842,6 +842,14 @@ impl PaneConfiguration {
         ctx.emit(PaneConfigurationEvent::ToggleSharingDialog(source));
     }
 
+    pub fn open_sharing_qr_code(
+        &mut self,
+        source: SharingDialogSource,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(PaneConfigurationEvent::OpenSharingQrCode(source));
+    }
+
     /// Notifies that the header content has changed and the pane header should re-render.
     /// Use this when the backing view's state has changed in a way that affects the header
     /// content returned by `render_header_content()`.
@@ -867,6 +875,7 @@ pub enum PaneConfigurationEvent {
     RefreshPaneHeaderOverflowMenuItems,
     ShareableObjectChanged(Option<ShareableObject>),
     ToggleSharingDialog(SharingDialogSource),
+    OpenSharingQrCode(SharingDialogSource),
     DimEvenIfFocusedUpdated,
     /// The header content has changed and should be re-rendered.
     /// This is used when the backing view's state changes in a way that

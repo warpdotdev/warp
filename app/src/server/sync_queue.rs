@@ -47,6 +47,9 @@ use crate::{
     workflows::{workflow_enum::CloudWorkflowEnumModel, CloudWorkflowModel},
 };
 
+// Re-exported from warp_server_client.
+pub use warp_server_client::cloud_object::SerializedModel;
+
 lazy_static! {
     static ref DEFAULT_RETRY_OPTION: RetryOption =
         RetryOption::exponential(Duration::from_secs(1), 2., 3);
@@ -89,30 +92,6 @@ enum UpdateResponseType {
     /// The update was rejected because the update was not sent from the current revision in
     /// storage. The object and revision in storage are returned.
     Rejected { object: Box<ServerCloudObject> },
-}
-
-// A newtype for a serialized model that wraps a plain string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerializedModel(String);
-
-impl SerializedModel {
-    pub fn new(s: String) -> Self {
-        Self(s)
-    }
-
-    pub fn model_as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn take(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for SerializedModel {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -911,7 +890,7 @@ impl SyncQueue {
                 } => {
                     let serialized_model = serialized_model
                         .as_ref()
-                        .map(|data| SerializedModel(data.model_as_str().to_owned()));
+                        .map(|data| SerializedModel::new(data.model_as_str().to_owned()));
 
                     self.create_object(
                         object_type,
@@ -962,7 +941,7 @@ impl SyncQueue {
                                     BulkCreateGenericStringObjectsRequest {
                                         id: data.id,
                                         format: data.format,
-                                        serialized_model: SerializedModel(
+                                        serialized_model: SerializedModel::new(
                                             data.serialized_model
                                                 .as_ref()
                                                 .model_as_str()

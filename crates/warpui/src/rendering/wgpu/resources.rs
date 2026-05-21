@@ -521,6 +521,7 @@ pub fn adapter_has_rendering_offset_bug(adapter_info: &wgpu::AdapterInfo) -> boo
     // Known affected Intel integrated GPU models. This list is based on user reports from
     // https://github.com/warpdotdev/Warp/issues/6120.
     let affected_models = [
+        "Intel(R) HD Graphics 2500",
         "Intel(R) HD Graphics 4000",
         "Intel(R) HD Graphics 4400",
         "Intel(R) HD Graphics 4600",

@@ -4297,8 +4297,39 @@ impl Workspace {
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string());
+            let toast = DismissibleToast::default("Remote control link copied.".to_string())
+                .with_object_id(Self::shared_session_qr_toast_id(session_id))
+                .with_link(
+                    ToastLink::new("View QR code".to_string()).with_onclick_action(
+                        WorkspaceAction::OpenSharedSessionQrCode {
+                            session_id: *session_id,
+                        },
+                    ),
+                );
             toast_stack.add_ephemeral_toast(toast, ctx);
+        });
+    }
+    fn shared_session_qr_toast_id(session_id: &SharedSessionId) -> String {
+        format!("shared_session_qr_code:{session_id}")
+    }
+
+    fn open_shared_session_qr_code(
+        &mut self,
+        session_id: &SharedSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_view) = terminal::shared_session::manager::Manager::as_ref(ctx)
+            .shared_view_by_session_id(session_id, ctx)
+        else {
+            return;
+        };
+        let toast_id = Self::shared_session_qr_toast_id(session_id);
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.dismiss_older_toasts(&toast_id, ctx);
+        });
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.open_shared_session_qr_code(ctx);
         });
     }
 
@@ -12000,8 +12031,10 @@ impl Workspace {
         if let Some(server_id) = server_forked_conversation_id {
             let forked_id = forked_conversation.id();
             forked_conversation.set_server_conversation_token(server_id.clone());
-            history_model.update(ctx, |history_model, _| {
-                history_model.set_server_conversation_token_for_conversation(forked_id, server_id);
+            history_model.update(ctx, |history_model, ctx| {
+                history_model.set_server_conversation_token_for_conversation_and_persist(
+                    forked_id, server_id, ctx,
+                );
             });
         }
 
@@ -12873,18 +12906,43 @@ impl Workspace {
                 line_and_column_arg,
             } => {
                 #[cfg(feature = "local_fs")]
-                self.open_code(
-                    CodeSource::Link {
-                        path: path.clone().into(),
-                        range_start: None,
-                        range_end: None,
-                    },
-                    *EditorSettings::as_ref(ctx).open_file_layout.value(),
-                    *line_and_column_arg,
-                    false, // preview
-                    &[],
-                    ctx,
-                );
+                {
+                    // Build a LocalOrRemotePath for the file. For remote sessions
+                    // the host_id comes from the active working directory.
+                    let location = {
+                        let window_id = ctx.window_id();
+                        ActiveSession::as_ref(ctx)
+                            .working_directory(window_id)
+                            .and_then(|wd| match wd {
+                                LocalOrRemotePath::Remote(remote) => {
+                                    let std_path =
+                                        warp_util::standardized_path::StandardizedPath::try_new(
+                                            path,
+                                        )
+                                        .ok()?;
+                                    Some(LocalOrRemotePath::Remote(
+                                        warp_util::remote_path::RemotePath::new(
+                                            remote.host_id.clone(),
+                                            std_path,
+                                        ),
+                                    ))
+                                }
+                                LocalOrRemotePath::Local(_) => None,
+                            })
+                            .unwrap_or_else(|| LocalOrRemotePath::Local(PathBuf::from(path)))
+                    };
+
+                    let code_source = CodeSource::CommandPalette { location };
+
+                    self.open_code(
+                        code_source,
+                        *EditorSettings::as_ref(ctx).open_file_layout.value(),
+                        *line_and_column_arg,
+                        false, // preview
+                        &[],
+                        ctx,
+                    );
+                }
             }
             CommandPaletteEvent::OpenDirectory { path } => {
                 let active_terminal_view = self
@@ -14091,10 +14149,11 @@ impl Workspace {
         });
 
         // Bind the local fork to the server fork token.
-        history_model.update(ctx, |history_model, _| {
-            history_model.set_server_conversation_token_for_conversation(
+        history_model.update(ctx, |history_model, ctx| {
+            history_model.set_server_conversation_token_for_conversation_and_persist(
                 local_fork_id,
                 forked_conversation_id.clone(),
+                ctx,
             );
             history_model.set_viewing_shared_session_for_conversation(local_fork_id, true);
         });
@@ -15566,33 +15625,41 @@ impl Workspace {
 
         if let Some(terminal_handle) = pane_group_handle.as_ref(ctx).active_session_view(ctx) {
             #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
-            let (session, path_if_local, is_local, is_wsl_session, session_id, has_pending_ssh) =
-                terminal_handle.read(ctx, |terminal, ctx| {
-                    let active_session_id = terminal.active_block_session_id();
-                    let session = active_session_id
-                        .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id));
-                    let path_if_local = terminal.active_session_path_if_local(ctx);
-                    let is_local = terminal.active_session_is_local(ctx);
-                    let is_wsl_session = session.as_ref().map(|s| s.is_wsl()).unwrap_or(false);
-                    let has_pending_ssh = terminal.has_pending_ssh_command();
-                    (
-                        session,
-                        path_if_local,
-                        is_local,
-                        is_wsl_session,
-                        active_session_id,
-                        has_pending_ssh,
-                    )
-                });
+            let (
+                session,
+                pwd_location,
+                path_if_local,
+                is_local,
+                is_wsl_session,
+                session_id,
+                has_pending_ssh,
+            ) = terminal_handle.read(ctx, |terminal, ctx| {
+                let active_session_id = terminal.active_block_session_id();
+                let session =
+                    active_session_id.and_then(|id| terminal.sessions_model().as_ref(ctx).get(id));
+                let pwd_location = terminal.pwd_as_local_or_remote(ctx);
+                let path_if_local = terminal.active_session_path_if_local(ctx);
+                let is_local = terminal.active_session_is_local(ctx);
+                let is_wsl_session = session.as_ref().map(|s| s.is_wsl()).unwrap_or(false);
+                let has_pending_ssh = terminal.has_pending_ssh_command();
+                (
+                    session,
+                    pwd_location,
+                    path_if_local,
+                    is_local,
+                    is_wsl_session,
+                    active_session_id,
+                    has_pending_ssh,
+                )
+            });
 
             let window_id = ctx.window_id();
             let working_directory_clone = path_if_local.clone();
-            let path_if_local_clone = path_if_local.clone();
             ActiveSession::handle(ctx).update(ctx, |active_session, ctx| {
                 active_session.set_session_state(
                     window_id,
                     session,
-                    path_if_local_clone.clone(),
+                    pwd_location,
                     Some(terminal_handle.id()),
                     ctx,
                 );
@@ -22304,6 +22371,9 @@ impl TypedActionView for Workspace {
             }
             CopySharedSessionLinkFromTab { tab_index } => {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
+            }
+            OpenSharedSessionQrCode { session_id } => {
+                self.open_shared_session_qr_code(session_id, ctx)
             }
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());

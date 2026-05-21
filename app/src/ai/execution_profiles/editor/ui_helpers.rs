@@ -552,6 +552,17 @@ pub fn render_permissions_section(
             .ask_user_question_tooltip_mouse_state
             .clone(),
     ));
+    column.add_child(render_permission_row(
+        appearance,
+        Icon::Atom,
+        "Run orchestrated agents",
+        &view.run_agents_dropdown,
+        profile_data.run_agents.description(),
+        !ai_settings.is_run_agents_permissions_editable(app),
+        view.tooltip_mouse_state_handles
+            .run_agents_tooltip_mouse_state
+            .clone(),
+    ));
 
     column.add_child(render_permission_row(
         appearance,

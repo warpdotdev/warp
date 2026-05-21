@@ -179,13 +179,13 @@ lazy_static! {
         // Matches "bash", "/bin/bash", any "./any/path/to/bash", plus the zsh/fish equivalents
         Regex::new(r"^/?([\w\.-]+/)*(bash|zsh|fish)$").expect("Direct shell regex invalid"),
 
-        // Matches "docker run [whatever args] bash", plus zsh/fish equivalents.
+        // Matches "docker/podman run [whatever args] bash", plus zsh/fish equivalents.
         // Optionally allows single or double quotes around the shell name.
-        Regex::new(r#"^docker\s+run\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker run regex invalid"),
+        Regex::new(r#"^(docker|podman)\s+run\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker/podman run regex invalid"),
 
-        // Matches "docker exec [whatever args] bash", plus zsh/fish equivalents.
+        // Matches "docker/podman exec [whatever args] bash", plus zsh/fish equivalents.
         // Optionally allows single or double quotes around the shell name.
-        Regex::new(r#"^docker\s+exec\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker exec regex invalid"),
+        Regex::new(r#"^(docker|podman)\s+exec\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker/podman exec regex invalid"),
 
         // Matches commands that spawn a poetry subshell.
         POETRY_SUBSHELL_COMMAND_REGEX.clone(),
