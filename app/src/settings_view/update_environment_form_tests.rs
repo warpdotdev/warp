@@ -480,8 +480,8 @@ fn test_render_repos_field_auth_required() {
                 "Expected 'Repo(s)' label in rendered content: {text_content}"
             );
             assert!(
-                text_content.contains("Auth with GitHub"),
-                "Expected 'Auth with GitHub' in rendered content: {text_content}"
+                text_content.contains("GitHub Auth"),
+                "Expected 'GitHub Auth' in rendered content: {text_content}"
             );
         });
     })
