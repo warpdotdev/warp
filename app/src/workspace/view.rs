@@ -447,7 +447,7 @@ use crate::editor::{
 use crate::persistence::ModelEvent;
 
 use super::action::{
-    InitContent, RestoreConversationLayout, TabContextMenuAnchor,
+    InitContent, NewSessionMenuAnchor, RestoreConversationLayout, TabContextMenuAnchor,
     VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 use super::close_session_confirmation_dialog::{
@@ -999,7 +999,10 @@ pub struct Workspace {
     // menu in the "new_session_dropdown_menu"
     // Same applies to "show_new_session_dropdown_menu"
     new_session_dropdown_menu: ViewHandle<Menu<WorkspaceAction>>,
-    show_new_session_dropdown_menu: Option<Vector2F>,
+    /// Anchor used to position the new-session dropdown when it's open. The
+    /// variant determines whether the menu sits below the `+` add-tab button
+    /// or floats at the pointer position (right-click on the panel chrome).
+    show_new_session_dropdown_menu: Option<NewSessionMenuAnchor>,
     changelog_model: ModelHandle<ChangelogModel>,
     palette: ViewHandle<CommandPalette>,
     ctrl_tab_palette: ViewHandle<CommandPalette>,
@@ -1846,7 +1849,12 @@ impl Workspace {
     }
 
     fn build_menus(ctx: &mut ViewContext<Self>) -> WorkspaceMenuHandles {
-        let tab_right_click_menu = ctx.add_typed_action_view(|_| Menu::new());
+        // `prevent_interaction_with_other_elements` so that a click outside
+        // the menu only dismisses it instead of also firing handlers on
+        // whatever element is behind the click (e.g. the vertical tabs
+        // panel's right-click handler that opens the new-session dropdown).
+        let tab_right_click_menu =
+            ctx.add_typed_action_view(|_| Menu::new().prevent_interaction_with_other_elements());
         ctx.subscribe_to_view(&tab_right_click_menu, move |me, _, event, ctx| {
             me.handle_tab_right_click_menu_event(event, ctx);
         });
@@ -1871,6 +1879,7 @@ impl Workspace {
                 Menu::new()
                     .with_safe_triangle()
                     .with_ignore_hover_when_covered()
+                    .prevent_interaction_with_other_elements()
             }
         });
         ctx.subscribe_to_view(&new_session_menu, move |me, _, event, ctx| {
@@ -6214,7 +6223,7 @@ impl Workspace {
     /// Builds the unified new-session menu items
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
-    /// Order: Agent → Terminal (sidecar) → Cloud Agent → [tab configs] → separator → New worktree config (sidecar) → New tab config → separator → Reopen closed session.
+    /// Order: Agent → Terminal (sidecar) → Cloud Agent → [tab configs] → separator → New worktree config (sidecar) → New tab config → separator → New tab group → separator → Reopen closed session.
     fn unified_new_session_menu_items(
         &self,
         ctx: &mut ViewContext<Self>,
@@ -6388,6 +6397,20 @@ impl Workspace {
             );
         }
 
+        // 7. Separator + New tab group entry. Gated on the Grouped Tabs flag.
+        // TODO(johnturcoo) add group actions.
+        if FeatureFlag::GroupedTabs.is_enabled() {
+            menu_items.push(MenuItem::Separator);
+            menu_items.push(
+                MenuItemFields::new("New tab group")
+                    .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
+                        NewSessionMenuItem::CreateNewTabGroup,
+                    ))
+                    .with_icon(icons::Icon::LayersThree01)
+                    .into_item(),
+            );
+        }
+
         menu_items.push(MenuItem::Separator);
         menu_items.push(
             MenuItemFields::new("Reopen closed session")
@@ -6402,7 +6425,7 @@ impl Workspace {
 
     fn open_tab_configs_menu(
         &mut self,
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
         open_source: TabConfigsMenuOpenSource,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -6420,17 +6443,17 @@ impl Workspace {
                 }
             }
         });
-        self.show_new_session_dropdown_menu = Some(position);
+        self.show_new_session_dropdown_menu = Some(anchor);
         ctx.focus(&self.new_session_dropdown_menu);
         ctx.notify();
     }
 
     pub fn open_new_session_dropdown_menu(
         &mut self,
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.open_tab_configs_menu(position, TabConfigsMenuOpenSource::Pointer, ctx);
+        self.open_tab_configs_menu(anchor, TabConfigsMenuOpenSource::Pointer, ctx);
     }
 
     fn toggle_tab_configs_menu(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6447,7 +6470,7 @@ impl Workspace {
                 self.sync_window_button_visibility(ctx);
             }
             self.open_tab_configs_menu(
-                Vector2F::zero(),
+                NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
                 TabConfigsMenuOpenSource::KeyboardShortcut,
                 ctx,
             );
@@ -6458,12 +6481,16 @@ impl Workspace {
             .element_position_by_id_at_last_frame(self.window_id, NEW_TAB_BUTTON_POSITION_ID)
             .map(|position| position.lower_left())
             .unwrap_or_else(Vector2F::zero);
-        self.open_tab_configs_menu(position, TabConfigsMenuOpenSource::KeyboardShortcut, ctx);
+        self.open_tab_configs_menu(
+            NewSessionMenuAnchor::AddTabButton(position),
+            TabConfigsMenuOpenSource::KeyboardShortcut,
+            ctx,
+        );
     }
 
     pub fn toggle_new_session_dropdown_menu(
         &mut self,
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.show_new_session_dropdown_menu.is_some() {
@@ -6471,7 +6498,7 @@ impl Workspace {
             return;
         }
 
-        self.open_tab_configs_menu(position, TabConfigsMenuOpenSource::Pointer, ctx);
+        self.open_tab_configs_menu(anchor, TabConfigsMenuOpenSource::Pointer, ctx);
     }
 
     fn open_launch_config_from_menu(
@@ -6497,6 +6524,9 @@ impl Workspace {
             }
             #[cfg(not(feature = "local_fs"))]
             NewSessionMenuItem::CreateNewTabConfig => {}
+            NewSessionMenuItem::CreateNewTabGroup => {
+                // TODO(johnturcoo): implement tab group creation. 
+            }
         }
     }
 
@@ -18953,7 +18983,9 @@ impl Workspace {
                     false,
                 )
                 .on_right_click(move |ctx, _, position| {
-                    ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu { position });
+                    ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
+                        anchor: NewSessionMenuAnchor::AddTabButton(position),
+                    });
                 })
                 .finish();
             return Container::new(
@@ -19022,7 +19054,7 @@ impl Workspace {
                     app.element_position_by_id_at_last_frame(window_id, NEW_TAB_BUTTON_POSITION_ID)
                 {
                     ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
-                        position: position.lower_left(),
+                        anchor: NewSessionMenuAnchor::AddTabButton(position.lower_left()),
                     });
                 }
             })
@@ -21192,7 +21224,7 @@ impl TypedActionView for Workspace {
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
             }
-            OpenNewSessionMenu { position } => self.open_new_session_dropdown_menu(*position, ctx),
+            OpenNewSessionMenu { anchor } => self.open_new_session_dropdown_menu(*anchor, ctx),
             ToggleTabConfigsMenu => self.toggle_tab_configs_menu(ctx),
             ShowSessionConfigModal => self.show_session_config_modal(ctx),
             DismissSessionConfigTabConfigChip => {
@@ -21203,8 +21235,8 @@ impl TypedActionView for Workspace {
             SaveCurrentTabAsNewConfig(tab_index) => {
                 self.save_current_tab_as_new_config(*tab_index, ctx)
             }
-            ToggleNewSessionMenu { position } => {
-                self.toggle_new_session_dropdown_menu(*position, ctx)
+            ToggleNewSessionMenu { anchor } => {
+                self.toggle_new_session_dropdown_menu(*anchor, ctx)
             }
             SelectNewSessionMenuItem(new_session_menu_item) => {
                 self.open_launch_config_from_menu(new_session_menu_item.clone(), ctx)
@@ -23700,54 +23732,59 @@ impl View for Workspace {
 
         // Render the new session dropdown menu. This is outside the tab bar visibility
         // gate because it can also be opened from the vertical tabs panel.
-        if self.show_new_session_dropdown_menu.is_some() {
+        if let Some(menu_anchor) = self.show_new_session_dropdown_menu {
             let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
                 && *TabSettings::as_ref(app).use_vertical_tabs
                 && self.vertical_tabs_panel_open;
 
-            if is_vertical {
-                // Anchor the menu below the vertical-tabs + button. The anchor
-                // side mirrors which side the tabs panel itself is on, so the
-                // menu always expands inward and stays inside the window.
-                let tabs_side =
-                    Self::tabs_panel_side(&TabSettings::as_ref(app).header_toolbar_chip_selection);
-                let (anchor, child_anchor) = match tabs_side {
-                    PanelPosition::Left => {
-                        (PositionedElementAnchor::BottomLeft, ChildAnchor::TopLeft)
-                    }
-                    PanelPosition::Right => {
-                        (PositionedElementAnchor::BottomRight, ChildAnchor::TopRight)
-                    }
-                };
-                stack.add_positioned_overlay_child(
-                    ChildView::new(&self.new_session_dropdown_menu).finish(),
-                    OffsetPositioning::offset_from_save_position_element(
-                        vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
-                        vec2f(0., 4.),
-                        PositionedElementOffsetBounds::WindowBySize,
-                        anchor,
-                        child_anchor,
-                    ),
-                );
-            } else {
-                // TODO(CORE-2300): In the new version of the shell selector, this is not a
-                // context menu but a dropdown. Since it is quite wide, we need to reposition
-                // it so it does not render outside the bounds of the window.
-                let new_session_menu_position = self.show_new_session_dropdown_menu.unwrap();
-                let bounds = if FeatureFlag::ShellSelector.is_enabled() {
-                    ParentOffsetBounds::WindowByPosition
-                } else {
-                    ParentOffsetBounds::Unbounded
-                };
-                stack.add_positioned_overlay_child(
-                    ChildView::new(&self.new_session_dropdown_menu).finish(),
-                    OffsetPositioning::offset_from_parent(
-                        new_session_menu_position,
-                        bounds,
-                        ParentAnchor::TopLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
+            match (is_vertical, menu_anchor) {
+                (true, NewSessionMenuAnchor::AddTabButton(_)) => {
+                    // Anchor the menu below the vertical-tabs + button. The anchor
+                    // side mirrors which side the tabs panel itself is on, so the
+                    // menu always expands inward and stays inside the window.
+                    let tabs_side = Self::tabs_panel_side(
+                        &TabSettings::as_ref(app).header_toolbar_chip_selection,
+                    );
+                    let (anchor, child_anchor) = match tabs_side {
+                        PanelPosition::Left => {
+                            (PositionedElementAnchor::BottomLeft, ChildAnchor::TopLeft)
+                        }
+                        PanelPosition::Right => {
+                            (PositionedElementAnchor::BottomRight, ChildAnchor::TopRight)
+                        }
+                    };
+                    stack.add_positioned_overlay_child(
+                        ChildView::new(&self.new_session_dropdown_menu).finish(),
+                        OffsetPositioning::offset_from_save_position_element(
+                            vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
+                            vec2f(0., 4.),
+                            PositionedElementOffsetBounds::WindowBySize,
+                            anchor,
+                            child_anchor,
+                        ),
+                    );
+                }
+                (true, NewSessionMenuAnchor::Pointer(_))
+                | (false, NewSessionMenuAnchor::AddTabButton(_))
+                | (false, NewSessionMenuAnchor::Pointer(_)) => {
+                    // TODO(CORE-2300): In the new version of the shell selector, this is not a
+                    // context menu but a dropdown. Since it is quite wide, we need to reposition
+                    // it so it does not render outside the bounds of the window.
+                    let bounds = if FeatureFlag::ShellSelector.is_enabled() {
+                        ParentOffsetBounds::WindowByPosition
+                    } else {
+                        ParentOffsetBounds::Unbounded
+                    };
+                    stack.add_positioned_overlay_child(
+                        ChildView::new(&self.new_session_dropdown_menu).finish(),
+                        OffsetPositioning::offset_from_parent(
+                            menu_anchor.position(),
+                            bounds,
+                            ParentAnchor::TopLeft,
+                            ChildAnchor::TopLeft,
+                        ),
+                    );
+                }
             }
 
             // Sidecar menu for submenu parents (New worktree config).

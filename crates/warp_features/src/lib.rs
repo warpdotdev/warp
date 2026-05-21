@@ -877,6 +877,9 @@ pub enum FeatureFlag {
 
     /// Enables the code review view for remote sessions.
     RemoteCodeReview,
+
+    /// Gates the Grouped Tabs feature.
+    GroupedTabs,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

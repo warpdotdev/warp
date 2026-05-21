@@ -81,6 +81,27 @@ pub enum TabContextMenuAnchor {
     VerticalTabsKebab,
 }
 
+/// Describes how the new-session dropdown menu was opened so the renderer
+/// can pick the right anchor strategy.
+#[derive(Debug, Clone, Copy)]
+pub enum NewSessionMenuAnchor {
+    /// Menu was opened from the `+` add-tab button. When vertical tabs are
+    /// active, the renderer anchors below the button's save position;
+    /// otherwise the contained position is used directly.
+    AddTabButton(Vector2F),
+    /// Menu was opened by right-clicking the vertical tabs panel.
+    /// Always anchored at the contained pointer position.
+    Pointer(Vector2F),
+}
+
+impl NewSessionMenuAnchor {
+    pub fn position(self) -> Vector2F {
+        match self {
+            Self::AddTabButton(position) | Self::Pointer(position) => position,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum VerticalTabsPaneContextMenuTarget {
     ClickedPane(PaneViewLocator),
@@ -165,11 +186,11 @@ pub enum WorkspaceAction {
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
     OpenNewSessionMenu {
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
     },
     ToggleTabConfigsMenu,
     ToggleNewSessionMenu {
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
     },
     SelectNewSessionMenuItem(NewSessionMenuItem),
     AutoupdateFailureLink,

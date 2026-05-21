@@ -307,7 +307,10 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
-        workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        workspace.open_new_session_dropdown_menu(
+            crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+            ctx,
+        );
 
         let worktree_index = workspace
             .new_session_dropdown_menu
@@ -405,7 +408,10 @@ fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
         });
 
         workspace.update(&mut app, |workspace, ctx| {
-            workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
 
             let worktree_index = workspace
                 .new_session_dropdown_menu
@@ -2651,7 +2657,10 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            workspace.toggle_new_session_dropdown_menu(Vector2F::zero(), ctx);
+            workspace.toggle_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
 
             assert!(workspace.show_new_session_dropdown_menu.is_some());
             assert_eq!(
