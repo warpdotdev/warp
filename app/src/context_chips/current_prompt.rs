@@ -1406,6 +1406,61 @@ impl CurrentPrompt {
         })
     }
 
+    /// Seed the GitHub PR chip from a conversation artifact.
+    ///
+    /// Cloud session panes may not be able to run local `gh` commands, but the
+    /// Oz platform can still report a PR artifact for the active conversation.
+    /// Only accept the artifact when it is compatible with the currently known
+    /// branch. If the branch chip has not been populated yet, use the artifact
+    /// branch as the current branch for this prompt.
+    pub fn apply_github_pull_request_artifact(&mut self, url: &str, branch: &str) -> bool {
+        let url = url.trim();
+        if url.is_empty() || ContextChipKind::GithubPullRequest.to_chip().is_none() {
+            return false;
+        }
+
+        let artifact_branch = branch.trim();
+        let current_branch = self
+            .latest_chip_value(&ContextChipKind::ShellGitBranch)
+            .and_then(ChipValue::as_text)
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty());
+
+        if current_branch.is_some_and(|current_branch| {
+            !artifact_branch.is_empty() && current_branch != artifact_branch
+        }) {
+            return false;
+        }
+
+        if current_branch.is_none() && !artifact_branch.is_empty() {
+            self.ensure_chip_state(ContextChipKind::ShellGitBranch);
+            self.update_chip_value(
+                &ContextChipKind::ShellGitBranch,
+                Some(ChipValue::Text(artifact_branch.to_string())),
+            );
+        }
+
+        self.ensure_chip_state(ContextChipKind::GithubPullRequest);
+        if let Some(state) = self.states.get_mut(&ContextChipKind::GithubPullRequest) {
+            state.clear_abort_handlers();
+            state.availability = ChipAvailability::Enabled;
+            state.should_render = true;
+            state.last_failure_fingerprint = None;
+            state.update_status = ChipUpdateStatus::Ready;
+        }
+        self.update_chip_value(
+            &ContextChipKind::GithubPullRequest,
+            Some(ChipValue::Text(url.to_string())),
+        );
+        true
+    }
+
+    fn ensure_chip_state(&mut self, chip_kind: ContextChipKind) {
+        self.states
+            .entry(chip_kind.clone())
+            .or_insert_with(|| ChipState::new(&chip_kind));
+    }
+
     /// Serializes the current prompt as an unstyled string.
     pub fn prompt_as_string(&self, ctx: &AppContext) -> String {
         chips_to_string(

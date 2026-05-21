@@ -207,6 +207,7 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentOutputStatus, AIAgentTextSection, EntrypointType,
     FinishedAIAgentOutput, RenderableAIError, StaticQueryType,
 };
+use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
@@ -5427,12 +5428,14 @@ impl TerminalView {
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        let history_model_ref = history_model.as_ref(ctx);
-        let should_handle = match self.render_owner_for_ai_history_event(history_model_ref, event) {
-            Some(owner_terminal_view_id) => owner_terminal_view_id == self.view_id,
-            None => event
-                .terminal_view_id()
-                .is_none_or(|terminal_view_id| terminal_view_id == self.view_id),
+        let should_handle = {
+            let history_model_ref = history_model.as_ref(ctx);
+            match self.render_owner_for_ai_history_event(history_model_ref, event) {
+                Some(owner_terminal_view_id) => owner_terminal_view_id == self.view_id,
+                None => event
+                    .terminal_view_id()
+                    .is_none_or(|terminal_view_id| terminal_view_id == self.view_id),
+            }
         };
         if !should_handle {
             return;
@@ -5462,6 +5465,19 @@ impl TerminalView {
                 | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
         ) {
             self.maybe_insert_tombstone_for_non_running_shared_ambient_task(ctx);
+        }
+        if let BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
+            conversation_id,
+            artifact,
+            ..
+        } = event
+        {
+            self.maybe_apply_pull_request_artifact_to_prompt(
+                &history_model,
+                *conversation_id,
+                artifact,
+                ctx,
+            );
         }
         match event {
             BlocklistAIHistoryEvent::AppendedExchange {
@@ -5899,6 +5915,63 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
         }
         ctx.notify();
+    }
+
+    fn maybe_apply_pull_request_artifact_to_prompt(
+        &mut self,
+        history_model: &ModelHandle<BlocklistAIHistoryModel>,
+        conversation_id: AIConversationId,
+        artifact: &Artifact,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Artifact::PullRequest { url, branch, .. } = artifact else {
+            return;
+        };
+        if url.trim().is_empty() {
+            return;
+        }
+
+        let should_apply = {
+            let history_model = history_model.as_ref(ctx);
+            history_model.active_conversation_id(self.view_id) == Some(conversation_id)
+                && self.pull_request_artifact_matches_current_working_directory(
+                    history_model,
+                    &conversation_id,
+                )
+        };
+
+        if !should_apply {
+            return;
+        }
+
+        self.current_prompt.update(ctx, |prompt_type, ctx| {
+            prompt_type.apply_github_pull_request_artifact(url, branch, ctx);
+        });
+    }
+
+    fn pull_request_artifact_matches_current_working_directory(
+        &self,
+        history_model: &BlocklistAIHistoryModel,
+        conversation_id: &AIConversationId,
+    ) -> bool {
+        let Some(conversation_cwd) = history_model.conversation(conversation_id).and_then(|c| {
+            c.current_working_directory()
+                .or_else(|| c.initial_working_directory())
+        }) else {
+            return true;
+        };
+        let Some(terminal_cwd) = self.pwd() else {
+            return true;
+        };
+
+        let conversation_cwd = Self::normalize_cwd_for_artifact_match(&conversation_cwd);
+        let terminal_cwd = Self::normalize_cwd_for_artifact_match(&terminal_cwd);
+
+        conversation_cwd.is_empty() || terminal_cwd.is_empty() || conversation_cwd == terminal_cwd
+    }
+
+    fn normalize_cwd_for_artifact_match(path: &str) -> &str {
+        path.trim().trim_end_matches(['/', '\\'])
     }
 
     fn handle_cli_subagent_controller_event(
