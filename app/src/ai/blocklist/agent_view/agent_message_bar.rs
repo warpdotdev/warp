@@ -958,7 +958,10 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
             return None;
         }
         let set_input_mode_agent_keystroke =
-            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app).unwrap_or_else(|| Keystroke {
+                key: "backspace".to_owned(),
+                ..Default::default()
+            });
 
         let (text_color, keystroke_color_override, keystroke_bg_color_override) =
             if input_buffer_model.current_value().is_empty() {
