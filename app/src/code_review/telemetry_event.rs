@@ -223,6 +223,10 @@ pub enum CodeReviewTelemetryEvent {
         is_local: Option<bool>,
         mode: DiffMode,
         error: String,
+        /// Time elapsed between when the tracked diff load was requested and
+        /// when this failure was observed. `None` if no tracked load was in
+        /// flight (e.g. a background invalidation error).
+        load_duration: Option<Duration>,
     },
     /// Emitted when a full diff load completes successfully.
     DiffLoadCompleted {
@@ -386,7 +390,13 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 is_local,
                 mode,
                 error,
-            } => Some(json!({ "is_local": is_local, "mode": mode, "error": error })),
+                load_duration,
+            } => Some(json!({
+                "is_local": is_local,
+                "mode": mode,
+                "error": error,
+                "load_duration": load_duration,
+            })),
             CodeReviewTelemetryEvent::DiffLoadCompleted {
                 is_local,
                 mode,

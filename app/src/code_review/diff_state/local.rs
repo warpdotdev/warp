@@ -254,6 +254,9 @@ impl LocalDiffStateModel {
                                 is_local: Some(true),
                                 mode: me.mode.clone(),
                                 error: err.to_string(),
+                                // Per-file invalidation errors are not tied to a full
+                                // tracked load, so `load_duration` is intentionally `None`.
+                                load_duration: None,
                             },
                             ctx
                         );
@@ -1483,12 +1486,16 @@ impl LocalDiffStateModel {
                 .take()
                 .map(|start| start.elapsed()),
             Err(e) => {
-                self.tracked_diff_load_start_time = None;
+                let load_duration = self
+                    .tracked_diff_load_start_time
+                    .take()
+                    .map(|start| start.elapsed());
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         is_local: Some(true),
                         mode: self.mode.clone(),
                         error: e.to_string(),
+                        load_duration,
                     },
                     ctx
                 );

@@ -200,9 +200,9 @@ impl RemoteDiffStateModel {
     /// Re-sends `GetDiffState` through the model's existing `session_id`
     /// and transitions to `Loading` while waiting for a fresh snapshot.
     fn resubscribe(&mut self, track_load_duration: bool, ctx: &mut ModelContext<Self>) {
-        if track_load_duration {
-            self.tracked_diff_load_start_time = Some(Instant::now());
-        }
+        // Always overwrite to avoid carrying a stale `Instant` from a prior
+        // tracked load that was interrupted by a session blip.
+        self.tracked_diff_load_start_time = track_load_duration.then(Instant::now);
         let remote_path = self.remote_path.clone();
         let mode = self.mode.clone();
         let session_id = self.session_id;
@@ -334,12 +334,16 @@ impl RemoteDiffStateModel {
                 });
             }
             DiffState::Error(msg) => {
-                self.tracked_diff_load_start_time = None;
+                let load_duration = self
+                    .tracked_diff_load_start_time
+                    .take()
+                    .map(|start| start.elapsed());
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         is_local: Some(false),
                         mode: self.mode.clone(),
                         error: "Server reported diff error".to_string(),
+                        load_duration,
                     },
                     ctx
                 );
@@ -353,12 +357,16 @@ impl RemoteDiffStateModel {
                 let Some(base_content) = diffs else {
                     let error =
                         "Server reported loaded state but no diff data was available".to_string();
-                    self.tracked_diff_load_start_time = None;
+                    let load_duration = self
+                        .tracked_diff_load_start_time
+                        .take()
+                        .map(|start| start.elapsed());
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::LoadDiffFailed {
                             is_local: Some(false),
                             mode: self.mode.clone(),
                             error: "Empty diff data".to_string(),
+                            load_duration,
                         },
                         ctx
                     );
