@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
 use crate::ai::blocklist::handoff::touched_repos::derive_touched_workspace;
@@ -18,7 +19,8 @@ use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 
 /// Gather the workspace snapshot from the given absolute paths and upload it.
 ///
-/// 1. Filters to valid absolute paths (non-absolute paths are logged and skipped).
+/// 1. Validates each path as a [`StandardizedPath`] (absolute, normalized).
+///    Invalid entries are logged and skipped.
 /// 2. Runs [`derive_touched_workspace`] to discover git roots and orphan files.
 /// 3. Calls [`upload_snapshot_for_handoff`] to build patches, allocate a token,
 ///    and upload everything to GCS.
@@ -34,16 +36,15 @@ pub(crate) async fn gather_and_upload_handoff_snapshot(
     let resolved_paths: Vec<PathBuf> = paths
         .into_iter()
         .filter_map(|raw| {
-            let raw = raw.trim().to_string();
             if raw.is_empty() {
                 return None;
             }
-            let candidate = PathBuf::from(&raw);
-            if candidate.is_absolute() {
-                Some(candidate)
-            } else {
-                log::warn!("Skipping non-absolute path in handoff snapshot: {raw}");
-                None
+            match StandardizedPath::try_new(&raw) {
+                Ok(sp) => Some(sp.to_local_path_lossy()),
+                Err(e) => {
+                    log::warn!("Skipping invalid path in handoff snapshot: {e}");
+                    None
+                }
             }
         })
         .collect();

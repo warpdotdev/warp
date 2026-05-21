@@ -20,134 +20,20 @@ mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
 
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "local_fs")]
-use std::convert::TryFrom;
-#[cfg(target_os = "macos")]
-use std::env;
-use std::fmt::Write;
-#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
-use std::fs;
-use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-#[cfg(target_os = "macos")]
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use ::settings::{Setting, ToggleableSetting};
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-use autoupdate::AutoupdateStage;
-#[cfg(target_os = "macos")]
-use command::blocking::Command;
-use futures::Future;
-use itertools::Itertools;
-use lazy_static::lazy_static;
-pub(crate) use onboarding::OnboardingTutorial;
-use parking_lot::FairMutex;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::rect::RectF;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
-#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
-use sentry::protocol::{Attachment, AttachmentType};
-use serde_json;
-use session_sharing_protocol::common::SessionId as SharedSessionId;
-#[cfg(target_family = "wasm")]
-use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::context_flag::ContextFlag;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_editor::editor::NavigationKey;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
-use warpui::accessibility::{
-    AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
-};
-use warpui::clipboard::ClipboardContent;
-#[cfg(target_family = "wasm")]
-use warpui::elements::Percentage;
-use warpui::elements::{
-    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DraggableState, DropTarget,
-    Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
-    Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize, MouseInBehavior, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, Stack, Text,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::keymap::Context;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
-use warpui::platform::{
-    Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
-};
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
-    AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
-    UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
-};
-
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
     VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use super::action::AutoCloudHandoffTrigger;
-use super::action::{
-    InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+use crate::workspace::cross_window_tab_drag::{
+    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use super::auto_handoff::AutoCloudHandoffController;
-use super::close_session_confirmation_dialog::{
-    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
-};
-use super::delete_conversation_confirmation_dialog::{
-    DeleteConversationConfirmationDialog, DeleteConversationConfirmationEvent,
-    DeleteConversationDialogSource,
-};
-use super::hoa_onboarding::{
-    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
-};
-use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
-use super::native_modal::{NativeModal, NativeModalEvent};
-use super::one_time_modal_model::OneTimeModalEvent;
-use super::rewind_confirmation_dialog::{
-    RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
-};
-use super::tab_settings::{
-    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
-};
-use super::util::{
-    PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
-    WorkspaceMouseStates, WorkspaceState,
-};
-use super::{util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry};
+pub(crate) use onboarding::OnboardingTutorial;
+
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::AIConversation;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
-use crate::ai::agent::EntrypointType;
-#[cfg(target_family = "wasm")]
-use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
@@ -166,7 +52,6 @@ use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
-use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
@@ -175,168 +60,422 @@ use crate::ai::blocklist::handoff::touched_repos::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
-use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
-use crate::ai::blocklist::suggested_agent_mode_workflow_modal::{
-    SuggestedAgentModeWorkflowAndId, SuggestedAgentModeWorkflowModal,
-    SuggestedAgentModeWorkflowModalEvent,
-};
+use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
 };
-use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, PendingQueryState, SerializedBlockListItem, SlashCommandRequest,
-    FORK_PREFIX,
-};
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
-#[cfg(target_family = "wasm")]
-use crate::ai::conversation_details_panel::ConversationDetailsPanel;
+use crate::ai::blocklist::FORK_PREFIX;
+use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
-use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
-use crate::ai::facts::view::AIFactPage;
-use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::{conversation_utils, AIRequestUsageModel};
+use crate::ai::AIRequestUsageModel;
+use crate::ai::{
+    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
+    blocklist::{
+        inline_action::code_diff_view::CodeDiffView,
+        suggested_agent_mode_workflow_modal::{
+            SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
+        },
+        SlashCommandRequest,
+    },
+    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
+};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
-use crate::ai_assistant::{AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR};
 use crate::app_state::{
     LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
-use crate::appearance::{Appearance, AppearanceManager};
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code_review::diff_state::DiffStateModel;
+#[cfg(feature = "local_fs")]
+use crate::code_review::CodeReviewTelemetryEvent;
+use crate::code_review::GlobalCodeReviewModel;
+use crate::coding_panel_enablement_state::CodingPanelEnablementState;
+use crate::default_terminal::DefaultTerminal;
+use crate::notebooks::CloudNotebook;
+use crate::notification::NotificationContext;
+use crate::pane_group::pane::ActionOrigin;
+use crate::projects::ProjectManagementModel;
+use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::terminal::enable_auto_reload_modal::{
+    EnableAutoReloadModal, EnableAutoReloadModalEvent,
+};
+use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
+use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
+use crate::terminal::view::{
+    AgentOnboardingVersion, ConversationRestorationInNewPaneType, OnboardingIntention,
+    OnboardingVersion,
+};
+use crate::ui_components::red_notification_dot::RedNotificationDot;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::settings::OpenConversationPreference;
+use crate::workspace::bonus_grant_notification_model::BonusGrantNotificationEvent;
+use crate::workspace::toast_stack::ToastStack;
+use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
+use crate::workspace::view::left_panel::{
+    LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
+};
+use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
+
+use crate::ui_components::window_focus_dimming::WindowFocusDimming;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::Editor;
+#[cfg(feature = "local_fs")]
+use crate::util::file::external_editor::EditorSettings;
+use crate::util::openable_file_type::FileTarget;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
+use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use crate::workspace::tab_settings::TabCloseButtonPosition;
+use crate::workspace::view::build_plan_migration_modal::{
+    BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
+};
+use crate::workspace::view::cloud_agent_capacity_modal::{
+    CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
+};
+use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
+use crate::workspace::view::free_tier_limit_hit_modal::{
+    FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
+};
+use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
+use crate::workspace::view::openwarp_launch_modal::{
+    OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
+};
+use crate::workspace::view::orchestration_launch_modal::{
+    OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
+};
+use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
+use crate::BlocklistAIHistoryModel;
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
+use sentry::protocol::{Attachment, AttachmentType};
+use serde_json;
+use warpui::notification::NotificationSendError;
+
+use super::hoa_onboarding::{
+    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
+};
+use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
+use super::util;
+use super::WorkspaceRegistry;
+use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
+use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_override_warning_modal::{
     AuthOverrideWarningModal, AuthOverrideWarningModalEvent, AuthOverrideWarningModalVariant,
 };
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::{AuthRedirectPayload, AuthView, AuthViewEvent, AuthViewVariant};
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeManager;
+use crate::code::editor_management::CodeSource;
+use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::drive::export::ExportManager;
+use crate::drive::settings::WarpDriveSettings;
+use crate::launch_configs::launch_config::WindowTemplate;
+use crate::pane_group::{
+    AIFactPane, ChildAgentOrigin, CodeReviewPanelArg, Direction as PaneGroupDirection,
+    EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, PaneGroup, PaneId,
+    TerminalPaneId,
+};
+use crate::quit_warning::UnsavedStateSummary;
+use crate::search::command_palette::view::NavigationMode;
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::server::network_log_pane_manager::NetworkLogPaneManager;
+use crate::server::server_api::ai::AIClient;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::server_api::ai::InitialSnapshotToken;
+use crate::server::server_api::auth::AuthClient;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
+    DefaultSessionMode, InputModeSettings,
+};
+use crate::settings_view::environments_page::EnvironmentsPage;
+use crate::settings_view::handoff_environment_creation_modal::{
+    HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
+};
+use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent};
+#[cfg(all(target_os = "windows", feature = "local_tty"))]
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::available_shells::AvailableShell;
+#[cfg(target_os = "windows")]
+use crate::terminal::available_shells::AvailableShells;
+use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::ligature_settings::should_use_ligature_rendering;
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
+
+#[cfg(target_family = "wasm")]
+use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
+#[cfg(target_family = "wasm")]
+use crate::ai::conversation_details_panel::ConversationDetailsPanel;
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
+use crate::workflows::manager::WorkflowManager;
+use crate::workflows::workflow::Workflow;
+#[cfg(feature = "local_fs")]
+use repo_metadata::RemoteRepositoryIdentifier;
+#[cfg(target_family = "wasm")]
+use url::Url;
+
+use crate::billing::shared_objects_creation_denied_modal::{
+    SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
+};
+
+#[cfg(target_family = "wasm")]
+use crate::wasm_nux_dialog::WasmNUXDialog;
+
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::settings::WarpDriveSettingsChangedEvent;
+use crate::env_vars::{
+    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
+    CloudEnvVarCollection,
+};
+use crate::settings::cloud_preferences::CloudPreferencesSettings;
+
+use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
     is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
 };
 use crate::banner::BannerState;
-use crate::billing::shared_objects_creation_denied_modal::{
-    SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
-};
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
-use crate::channel::{Channel, ChannelState};
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::channel::Channel;
 use crate::cloud_object::toast_message::CloudObjectToastMessage;
 use crate::cloud_object::{
     CloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType, Owner, Space,
 };
-use crate::code::buffer_location::LocalOrRemotePath;
-use crate::code::editor::{add_color, remove_color};
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeManager;
-use crate::code::editor_management::CodeSource;
-use crate::code_review::diff_state::DiffStateModel;
-use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-#[cfg(feature = "local_fs")]
-use crate::code_review::CodeReviewTelemetryEvent;
-use crate::code_review::GlobalCodeReviewModel;
-use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::context_chips::ChipRuntimeCapabilities;
-use crate::default_terminal::DefaultTerminal;
-use crate::drive::export::ExportManager;
 use crate::drive::import::modal::{ImportModal, ImportModalEvent};
-use crate::drive::items::WarpDriveItemId;
-use crate::drive::settings::{WarpDriveSettings, WarpDriveSettingsChangedEvent};
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::drive::workflows::modal::{WorkflowModal, WorkflowModalEvent};
 use crate::drive::{
     CloudObjectTypeAndId, DriveObjectType, DrivePanel, DrivePanelEvent, OpenWarpDriveObjectSettings,
 };
-use crate::editor::{
-    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-    TextOptions,
-};
-use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
-use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
-use crate::launch_configs::launch_config::WindowTemplate;
-use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
-use crate::notebooks::CloudNotebook;
-use crate::notification::NotificationContext;
-use crate::palette::PaletteMode;
-use crate::pane_group::pane::ActionOrigin;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::{
-    self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
-    ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
-    TabBarHoverIndex, TerminalPaneId,
+    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
+    TabBarHoverIndex,
 };
-use crate::persistence::ModelEvent;
-use crate::projects::ProjectManagementModel;
+use crate::remote_server::manager::RemoteServerManager;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::shared_session::SharedSessionActionSource;
+
+use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::prompt::editor_modal::{
     EditorModal as PromptEditorModal, EditorModalEvent as PromptEditorModalEvent,
     OpenSource as PromptEditorOpenSource,
 };
-use crate::quit_warning::UnsavedStateSummary;
 use crate::referral_theme_status::ReferralThemeEvent;
-use crate::remote_server::manager::RemoteServerManager;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
 use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
-use crate::search::command_palette::view::{
-    Event as CommandPaletteEvent, NavigationMode, View as CommandPalette,
-};
 use crate::search::command_search::searcher::{
     AcceptedHistoryItem, AcceptedWorkflow, CommandSearchItemAction,
 };
 use crate::search::command_search::view::{CommandSearchEvent, CommandSearchView};
-use crate::search::slash_command_menu::static_commands::commands;
-use crate::search::{self, QueryFilter};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
-use crate::server::network_log_pane_manager::NetworkLogPaneManager;
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
-    MCPServerCollectionPaneEntrypoint, NotificationsTurnedOnSource, OpenedWarpAISource,
-    PaletteSource, SharingDialogSource, TabRenameEvent, TierLimitHitEvent, WarpDriveSource,
+    MCPServerCollectionPaneEntrypoint, OpenedWarpAISource, SharingDialogSource, TierLimitHitEvent,
+    WarpDriveSource,
 };
 use crate::session_management::{SessionNavigationData, SessionSource, TabNavigationData};
-use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AISettings, AISettingsChangedEvent,
-    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
-    ChangelogSettings, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior, CursorBlink,
-    DebugSettings, DefaultSessionMode, FontSettings, GPUSettings, InputModeSettings, InputSettings,
-    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
-    ThemeSettings,
+    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
+    AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CursorBlink, DebugSettings,
+    FontSettings, GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
+    SelectionSettings, Settings, SshSettings, ThemeSettings,
 };
-use crate::settings_view::environments_page::EnvironmentsPage;
-use crate::settings_view::handoff_environment_creation_modal::{
-    HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
-};
+use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::pane_manager::SettingsPaneManager;
-use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEvent};
-#[cfg(all(target_os = "windows", feature = "local_tty"))]
-use crate::shell_indicator::ShellIndicatorType;
-use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::input::{Input, MenuPositioning};
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
+use crate::terminal::model::blockgrid::BlockGrid;
+#[cfg(feature = "local_fs")]
+use crate::terminal::model::session::Session;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::resizable_data::{
+    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
 };
+use crate::terminal::safe_mode_settings::SafeModeSettings;
+use crate::terminal::session_settings::{
+    NewSessionSource, NotificationsMode, NotificationsSettings, SessionSettingsChangedEvent,
+    WorkingDirectoryMode,
+};
+use crate::terminal::settings::{SpacingMode, TerminalSettings};
+use crate::terminal::shell::ShellType;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
+};
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
+#[cfg(feature = "local_tty")]
+use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
+use crate::terminal::{self, SizeInfo, TerminalView};
+#[cfg(target_os = "macos")]
+use crate::workspace::cli_install;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{report_if_error, AgentNotificationsModel};
+use ::settings::{Setting, ToggleableSetting};
+use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
+
+use crate::search::{self, QueryFilter};
+use crate::terminal::view::{
+    SyncEvent, SyncInputType, TerminalAction, NOTIFICATIONS_TROUBLESHOOT_URL,
+};
+use crate::terminal::{BlockListSettings, TerminalModel};
+use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
+use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
+use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
+use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
+use crate::tips::{TipsEvent, TipsView};
+use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
+use crate::undo_close::UndoCloseStack;
+#[cfg(feature = "local_fs")]
+use crate::user_config::{
+    ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
+    find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
+    tab_configs_dir,
+};
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::util::bindings::{
+    keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
+};
+use crate::util::links;
+use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
+use crate::util::truncation::truncate_from_end;
+#[cfg(target_family = "wasm")]
+use crate::view_components::action_button::ActionButton;
+use crate::view_components::callout_bubble::{
+    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+};
+use crate::view_components::{
+    AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
+};
+use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
+use crate::workflows::{
+    manager::WorkflowOpenSource, AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource,
+    WorkflowSource, WorkflowType, WorkflowViewMode,
+};
+use crate::workspace::action::CommandSearchOptions;
+use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::toast_stack::{
+    ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
+};
+use crate::{
+    ai_assistant::{
+        panel::{AIAssistantPanelEvent, AIAssistantPanelView},
+        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
+    },
+    settings,
+    ui_components::blended_colors,
+};
+use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
+
+use futures::Future;
+use itertools::Itertools;
+use parking_lot::FairMutex;
+use pathfinder_geometry::rect::RectF;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::DetectedRepositories;
+use session_sharing_protocol::common::SessionId as SharedSessionId;
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "local_fs")]
+use std::convert::TryFrom;
+use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::{SystemTime, UNIX_EPOCH};
+use warp_core::context_flag::ContextFlag;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warpui::fonts::Weight;
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+
+use warp_core::user_preferences::GetUserPreferences as _;
+use warpui::clipboard::ClipboardContent;
+#[cfg(target_family = "wasm")]
+use warpui::elements::Percentage;
+use warpui::elements::{
+    CacheOption, DispatchEventResult, DraggableState, DropTarget, EventHandler, Image,
+    MouseInBehavior, Rect,
+};
+use warpui::ui_components::button::{Button, ButtonVariant};
+use warpui::windowing::{state::ApplicationStage, StateEvent, WindowManager};
+use warpui::{elements::MouseStateHandle, fonts::Properties};
+
+use crate::{autoupdate, channel::ChannelState};
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use super::action::AutoCloudHandoffTrigger;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use super::auto_handoff::AutoCloudHandoffController;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, PendingQueryState, SerializedBlockListItem};
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::persistence::ModelEvent;
+
+use super::action::{
+    InitContent, RestoreConversationLayout, TabContextMenuAnchor,
+    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+};
+use super::close_session_confirmation_dialog::{
+    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
+};
+use super::delete_conversation_confirmation_dialog::{
+    DeleteConversationConfirmationDialog, DeleteConversationConfirmationEvent,
+    DeleteConversationDialogSource,
+};
+use super::native_modal::{NativeModal, NativeModalEvent};
+use super::one_time_modal_model::OneTimeModalEvent;
+use super::rewind_confirmation_dialog::{
+    RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
+};
+use super::{ActiveSession, TabBarDropTargetData, TabBarLocation};
+
+use super::tab_settings::{
+    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
+    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+};
+use super::util::{
+    PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
+    WorkspaceMouseStates, WorkspaceState,
+};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
     RemoveTabConfigConfirmationDialog, RemoveTabConfigConfirmationEvent,
@@ -350,151 +489,65 @@ use crate::tab_configs::telemetry::{NewWorktreeConfigOpenSource, WorktreeBranchN
 use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
-use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::available_shells::AvailableShell;
-#[cfg(target_os = "windows")]
-use crate::terminal::available_shells::AvailableShells;
-use crate::terminal::block_list_viewport::InputMode;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
-use crate::terminal::enable_auto_reload_modal::{
-    EnableAutoReloadModal, EnableAutoReloadModalEvent,
+
+use crate::code::editor::{add_color, remove_color};
+use crate::palette::PaletteMode;
+use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
+use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
+use crate::tab::{
+    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
+    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
 };
-use crate::terminal::general_settings::GeneralSettings;
-use crate::terminal::input::{Input, MenuPositioning};
-use crate::terminal::keys_settings::KeysSettings;
-use crate::terminal::ligature_settings::should_use_ligature_rendering;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-use crate::terminal::model::blockgrid::BlockGrid;
-#[cfg(feature = "local_fs")]
-use crate::terminal::model::session::Session;
-use crate::terminal::model::session::SessionId;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
-use crate::terminal::resizable_data::{
-    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
-};
-use crate::terminal::safe_mode_settings::SafeModeSettings;
-use crate::terminal::session_settings::{
-    NewSessionSource, NotificationsMode, NotificationsSettings, SessionSettings,
-    SessionSettingsChangedEvent, WorkingDirectoryMode,
-};
-use crate::terminal::settings::{SpacingMode, TerminalSettings};
-use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::shell::ShellType;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{
-    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
-};
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
-#[cfg(feature = "local_tty")]
-use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
 use crate::terminal::view::ssh_file_upload::FileUploadId;
-use crate::terminal::view::{
-    AgentOnboardingVersion, ConversationRestorationInNewPaneType, LeftPanelTargetView,
-    OnboardingIntention, OnboardingVersion, SyncEvent, SyncInputType, TerminalAction,
-    NOTIFICATIONS_TROUBLESHOOT_URL,
-};
-use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
-use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
-use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
-use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
-use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
-use crate::tips::{TipsEvent, TipsView};
-use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
-use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
-use crate::ui_components::red_notification_dot::RedNotificationDot;
-use crate::ui_components::window_focus_dimming::WindowFocusDimming;
-use crate::ui_components::{blended_colors, icons};
-use crate::undo_close::UndoCloseStack;
-#[cfg(target_family = "wasm")]
-use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
-#[cfg(feature = "local_fs")]
-use crate::user_config::{
-    ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
-    find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
-    tab_configs_dir,
-};
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::util::bindings::{
-    keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
-};
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::settings::OpenConversationPreference;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::Editor;
-#[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::EditorSettings;
-use crate::util::links;
-use crate::util::openable_file_type::FileTarget;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
-use crate::util::truncation::truncate_from_end;
-#[cfg(target_family = "wasm")]
-use crate::view_components::action_button::ActionButton;
-use crate::view_components::callout_bubble::{
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
-};
-use crate::view_components::{
-    AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
-};
-#[cfg(target_family = "wasm")]
-use crate::wasm_nux_dialog::WasmNUXDialog;
-use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
-use crate::workflows::manager::{WorkflowManager, WorkflowOpenSource};
-use crate::workflows::workflow::Workflow;
-use crate::workflows::{
-    AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource, WorkflowSource, WorkflowType,
-    WorkflowViewMode,
-};
-use crate::workspace::action::CommandSearchOptions;
-use crate::workspace::bonus_grant_notification_model::BonusGrantNotificationEvent;
+use crate::ui_components::icons;
+use crate::TelemetryEvent;
+use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
-use crate::workspace::cli_install;
-use crate::workspace::cross_window_tab_drag::{
-    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
+use command::blocking::Command;
+use lazy_static::lazy_static;
+use pathfinder_color::ColorU;
+#[cfg(target_os = "macos")]
+use std::env;
+use std::fmt::Write;
+#[cfg(all(target_os = "macos", feature = "crash_reporting"))]
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::process;
+use std::sync::{mpsc, Mutex};
+use std::{cmp::Ordering, sync::Arc};
+use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
+use warp_core::ui::{color::coloru_with_opacity, Icon};
+use warp_editor::editor::NavigationKey;
+use warpui::keymap::Context;
+use warpui::notification::{RequestPermissionsOutcome, UserNotification};
+use warpui::platform::{
+    Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
 };
-use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
-use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
-use crate::workspace::one_time_modal_model::OneTimeModalModel;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_settings::TabCloseButtonPosition;
-use crate::workspace::toast_stack::{
-    ToastStack, ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    accessibility::{
+        AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
+    },
+    elements::{
+        Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Fill as ElementFill, Flex,
+        Highlight, Hoverable, Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize,
+        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
+        Stack, Text,
+    },
+    geometry::vector::{vec2f, Vector2F},
+    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
 };
-use crate::workspace::view::build_plan_migration_modal::{
-    BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
+use warpui::{
+    EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
+    WindowId,
 };
-use crate::workspace::view::cloud_agent_capacity_modal::{
-    CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
-};
-use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
-use crate::workspace::view::free_tier_limit_hit_modal::{
-    FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
-};
-use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
-use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
-use crate::workspace::view::left_panel::{
-    LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
-};
-use crate::workspace::view::openwarp_launch_modal::{
-    OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
-};
-use crate::workspace::view::orchestration_launch_modal::{
-    OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
-};
-use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
-use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    autoupdate, report_if_error, send_telemetry_from_ctx, settings, AgentNotificationsModel,
-    BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
-};
+
+use crate::terminal::view::LeftPanelTargetView;
 
 /// The padding that should be applied to the workspace as a whole.
 pub const WORKSPACE_PADDING: f32 = 1.0;
@@ -4237,39 +4290,8 @@ impl Workspace {
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string())
-                .with_object_id(Self::shared_session_qr_toast_id(session_id))
-                .with_link(
-                    ToastLink::new("View QR code".to_string()).with_onclick_action(
-                        WorkspaceAction::OpenSharedSessionQrCode {
-                            session_id: *session_id,
-                        },
-                    ),
-                );
+            let toast = DismissibleToast::default("Remote control link copied.".to_string());
             toast_stack.add_ephemeral_toast(toast, ctx);
-        });
-    }
-    fn shared_session_qr_toast_id(session_id: &SharedSessionId) -> String {
-        format!("shared_session_qr_code:{session_id}")
-    }
-
-    fn open_shared_session_qr_code(
-        &mut self,
-        session_id: &SharedSessionId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let Some(terminal_view) = terminal::shared_session::manager::Manager::as_ref(ctx)
-            .shared_view_by_session_id(session_id, ctx)
-        else {
-            return;
-        };
-        let toast_id = Self::shared_session_qr_toast_id(session_id);
-        self.toast_stack.update(ctx, |toast_stack, ctx| {
-            toast_stack.dismiss_older_toasts(&toast_id, ctx);
-        });
-
-        terminal_view.update(ctx, |terminal_view, ctx| {
-            terminal_view.open_shared_session_qr_code(ctx);
         });
     }
 
@@ -5756,7 +5778,7 @@ impl Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -5837,7 +5859,7 @@ impl Workspace {
     #[cfg(not(feature = "local_fs"))]
     pub fn open_file_with_target(
         &mut self,
-        _path: LocalOrRemotePath,
+        _path: PathBuf,
         _target: FileTarget,
         _line_col: Option<LineAndColumnArg>,
         _code_source: CodeSource,
@@ -5848,121 +5870,102 @@ impl Workspace {
     #[cfg(feature = "local_fs")]
     pub fn open_file_with_target(
         &mut self,
-        path: LocalOrRemotePath,
+        path: PathBuf,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
         code_source: CodeSource,
         ctx: &mut ViewContext<Self>,
     ) {
         // Handle directories for CodeEditor(NewTab) target by opening a new terminal tab
-        if let LocalOrRemotePath::Local(ref local_path) = path {
-            if local_path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab))
-            {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                        initial_directory: Some(local_path.clone()),
-                        hide_homepage: true,
-                        ..Default::default()
-                    })),
-                    Arc::new(HashMap::new()),
-                    None,
-                    ctx,
-                );
-                return;
-            }
+        if path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab)) {
+            self.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    initial_directory: Some(path.clone()),
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            return;
         }
 
         match target {
             FileTarget::MarkdownViewer(layout) => {
                 let session = self.get_active_session(ctx);
-                self.open_file_notebook(path, session, layout, ctx);
+
+                self.open_file_notebook(path.clone(), session, layout, ctx);
+            }
+            FileTarget::EnvEditor => {
+                let editor_value: Option<String> = self
+                    .get_active_session(ctx)
+                    .and_then(|session| session.editor().map(|s| s.to_string()));
+
+                if let Some(ref editor_env) = editor_value {
+                    if let Ok(editor) = Editor::try_from(editor_env.as_str()) {
+                        crate::util::file::open_file_path_with_editor(
+                            line_col,
+                            path.clone(),
+                            Some(editor),
+                            ctx,
+                        );
+                        return;
+                    }
+
+                    // If we have an editor string but it's not a known Editor, we try to run it in a new pane
+                    let new_pane_id =
+                        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                            pane_group.add_terminal_pane(
+                                Direction::Right,
+                                None, /*chosen_shell*/
+                                ctx,
+                            )
+                        });
+
+                    if let Some(terminal_view_handle) = self
+                        .active_tab_pane_group()
+                        .as_ref(ctx)
+                        .terminal_view_from_pane_id(new_pane_id, ctx)
+                    {
+                        let editor_ref = Some(editor_env.as_str());
+                        let path_clone = path.clone();
+                        terminal_view_handle.update(ctx, |terminal, ctx| {
+                            let editor_command =
+                                crate::util::file::external_editor::generate_editor_command(
+                                    &path_clone,
+                                    line_col,
+                                    editor_ref,
+                                );
+                            terminal.set_pending_command(&editor_command, ctx);
+                        });
+                        return;
+                    } else {
+                        log::error!(
+                            "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
+                        );
+                    }
+                }
+
+                crate::util::file::open_file_path_in_external_editor(line_col, path.clone(), ctx);
             }
             FileTarget::CodeEditor(layout) => {
                 let open_as_preview = false;
                 self.open_code(code_source, layout, line_col, open_as_preview, &[], ctx);
             }
-            // The remaining targets only apply to local files.
-            _ => {
-                let Some(local_path) = path.to_local_path().map(Path::to_path_buf) else {
-                    log::warn!("FileTarget::{target:?} is not supported for remote files");
-                    return;
-                };
-                match target {
-                    FileTarget::EnvEditor => {
-                        let editor_value: Option<String> = self
-                            .get_active_session(ctx)
-                            .and_then(|session| session.editor().map(|s| s.to_string()));
-
-                        if let Some(ref editor_env) = editor_value {
-                            if let Ok(editor) = Editor::try_from(editor_env.as_str()) {
-                                crate::util::file::open_file_path_with_editor(
-                                    line_col,
-                                    local_path.clone(),
-                                    Some(editor),
-                                    ctx,
-                                );
-                                return;
-                            }
-
-                            // If we have an editor string but it's not a known Editor, we try to run it in a new pane
-                            let new_pane_id =
-                                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                                    pane_group.add_terminal_pane(
-                                        Direction::Right,
-                                        None, /*chosen_shell*/
-                                        ctx,
-                                    )
-                                });
-
-                            if let Some(terminal_view_handle) = self
-                                .active_tab_pane_group()
-                                .as_ref(ctx)
-                                .terminal_view_from_pane_id(new_pane_id, ctx)
-                            {
-                                let editor_ref = Some(editor_env.as_str());
-                                let path_clone = local_path.clone();
-                                terminal_view_handle.update(ctx, |terminal, ctx| {
-                                    let editor_command =
-                                        crate::util::file::external_editor::generate_editor_command(
-                                            &path_clone,
-                                            line_col,
-                                            editor_ref,
-                                        );
-                                    terminal.set_pending_command(&editor_command, ctx);
-                                });
-                                return;
-                            } else {
-                                log::error!(
-                                    "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
-                                );
-                            }
-                        }
-
-                        crate::util::file::open_file_path_in_external_editor(
-                            line_col, local_path, ctx,
-                        );
-                    }
-                    FileTarget::ExternalEditor(editor) => {
-                        crate::util::file::open_file_path_with_editor(
-                            line_col,
-                            local_path,
-                            Some(editor),
-                            ctx,
-                        );
-                    }
-                    FileTarget::SystemDefault => {
-                        crate::util::file::open_file_path_with_editor(
-                            line_col, local_path, None, ctx,
-                        );
-                    }
-                    FileTarget::SystemGeneric => {
-                        ctx.open_file_path(&local_path);
-                    }
-                    // Already handled in the outer match above.
-                    FileTarget::MarkdownViewer(_) | FileTarget::CodeEditor(_) => {
-                        log::error!("FileTarget::{target:?} should have been handled before entering local-only branch");
-                    }
-                }
+            FileTarget::ExternalEditor(editor) => {
+                crate::util::file::open_file_path_with_editor(
+                    line_col,
+                    path.clone(),
+                    Some(editor),
+                    ctx,
+                );
+            }
+            FileTarget::SystemDefault => {
+                crate::util::file::open_file_path_with_editor(line_col, path.clone(), None, ctx);
+            }
+            FileTarget::SystemGeneric => {
+                ctx.open_file_path(&path);
             }
         }
     }
@@ -5984,13 +5987,28 @@ impl Workspace {
                 let code_source = CodeSource::FileTree {
                     location: location.clone(),
                 };
-                self.open_file_with_target(
-                    location.clone(),
-                    target.clone(),
-                    *line_col,
-                    code_source,
-                    ctx,
-                );
+                match location {
+                    LocalOrRemotePath::Local(path) => {
+                        self.open_file_with_target(
+                            path.clone(),
+                            target.clone(),
+                            *line_col,
+                            code_source,
+                            ctx,
+                        );
+                    }
+                    LocalOrRemotePath::Remote(_) => {
+                        #[cfg(feature = "local_fs")]
+                        self.open_code(
+                            code_source,
+                            crate::util::openable_file_type::EditorLayout::SplitPane,
+                            None,
+                            false,
+                            &[],
+                            ctx,
+                        );
+                    }
+                }
             }
             LeftPanelEvent::NewConversationInNewTab => {
                 self.add_terminal_tab_with_new_agent_view(ctx);
@@ -6033,7 +6051,7 @@ impl Workspace {
                 }
 
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target,
                     line_col,
                     CodeSource::Link {
@@ -6579,7 +6597,7 @@ impl Workspace {
         );
         send_telemetry_from_ctx!(TabConfigsTelemetryEvent::MenuCreateNewTabConfigClicked, ctx);
         self.open_file_with_target(
-            LocalOrRemotePath::Local(path.clone()),
+            path.clone(),
             target,
             None,
             CodeSource::Link {
@@ -6615,7 +6633,7 @@ impl Workspace {
                     None,
                 );
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target,
                     None,
                     CodeSource::Link {
@@ -7358,7 +7376,7 @@ impl Workspace {
     #[cfg(feature = "local_fs")]
     fn open_file_notebook(
         &mut self,
-        path: LocalOrRemotePath,
+        path: PathBuf,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
@@ -9131,7 +9149,7 @@ impl Workspace {
                 line_col,
             } => {
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target.clone(),
                     *line_col,
                     CodeSource::Link {
@@ -13199,25 +13217,25 @@ impl Workspace {
             .terminal_view_working_directories(ctx)
             .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let code_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
+        let code_local_paths: Vec<(EntityId, String)> = pane_group
             .as_ref(ctx)
-            .code_view_paths(ctx)
-            .filter_map(|(id, path)| path.map(|p| (id, p)))
+            .code_view_local_paths(ctx)
+            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let code_diff_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
+        let code_diff_local_paths: Vec<(EntityId, String)> = pane_group
             .as_ref(ctx)
-            .code_diff_view_paths(ctx)
-            .filter_map(|(id, path)| path.map(|p| (id, p)))
+            .code_diff_view_local_paths(ctx)
+            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let notebook_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
+        let notebook_local_paths: Vec<(EntityId, String)> = pane_group
             .as_ref(ctx)
-            .file_notebook_paths(ctx)
-            .filter_map(|(id, path)| path.map(|p| (id, p)))
+            .file_notebook_local_paths(ctx)
+            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
-        let editor_paths: Vec<(EntityId, LocalOrRemotePath)> = code_paths
+        let local_paths: Vec<(EntityId, String)> = code_local_paths
             .into_iter()
-            .chain(notebook_paths)
-            .chain(code_diff_paths)
+            .chain(notebook_local_paths)
+            .chain(code_diff_local_paths)
             .collect();
 
         // Get the focused terminal ID to prioritize it in the repo_to_terminal map
@@ -13230,7 +13248,7 @@ impl Workspace {
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 terminal_cwds,
-                editor_paths,
+                local_paths,
                 focused_terminal_id,
                 ctx,
             );
@@ -13515,88 +13533,101 @@ impl Workspace {
         });
     }
 
+    /// Settle the snapshot upload status on the model from an upload result.
+    ///
+    /// Shared by both local and remote handoff paths. Maps
+    /// `Ok(Some(token))` → `Uploaded`, `Ok(None)` → `SkippedEmptyWorkspace`,
+    /// and `Err` → `record_handoff_snapshot_upload_failed`.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn settle_handoff_snapshot_result(
+        model: &mut AmbientAgentViewModel,
+        result: Result<Option<InitialSnapshotToken>, anyhow::Error>,
+        model_ctx: &mut warpui::ModelContext<AmbientAgentViewModel>,
+    ) {
+        match result {
+            Ok(Some(token)) => {
+                model.set_pending_handoff_snapshot_upload(
+                    SnapshotUploadStatus::Uploaded(token),
+                    model_ctx,
+                );
+            }
+            Ok(None) => {
+                model.set_pending_handoff_snapshot_upload(
+                    SnapshotUploadStatus::SkippedEmptyWorkspace,
+                    model_ctx,
+                );
+            }
+            Err(err) => {
+                log::warn!("Handoff snapshot upload failed: {err:#}");
+                model.record_handoff_snapshot_upload_failed(format!("{err}"), model_ctx);
+            }
+        }
+    }
+
     /// Spawns the async snapshot upload pipeline for a handoff pane. Derives the
     /// touched workspace from `paths`, uploads repo patches + orphan files, sets
     /// environment overlap, and settles the snapshot status on the model. Shared
     /// by both the conversation-fork and fresh-launch handoff paths.
     ///
+    /// `paths` are raw path strings (not `PathBuf`) because for remote SSH
+    /// sessions they represent paths on the remote host and must not be
+    /// interpreted through the local OS's path encoding.
+    ///
     /// For remote SSH sessions, delegates the gather+upload work to the remote
     /// server daemon via `UploadHandoffSnapshot` instead of doing it locally.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn spawn_handoff_snapshot_upload(
-        paths: Vec<PathBuf>,
+        paths: Vec<String>,
         pane_view: ViewHandle<TerminalView>,
         model_handle: ModelHandle<AmbientAgentViewModel>,
-        remote_session_id: Option<SessionId>,
+        session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(session_id) = remote_session_id {
-            // Remote SSH path: delegate to the remote server daemon.
-            let client = RemoteServerManager::as_ref(ctx)
-                .client_for_session(session_id)
-                .cloned();
-            let Some(client) = client else {
-                log::warn!(
-                    "Handoff snapshot: no connected remote server client for session {session_id:?}, skipping snapshot"
-                );
-                model_handle.update(ctx, |model, model_ctx| {
-                    model.set_pending_handoff_snapshot_upload(
-                        SnapshotUploadStatus::SkippedEmptyWorkspace,
-                        model_ctx,
-                    );
-                });
-                Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
-                return;
-            };
-            let path_strings: Vec<String> = paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
+        // Check if this session has a connected remote server daemon.
+        // If so, delegate the snapshot work to the daemon; otherwise run locally.
+        let remote_client = RemoteServerManager::as_ref(ctx)
+            .client_for_session(session_id)
+            .cloned();
+        if let Some(client) = remote_client {
             ctx.spawn(
-                async move {
-                    client.upload_handoff_snapshot(paths).await
-                },
+                async move { client.upload_handoff_snapshot(paths).await },
                 move |_workspace, result, ctx| {
                     model_handle.update(ctx, |model, model_ctx| {
                         if !model.is_local_to_cloud_handoff() {
                             return;
                         }
-                        match result {
-                            Ok(resp) if resp.success => {
-                                if let Some(token) = resp.initial_snapshot_token {
-                                    use crate::server::server_api::ai::InitialSnapshotToken;
-                                    // Construct the token from the raw string.
-                                    // The type is a newtype wrapper with serde support.
-                                    let token: InitialSnapshotToken =
-                                        serde_json::from_value(serde_json::Value::String(token))
-                                            .expect("InitialSnapshotToken is a String newtype");
-                                    model.set_pending_handoff_snapshot_upload(
-                                        SnapshotUploadStatus::Uploaded(token),
-                                        model_ctx,
-                                    );
-                                } else {
-                                    model.set_pending_handoff_snapshot_upload(
-                                        SnapshotUploadStatus::SkippedEmptyWorkspace,
-                                        model_ctx,
-                                    );
+                        // The remote daemon handled workspace derivation internally;
+                        // set an empty workspace so the auto-submit gate
+                        // (`touched_workspace.is_some()`) is satisfied.
+                        model.set_pending_handoff_workspace(Default::default(), model_ctx);
+                        // Map the proto response into Result<Option<InitialSnapshotToken>>
+                        // so the shared settle helper can handle it.
+                        let mapped =
+                            match result {
+                                Ok(resp) if resp.success => {
+                                    if let Some(token) = resp.initial_snapshot_token {
+                                        match serde_json::from_value::<InitialSnapshotToken>(
+                                            serde_json::Value::String(token),
+                                        ) {
+                                            Ok(token) => Ok(Some(token)),
+                                            Err(e) => Err(anyhow::anyhow!(
+                                                "Failed to parse InitialSnapshotToken: {e}"
+                                            )),
+                                        }
+                                    } else {
+                                        Ok(None)
+                                    }
                                 }
-                            }
-                            Ok(resp) => {
-                                let error_msg = resp.error.unwrap_or_default();
-                                log::warn!("Remote handoff snapshot upload failed: {error_msg}");
-                                model.set_pending_handoff_snapshot_upload(
-                                    SnapshotUploadStatus::SkippedEmptyWorkspace,
-                                    model_ctx,
-                                );
-                            }
-                            Err(err) => {
-                                log::warn!("Remote handoff snapshot RPC failed: {err:#}");
-                                model.set_pending_handoff_snapshot_upload(
-                                    SnapshotUploadStatus::SkippedEmptyWorkspace,
-                                    model_ctx,
-                                );
-                            }
-                        }
+                                Ok(resp) => {
+                                    let error_msg = resp.error.unwrap_or_default();
+                                    Err(anyhow::anyhow!(
+                                        "Remote handoff snapshot failed: {error_msg}"
+                                    ))
+                                }
+                                Err(err) => Err(anyhow::anyhow!(err)
+                                    .context("Remote handoff snapshot RPC failed")),
+                            };
+                        Self::settle_handoff_snapshot_result(model, mapped, model_ctx);
                     });
                     Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
                 },
@@ -13604,13 +13635,14 @@ impl Workspace {
             return;
         }
 
-        // Local path: existing flow unchanged.
+        // Local path: convert strings back to PathBuf for local filesystem operations.
+        let local_paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         let server_api_provider = ServerApiProvider::as_ref(ctx);
         let ai_client = server_api_provider.get_ai_client();
         let http = server_api_provider.get_http_client();
         ctx.spawn(
             async move {
-                let workspace = derive_touched_workspace(paths).await;
+                let workspace = derive_touched_workspace(local_paths).await;
                 let repo_paths: Vec<_> =
                     workspace.repos.iter().map(|r| r.git_root.clone()).collect();
                 let upload_result = upload_snapshot_for_handoff(
@@ -13628,25 +13660,7 @@ impl Workspace {
                         return;
                     }
                     model.set_pending_handoff_workspace(derived_workspace, model_ctx);
-                    match upload_result {
-                        Ok(Some(initial_snapshot_token)) => {
-                            model.set_pending_handoff_snapshot_upload(
-                                SnapshotUploadStatus::Uploaded(initial_snapshot_token),
-                                model_ctx,
-                            );
-                        }
-                        Ok(None) => {
-                            model.set_pending_handoff_snapshot_upload(
-                                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                                model_ctx,
-                            );
-                        }
-                        Err(err) => {
-                            log::warn!("Handoff snapshot upload failed: {err:#}");
-                            model
-                                .record_handoff_snapshot_upload_failed(format!("{err}"), model_ctx);
-                        }
-                    }
+                    Self::settle_handoff_snapshot_result(model, upload_result, model_ctx);
                 });
                 Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
             },
@@ -13774,27 +13788,13 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
-        let (paths, remote_session_id) = if is_remote {
-            let remote_pwd = source_view.as_ref(ctx).pwd();
-            let session_id = source_view.as_ref(ctx).active_block_session_id();
-            let paths: Vec<String> = remote_pwd.into_iter().collect();
-            (paths, session_id)
-        } else {
-            let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-            let paths: Vec<String> = source_pwd
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            (paths, None)
-        };
-        Self::spawn_handoff_snapshot_upload(
-            paths,
-            new_pane_view,
-            model_handle,
-            remote_session_id,
-            ctx,
-        );
+        let source_pwd = source_view.as_ref(ctx).pwd();
+        let session_id = source_view
+            .as_ref(ctx)
+            .active_block_session_id()
+            .unwrap_or_default();
+        let paths: Vec<String> = source_pwd.into_iter().collect();
+        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, session_id, ctx);
     }
 
     /// Opens a local-to-cloud handoff pane in place over the active local pane.
@@ -14205,34 +14205,18 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let is_remote = source_view.as_ref(ctx).active_session_is_local(ctx) == Some(false);
-        let (paths, remote_session_id) = if is_remote {
-            let remote_pwd = source_view.as_ref(ctx).pwd();
-            let session_id = source_view.as_ref(ctx).active_block_session_id();
-            // For remote sessions, conversation paths are remote; combine with pwd.
-            let mut p = extract_paths_from_conversation(&source_conversation);
-            if let Some(ref pwd) = remote_pwd {
-                p.push(PathBuf::from(pwd));
-            }
-            (p, session_id)
-        } else {
-            let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-            // Derive touched repos and upload the initial snapshot off the UI thread.
-            // The paths list is built from the conversation's write actions plus the
-            // source pane's pwd (so the current repo is always captured).
-            let mut p = extract_paths_from_conversation(&source_conversation);
-            if let Some(pwd) = source_pwd {
-                p.push(pwd);
-            }
-            (p, None)
-        };
-        Self::spawn_handoff_snapshot_upload(
-            paths,
-            new_pane_view,
-            model_handle,
-            remote_session_id,
-            ctx,
-        );
+        let source_pwd = source_view.as_ref(ctx).pwd();
+        let session_id = source_view
+            .as_ref(ctx)
+            .active_block_session_id()
+            .unwrap_or_default();
+        // extract_paths_from_conversation now returns Vec<String> with
+        // platform-aware StandardizedPath validation internally.
+        let mut paths = extract_paths_from_conversation(&source_conversation);
+        if let Some(ref pwd) = source_pwd {
+            paths.push(pwd.clone());
+        }
+        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, session_id, ctx);
     }
 
     pub(crate) fn handle_file_tree_event(
@@ -14770,12 +14754,30 @@ impl Workspace {
                     }
                 }
             }
-            // Remote repo navigation is handled entirely through
-            // refresh_working_directories_for_pane_group, which inserts
-            // remote paths into the unified `pane_groups` set. The
-            // resulting `DirectoriesChanged` event carries both local
-            // and remote dirs, so the left panel subscriber forwards
-            // them to `set_remote_root_directories` on the file tree.
+            #[cfg(feature = "local_fs")]
+            pane_group::Event::RemoteRepoNavigated { remote_path } => {
+                let remote_id = RemoteRepositoryIdentifier::new(
+                    remote_path.host_id.clone(),
+                    remote_path.path.clone(),
+                );
+                let pane_group_id = pane_group.id();
+                if let Some(file_tree_view) = self
+                    .working_directories_model
+                    .as_ref(ctx)
+                    .get_file_tree_view(pane_group_id)
+                {
+                    file_tree_view.update(ctx, |view, ctx| {
+                        view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);
+                    });
+                }
+
+                // Remote repos now enter repository_roots through
+                // refresh_working_directories_for_pane_group (via
+                // pwd_as_local_or_remote). No need to register here —
+                // doing so would race with refresh and prevent stale
+                // DiffStateModels from being dropped.
+            }
+            #[cfg(not(feature = "local_fs"))]
             pane_group::Event::RemoteRepoNavigated { .. } => {}
             pane_group::Event::OpenChildAgentInNewTab { conversation_id } => {
                 // Move the existing child pane into a new tab so the live
@@ -15291,7 +15293,7 @@ impl Workspace {
                 line_col,
             } => {
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target.clone(),
                     *line_col,
                     CodeSource::Link {
@@ -21360,7 +21362,7 @@ impl TypedActionView for Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -21411,7 +21413,7 @@ impl TypedActionView for Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -22387,9 +22389,6 @@ impl TypedActionView for Workspace {
             }
             CopySharedSessionLinkFromTab { tab_index } => {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
-            }
-            OpenSharedSessionQrCode { session_id } => {
-                self.open_shared_session_qr_code(session_id, ctx)
             }
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());

@@ -21,6 +21,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use warp_util::standardized_path::StandardizedPath;
+
 use command::r#async::Command;
 use command::Stdio;
 use futures::future::join_all;
@@ -277,16 +279,22 @@ pub(crate) fn pick_handoff_overlap_env(
 /// write actions (plus the cwd of every exchange that ran shell commands),
 /// capped to the most recent [`MAX_TOOL_CALLS_TO_SCAN`] action results.
 ///
+/// Returns path strings (not `PathBuf`) because the conversation may reference
+/// paths on a remote host with a different OS encoding than the client.
+/// [`StandardizedPath`] is used internally for platform-aware absolute-path
+/// validation so that e.g. a POSIX remote path like `/home/user/project` is
+/// recognised as absolute even when the client is Windows.
+///
 /// The returned vec is deduplicated and may contain both absolute and
 /// resolved-against-`working_directory` paths. Per-path filesystem checks
 /// (does the path exist? does it have a `.git` ancestor?) happen later in
 /// [`derive_touched_workspace`].
-pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> Vec<PathBuf> {
+pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> Vec<String> {
     // Walk exchanges newest-first so we can stop once we've consumed the cap.
     // Within each exchange we count every `Action` message against the budget
     // and bail early if we hit it mid-exchange.
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut paths: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut tool_calls_remaining = MAX_TOOL_CALLS_TO_SCAN;
 
     for exchange in conversation.all_exchanges().into_iter().rev() {
@@ -298,9 +306,8 @@ pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> 
         // Track the per-exchange cwd unconditionally (it doesn't count as a tool
         // call). Covers `RunShellCommand` cwds without walking action results.
         if let Some(cwd) = cwd {
-            let cwd_path = PathBuf::from(cwd);
-            if cwd_path.is_absolute() && seen.insert(cwd_path.clone()) {
-                paths.push(cwd_path);
+            if StandardizedPath::try_new(cwd).is_ok() && seen.insert(cwd.to_string()) {
+                paths.push(cwd.to_string());
             }
         }
 
@@ -329,8 +336,8 @@ pub(crate) fn extract_paths_from_conversation(conversation: &AIConversation) -> 
 fn extract_action_paths(
     action: &AIAgentAction,
     cwd: Option<&str>,
-    paths: &mut Vec<PathBuf>,
-    seen: &mut HashSet<PathBuf>,
+    paths: &mut Vec<String>,
+    seen: &mut HashSet<String>,
 ) {
     match &action.action {
         // Write actions: the agent authored or replaced these files. Safe to
@@ -377,25 +384,33 @@ fn extract_action_paths(
 }
 
 /// Push `raw` into `paths` after resolving it against `cwd` if necessary.
+/// Uses [`StandardizedPath`] for platform-aware absolute-path detection so
+/// POSIX remote paths are handled correctly even on Windows clients.
 /// Empty / `None` entries are ignored.
 fn push_resolved(
     raw: Option<&str>,
     cwd: Option<&str>,
-    paths: &mut Vec<PathBuf>,
-    seen: &mut HashSet<PathBuf>,
+    paths: &mut Vec<String>,
+    seen: &mut HashSet<String>,
 ) {
     let Some(raw) = raw else { return };
     let raw = raw.trim();
     if raw.is_empty() {
         return;
     }
-    let candidate = Path::new(raw);
-    let resolved = if candidate.is_absolute() {
-        candidate.to_path_buf()
+    // Try to validate as an absolute path using StandardizedPath, which
+    // correctly handles both Unix and Windows path encodings.
+    let resolved = if StandardizedPath::try_new(raw).is_ok() {
+        raw.to_string()
     } else if let Some(cwd) = cwd {
-        Path::new(cwd).join(candidate)
+        // Relative path — resolve against the exchange cwd.
+        let joined = format!("{cwd}/{raw}");
+        if StandardizedPath::try_new(&joined).is_ok() {
+            joined
+        } else {
+            return;
+        }
     } else {
-        // No cwd context, no absolute path — we have nothing actionable.
         return;
     };
     if seen.insert(resolved.clone()) {
