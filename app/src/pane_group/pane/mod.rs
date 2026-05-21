@@ -32,6 +32,8 @@ pub mod workflow_pane;
 
 use std::{any::Any, fmt::Display};
 
+#[cfg(feature = "local_fs")]
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
 use crate::view_components::action_button::ActionButton;
@@ -55,8 +57,6 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
-#[cfg(feature = "local_fs")]
-use crate::code::buffer_location::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warpui::{
     elements::{DispatchEventResult, EventHandler, MouseInBehavior},
