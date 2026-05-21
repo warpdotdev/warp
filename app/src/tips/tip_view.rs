@@ -220,6 +220,7 @@ impl TipsView {
         &self,
         tip_item: TipItem,
         appearance: &Appearance,
+        app: &AppContext,
         index: usize,
         is_tip_completed: bool,
     ) -> Box<dyn Element> {
@@ -265,7 +266,10 @@ impl TipsView {
                 .with_child(
                     Container::new(
                         ui_builder
-                            .wrappable_text("Shortcut".to_string(), false)
+                            .wrappable_text(
+                                crate::i18n::tr_static(app, "Shortcut").to_string(),
+                                false,
+                            )
                             .with_style(UiComponentStyles {
                                 font_family_id: Some(appearance.ui_font_family()),
                                 font_size: Some(appearance.monospace_font_size() * 0.8),
@@ -361,6 +365,7 @@ impl TipsView {
     fn render_body(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
         tips_completed: &TipsCompleted,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -370,6 +375,7 @@ impl TipsView {
                 self.render_tip_item(
                     tip_item.clone(),
                     appearance,
+                    app,
                     index,
                     tips_completed.features_used.contains(&tip_item.tip_feature),
                 )
@@ -400,7 +406,9 @@ impl TipsView {
                         Align::new(
                             appearance
                                 .ui_builder()
-                                .paragraph("Skip Welcome Tips".to_string())
+                                .paragraph(
+                                    crate::i18n::tr_static(app, "Skip Welcome Tips").to_string(),
+                                )
                                 .build()
                                 .finish(),
                         )
@@ -440,7 +448,11 @@ impl TipsView {
         .finish()
     }
 
-    fn render_completed_overlay(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_completed_overlay(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         // TODO: We should render this as a SVG.
         let confetti = ui_builder
@@ -453,7 +465,7 @@ impl TipsView {
             .finish();
 
         let title = ui_builder
-            .span("Complete!")
+            .span(crate::i18n::tr_static(app, "Complete!"))
             .with_style(UiComponentStyles {
                 font_weight: Some(Weight::Bold),
                 // Set to white here as the background has 85% black overlay.
@@ -465,7 +477,10 @@ impl TipsView {
             .finish();
 
         let sub_text = ui_builder
-            .paragraph("Nice work on finishing the welcome tips!")
+            .paragraph(crate::i18n::tr_static(
+                app,
+                "Nice work on finishing the welcome tips!",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(12.),
                 font_color: Some(Fill::white().into()),
@@ -485,7 +500,7 @@ impl TipsView {
                     .set_width(152.)
                     .set_height(34.),
             )
-            .with_centered_text_label("Close Welcome Tips".to_string())
+            .with_centered_text_label(crate::i18n::tr_static(app, "Close Welcome Tips").to_string())
             .build()
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(TipsAction::DismissTips))
             .finish();
@@ -594,7 +609,7 @@ impl View for TipsView {
         // rendered on. But then stack creates a new layer on top of it, which nullifies
         // the original position.
         stack.add_positioned_child(
-            self.render_body(appearance, tips_completed),
+            self.render_body(appearance, app, tips_completed),
             OffsetPositioning::offset_from_save_position_element(
                 self.parent_position_id.as_str(),
                 vec2f(0., 10.),
@@ -606,7 +621,7 @@ impl View for TipsView {
 
         if tips_completed.completed_count() == WELCOME_TIP_FEATURE_LENGTH {
             stack.add_positioned_child(
-                self.render_completed_overlay(appearance),
+                self.render_completed_overlay(appearance, app),
                 OffsetPositioning::offset_from_save_position_element(
                     self.parent_position_id.as_str(),
                     vec2f(0., 10.),

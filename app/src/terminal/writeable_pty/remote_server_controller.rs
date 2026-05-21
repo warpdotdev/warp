@@ -5,7 +5,7 @@ use remote_server::auth::RemoteServerAuthContext;
 use std::path::PathBuf;
 use std::sync::Arc;
 use warp_core::SessionId;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
 use settings::Setting;
 
@@ -263,7 +263,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
-                let connection_label = connection_label_for_session_info(&session_info);
+                let connection_label = connection_label_for_session_info(&session_info, ctx);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
@@ -496,7 +496,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
-                let connection_label = connection_label_for_session_info(&session_info);
+                let connection_label = connection_label_for_session_info(&session_info, ctx);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
@@ -556,7 +556,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
     }
 }
 
-fn connection_label_for_session_info(session_info: &SessionInfo) -> String {
+fn connection_label_for_session_info(session_info: &SessionInfo, app: &AppContext) -> String {
     let host = if session_info.hostname.is_empty() {
         session_info
             .subshell_info
@@ -568,15 +568,36 @@ fn connection_label_for_session_info(session_info: &SessionInfo) -> String {
         Some(session_info.hostname.clone())
     };
 
-    connection_label_from_user_and_host(&session_info.user, host.as_deref())
+    connection_label_from_user_and_host_localized(&session_info.user, host.as_deref(), app)
 }
 
+#[cfg(test)]
 fn connection_label_from_user_and_host(user: &str, host: Option<&str>) -> String {
+    connection_label_from_user_and_host_with_fallback(user, host, "Remote host")
+}
+
+fn connection_label_from_user_and_host_localized(
+    user: &str,
+    host: Option<&str>,
+    app: &AppContext,
+) -> String {
+    connection_label_from_user_and_host_with_fallback(
+        user,
+        host,
+        crate::i18n::tr_static(app, "Remote host"),
+    )
+}
+
+fn connection_label_from_user_and_host_with_fallback(
+    user: &str,
+    host: Option<&str>,
+    fallback: &str,
+) -> String {
     match (user.is_empty(), host.filter(|host| !host.is_empty())) {
         (false, Some(host)) => format!("{user}@{host}"),
         (false, None) => user.to_string(),
         (true, Some(host)) => host.to_string(),
-        (true, None) => "Remote host".to_string(),
+        (true, None) => fallback.to_string(),
     }
 }
 

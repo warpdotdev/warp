@@ -916,11 +916,11 @@ impl FileNotebookView {
     }
 
     /// Renders a placeholder for when no file has been specified.
-    fn render_no_file(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_no_file(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Align::new(
             appearance
                 .ui_builder()
-                .paragraph("Missing source file".to_string())
+                .paragraph(crate::i18n::tr_static(app, "Missing source file").to_string())
                 .with_style(self.state_style(appearance))
                 .build()
                 .finish(),
@@ -928,9 +928,9 @@ impl FileNotebookView {
         .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
-            FileState::NoFile => self.render_no_file(appearance),
+            FileState::NoFile => self.render_no_file(appearance, app),
             FileState::Loading(source) => self.render_loading(source, appearance),
             FileState::Error(source) => self.render_error(source, appearance),
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
@@ -961,7 +961,7 @@ impl View for FileNotebookView {
 
         let column = Flex::column().with_children([
             self.render_title(appearance, font_settings),
-            Shrinkable::new(1., self.render_body(appearance)).finish(),
+            Shrinkable::new(1., self.render_body(appearance, app)).finish(),
         ]);
 
         let mut stack = Stack::new().with_child(column.finish());
@@ -1083,12 +1083,12 @@ impl BackingView for FileNotebookView {
 
     fn pane_header_overflow_menu_items(
         &self,
-        _ctx: &AppContext,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
         let mut actions = vec![];
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
             actions.push(
-                MenuItemFields::new("Refresh file")
+                MenuItemFields::new(crate::i18n::tr_static(ctx, "Refresh file"))
                     .with_on_select_action(FileNotebookAction::ReloadFile)
                     .into_item(),
             );
@@ -1098,13 +1098,13 @@ impl BackingView for FileNotebookView {
                 // The markdown rendered/raw toggle is always visible in the pane header, so we don't
                 // duplicate it in the overflow menu. Keep "Open in editor" available for local files.
                 actions.push(
-                    MenuItemFields::new("Open in editor")
+                    MenuItemFields::new(crate::i18n::tr_static(ctx, "Open in editor"))
                         .with_on_select_action(FileNotebookAction::OpenInEditor)
                         .into_item(),
                 );
                 actions.extend([
                     MenuItem::Separator,
-                    MenuItemFields::new("Copy file path")
+                    MenuItemFields::new(crate::i18n::tr_static(ctx, "Copy file path"))
                         .with_on_select_action(FileNotebookAction::CopyFilePath)
                         .into_item(),
                 ]);

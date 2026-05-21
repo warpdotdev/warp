@@ -165,14 +165,14 @@ impl<S: Slide> LaunchModal<S> {
                     action: CTAButtonAction::NextSlide(next),
                     ..
                 } => {
-                    next_button.set_label(label, ctx);
+                    next_button.set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
                     next_button.set_on_click(
                         move |ctx| ctx.dispatch_typed_action(LaunchModalAction::SelectSlide(next)),
                         ctx,
                     );
                 }
                 CTAButton { label, .. } => {
-                    next_button.set_label(label, ctx);
+                    next_button.set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
                     next_button.set_on_click(
                         move |ctx| ctx.dispatch_typed_action(LaunchModalAction::<S>::Finish),
                         ctx,
@@ -189,7 +189,8 @@ impl<S: Slide> LaunchModal<S> {
                         action: CTAButtonAction::NextSlide(next),
                         ..
                     } => {
-                        secondary_button.set_label(label, ctx);
+                        secondary_button
+                            .set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
                         secondary_button.set_on_click(
                             move |ctx| {
                                 ctx.dispatch_typed_action(LaunchModalAction::SelectSlide(next))
@@ -198,7 +199,8 @@ impl<S: Slide> LaunchModal<S> {
                         );
                     }
                     CTAButton { label, .. } => {
-                        secondary_button.set_label(label, ctx);
+                        secondary_button
+                            .set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
                         secondary_button.set_on_click(
                             move |ctx| {
                                 ctx.dispatch_typed_action(LaunchModalAction::<S>::FinishSecondary)
@@ -232,16 +234,19 @@ impl<S: Slide> LaunchModal<S> {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(LaunchModalAction::<S>::ToggleCheckbox))
             .finish();
 
-        let label =
-            FormattedTextElement::from_str(checkbox_config.label, appearance.ui_font_family(), 12.)
-                .with_color(blended_colors::text_sub(
-                    theme,
-                    blended_colors::neutral_1(theme),
-                ))
-                .finish();
+        let label = FormattedTextElement::from_str(
+            crate::i18n::tr_static(app, checkbox_config.label),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(blended_colors::text_sub(
+            theme,
+            blended_colors::neutral_1(theme),
+        ))
+        .finish();
 
         let description = FormattedTextElement::from_str(
-            checkbox_config.description,
+            crate::i18n::tr_static(app, checkbox_config.description),
             appearance.ui_font_family(),
             12.,
         )
@@ -288,12 +293,15 @@ impl<S: Slide> LaunchModal<S> {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         for (i, (slide, display_text)) in slides_with_display_text.into_iter().enumerate() {
-            let mut label =
-                FormattedTextElement::from_str(display_text, appearance.ui_font_family(), 14.)
-                    .with_color(blended_colors::text_main(
-                        theme,
-                        blended_colors::neutral_1(theme),
-                    ));
+            let mut label = FormattedTextElement::from_str(
+                crate::i18n::tr_static(app, display_text),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(blended_colors::text_main(
+                theme,
+                blended_colors::neutral_1(theme),
+            ));
             if slide == self.slide {
                 label = label.with_weight(Weight::Bold);
             }
@@ -354,7 +362,7 @@ impl<S: Slide> LaunchModal<S> {
                         .with_child(
                             Container::new({
                                 let text = FormattedTextElement::from_str(
-                                    self.slide.title(),
+                                    crate::i18n::tr_static(app, self.slide.title()),
                                     appearance.ui_font_family(),
                                     16.,
                                 )
@@ -402,7 +410,11 @@ impl<S: Slide> LaunchModal<S> {
                                 Shrinkable::new(
                                     1.,
                                     FormattedTextElement::new(
-                                        parse_markdown(self.slide.content()).unwrap(),
+                                        parse_markdown(crate::i18n::tr_static(
+                                            app,
+                                            self.slide.content(),
+                                        ))
+                                        .unwrap(),
                                         14.,
                                         appearance.ui_font_family(),
                                         appearance.ui_font_family(),
@@ -554,11 +566,15 @@ impl<S: Slide> View for LaunchModal<S> {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_child(
                     Container::new(
-                        FormattedTextElement::from_str(
-                            self.slide.modal_title(),
-                            appearance.ui_font_family(),
-                            24.,
-                        )
+                        {
+                            let modal_title = self.slide.modal_title();
+                            let modal_title = crate::i18n::tr_text(app, &modal_title).into_owned();
+                            FormattedTextElement::from_str(
+                                modal_title,
+                                appearance.ui_font_family(),
+                                24.,
+                            )
+                        }
                         .with_color(blended_colors::text_main(
                             theme,
                             blended_colors::neutral_1(theme),

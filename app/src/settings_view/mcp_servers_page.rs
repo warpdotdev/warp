@@ -13,6 +13,7 @@ use crate::{
     },
     appearance::Appearance,
     cloud_object::Space,
+    i18n::I18nKey,
     modal::{Modal, ModalViewState},
     server::cloud_objects::update_manager::InitiatedBy,
     settings_view::{
@@ -47,7 +48,6 @@ pub enum InstallOrigin {
     Deeplink,
 }
 
-const PAGE_TITLE_TEXT: &str = "MCP Servers";
 #[derive(Debug, Default, Copy, Clone)]
 pub enum MCPServersSettingsPage {
     #[default]
@@ -98,9 +98,9 @@ impl MCPServersSettingsPageView {
         let installation_modal_state = ModalViewState::new(installation_modal);
 
         Self {
-            page: PageType::new_monolith(
+            page: PageType::new_monolith_i18n_title(
                 MCPServersSettingsWidget::default(),
-                Some(PAGE_TITLE_TEXT),
+                Some(I18nKey::SettingsPageTitleMcpServers),
                 true,
             ),
             current_page: MCPServersSettingsPage::default(),

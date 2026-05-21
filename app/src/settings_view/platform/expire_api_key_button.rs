@@ -1,4 +1,7 @@
-use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
+use crate::{
+    i18n::{self, I18nKey},
+    server::{ids::ApiKeyUid, server_api::auth::AuthClient},
+};
 use warp_core::ui::appearance::Appearance;
 use warpui::{
     elements::MouseStateHandle, ui_components::components::UiComponent, AppContext, Element,
@@ -73,7 +76,7 @@ impl ExpireApiKeyButton {
                 | Err(_) => {
                     me.request_state = RequestState::Idle;
                     ctx.emit(ExpireApiKeyButtonEvent::ExpireApiKeyFailed {
-                        message: "Failed to delete API key. Please try again.".to_string(),
+                        message: i18n::tr(ctx, I18nKey::PlatformDeleteApiKeyFailed).to_string(),
                     });
                     ctx.notify();
                 }

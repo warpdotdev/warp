@@ -562,11 +562,11 @@ impl ImportedCommentElementState {
         ctx: &mut ViewContext<AIBlock>,
     ) -> Self {
         let open_in_github_button = html_url.map(|url| {
-            ctx.add_typed_action_view(move |_| {
+            ctx.add_typed_action_view(move |ctx| {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Github)
                     .with_size(ButtonSize::Small)
-                    .with_tooltip("Open in GitHub")
+                    .with_tooltip(crate::i18n::tr_static(ctx, "Open in GitHub"))
                     .on_click({
                         let url = url.clone();
                         move |ctx| {
@@ -579,15 +579,18 @@ impl ImportedCommentElementState {
         });
 
         let action_id_for_open_button = action_id.clone();
-        let open_in_code_review_button = ctx.add_typed_action_view(move |_| {
-            ActionButton::new("Open in code review", SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(move |ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenImportedCommentInCodeReview {
-                        action_id: action_id_for_open_button.clone(),
-                        comment_index,
-                    });
-                })
+        let open_in_code_review_button = ctx.add_typed_action_view(move |ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Open in code review"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(move |ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenImportedCommentInCodeReview {
+                    action_id: action_id_for_open_button.clone(),
+                    comment_index,
+                });
+            })
         });
 
         let chevron_button = ctx.add_view(|_| {
@@ -1166,8 +1169,8 @@ impl AIBlock {
             }
         });
 
-        let manage_rules_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Manage rules", NakedTheme)
+        let manage_rules_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Manage rules"), NakedTheme)
                 .on_click(|ctx| ctx.dispatch_typed_action(AIBlockAction::OpenAIFactCollection))
         });
 
@@ -1297,47 +1300,59 @@ impl AIBlock {
             }
         });
 
-        let review_changes_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Review changes", SecondaryTheme)
-                .with_icon(Icon::Diff)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::ToggleCodeReviewPane);
-                })
+        let review_changes_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Review changes"),
+                SecondaryTheme,
+            )
+            .with_icon(Icon::Diff)
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::ToggleCodeReviewPane);
+            })
         });
 
-        let open_all_comments_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Open all in code review", SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenAllImportedCommentsInCodeReview);
-                })
+        let open_all_comments_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Open all in code review"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenAllImportedCommentsInCodeReview);
+            })
         });
 
-        let dismiss_suggestion_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Dismiss", SuggestionDismissButtonTheme)
-                .with_icon(Icon::X)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::DismissSuggestionsSection);
-                })
+        let dismiss_suggestion_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Dismiss"),
+                SuggestionDismissButtonTheme,
+            )
+            .with_icon(Icon::X)
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::DismissSuggestionsSection);
+            })
         });
 
-        let disable_rule_suggestions_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Don't show again", SuggestionDismissButtonTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::DisableRuleSuggestions);
-                })
+        let disable_rule_suggestions_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Don't show again"),
+                SuggestionDismissButtonTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::DisableRuleSuggestions);
+            })
         });
 
         let ai_block_view_id = ctx.view_id();
         let exchange_id = client_ids.client_exchange_id;
         let conversation_id = client_ids.conversation_id;
-        let rewind_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Rewind", RewindButtonTheme)
+        let rewind_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Rewind"), RewindButtonTheme)
                 .with_size(ButtonSize::XSmall)
-                .with_tooltip("Rewind to before this block")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Rewind to before this block"))
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(TerminalAction::RewindAIConversation {
                         ai_block_view_id,
@@ -6075,7 +6090,10 @@ impl TypedActionView for AIBlock {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success(String::from("Copied to clipboard")),
+                        DismissibleToast::success(String::from(crate::i18n::tr_static(
+                            ctx,
+                            "Copied to clipboard",
+                        ))),
                         window_id,
                         ctx,
                     );
@@ -6381,8 +6399,10 @@ impl TypedActionView for AIBlock {
 
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast =
-                        DismissibleToast::default(String::from("Thank you for the feedback!"));
+                    let toast = DismissibleToast::default(String::from(crate::i18n::tr_static(
+                        ctx,
+                        "Thank you for the feedback!",
+                    )));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
 

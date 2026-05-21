@@ -665,7 +665,10 @@ impl Input {
                     .as_ref(ctx)
                     .active_conversation(self.terminal_view_id)
                 else {
-                    show_error_toast("No active conversation to export".to_owned(), ctx);
+                    show_error_toast(
+                        crate::i18n::tr_static(ctx, "No active conversation to export").to_owned(),
+                        ctx,
+                    );
                     return true;
                 };
 
@@ -678,9 +681,10 @@ impl Input {
                 // Show a toast to confirm the export
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(String::from(
+                    let toast = DismissibleToast::default(String::from(crate::i18n::tr_static(
+                        ctx,
                         "Conversation exported to clipboard",
-                    ));
+                    )));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }

@@ -1089,7 +1089,10 @@ impl AskUserQuestionView {
         let initial_text = initial_text.map(String::from);
         let input = ctx.add_view(move |ctx| {
             let input = compact_agent_input::CompactAgentInput::new(ctx);
-            input.set_placeholder_text("Type your answer and press Enter", ctx);
+            input.set_placeholder_text(
+                crate::i18n::tr_static(ctx, "Type your answer and press Enter"),
+                ctx,
+            );
             if let Some(initial_text) = initial_text.as_deref() {
                 input.set_text(initial_text, ctx);
             }

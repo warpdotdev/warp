@@ -536,7 +536,7 @@ impl WorkflowView {
         }
 
         let mut arguments_section = Flex::column();
-        arguments_section.add_child(self.render_arguments_section_header(appearance));
+        arguments_section.add_child(self.render_arguments_section_header(appearance, app));
 
         match mode {
             ArgumentEditorMode::WorkflowDefinition | ArgumentEditorMode::Viewer => {
@@ -560,7 +560,11 @@ impl WorkflowView {
         Some(arguments_section.finish())
     }
 
-    fn render_arguments_section_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_arguments_section_header(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let mut arguments_section_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -569,7 +573,10 @@ impl WorkflowView {
         arguments_section_row.add_child(
             Shrinkable::new(
                 2.,
-                self.render_section_header(ARGUMENT_LABEL_TEXT, appearance),
+                self.render_section_header(
+                    crate::i18n::tr_static(app, ARGUMENT_LABEL_TEXT),
+                    appearance,
+                ),
             )
             .finish(),
         );
@@ -579,6 +586,8 @@ impl WorkflowView {
 
         if self.is_editable() {
             let ui_builder = appearance.ui_builder().clone();
+            let add_argument_tooltip =
+                crate::i18n::tr_static(app, "Add a workflow argument").to_string();
             arguments_section_row.add_child(
                 icon_button(
                     appearance,
@@ -588,7 +597,7 @@ impl WorkflowView {
                 )
                 .with_tooltip(move || {
                     ui_builder
-                        .tool_tip("Add a workflow argument".to_string())
+                        .tool_tip(add_argument_tooltip.clone())
                         .build()
                         .finish()
                 })
@@ -602,7 +611,7 @@ impl WorkflowView {
                     Container::new(
                         appearance
                         .ui_builder()
-                        .span("Fill out the arguments in this workflow and copy it to run in your terminal session")
+                        .span(crate::i18n::tr_static(app, "Fill out the arguments in this workflow and copy it to run in your terminal session"))
                         .with_soft_wrap()
                         .with_style(UiComponentStyles {
                             font_size: Some(EDITOR_FONT_SIZE),
@@ -826,7 +835,9 @@ impl WorkflowView {
                         .add_environment_variables_mouse_state
                         .clone(),
                 )
-                .with_centered_text_label("Add environment variables".to_string())
+                .with_centered_text_label(
+                    crate::i18n::tr_static(app, "Add environment variables").to_string(),
+                )
                 .build()
                 .on_click(|ctx, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::CreatePersonalEnvVarCollection);
@@ -838,7 +849,7 @@ impl WorkflowView {
             .with_children([
                 appearance
                     .ui_builder()
-                    .span("Environment variables")
+                    .span(crate::i18n::tr_static(app, "Environment variables"))
                     .with_style(UiComponentStyles {
                         font_size: Some(13.),
                         ..Default::default()

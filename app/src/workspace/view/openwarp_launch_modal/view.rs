@@ -141,10 +141,13 @@ impl OpenWarpLaunchModal {
                 .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::Close))
         });
 
-        let cta_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Visit the repo", CtaButtonTheme)
-                .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::VisitRepo))
+        let cta_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Visit the repo"),
+                CtaButtonTheme,
+            )
+            .with_full_width(true)
+            .on_click(|ctx| ctx.dispatch_typed_action(OpenWarpLaunchModalAction::VisitRepo))
         });
 
         Self {

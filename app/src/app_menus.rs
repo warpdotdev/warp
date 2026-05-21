@@ -6,6 +6,7 @@ use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::auth::AuthStateProvider;
 use crate::default_terminal::DefaultTerminal;
 use crate::features::{runtime_flags_menu_items, FeatureFlag};
+use crate::i18n::{self, I18nKey};
 use crate::root_view::OpenLaunchConfigArg;
 use crate::server::telemetry::LaunchConfigUiLocation;
 use crate::settings::{
@@ -70,19 +71,19 @@ pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
         make_new_blocks_menu(ctx),
         make_new_ai_menu(ctx),
         make_new_drive_menu(ctx),
-        make_new_window_menu(),
-        make_new_help_menu(),
+        make_new_window_menu(ctx),
+        make_new_help_menu(ctx),
     ])
 }
 
 // Creates the app dock menu
 // Menu here instead of MenuBar, since we only need one vec<MenuItem> in the dock
 // To create submenus, we could use MenuItem::Custom(CustomMenuItem::new_with_submenu(...))
-pub fn dock_menu() -> Menu {
+pub fn dock_menu(ctx: &AppContext) -> Menu {
     Menu::new(
-        "New Window",
+        i18n::tr(ctx, I18nKey::MenuNewWindow),
         vec![MenuItem::Custom(CustomMenuItem::new(
-            "New Window",
+            i18n::tr(ctx, I18nKey::MenuNewWindow),
             move |ctx| {
                 ctx.dispatch_global_action("root_view:open_new", &());
                 ctx.dispatch_global_action("workspace:save_app", &());
@@ -98,11 +99,139 @@ fn custom_shortcut(action: CustomAction) -> Option<Keystroke> {
 }
 
 fn default_name(action: CustomAction, ctx: &AppContext) -> String {
+    if let Some(label) = localized_custom_action_name(action, ctx) {
+        return label.to_string();
+    }
+
     ctx.description_for_custom_action(action.into(), bindings::MAC_MENUS_CONTEXT)
         .unwrap_or_else(|| {
             debug_assert!(false, "action should have a name: {action:?}");
             "<NO DESCRIPTION>".into()
         })
+}
+
+fn localized_custom_action_name(action: CustomAction, ctx: &AppContext) -> Option<&'static str> {
+    match action {
+        CustomAction::ReferAFriend => Some(i18n::tr(ctx, I18nKey::MenuInviteAFriend)),
+        CustomAction::ShowSettings => Some(i18n::tr(ctx, I18nKey::MenuSettings)),
+        CustomAction::ToggleKeybindingsPage => Some(i18n::tr(ctx, I18nKey::MenuKeyboardShortcuts)),
+        CustomAction::ShowAppearance => Some(i18n::tr(ctx, I18nKey::SettingsNavAppearance)),
+        CustomAction::ViewChangelog => Some(i18n::tr(ctx, I18nKey::MenuWhatsNew)),
+        CustomAction::NewFile => Some(i18n::tr(ctx, I18nKey::CodeNewFile)),
+        CustomAction::SplitPaneRight => Some(i18n::tr(ctx, I18nKey::CommonSplitPaneRight)),
+        CustomAction::SplitPaneLeft => Some(i18n::tr(ctx, I18nKey::CommonSplitPaneLeft)),
+        CustomAction::SplitPaneDown => Some(i18n::tr(ctx, I18nKey::CommonSplitPaneDown)),
+        CustomAction::SplitPaneUp => Some(i18n::tr(ctx, I18nKey::CommonSplitPaneUp)),
+        CustomAction::RenameTab => Some(i18n::tr(ctx, I18nKey::TabRenameTab)),
+        CustomAction::CloseTab => Some(i18n::tr(ctx, I18nKey::TabCloseTab)),
+        CustomAction::CloseOtherTabs => Some(i18n::tr(ctx, I18nKey::TabCloseOtherTabs)),
+        CustomAction::CloseTabsRight => Some(i18n::tr(ctx, I18nKey::TabCloseTabsRight)),
+        CustomAction::ReopenClosedSession => {
+            Some(i18n::tr(ctx, I18nKey::CommonReopenClosedSession))
+        }
+        CustomAction::CloseCurrentSession => Some(i18n::tr(ctx, I18nKey::MenuCloseFocusedPanel)),
+        CustomAction::CloseWindow => Some(i18n::tr(ctx, I18nKey::MenuCloseWindow)),
+        CustomAction::ViewSharedBlocks => Some(i18n::tr(ctx, I18nKey::SettingsNavSharedBlocks)),
+        CustomAction::ToggleWarpDrive => Some(i18n::tr(ctx, I18nKey::SettingsNavWarpDrive)),
+        CustomAction::OpenTeamSettings => Some(i18n::tr(ctx, I18nKey::SettingsNavTeams)),
+        CustomAction::OpenAIFactCollection => Some(i18n::tr(ctx, I18nKey::SettingsNavKnowledge)),
+        CustomAction::OpenMCPServerCollection => {
+            Some(i18n::tr(ctx, I18nKey::SettingsNavMcpServers))
+        }
+        CustomAction::OpenRepository => Some(i18n::tr(ctx, I18nKey::MenuOpenRepository)),
+        CustomAction::NewTerminalTab => Some(i18n::tr(ctx, I18nKey::MenuNewTerminalTab)),
+        CustomAction::NewAgentTab => Some(i18n::tr(ctx, I18nKey::MenuNewAgentTab)),
+        CustomAction::NewAgentModePane => Some(i18n::tr(ctx, I18nKey::CommonAgent)),
+        CustomAction::Undo => Some(i18n::tr(ctx, I18nKey::CommonUndo)),
+        CustomAction::Redo => Some(i18n::tr_static(ctx, "Redo")),
+        CustomAction::Cut => Some(i18n::tr(ctx, I18nKey::CommonCut)),
+        CustomAction::Copy => Some(i18n::tr(ctx, I18nKey::CommonCopy)),
+        CustomAction::Paste => Some(i18n::tr(ctx, I18nKey::CommonPaste)),
+        CustomAction::SelectAll => Some(i18n::tr(ctx, I18nKey::CommonSelectAll)),
+        CustomAction::ClearEditor => Some(i18n::tr_static(ctx, "Clear command editor")),
+        CustomAction::AddNextOccurrence => {
+            Some(i18n::tr_static(ctx, "Add selection for next occurrence"))
+        }
+        CustomAction::AddCursorAbove => Some(i18n::tr_static(ctx, "Add cursor above")),
+        CustomAction::AddCursorBelow => Some(i18n::tr_static(ctx, "Add cursor below")),
+        CustomAction::Find => Some(i18n::tr_static(ctx, "Find")),
+        CustomAction::GoToLine => Some(i18n::tr_static(ctx, "Go to line")),
+        CustomAction::FocusInput => Some(i18n::tr_static(ctx, "Focus terminal input")),
+        CustomAction::ToggleSyncAllTerminalInputsInAllTabs => Some(i18n::tr_static(
+            ctx,
+            "Toggle Synchronizing All Panes in All Tabs",
+        )),
+        CustomAction::ToggleSyncTerminalInputsInCurrentTab => Some(i18n::tr_static(
+            ctx,
+            "Toggle Synchronizing All Panes in Current Tab",
+        )),
+        CustomAction::DisableSyncTerminalInputs => {
+            Some(i18n::tr_static(ctx, "Stop Synchronizing Any Panes"))
+        }
+        CustomAction::CommandPalette => Some(i18n::tr_static(ctx, "Command Palette")),
+        CustomAction::AISearch => Some(i18n::tr(ctx, I18nKey::TerminalAiCommandSearch)),
+        CustomAction::AttachSelectionAsAgentModeContext => {
+            Some(i18n::tr_static(ctx, "Attach Selection as Agent Context"))
+        }
+        CustomAction::NavigationPalette => Some(i18n::tr_static(ctx, "Navigation Palette")),
+        CustomAction::LaunchConfigPalette => Some(i18n::tr(ctx, I18nKey::MenuLaunchConfigurations)),
+        CustomAction::FilesPalette => Some(i18n::tr_static(ctx, "Project Explorer")),
+        CustomAction::ToggleConversationListView => {
+            Some(i18n::tr_static(ctx, "Agent conversation list view"))
+        }
+        CustomAction::ToggleProjectExplorer => Some(i18n::tr_static(ctx, "Project Explorer")),
+        CustomAction::ToggleGlobalSearch => Some(i18n::tr_static(ctx, "Global Search")),
+        CustomAction::History => Some(i18n::tr_static(ctx, "History")),
+        CustomAction::CommandSearch => Some(i18n::tr_static(ctx, "Command Search")),
+        CustomAction::Workflows => Some(i18n::tr_static(ctx, "Workflows")),
+        CustomAction::IncreaseZoom => Some(i18n::tr_static(ctx, "Zoom In")),
+        CustomAction::DecreaseZoom => Some(i18n::tr_static(ctx, "Zoom Out")),
+        CustomAction::ResetZoom => Some(i18n::tr_static(ctx, "Reset Zoom")),
+        CustomAction::IncreaseFontSize => Some(i18n::tr_static(ctx, "Increase font size")),
+        CustomAction::DecreaseFontSize => Some(i18n::tr_static(ctx, "Decrease font size")),
+        CustomAction::ResetFontSize => Some(i18n::tr_static(ctx, "Reset font size to default")),
+        CustomAction::MoveTabLeft => Some(i18n::tr_static(ctx, "Move tab left")),
+        CustomAction::MoveTabRight => Some(i18n::tr_static(ctx, "Move tab right")),
+        CustomAction::CycleNextSession => Some(i18n::tr_static(ctx, "Switch to next tab")),
+        CustomAction::CyclePrevSession => Some(i18n::tr_static(ctx, "Switch to previous tab")),
+        CustomAction::ActivateNextPane => Some(i18n::tr_static(ctx, "Activate next pane")),
+        CustomAction::ActivatePreviousPane => Some(i18n::tr_static(ctx, "Activate previous pane")),
+        CustomAction::ToggleMaximizePane => {
+            Some(i18n::tr_static(ctx, "Toggle Maximize Active Pane"))
+        }
+        CustomAction::ClearBlocks => Some(i18n::tr_static(ctx, "Clear Blocks")),
+        CustomAction::SelectBlockAbove => Some(i18n::tr_static(ctx, "Select previous block")),
+        CustomAction::SelectBlockBelow => Some(i18n::tr_static(ctx, "Select next block")),
+        CustomAction::SelectAllBlocks => Some(i18n::tr_static(ctx, "Select all blocks")),
+        CustomAction::ScrollToTopOfSelectedBlocks => {
+            Some(i18n::tr_static(ctx, "Scroll to top of selected block"))
+        }
+        CustomAction::ScrollToBottomOfSelectedBlocks => {
+            Some(i18n::tr_static(ctx, "Scroll to bottom of selected block"))
+        }
+        CustomAction::CreateBlockPermalink => Some(i18n::tr_static(ctx, "Share selected block")),
+        CustomAction::ToggleBookmarkBlock => Some(i18n::tr_static(ctx, "Bookmark selected block")),
+        CustomAction::FindWithinBlock => Some(i18n::tr_static(ctx, "Find within selected block")),
+        CustomAction::CopyBlock => Some(i18n::tr_static(ctx, "Copy command and output")),
+        CustomAction::CopyBlockCommand => Some(i18n::tr_static(ctx, "Copy command")),
+        CustomAction::CopyBlockOutput => Some(i18n::tr_static(ctx, "Copy command output")),
+        CustomAction::NewPersonalWorkflow => Some(i18n::tr_static(ctx, "New Personal Workflow")),
+        CustomAction::NewPersonalNotebook => Some(i18n::tr_static(ctx, "New Personal Notebook")),
+        CustomAction::NewPersonalAIPrompt => Some(i18n::tr_static(ctx, "New Personal Prompt")),
+        CustomAction::NewPersonalEnvVars => {
+            Some(i18n::tr_static(ctx, "New Personal Environment Variables"))
+        }
+        CustomAction::NewTeamWorkflow => Some(i18n::tr_static(ctx, "New Team Workflow")),
+        CustomAction::NewTeamNotebook => Some(i18n::tr_static(ctx, "New Team Notebook")),
+        CustomAction::NewTeamAIPrompt => Some(i18n::tr_static(ctx, "New Team Prompt")),
+        CustomAction::NewTeamEnvVars => {
+            Some(i18n::tr_static(ctx, "New Team Environment Variables"))
+        }
+        CustomAction::SearchDrive => Some(i18n::tr_static(ctx, "Search Drive")),
+        CustomAction::SharePaneContents => Some(i18n::tr_static(ctx, "Share pane contents")),
+        CustomAction::ShareCurrentSession => Some(i18n::tr(ctx, I18nKey::TabShareSession)),
+        _ => None,
+    }
 }
 
 fn non_updateable_custom_item(action: CustomAction, ctx: &AppContext) -> MenuItem {
@@ -166,7 +295,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     ];
 
     menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Preferences",
+        i18n::tr(ctx, I18nKey::MenuPreferences),
         |_| (),
         no_updates,
         None,
@@ -187,14 +316,14 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
 
     menu_items.push(MenuItem::Separator);
     menu_items.push(link_menu_item(
-        "Privacy Policy...",
+        i18n::tr(ctx, I18nKey::MenuPrivacyPolicy),
         links::PRIVACY_POLICY_URL.into(),
     ));
 
     let debug_menu_items = debug_menu_items();
     if !debug_menu_items.is_empty() {
         menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-            "Debug",
+            i18n::tr(ctx, I18nKey::MenuDebug),
             |_| (),
             no_updates,
             None,
@@ -208,7 +337,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     menu_items.push(MenuItem::Standard(StandardAction::ShowAllApps));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Set Warp as Default Terminal",
+        i18n::tr(ctx, I18nKey::MenuSetDefaultTerminal),
         move |ctx| {
             DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
                 default_terminal.make_warp_default(ctx)
@@ -228,7 +357,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     )));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Log out",
+        i18n::tr(ctx, I18nKey::MenuLogOut),
         auth::maybe_log_out,
         move |_, ctx| {
             let is_anonymous = AuthStateProvider::handle(ctx)
@@ -252,7 +381,7 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::OpenRepository, ctx),
         MenuItem::Custom(CustomMenuItem::new_with_submenu(
-            "Open Recent",
+            i18n::tr(ctx, I18nKey::MenuOpenRecent),
             |_| (),
             |_props, ctx| {
                 let recent_repos = generate_recent_repos_for_menu(ctx);
@@ -270,7 +399,7 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::CloseWindow, ctx),
     ]);
 
-    Menu::new("File", file_menu_options)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuFile), file_menu_options)
 }
 
 fn make_new_edit_menu(ctx: &AppContext) -> Menu {
@@ -299,7 +428,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     ];
     let group_5 = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "Use Warp's Prompt",
+            i18n::tr(ctx, I18nKey::MenuUseWarpsPrompt),
             move |ctx| ctx.dispatch_global_action("app:toggle_user_ps1", &()),
             move |_props, ctx| MenuItemPropertyChanges {
                 checked: Some(
@@ -312,7 +441,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Copy on Select within the Terminal",
+            i18n::tr(ctx, I18nKey::MenuCopyOnSelectWithinTerminal),
             move |ctx| {
                 ctx.dispatch_global_action("app:toggle_copy_on_select", &());
             },
@@ -338,7 +467,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     edit_menu_items.push(MenuItem::Separator);
 
     edit_menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Synchronize Inputs",
+        i18n::tr(ctx, I18nKey::MenuSynchronizeInputs),
         |_| (),
         no_updates,
         None,
@@ -370,7 +499,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
 
     edit_menu_items.extend(group_5);
 
-    Menu::new("Edit", edit_menu_items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuEdit), edit_menu_items)
 }
 
 fn make_new_view_menu(ctx: &AppContext) -> Menu {
@@ -390,7 +519,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::Workflows, ctx),
         MenuItem::Separator,
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Mouse Reporting",
+            i18n::tr(ctx, I18nKey::MenuToggleMouseReporting),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_mouse_reporting", &());
             },
@@ -407,7 +536,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Scroll Reporting",
+            i18n::tr(ctx, I18nKey::MenuToggleScrollReporting),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_scroll_reporting", &());
             },
@@ -422,7 +551,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Focus Reporting",
+            i18n::tr(ctx, I18nKey::MenuToggleFocusReporting),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_focus_reporting", &());
             },
@@ -448,7 +577,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
     items.extend([
         MenuItem::Separator,
         MenuItem::Custom(CustomMenuItem::new(
-            "Compact Mode",
+            i18n::tr(ctx, I18nKey::MenuCompactMode),
             move |ctx| {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
                     let current_value = *terminal_settings.spacing_mode;
@@ -482,7 +611,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
         ]);
     }
 
-    Menu::new("View", items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuView), items)
 }
 
 fn make_new_tab_menu(ctx: &AppContext) -> Menu {
@@ -509,7 +638,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::CloseOtherTabs, ctx),
         updateable_custom_item_without_checkmark(CustomAction::CloseTabsRight, ctx),
     ];
-    Menu::new("Tab", items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuTab), items)
 }
 
 fn make_new_ai_menu(ctx: &AppContext) -> Menu {
@@ -542,7 +671,7 @@ fn make_new_ai_menu(ctx: &AppContext) -> Menu {
         ));
     }
 
-    Menu::new("AI", items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuAi), items)
 }
 
 fn make_new_blocks_menu(ctx: &AppContext) -> Menu {
@@ -580,7 +709,7 @@ fn make_new_blocks_menu(ctx: &AppContext) -> Menu {
         items.extend(debug_items);
     }
 
-    Menu::new("Blocks", items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuBlocks), items)
 }
 
 fn make_new_drive_menu(ctx: &AppContext) -> Menu {
@@ -624,7 +753,7 @@ fn make_new_drive_menu(ctx: &AppContext) -> Menu {
         ])
     }
 
-    Menu::new("Drive", items)
+    Menu::new(i18n::tr(ctx, I18nKey::MenuDrive), items)
 }
 
 /// Returns [`MenuItem`]s that aid debugging to be included in the Block menu.
@@ -735,9 +864,9 @@ fn toggle_bootstrap_block_menu_item() -> MenuItem {
     ))
 }
 
-fn make_new_window_menu() -> Menu {
+fn make_new_window_menu(ctx: &AppContext) -> Menu {
     Menu::new(
-        "Window",
+        i18n::tr(ctx, I18nKey::MenuWindow),
         vec![
             MenuItem::Standard(StandardAction::Minimize),
             MenuItem::Standard(StandardAction::Zoom),
@@ -905,9 +1034,9 @@ fn link_menu_item(title: &'static str, link: Cow<'static, str>) -> MenuItem {
     ))
 }
 
-fn feedback_menu_item() -> MenuItem {
+fn feedback_menu_item(ctx: &AppContext) -> MenuItem {
     MenuItem::Custom(CustomMenuItem::new(
-        "Send Feedback...",
+        i18n::tr(ctx, I18nKey::MenuSendFeedback),
         move |ctx| {
             // Route through the root-view action so workspace windows can open the
             // guided AI flow, while non-workspace windows still fall back to the
@@ -919,14 +1048,23 @@ fn feedback_menu_item() -> MenuItem {
     ))
 }
 
-fn make_new_help_menu() -> Menu {
+fn make_new_help_menu(ctx: &AppContext) -> Menu {
     Menu::new(
-        "Help",
+        i18n::tr(ctx, I18nKey::MenuHelp),
         vec![
-            feedback_menu_item(),
-            link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
-            link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
-            link_menu_item("Warp Slack Community...", links::SLACK_URL.into()),
+            feedback_menu_item(ctx),
+            link_menu_item(
+                i18n::tr(ctx, I18nKey::MenuWarpDocumentation),
+                links::USER_DOCS_URL.into(),
+            ),
+            link_menu_item(
+                i18n::tr(ctx, I18nKey::MenuGithubIssues),
+                links::GITHUB_ISSUES_URL.into(),
+            ),
+            link_menu_item(
+                i18n::tr(ctx, I18nKey::MenuWarpSlackCommunity),
+                links::SLACK_URL.into(),
+            ),
         ],
     )
 }
@@ -960,7 +1098,7 @@ fn make_launch_config_menu_items(ctx: &mut AppContext) -> Vec<MenuItem> {
 
     // TODO(vorporeal): use non_updateable_custom_item() here instead
     launch_config_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Save New...",
+        i18n::tr(ctx, I18nKey::MenuSaveNew),
         custom_action_dispatcher(CustomAction::SaveCurrentConfig),
         no_updates,
         custom_shortcut(CustomAction::SaveCurrentConfig),
@@ -975,13 +1113,13 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     // shows its dedicated keystroke instead.
     let mut new_elements_menu = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "New Window",
+            i18n::tr(ctx, I18nKey::MenuNewWindow),
             open_new_window,
             no_updates,
             Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "New Terminal Tab",
+            i18n::tr(ctx, I18nKey::MenuNewTerminalTab),
             open_new_default_tab_or_window,
             move |_props: &MenuItemProperties, ctx: &mut AppContext| {
                 let mut changes = MenuItemPropertyChanges::default();
@@ -1006,7 +1144,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
             Some(Keystroke::parse("cmd-t").expect("Valid keystroke")),
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "New Agent Tab",
+            i18n::tr(ctx, I18nKey::MenuNewAgentTab),
             open_new_agent_tab_or_window,
             move |_props: &MenuItemProperties, ctx: &mut AppContext| {
                 let mut changes = MenuItemPropertyChanges::default();
@@ -1042,7 +1180,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     let reopen_session_action_updater =
         custom_action_updater(CustomAction::ReopenClosedSession, Box::new(|_| false));
     new_elements_menu.push(MenuItem::Custom(CustomMenuItem::new(
-        "Reopen closed session",
+        i18n::tr(ctx, I18nKey::CommonReopenClosedSession),
         |ctx| {
             UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
                 stack.undo_close(ctx);
@@ -1057,7 +1195,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     )));
 
     new_elements_menu.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Launch Configurations",
+        i18n::tr(ctx, I18nKey::MenuLaunchConfigurations),
         |_| (),
         |_props, ctx| MenuItemPropertyChanges {
             submenu: Some(Some(make_launch_config_menu_items(ctx))),
@@ -1170,10 +1308,11 @@ fn custom_action_updater(
             changes.disabled = Some(binding.is_none());
             if let Some(binding) = binding {
                 if let Some(description) = binding.description {
+                    let resolved_name = description.resolve(ctx, bindings::MAC_MENUS_CONTEXT);
                     changes.name = Some(
-                        description
-                            .resolve(ctx, bindings::MAC_MENUS_CONTEXT)
-                            .into_owned(),
+                        localized_custom_action_name(action, ctx)
+                            .unwrap_or(resolved_name.as_ref())
+                            .to_owned(),
                     );
                 }
                 changes.keystroke = Some(bindings::trigger_to_keystroke(binding.trigger));

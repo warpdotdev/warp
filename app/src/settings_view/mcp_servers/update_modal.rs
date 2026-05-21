@@ -298,12 +298,12 @@ impl UpdateModalBody {
         .finish()
     }
 
-    fn render_action_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_action_buttons(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, self.cancel_mouse_state.clone())
-            .with_text_label("Cancel".into())
+            .with_text_label(crate::i18n::tr_static(app, "Cancel").into())
             .with_style(UiComponentStyles {
                 font_weight: Some(Weight::Bold),
                 font_color: Some(theme.active_ui_text_color().into()),
@@ -386,8 +386,8 @@ impl UpdateModalBody {
             .finish()
     }
 
-    fn render_buttons_row(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let action_buttons = self.render_action_buttons(appearance);
+    fn render_buttons_row(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let action_buttons = self.render_action_buttons(appearance, app);
 
         let spacer = Shrinkable::new(1., Container::new(Empty::new().finish()).finish()).finish();
 
@@ -452,7 +452,7 @@ impl View for UpdateModalBody {
                     .with_uniform_padding(INSTALLATION_MODAL_PADDING)
                     .finish(),
             )
-            .with_child(self.render_buttons_row(appearance))
+            .with_child(self.render_buttons_row(appearance, ctx))
             .finish()
     }
 }

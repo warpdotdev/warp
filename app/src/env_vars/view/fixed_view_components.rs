@@ -20,6 +20,7 @@ use crate::{
         active_env_var_collection_data::TrashStatus,
         view::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView},
     },
+    i18n::{self, I18nKey},
     ui_components::{breadcrumb::BreadcrumbState, buttons::icon_button, icons::Icon},
     AppContext, Appearance, SingletonEntity,
 };
@@ -27,9 +28,6 @@ use crate::{
 const VARIABLE_DIVIDER_HEIGHT: f32 = 2.;
 const SECTION_FONT_SIZE: f32 = 16.;
 const BUTTON_HEIGHT: f32 = 32.;
-
-const SAVE_BUTTON_TEXT: &str = "Save";
-const VARIABLES_LABEL_TEXT: &str = "Variables";
 
 /// This file contains components that fixed in the view,
 /// i.e. the trash banner, breadcrumbs, and variables section header
@@ -63,9 +61,9 @@ impl EnvVarCollectionView {
         let mut stack = Stack::new();
 
         let text = if deleted {
-            "You no longer have access to these environment variables"
+            i18n::tr(app, I18nKey::EnvVarsNoAccess)
         } else {
-            "Environment variables were moved to trash"
+            i18n::tr(app, I18nKey::EnvVarsMovedToTrash)
         };
         stack.add_child(
             Align::new(
@@ -108,6 +106,7 @@ impl EnvVarCollectionView {
 
             if !FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash() {
                 let ui_builder = appearance.ui_builder().clone();
+                let tooltip = i18n::tr(app, I18nKey::EnvVarsRestoreTooltip).to_string();
                 action_row.add_child(
                     Align::new(
                         appearance
@@ -117,14 +116,9 @@ impl EnvVarCollectionView {
                                 self.button_mouse_states.restore_from_trash_button.clone(),
                             )
                             .with_tooltip(move || {
-                                ui_builder
-                                    .tool_tip(
-                                        "Restore environment variables from trash".to_string(),
-                                    )
-                                    .build()
-                                    .finish()
+                                ui_builder.tool_tip(tooltip.clone()).build().finish()
                             })
-                            .with_text_label("Restore".to_string())
+                            .with_text_label(i18n::tr(app, I18nKey::CommonRestore).to_string())
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(EnvVarCollectionAction::Untrash)
@@ -156,6 +150,7 @@ impl EnvVarCollectionView {
         &self,
         editability: ContentEditability,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut variables_section_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -167,7 +162,7 @@ impl EnvVarCollectionView {
                 2.,
                 appearance
                     .ui_builder()
-                    .span(VARIABLES_LABEL_TEXT.to_string())
+                    .span(i18n::tr(app, I18nKey::CommonVariables).to_string())
                     .with_style(UiComponentStyles {
                         font_size: Some(SECTION_FONT_SIZE),
                         ..Default::default()
@@ -299,7 +294,7 @@ impl EnvVarCollectionView {
                 font_size: Some(14.),
                 ..Default::default()
             })
-            .with_centered_text_label(SAVE_BUTTON_TEXT.to_owned());
+            .with_centered_text_label(i18n::tr(app, I18nKey::CommonSave).to_owned());
 
         if is_save_disabled {
             button = button.disabled();

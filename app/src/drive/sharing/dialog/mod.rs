@@ -962,7 +962,11 @@ impl SharingDialog {
             let window_id = ctx.window_id();
             let object_name = self.targeted_object_name(ctx);
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast = DismissibleToast::default(format!("Copied link to {object_name}."));
+                let toast = if crate::i18n::current_locale(ctx) == crate::i18n::Locale::ZhCn {
+                    DismissibleToast::default(format!("已复制 {object_name} 的链接。"))
+                } else {
+                    DismissibleToast::default(format!("Copied link to {object_name}."))
+                };
                 toast_stack.add_ephemeral_toast(toast, window_id, ctx);
             });
         }
@@ -1022,7 +1026,7 @@ impl SharingDialog {
                 if !is_team_guest || !is_session {
                     items.push(MenuItem::Separator);
                     items.push(
-                        MenuItemFields::new("Remove")
+                        MenuItemFields::new(crate::i18n::tr_static(ctx, "Remove"))
                             .with_on_select_action(SharingDialogAction::RemoveGuest)
                             .with_disabled(inherited_access)
                             .into_item(),
@@ -1459,7 +1463,7 @@ impl SharingDialog {
                 ButtonVariant::Accent,
                 self.ui_state_handles.invite_button.clone(),
             )
-            .with_centered_text_label("Invite".into())
+            .with_centered_text_label(crate::i18n::tr_static(app, "Invite").into())
             .with_style(UiComponentStyles {
                 // Adjust the height to match the email editor's padding.
                 height: Some(style::ACL_ITEM_HEIGHT + 6.),
@@ -1794,10 +1798,10 @@ impl SharingDialog {
     }
 
     /// Render the "Who has access" header shown above the ACL list.
-    fn render_access_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_access_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         appearance
             .ui_builder()
-            .span("Who has access")
+            .span(crate::i18n::tr_static(app, "Who has access"))
             .with_style(UiComponentStyles {
                 font_color: Some(style::label_text(appearance)),
                 font_size: Some(style::PRIMARY_TEXT_SIZE),
@@ -2035,13 +2039,13 @@ impl SharingDialog {
         let is_ai_conversation = matches!(self.target, Some(ShareableObject::AIConversation(_)));
 
         let mut items = vec![
-            MenuItemFields::new("Only people invited")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Only people invited"))
                 .with_on_select_action(SharingDialogAction::SetLinkPermissions(None))
                 .with_icon(Icon::Lock)
                 .with_disabled(inherited_access)
                 .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new("Anyone with the link")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Anyone with the link"))
                 .with_no_interaction_on_hover()
                 .with_icon(Icon::Globe)
                 .into_item(),
@@ -2216,13 +2220,13 @@ impl SharingDialog {
         let inherited_access = self.team_sharing_state.inheritance.is_some();
         let current_access_level = self.team_sharing_state.access_level;
         let items = [
-            MenuItemFields::new("Only invited teammates")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Only invited teammates"))
                 .with_on_select_action(SharingDialogAction::SetTeamPermissions(None))
                 .with_icon(Icon::Lock)
                 .with_disabled(inherited_access)
                 .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new("Teammates with the link")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Teammates with the link"))
                 .with_no_interaction_on_hover()
                 .with_icon(Icon::Users)
                 .into_item(),
@@ -2455,7 +2459,9 @@ impl SharingDialog {
     fn download_qr_code(&self, ctx: &mut ViewContext<Self>) {
         let Some(url) = self.target_link(ctx) else {
             self.show_ephemeral_toast(
-                DismissibleToast::error("Unable to download QR code.".to_string()),
+                DismissibleToast::error(
+                    crate::i18n::tr_static(ctx, "Unable to download QR code.").to_string(),
+                ),
                 ctx,
             );
             return;
@@ -2465,7 +2471,9 @@ impl SharingDialog {
             Ok(png) => png,
             Err(_) => {
                 self.show_ephemeral_toast(
-                    DismissibleToast::error("Unable to download QR code.".to_string()),
+                    DismissibleToast::error(
+                        crate::i18n::tr_static(ctx, "Unable to download QR code.").to_string(),
+                    ),
                     ctx,
                 );
                 return;
@@ -2493,11 +2501,15 @@ impl SharingDialog {
     fn handle_qr_write_result(&self, result: std::io::Result<()>, ctx: &mut ViewContext<Self>) {
         match result {
             Ok(()) => self.show_ephemeral_toast(
-                DismissibleToast::success("QR code downloaded.".to_string()),
+                DismissibleToast::success(
+                    crate::i18n::tr_static(ctx, "QR code downloaded.").to_string(),
+                ),
                 ctx,
             ),
             Err(_) => self.show_ephemeral_toast(
-                DismissibleToast::error("Unable to download QR code.".to_string()),
+                DismissibleToast::error(
+                    crate::i18n::tr_static(ctx, "Unable to download QR code.").to_string(),
+                ),
                 ctx,
             ),
         }
@@ -2585,7 +2597,7 @@ impl SharingDialog {
             .finish()
     }
 
-    fn render_qr_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_qr_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let foreground = style::acl_primary_text_color(appearance);
         let icon_button_styles = UiComponentStyles {
             width: Some(QR_ICON_BUTTON_SIZE),
@@ -2612,7 +2624,7 @@ impl SharingDialog {
         .finish();
         let title = appearance
             .ui_builder()
-            .span("Share session QR code")
+            .span(crate::i18n::tr_static(app, "Share session QR code"))
             .with_style(UiComponentStyles {
                 font_color: Some(foreground),
                 font_size: Some(style::HEADER_TEXT_SIZE),
@@ -2681,14 +2693,14 @@ impl SharingDialog {
                         self.render_footer_icon_button(
                             Icon::Copy,
                             SharingDialogAction::CopyLink,
-                            "Copy link",
+                            crate::i18n::tr_static(app, "Copy link"),
                             self.ui_state_handles.qr_copy_button.clone(),
                             appearance,
                         ),
                         Container::new(self.render_footer_icon_button(
                             Icon::Download,
                             SharingDialogAction::DownloadQrCode,
-                            "Download QR code",
+                            crate::i18n::tr_static(app, "Download QR code"),
                             self.ui_state_handles.qr_download_button.clone(),
                             appearance,
                         ))
@@ -2711,7 +2723,10 @@ impl SharingDialog {
             .unwrap_or_else(|| {
                 appearance
                     .ui_builder()
-                    .paragraph("Unable to create QR code for this session link.")
+                    .paragraph(crate::i18n::tr_static(
+                        app,
+                        "Unable to create QR code for this session link.",
+                    ))
                     .with_style(UiComponentStyles {
                         font_color: Some(style::acl_secondary_text_color(appearance)),
                         ..Default::default()
@@ -2723,7 +2738,7 @@ impl SharingDialog {
         Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_children([
-                self.render_qr_header(appearance),
+                self.render_qr_header(appearance, app),
                 Container::new(Align::new(qr_contents).finish())
                     .with_vertical_padding(32.)
                     .finish(),
@@ -2765,7 +2780,7 @@ impl SharingDialog {
             .with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::IconFirst,
-                    "Copy link",
+                    crate::i18n::tr_static(app, "Copy link"),
                     Icon::Link.to_warpui_icon(copy_button_foreground),
                     MainAxisSize::Min,
                     MainAxisAlignment::SpaceBetween,
@@ -2796,7 +2811,7 @@ impl SharingDialog {
             self.render_footer_icon_button(
                 Icon::QrCode,
                 SharingDialogAction::ShowQrCode,
-                "Show QR code",
+                crate::i18n::tr_static(app, "Show QR code"),
                 self.ui_state_handles.qr_code_button.clone(),
                 appearance,
             )
@@ -2866,7 +2881,7 @@ impl View for SharingDialog {
             if self.can_edit_access(app) && self.can_direct_link_share(app) {
                 contents.add_child(self.render_invite_form(appearance, app));
             }
-            contents.add_child(self.render_access_header(appearance));
+            contents.add_child(self.render_access_header(appearance, app));
             contents.extend(self.render_restricted_access_label(appearance, app));
 
             if self.can_anyone_with_link_share(app) {

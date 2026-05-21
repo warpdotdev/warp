@@ -134,7 +134,7 @@ impl RuleEditorView {
         });
 
         let save_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("Save", PrimaryTheme)
+            let mut button = ActionButton::new(crate::i18n::tr_static(ctx, "Save"), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RuleEditorViewAction::Save);
@@ -144,12 +144,15 @@ impl RuleEditorView {
             button
         });
 
-        let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete rule", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(RuleEditorViewAction::Delete);
-                })
+        let delete_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Delete rule"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(RuleEditorViewAction::Delete);
+            })
         });
 
         Self {
@@ -330,18 +333,30 @@ impl RuleEditorView {
         .finish()
     }
 
-    fn render_form(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_form(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Flex::column()
             .with_child(
-                Container::new(appearance.ui_builder().span("Name").build().finish())
-                    .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
-                    .finish(),
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .span(crate::i18n::tr_static(app, "Name"))
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
+                .finish(),
             )
             .with_child(self.render_name_editor(appearance))
             .with_child(
-                Container::new(appearance.ui_builder().span("Rule").build().finish())
-                    .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
-                    .finish(),
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .span(crate::i18n::tr_static(app, "Rule"))
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
+                .finish(),
             )
             .with_child(self.render_content_editor(appearance))
             .finish()
@@ -370,7 +385,7 @@ impl View for RuleEditorView {
         let appearance = Appearance::as_ref(app);
         let mut col = Flex::column()
             .with_child(self.render_header(appearance))
-            .with_child(self.render_form(appearance));
+            .with_child(self.render_form(appearance, app));
 
         if let Some(ai_fact) = &self.ai_fact {
             if is_delete_allowed(ai_fact.clone(), app) {

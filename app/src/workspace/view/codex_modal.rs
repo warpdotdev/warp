@@ -69,13 +69,16 @@ pub struct CodexModal {
 
 impl CodexModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let cta_button = ctx.add_view(|_| {
-            ActionButton::new("Use latest codex model", WhiteButtonTheme)
-                .with_icon(Icon::OpenAILogo)
-                .with_full_width(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CodexModalAction::UseCodex);
-                })
+        let cta_button = ctx.add_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Use latest codex model"),
+                WhiteButtonTheme,
+            )
+            .with_icon(Icon::OpenAILogo)
+            .with_full_width(true)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CodexModalAction::UseCodex);
+            })
         });
 
         CodexModal {

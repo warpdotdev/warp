@@ -32,7 +32,7 @@ impl ShellTerminatedBanner {
         let appearance = Appearance::as_ref(ctx);
 
         let mut handles = vec![];
-        let _ = termination_type.buttons(appearance, &mut handles);
+        let _ = termination_type.buttons(appearance, &mut handles, ctx);
 
         Self {
             termination_type,
@@ -78,7 +78,7 @@ impl View for ShellTerminatedBanner {
         let mut handles = self.handles.borrow_mut();
         let buttons = self
             .termination_type
-            .buttons(appearance, &mut handles)
+            .buttons(appearance, &mut handles, app)
             .into_iter()
             .map(|button| Container::new(button).with_margin_left(8.).finish());
 
@@ -202,6 +202,7 @@ impl TerminationType {
         &self,
         appearance: &Appearance,
         handles: &mut Vec<MouseStateHandle>,
+        app: &AppContext,
     ) -> Vec<Box<dyn Element>> {
         match self {
             TerminationType::Normal => vec![],
@@ -240,7 +241,7 @@ impl TerminationType {
                 vec![
                     ui_builder
                         .button(ButtonVariant::Text, handles[0].clone())
-                        .with_text_label("Copy error".to_string())
+                        .with_text_label(crate::i18n::tr_static(app, "Copy error").to_string())
                         .build()
                         .on_click(move |evt_ctx, _ctx, _position| {
                             evt_ctx.dispatch_typed_action(Action::CopyPtySpawnError(

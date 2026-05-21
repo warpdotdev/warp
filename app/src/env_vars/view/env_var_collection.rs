@@ -1383,7 +1383,7 @@ impl View for EnvVarCollectionView {
                     .finish(),
             )
             .with_child(
-                Container::new(self.render_variables_section_header(editability, appearance))
+                Container::new(self.render_variables_section_header(editability, appearance, app))
                     .with_margin_bottom(SECTION_SPACING)
                     .finish(),
             )

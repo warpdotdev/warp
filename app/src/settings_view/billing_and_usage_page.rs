@@ -353,10 +353,12 @@ impl BillingAndUsagePageView {
             }
         });
 
-        let load_more_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Load more", SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
-            })
+        let load_more_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Load more"), SecondaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
+                },
+            )
         });
 
         let mut me = Self {
@@ -1155,7 +1157,7 @@ impl BillingAndUsagePageView {
                     ButtonVariant::Secondary,
                     self.ambient_trial_new_agent_button.clone(),
                 )
-                .with_text_label("New agent".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "New agent").to_string())
                 .with_style(UiComponentStyles {
                     font_color: Some(bg),
                     background: Some(fg.into()),
@@ -1192,7 +1194,7 @@ impl BillingAndUsagePageView {
                     ButtonVariant::Secondary,
                     self.ambient_trial_buy_more_button.clone(),
                 )
-                .with_text_label("Buy more".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "Buy more").to_string())
                 .with_style(UiComponentStyles {
                     background: Some(bg.into()),
                     font_size: Some(14.),
@@ -1685,9 +1687,15 @@ impl BillingAndUsagePageView {
                     .current_team()
                     .is_some_and(|team| team.billing_metadata.is_on_legacy_paid_plan());
                 let (link_text, suffix) = if is_legacy_paid {
-                    ("Switch to the Build plan", " to purchase add-on credits.")
+                    (
+                        crate::i18n::tr_static(app, "Switch to the Build plan"),
+                        crate::i18n::tr_static(app, " to purchase add-on credits."),
+                    )
                 } else {
-                    ("Upgrade to the Build plan", " to purchase add-on credits.")
+                    (
+                        crate::i18n::tr_static(app, "Upgrade to the Build plan"),
+                        crate::i18n::tr_static(app, " to purchase add-on credits."),
+                    )
                 };
 
                 let text_fragments = vec![
@@ -1814,7 +1822,10 @@ impl BillingAndUsagePageView {
         let monthly_spend_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_children([
-                ui_builder.span("Monthly spend limit").build().finish(),
+                ui_builder
+                    .span(crate::i18n::tr_static(app, "Monthly spend limit"))
+                    .build()
+                    .finish(),
                 Shrinkable::new(1., Align::new(info_icon).left().finish()).finish(),
                 icon_button(
                     appearance,
@@ -2090,7 +2101,10 @@ impl BillingAndUsagePageView {
                 .finish();
 
             let mut card_content_lower_children = vec![
-                ui_builder.span("One-time purchase").build().finish(),
+                ui_builder
+                    .span(crate::i18n::tr_static(app, "One-time purchase"))
+                    .build()
+                    .finish(),
                 buy_row.finish(),
             ];
 
@@ -2255,6 +2269,7 @@ impl BillingAndUsagePageView {
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
         prorated_request_limits_info: Option<ProratedRequestLimitsInfo>,
+        app: &AppContext,
     ) -> Box<dyn warpui::Element> {
         let mut row = Flex::row();
 
@@ -2292,7 +2307,7 @@ impl BillingAndUsagePageView {
         }
 
         let request_count_label = if workspace_is_delinquent_due_to_payment_issue {
-            "Restricted due to billing issue".to_string()
+            crate::i18n::tr_static(app, "Restricted due to billing issue").to_string()
         } else {
             match divisor {
                 Some(Divisor::Unlimited) => {
@@ -2349,6 +2364,7 @@ impl BillingAndUsagePageView {
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
         prorated_request_limits_info: Option<ProratedRequestLimitsInfo>,
+        app: &AppContext,
     ) -> Box<dyn warpui::Element> {
         let request_usage_details = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::End)
@@ -2358,6 +2374,7 @@ impl BillingAndUsagePageView {
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
                 prorated_request_limits_info,
+                app,
             ));
 
         let left_side = if !name.is_empty() {
@@ -2842,8 +2859,9 @@ impl BillingAndUsagePageView {
                     let hoverable =
                         Hoverable::new(self.sort_icon_mouse_state.clone(), |mouse_state| {
                             if mouse_state.is_hovered() {
-                                let tooltip =
-                                    appearance.ui_builder().tool_tip("Sort by".to_string());
+                                let tooltip = appearance
+                                    .ui_builder()
+                                    .tool_tip(crate::i18n::tr_static(app, "Sort by").to_string());
 
                                 button.add_positioned_overlay_child(
                                     tooltip.build().finish(),
@@ -2965,6 +2983,7 @@ impl BillingAndUsagePageView {
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
                 None,
+                app,
             ));
             let divider = Container::new(
                 ConstrainedBox::new(Empty::new().finish())
@@ -3012,6 +3031,7 @@ impl BillingAndUsagePageView {
                             mouse_state: prorated_request_limits_info_mouse_states[i].clone(),
                             is_current_user: member.email == current_user_email,
                         }),
+                        app,
                     );
 
                     UserSortingCriteria::new(display_name, requests_used, row)
@@ -3045,6 +3065,7 @@ impl BillingAndUsagePageView {
                     mouse_state: prorated_request_limits_info_mouse_states[0].clone(), // We know the workspace has at least one member, so just take the first mouse state handle since we don't use the others.
                     is_current_user: true,
                 }),
+                app,
             );
             user_information.push(UserSortingCriteria::new(
                 display_name,
@@ -3085,18 +3106,22 @@ impl BillingAndUsagePageView {
                 if has_admin_permissions {
                     vec![
                         FormattedTextFragment::hyperlink_action(
-                            "Manage billing",
+                            crate::i18n::tr_static(app, "Manage billing"),
                             BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
                                 team_uid: team.uid,
                             },
                         ),
-                        FormattedTextFragment::plain_text(" to regain access to AI features."),
+                        FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                            app,
+                            " to regain access to AI features.",
+                        )),
                     ]
                 } else {
                     // Non-admin team member - show message to contact admin
-                    vec![FormattedTextFragment::plain_text(
+                    vec![FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
                         "Contact your team admin to resolve billing issues.",
-                    )]
+                    ))]
                 }
             } else if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
@@ -3105,39 +3130,52 @@ impl BillingAndUsagePageView {
                         if team.billing_metadata.is_on_legacy_paid_plan() {
                             vec![
                                 FormattedTextFragment::hyperlink(
-                                    "Switch to the Build plan",
+                                    crate::i18n::tr_static(app, "Switch to the Build plan"),
                                     upgrade_url,
                                 ),
-                                FormattedTextFragment::plain_text(
+                                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                                    app,
                                     " for a more flexible pricing model.",
-                                ),
+                                )),
                             ]
                         } else {
                             let mut fragments = vec![FormattedTextFragment::hyperlink(
-                                "Upgrade to the Build plan",
+                                crate::i18n::tr_static(app, "Upgrade to the Build plan"),
                                 upgrade_url,
                             )];
                             if team.billing_metadata.is_byo_api_key_enabled() {
-                                fragments.push(FormattedTextFragment::plain_text(" or "));
+                                fragments.push(FormattedTextFragment::plain_text(
+                                    crate::i18n::tr_static(app, " or "),
+                                ));
                                 fragments.push(FormattedTextFragment::hyperlink_action(
-                                    "bring your own key",
+                                    crate::i18n::tr_static(app, "bring your own key"),
                                     BillingAndUsagePageAction::NavigateToByokSettings,
                                 ));
                             }
                             fragments.push(FormattedTextFragment::plain_text(
-                                " for increased access to AI features.",
+                                crate::i18n::tr_static(
+                                    app,
+                                    " for increased access to AI features.",
+                                ),
                             ));
                             fragments
                         }
                     } else {
                         let upgrade_text = match team.billing_metadata.customer_type {
-                            CustomerType::Prosumer => "Upgrade to Turbo plan",
-                            CustomerType::Turbo => "Upgrade to Lightspeed plan",
-                            _ => "Upgrade",
+                            CustomerType::Prosumer => {
+                                crate::i18n::tr_static(app, "Upgrade to Turbo plan")
+                            }
+                            CustomerType::Turbo => {
+                                crate::i18n::tr_static(app, "Upgrade to Lightspeed plan")
+                            }
+                            _ => crate::i18n::tr_static(app, "Upgrade"),
                         };
                         vec![
                             FormattedTextFragment::hyperlink(upgrade_text, upgrade_url),
-                            FormattedTextFragment::plain_text(" to get more AI usage."),
+                            FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                                app,
+                                " to get more AI usage.",
+                            )),
                         ]
                     }
                 } else {
@@ -3146,35 +3184,48 @@ impl BillingAndUsagePageView {
             } else if team.billing_metadata.is_on_build_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
-                        "Upgrade to Max",
+                        crate::i18n::tr_static(app, "Upgrade to Max"),
                         UserWorkspaces::upgrade_link_for_team(team.uid),
                     ),
-                    FormattedTextFragment::plain_text(" for more AI credits."),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
+                        " for more AI credits.",
+                    )),
                 ]
             } else if team.billing_metadata.is_on_build_max_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
-                        "Switch to Business",
+                        crate::i18n::tr_static(app, "Switch to Business"),
                         UserWorkspaces::upgrade_link_for_team(team.uid),
                     ),
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
                         " for security features like SSO and automatically applied zero data retention.",
-                    ),
+                    )),
                 ]
             } else if team.billing_metadata.is_on_build_business_plan()
                 || team.billing_metadata.is_on_legacy_business_plan()
             {
                 vec![
                     FormattedTextFragment::hyperlink(
-                        "Upgrade to Enterprise",
+                        crate::i18n::tr_static(app, "Upgrade to Enterprise"),
                         "mailto:sales@warp.dev",
                     ),
-                    FormattedTextFragment::plain_text(" for custom limits and dedicated support."),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
+                        " for custom limits and dedicated support.",
+                    )),
                 ]
             } else if !team.billing_metadata.is_usage_based_pricing_toggleable() {
                 vec![
-                    FormattedTextFragment::hyperlink("Contact support", "mailto:support@warp.dev"),
-                    FormattedTextFragment::plain_text(" for more AI usage."),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::tr_static(app, "Contact support"),
+                        "mailto:support@warp.dev",
+                    ),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
+                        " for more AI usage.",
+                    )),
                 ]
             } else {
                 vec![]
@@ -3183,19 +3234,22 @@ impl BillingAndUsagePageView {
             let user_id = auth_state.user_id().unwrap_or_default();
             let upgrade_url = UserWorkspaces::upgrade_link(user_id);
             let mut fragments = vec![FormattedTextFragment::hyperlink(
-                "Upgrade to the Build plan",
+                crate::i18n::tr_static(app, "Upgrade to the Build plan"),
                 upgrade_url,
             )];
             if UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
-                fragments.push(FormattedTextFragment::plain_text(" or "));
+                fragments.push(FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    app, " or ",
+                )));
                 fragments.push(FormattedTextFragment::hyperlink_action(
-                    "bring your own key",
+                    crate::i18n::tr_static(app, "bring your own key"),
                     BillingAndUsagePageAction::NavigateToByokSettings,
                 ));
             }
-            fragments.push(FormattedTextFragment::plain_text(
+            fragments.push(FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                app,
                 " for more credits and access to more models.",
-            ));
+            )));
             fragments
         };
 
@@ -3335,6 +3389,7 @@ impl BillingAndUsagePageView {
         &self,
         auth_state: &AuthState,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let button_styles = UiComponentStyles {
             font_size: Some(14.),
@@ -3356,7 +3411,7 @@ impl BillingAndUsagePageView {
                 self.anonymous_user_sign_up_button.clone(),
             )
             .with_style(button_styles)
-            .with_text_label("Sign up".to_owned())
+            .with_text_label(crate::i18n::tr_static(app, "Sign up").to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(BillingAndUsagePageAction::SignupAnonymousUser);
@@ -3427,6 +3482,7 @@ impl BillingAndUsagePageView {
         team: &Team,
         _current_user_id: UserUid,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if team.billing_metadata.customer_type == CustomerType::Enterprise
             || !team.has_billing_history
@@ -3442,7 +3498,7 @@ impl BillingAndUsagePageView {
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
-                        "Manage billing",
+                        crate::i18n::tr_static(app, "Manage billing"),
                         Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
                         MainAxisSize::Min,
                         MainAxisAlignment::Center,
@@ -3591,7 +3647,7 @@ impl BillingAndUsagePageView {
 
             if has_admin_permissions {
                 if let Some(admin_actions) =
-                    self.render_team_admin_actions(team, current_user_id, appearance)
+                    self.render_team_admin_actions(team, current_user_id, appearance, app)
                 {
                     right_side.add_child(admin_actions);
                 }
@@ -3616,7 +3672,7 @@ impl BillingAndUsagePageView {
 impl BillingAndUsagePageView {
     fn render_plan_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let account_info = if self.auth_state.is_anonymous_or_logged_out() {
-            self.render_anonymous_account_info(self.auth_state.as_ref(), appearance)
+            self.render_anonymous_account_info(self.auth_state.as_ref(), appearance, app)
         } else {
             self.render_account_info(self.auth_state.as_ref(), app, appearance)
         };

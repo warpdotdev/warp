@@ -355,11 +355,11 @@ impl UniversalDeveloperInputButtonBar {
     ) -> Self {
         let button_size = ButtonSize::UDIButton;
 
-        let mic_button_view = ctx.add_typed_action_view(|_ctx| {
+        let mic_button_view = ctx.add_typed_action_view(|ctx| {
             #[cfg_attr(not(feature = "voice_input"), allow(unused_mut))]
             let mut button = ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Microphone)
-                .with_tooltip("Voice input")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Voice input"))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left);
             #[cfg(feature = "voice_input")]
@@ -387,10 +387,10 @@ impl UniversalDeveloperInputButtonBar {
                 })
         });
 
-        let file_button_view = ctx.add_typed_action_view(|_ctx| {
+        let file_button_view = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Plus)
-                .with_tooltip("Attach file")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Attach file"))
                 .with_size(button_size)
                 .with_disabled_theme(UDIDisabledButtonTheme)
                 .with_tooltip_alignment(TooltipAlignment::Left)
@@ -399,10 +399,10 @@ impl UniversalDeveloperInputButtonBar {
                 })
         });
 
-        let slash_command_menu_view = ctx.add_typed_action_view(|_ctx| {
+        let slash_command_menu_view = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::SlashCommands)
-                .with_tooltip("Slash commands")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Slash commands"))
                 .with_size(button_size)
                 .with_disabled_theme(UDIDisabledButtonTheme)
                 .with_tooltip_alignment(TooltipAlignment::Left)

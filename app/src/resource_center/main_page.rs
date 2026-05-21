@@ -415,7 +415,12 @@ impl ResourceCenterMainView {
         .finish()
     }
 
-    fn render_skip_tips_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_skip_tips_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mark_all_read_label = crate::i18n::tr_static(app, "Mark all as read").to_string();
         Container::new(
             Align::new(
                 Hoverable::new(self.button_mouse_states.skip_tips.clone(), |state| {
@@ -433,7 +438,7 @@ impl ResourceCenterMainView {
 
                     appearance
                         .ui_builder()
-                        .wrappable_text("Mark all as read", false)
+                        .wrappable_text(mark_all_read_label.clone(), false)
                         .with_style(style)
                         .build()
                         .finish()
@@ -508,7 +513,7 @@ impl View for ResourceCenterMainView {
         let appearance = Appearance::as_ref(app);
         let body = self.render_body(appearance);
         let invite_button = self.render_invite_button(appearance);
-        let skip_tips = self.render_skip_tips_button(appearance);
+        let skip_tips = self.render_skip_tips_button(appearance, app);
 
         let mut main_page = Flex::column();
 

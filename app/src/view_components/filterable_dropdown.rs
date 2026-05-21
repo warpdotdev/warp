@@ -104,7 +104,7 @@ where
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "Search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&filter_editor, |me, _, event, ctx| {
@@ -556,11 +556,11 @@ where
         .finish()
     }
 
-    fn render_empty_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_empty_menu(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let background_fill = appearance.theme().surface_2();
         let empty_text = appearance
             .ui_builder()
-            .span("No matches found.")
+            .span(crate::i18n::tr_static(app, "No matches found."))
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background_fill).into()),
                 ..Default::default()
@@ -749,7 +749,7 @@ where
         // inside the Menu's Dismiss (via set_pinned_footer_builder), so clicks on it
         // correctly do not trigger the dismiss handler.
         let dropdown_menu = if !self.has_pinned_footer && self.dropdown_items_len(app) == 0 {
-            self.render_empty_menu(appearance)
+            self.render_empty_menu(appearance, app)
         } else {
             ChildView::new(&self.dropdown).finish()
         };

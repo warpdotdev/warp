@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cloud_object::UniquePer;
+use crate::i18n::{self, I18nKey};
 use crate::server::sync_queue::QueueItem;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -191,18 +192,16 @@ pub enum RunAgentsPermission {
 }
 
 impl RunAgentsPermission {
-    pub fn description(&self) -> &'static str {
+    pub fn description(&self, app: &AppContext) -> &'static str {
         match self {
-            RunAgentsPermission::NeverAllow => {
-                "The Agent cannot run child agents and the run_agents tool will not be available."
-            }
+            RunAgentsPermission::NeverAllow => i18n::tr(app, I18nKey::AiRunAgentsNeverDescription),
             RunAgentsPermission::AlwaysAllow => {
-                "Give the Agent full autonomy to run child agents without approval."
+                i18n::tr(app, I18nKey::AiRunAgentsAlwaysAllowDescription)
             }
             RunAgentsPermission::AlwaysAsk => {
-                "Require explicit approval before the Agent runs child agents."
+                i18n::tr(app, I18nKey::AiRunAgentsAlwaysAskDescription)
             }
-            RunAgentsPermission::Unknown => "Unknown setting.",
+            RunAgentsPermission::Unknown => i18n::tr(app, I18nKey::AiUnknownSettingDescription),
         }
     }
 

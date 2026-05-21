@@ -59,6 +59,7 @@ use crate::{
         PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextColors, TextOptions,
     },
     features::FeatureFlag,
+    i18n::{self, I18nKey},
     menu::{MenuItem, MenuItemFields},
     network::{NetworkStatus, NetworkStatusEvent},
     notebooks::{
@@ -128,8 +129,6 @@ const BANNER_VERTICAL_MARGIN: f32 = 10.;
 
 const CONFLICT_RESOLUTION_MESSAGE: &str =
     "This notebook could not be saved because changes were made while you were editing. Please copy your work and refresh.";
-const REFRESH_BUTTON_TEXT: &str = "Refresh";
-
 const FEATURE_NOT_AVAILABLE_MESSAGE: &str = "This notebook could not be saved to the server because the feature is temporarily unavailable. The changes are saved locally. Please retry later.";
 
 /// The frequency at which we check for modifications and save the notebook to the server. This
@@ -379,7 +378,7 @@ impl NotebookView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Untitled", ctx);
+            editor.set_placeholder_text(i18n::tr(ctx, I18nKey::CommonUntitled), ctx);
             editor
         });
         ctx.subscribe_to_view(&title, |notebook, _, event, ctx| {
@@ -1409,13 +1408,17 @@ impl NotebookView {
                 match space {
                     Space::Personal => {
                         menu_items.extend(team_spaces.iter().map(|space| {
-                            MenuItemFields::new(format!("Move to {}", space.name(ctx)))
-                                .with_on_select_action(NotebookAction::MoveToSpace {
-                                    cloud_object_type_and_id: cloud_object_type,
-                                    new_space: *space,
-                                })
-                                .with_icon(Icon::Move)
-                                .into_item()
+                            MenuItemFields::new(format!(
+                                "{} {}",
+                                i18n::tr(ctx, I18nKey::CommonMoveTo),
+                                space.name(ctx)
+                            ))
+                            .with_on_select_action(NotebookAction::MoveToSpace {
+                                cloud_object_type_and_id: cloud_object_type,
+                                new_space: *space,
+                            })
+                            .with_icon(Icon::Move)
+                            .into_item()
                         }));
                     }
                     Space::Shared => {} // TODO: Revisit these menu items with sharing in mind
@@ -1426,7 +1429,7 @@ impl NotebookView {
 
         if let Some(ai_document_id) = self.active_notebook_data.as_ref(ctx).ai_document_id(ctx) {
             menu_items.push(
-                MenuItemFields::new("Attach to active session")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonAttachToActiveSession))
                     .with_on_select_action(NotebookAction::AttachPlanAsContext(ai_document_id))
                     .with_icon(icons::Icon::Paperclip)
                     .into_item(),
@@ -1436,7 +1439,7 @@ impl NotebookView {
         // Add "Copy Link" to menu
         if let Some(link) = self.notebook_link(ctx) {
             menu_items.push(
-                MenuItemFields::new("Copy link")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCopyLink))
                     .with_on_select_action(NotebookAction::CopyLink(link))
                     .with_icon(icons::Icon::Link)
                     .into_item(),
@@ -1453,7 +1456,7 @@ impl NotebookView {
             if let Some(link) = self.notebook_link(ctx) {
                 if let Ok(url) = Url::parse(&link) {
                     menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
+                        MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonOpenOnDesktop))
                             .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
                             .with_icon(icons::Icon::Laptop)
                             .into_item(),
@@ -1465,7 +1468,7 @@ impl NotebookView {
         // Add "Duplicate" to menu
         if active_notebook_data.space(ctx) != Some(Space::Shared) {
             menu_items.push(
-                MenuItemFields::new("Duplicate")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonDuplicate))
                     .with_on_select_action(NotebookAction::Duplicate)
                     .with_icon(icons::Icon::Duplicate)
                     .into_item(),
@@ -1475,7 +1478,7 @@ impl NotebookView {
         #[cfg(feature = "local_fs")]
         {
             menu_items.push(
-                MenuItemFields::new("Export")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonExport))
                     .with_on_select_action(NotebookAction::Export)
                     .with_icon(icons::Icon::Download)
                     .into_item(),
@@ -1487,7 +1490,7 @@ impl NotebookView {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new("Trash")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonTrash))
                     .with_on_select_action(NotebookAction::Trash)
                     .with_icon(icons::Icon::Trash)
                     .into_item(),
@@ -1982,6 +1985,7 @@ impl NotebookView {
                 || active_notebook_data.access_level(app).can_trash()
             {
                 let ui_builder = appearance.ui_builder().clone();
+                let tooltip = i18n::tr(app, I18nKey::DriveRestoreNotebookTooltip).to_string();
                 action_row.add_child(
                     Align::new(
                         appearance
@@ -1991,12 +1995,9 @@ impl NotebookView {
                                 self.button_mouse_states.restore_from_trash_button.clone(),
                             )
                             .with_tooltip(move || {
-                                ui_builder
-                                    .tool_tip("Restore notebook from trash".to_string())
-                                    .build()
-                                    .finish()
+                                ui_builder.tool_tip(tooltip.clone()).build().finish()
                             })
-                            .with_text_label("Restore".to_string())
+                            .with_text_label(i18n::tr(app, I18nKey::CommonRestore).to_string())
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(NotebookAction::Untrash)
@@ -2009,6 +2010,8 @@ impl NotebookView {
 
             if active_notebook_data.space(app) != Some(Space::Personal) {
                 let ui_builder = appearance.ui_builder().clone();
+                let tooltip =
+                    i18n::tr(app, I18nKey::DriveCopyNotebookToPersonalTooltip).to_string();
                 action_row.add_child(
                     Container::new(
                         Align::new(
@@ -2021,15 +2024,11 @@ impl NotebookView {
                                         .clone(),
                                 )
                                 .with_tooltip(move || {
-                                    ui_builder
-                                        .tool_tip(
-                                            "Copy notebook contents into your personal workspace"
-                                                .to_string(),
-                                        )
-                                        .build()
-                                        .finish()
+                                    ui_builder.tool_tip(tooltip.clone()).build().finish()
                                 })
-                                .with_text_label("Copy to Personal".to_string())
+                                .with_text_label(
+                                    i18n::tr(app, I18nKey::DriveCopyToPersonal).to_string(),
+                                )
                                 .build()
                                 .on_click(|ctx, _, _| {
                                     ctx.dispatch_typed_action(NotebookAction::CopyToPersonal)
@@ -2063,6 +2062,7 @@ impl NotebookView {
         &self,
         sync_error: NotebookSyncError,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let banner = Shrinkable::new(
             1.,
@@ -2094,6 +2094,7 @@ impl NotebookView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip = i18n::tr(app, I18nKey::DriveCopyNotebookToClipboardTooltip).to_string();
         action_row.add_child(
             Container::new(
                 Align::new(
@@ -2105,13 +2106,8 @@ impl NotebookView {
                                 .conflict_resolution_copy_all_button
                                 .clone(),
                         )
-                        .with_tooltip(move || {
-                            ui_builder
-                                .tool_tip("Copy notebook contents to your clipboard".to_string())
-                                .build()
-                                .finish()
-                        })
-                        .with_text_label("Copy All".to_string())
+                        .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
+                        .with_text_label(i18n::tr(app, I18nKey::DriveCopyAll).to_string())
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(NotebookAction::CopyToClipboard)
@@ -2128,6 +2124,7 @@ impl NotebookView {
 
         if matches!(sync_error, NotebookSyncError::InConflict) {
             let ui_builder = appearance.ui_builder().clone();
+            let tooltip = i18n::tr(app, I18nKey::DriveRefreshNotebookTooltip).to_string();
             action_row.add_child(
                 Container::new(
                     Align::new(
@@ -2140,12 +2137,9 @@ impl NotebookView {
                                     .clone(),
                             )
                             .with_tooltip(move || {
-                                ui_builder
-                                    .tool_tip("Refresh notebook".to_string())
-                                    .build()
-                                    .finish()
+                                ui_builder.tool_tip(tooltip.clone()).build().finish()
                             })
-                            .with_text_label(REFRESH_BUTTON_TEXT.to_string())
+                            .with_text_label(i18n::tr(app, I18nKey::CommonRefresh).to_string())
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(
@@ -2244,11 +2238,14 @@ impl View for NotebookView {
             stack.add_child(self.render_sync_banner(
                 NotebookSyncError::FeatureNotAvailable,
                 Appearance::as_ref(app),
+                app,
             ));
         } else if self.active_notebook_data.as_ref(app).has_conflicts(app) {
-            stack.add_child(
-                self.render_sync_banner(NotebookSyncError::InConflict, Appearance::as_ref(app)),
-            );
+            stack.add_child(self.render_sync_banner(
+                NotebookSyncError::InConflict,
+                Appearance::as_ref(app),
+                app,
+            ));
         }
 
         self.context_menu.render(&mut stack);
@@ -2333,7 +2330,9 @@ impl TypedActionView for NotebookView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success("Link copied to clipboard".to_string()),
+                        DismissibleToast::success(
+                            crate::i18n::tr_static(ctx, "Link copied to clipboard").to_string(),
+                        ),
                         window_id,
                         ctx,
                     );

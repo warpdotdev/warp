@@ -878,6 +878,9 @@ impl InputSuggestions {
                                     })
                                     .finish();
 
+                                let ignore_tooltip =
+                                    crate::i18n::tr_static(app, "Ignore this suggestion")
+                                        .to_string();
                                 let ignore_button_with_tooltip =
                                     Hoverable::new(ignore_button_mouse_state, |state| {
                                         if state.is_hovered() {
@@ -885,7 +888,7 @@ impl InputSuggestions {
 
                                             let tooltip_element = appearance
                                                 .ui_builder()
-                                                .tool_tip("Ignore this suggestion".to_string())
+                                                .tool_tip(ignore_tooltip.clone())
                                                 .build()
                                                 .finish();
 

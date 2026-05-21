@@ -294,16 +294,19 @@ impl RuleView {
         });
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
-        let add_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Add", NakedTheme)
+        let add_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Add"), NakedTheme)
                 .with_icon(Icon::Plus)
                 .on_click(|ctx| ctx.dispatch_typed_action(RuleViewAction::AddRule))
         });
 
-        let initialize_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Initialize Project", NakedTheme)
-                .with_icon(Icon::Plus)
-                .on_click(|ctx| ctx.dispatch_typed_action(RuleViewAction::InitializeProject))
+        let initialize_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Initialize Project"),
+                NakedTheme,
+            )
+            .with_icon(Icon::Plus)
+            .on_click(|ctx| ctx.dispatch_typed_action(RuleViewAction::InitializeProject))
         });
 
         Self {
@@ -710,6 +713,7 @@ impl RuleView {
         &self,
         project_row: FileBackedRow,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let row_name = project_row.file_path.to_str().map(|s| s.to_string())?;
         let mut row = Flex::row()
@@ -735,7 +739,7 @@ impl RuleView {
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Outlined, project_row.mouse_state.clone())
-                .with_text_label("Open file".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "Open file").to_string())
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(RuleViewAction::OpenFile(file_path.clone()));
@@ -874,7 +878,9 @@ impl RuleView {
                 RuleRow::Global(global_row) => {
                     Some(self.render_global_rule_row(*global_row, appearance, app))
                 }
-                RuleRow::FileBacked(file_row) => self.render_file_backed_row(file_row, appearance),
+                RuleRow::FileBacked(file_row) => {
+                    self.render_file_backed_row(file_row, appearance, app)
+                }
             };
 
             if let Some(row) = row {

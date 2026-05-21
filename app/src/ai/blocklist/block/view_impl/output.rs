@@ -2082,6 +2082,8 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .set_background(internal_colors::fg_overlay_3(theme).into()),
         );
 
+        let resume_conversation_tooltip =
+            crate::i18n::tr_static(app, "Resume conversation").to_string();
         let resume_button = warpui::ui_components::button::Button::new(
             props.state_handles.resume_conversation_handle.clone(),
             button_styles,
@@ -2092,7 +2094,7 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
         .with_custom_label(button_content)
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Resume conversation".to_string())
+                .tool_tip(resume_conversation_tooltip.clone())
                 .build()
                 .finish()
         })
@@ -2818,7 +2820,9 @@ fn render_use_computer(
             btn.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("View screenshot".into()),
+                    content: button::Content::Label(
+                        crate::i18n::tr_static(app, "View screenshot").into(),
+                    ),
                     theme: &button::themes::Secondary,
                     options: button::Options {
                         size: button::Size::Small,
@@ -3082,6 +3086,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
     };
 
     let ui_builder = appearance.ui_builder().clone();
+    let good_response_tooltip = crate::i18n::tr_static(app, "Good response").to_string();
 
     // Thumbs up/down buttons.
     // (we hide these when you're in view-only mode).
@@ -3097,7 +3102,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Good response".to_string())
+                .tool_tip(good_response_tooltip.clone())
                 .build()
                 .finish()
         })
@@ -3106,6 +3111,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         .with_active_styles(style_override_with_background);
 
         let ui_builder = appearance.ui_builder().clone();
+        let bad_response_tooltip = crate::i18n::tr_static(app, "Bad response").to_string();
         let thumbs_down_button = icon_button(
             appearance,
             Icon::ThumbsDown,
@@ -3118,7 +3124,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         .with_tooltip(move || {
             ui_builder
                 .clone()
-                .tool_tip("Bad response".to_string())
+                .tool_tip(bad_response_tooltip.clone())
                 .build()
                 .finish()
         })
@@ -3182,6 +3188,8 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 
     if !props.shared_session_status.is_finished_viewer() && !FeatureFlag::AgentView.is_enabled() {
         let ui_builder = appearance.ui_builder().clone();
+        let continue_conversation_tooltip =
+            crate::i18n::tr_static(app, "Continue conversation").to_string();
         let continue_button = icon_button(
             appearance,
             Icon::CornerRight,
@@ -3190,7 +3198,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Continue conversation".to_string())
+                .tool_tip(continue_conversation_tooltip.clone())
                 .build()
                 .finish()
         })
@@ -3206,6 +3214,8 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 
     if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
         let ui_builder = appearance.ui_builder().clone();
+        let fork_conversation_tooltip =
+            crate::i18n::tr_static(app, "Fork conversation").to_string();
         let fork_button = icon_button(
             appearance,
             Icon::ArrowSplit,
@@ -3214,7 +3224,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Fork conversation".to_string())
+                .tool_tip(fork_conversation_tooltip.clone())
                 .build()
                 .finish()
         })
@@ -3371,6 +3381,8 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             .finish(),
         );
 
+    let show_credit_usage_tooltip =
+        crate::i18n::tr_static(app, "Show credit usage details").to_string();
     Hoverable::new(
         props.state_handles.usage_button_handle.clone(),
         |mouse_state| {
@@ -3390,7 +3402,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // Show tooltip on hover or while clicked
                 let mut stack = Stack::new().with_child(content.finish());
                 let tooltip = ui_builder
-                    .tool_tip("Show credit usage details".to_string())
+                    .tool_tip(show_credit_usage_tooltip.clone())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

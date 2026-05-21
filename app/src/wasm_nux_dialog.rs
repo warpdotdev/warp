@@ -154,18 +154,25 @@ impl View for WasmNUXDialog {
 
         let dialog = if self.requested_download {
             Dialog::new(
-                "Open in Warp Desktop?".to_string(),
-                Some("Future links will automatically open on desktop.".to_string()),
+                crate::i18n::tr_static(app, "Open in Warp Desktop?").to_string(),
+                Some(
+                    crate::i18n::tr_static(app, "Future links will automatically open on desktop.")
+                        .to_string(),
+                ),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Open in Warp",
+                crate::i18n::tr_static(app, "Open in Warp"),
                 WasmNUXDialogAction::OpenNativeAndClose,
                 &self.confirm_mouse_state,
                 appearance,
             ))
         } else if app_install_detected == &UserAppInstallStatus::NotDetected {
-            Dialog::new("Download Warp Desktop?".to_string(), None, dialog_styles)
+            Dialog::new(
+                crate::i18n::tr_static(app, "Download Warp Desktop?").to_string(),
+                None,
+                dialog_styles,
+            )
                 .with_child(
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -173,7 +180,7 @@ impl View for WasmNUXDialog {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .span("Warp is the intelligent terminal with AI and your dev team's knowledge built-in.")
+                                .span(crate::i18n::tr_static(app, "Warp is the intelligent terminal with AI and your dev team's knowledge built-in."))
                                 .with_style(UiComponentStyles {
                                     font_weight: Some(Weight::Thin),
                                     font_color: Some(
@@ -193,7 +200,7 @@ impl View for WasmNUXDialog {
                                 appearance
                                     .ui_builder()
                                     .link(
-                                        "Learn more".to_string(),
+                                        crate::i18n::tr_static(app, "Learn more").to_string(),
                                         None,
                                         Some(Box::new(|ctx| {
                                             ctx.dispatch_typed_action(
@@ -211,7 +218,7 @@ impl View for WasmNUXDialog {
                         .finish(),
                 )
                 .with_bottom_row_child(Self::render_dialog_button(
-                    "Download",
+                    crate::i18n::tr_static(app, "Download"),
                     WasmNUXDialogAction::OpenDownloadDesktopAppLink,
                     &self.download_warp_mouse_state,
                     appearance,
@@ -225,11 +232,14 @@ impl View for WasmNUXDialog {
 
             Dialog::new(
                 format!("Always open {object_kind} on the web?"),
-                Some("You can change this at any time in settings.".to_string()),
+                Some(
+                    crate::i18n::tr_static(app, "You can change this at any time in settings.")
+                        .to_string(),
+                ),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Yes",
+                crate::i18n::tr_static(app, "Yes"),
                 WasmNUXDialogAction::SetWebAndClose,
                 &self.confirm_mouse_state,
                 appearance,

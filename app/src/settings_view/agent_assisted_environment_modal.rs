@@ -100,8 +100,8 @@ pub struct AgentAssistedEnvironmentModal {
 
 impl AgentAssistedEnvironmentModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let add_repo_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Add repo", SecondaryTheme)
+        let add_repo_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Add repo"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(
@@ -110,14 +110,20 @@ impl AgentAssistedEnvironmentModal {
                 })
         });
 
-        let cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(AgentAssistedEnvironmentModalAction::Cancel);
-            })
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Cancel"), SecondaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(AgentAssistedEnvironmentModalAction::Cancel);
+                },
+            )
         });
 
-        let create_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Create environment", PrimaryTheme).on_click(|ctx| {
+        let create_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Create environment"),
+                PrimaryTheme,
+            )
+            .on_click(|ctx| {
                 ctx.dispatch_typed_action(AgentAssistedEnvironmentModalAction::Confirm);
             })
         });

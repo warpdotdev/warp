@@ -441,7 +441,7 @@ impl RightPanelView {
         let maximize_button = ctx.add_typed_action_view(|ctx| {
             let mut button = ActionButton::new("", PaneHeaderTheme)
                 .with_icon(Icon::Maximize)
-                .with_tooltip("Maximize")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Maximize"))
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize));
 
@@ -456,10 +456,13 @@ impl RightPanelView {
         });
 
         #[cfg(feature = "local_fs")]
-        let open_repository_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Open repository", NakedTheme)
+        let open_repository_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Open repository"), NakedTheme)
                 .with_size(crate::view_components::action_button::ButtonSize::Small)
-                .with_tooltip("Navigate to a repo and initialize it for coding")
+                .with_tooltip(crate::i18n::tr_static(
+                    ctx,
+                    "Navigate to a repo and initialize it for coding",
+                ))
                 .with_tooltip_alignment(TooltipAlignment::Center)
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
         });
@@ -768,12 +771,15 @@ impl RightPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(
+                    crate::i18n::tr_static(app, "Close panel").to_string(),
+                    keybinding,
+                )
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(crate::i18n::tr_static(app, "Close panel").to_string())
                 .build()
                 .finish()
         };
@@ -850,19 +856,19 @@ impl RightPanelView {
                         // No "Open repository" CTA when the session is remote — the
                         // button navigates to a local folder, which is not meaningful
                         // in a remote session.
-                        CodeReviewView::render_remote_state(appearance, None)
+                        CodeReviewView::render_remote_state(app, appearance, None)
                     } else if env.is_wsl {
-                        CodeReviewView::render_wsl_state(appearance, open_repo_button())
+                        CodeReviewView::render_wsl_state(app, appearance, open_repo_button())
                     } else {
-                        CodeReviewView::render_not_repo_state(appearance, open_repo_button())
+                        CodeReviewView::render_not_repo_state(app, appearance, open_repo_button())
                     }
                 } else {
-                    CodeReviewView::render_not_repo_state(appearance, open_repo_button())
+                    CodeReviewView::render_not_repo_state(app, appearance, open_repo_button())
                 }
             };
 
             #[cfg(not(feature = "local_fs"))]
-            let no_repo_body = CodeReviewView::render_not_repo_state(appearance, None);
+            let no_repo_body = CodeReviewView::render_not_repo_state(app, appearance, None);
 
             return Flex::column()
                 .with_child(simple_header)
@@ -1027,6 +1033,7 @@ impl RightPanelView {
                     appearance,
                     file_sidebar_expanded,
                     self.file_navigation_button_mouse_state.clone(),
+                    app,
                     |ctx| {
                         ctx.dispatch_typed_action(RightPanelAction::ToggleFileSidebar);
                     },

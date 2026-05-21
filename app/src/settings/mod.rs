@@ -18,6 +18,7 @@ mod init;
 pub mod initializer;
 mod input;
 mod input_mode;
+mod language;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 pub mod macros;
@@ -52,6 +53,7 @@ pub use gpu::*;
 pub use init::*;
 pub use input::*;
 pub use input_mode::*;
+pub use language::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux::*;
 pub use native_preference::*;

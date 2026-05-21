@@ -143,7 +143,8 @@ impl CodeReviewHeader {
                     code_review_header_fields.header_menu_open,
                 ));
             } else {
-                right_section_wide.add_child(self.render_add_diff_set_context_button(appearance));
+                right_section_wide
+                    .add_child(self.render_add_diff_set_context_button(appearance, app));
             }
         }
 
@@ -225,7 +226,7 @@ impl CodeReviewHeader {
                 ));
             } else {
                 right_subsection_compact
-                    .add_child(self.render_add_diff_set_context_button(appearance));
+                    .add_child(self.render_add_diff_set_context_button(appearance, app));
             }
         }
 
@@ -413,9 +414,14 @@ impl CodeReviewHeader {
         .finish()
     }
 
-    fn render_add_diff_set_context_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_add_diff_set_context_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip_text = crate::i18n::tr_static(app, "Add diff set as context").to_owned();
 
         let button = ui_builder
             .button(
@@ -439,12 +445,7 @@ impl CodeReviewHeader {
                 left: 6.,
                 right: 6.,
             }))
-            .with_tooltip(move || {
-                ui_builder
-                    .tool_tip("Add diff set as context".to_owned())
-                    .build()
-                    .finish()
-            })
+            .with_tooltip(move || ui_builder.tool_tip(tooltip_text.clone()).build().finish())
             .with_tooltip_position(warpui::ui_components::button::ButtonTooltipPosition::AboveLeft)
             .build()
             .on_click(|ctx, _, _| {

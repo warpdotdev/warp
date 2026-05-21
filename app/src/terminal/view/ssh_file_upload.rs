@@ -12,7 +12,7 @@ use warpui::{
         HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius,
     },
     ui_components::{button::ButtonVariant, components::UiComponent as _},
-    Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
 use crate::{
@@ -103,7 +103,7 @@ impl View for FileUpload {
 
     fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
         let appearance = Appearance::as_ref(app);
-        self.render_file_upload_element(&self.uploads, appearance)
+        self.render_file_upload_element(&self.uploads, appearance, app)
     }
 }
 
@@ -290,6 +290,7 @@ impl FileUpload {
         &self,
         file: &FileUploadInfo,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
@@ -319,7 +320,7 @@ impl FileUpload {
         if let FileUploadStatus::Completed { successful: _ } = file.status {
             file_info_and_status = Flex::row()
                 .with_child(file_info_and_status.finish())
-                .with_child(self.render_clear_upload_button(file, appearance))
+                .with_child(self.render_clear_upload_button(file, appearance, app))
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
         }
 
@@ -411,12 +412,14 @@ impl FileUpload {
         &self,
         file: &FileUploadInfo,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let upload_id = file.upload_id;
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip = crate::i18n::tr_static(app, "Clear upload").to_string();
         Container::new(
             icon_button(appearance, Icon::X, true, file.clear_button.clone())
-                .with_tooltip(move || ui_builder.tool_tip("Clear upload".into()).build().finish())
+                .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
                 .build()
                 .on_click(move |event_ctx, _, _| {
                     event_ctx
@@ -478,6 +481,7 @@ impl FileUpload {
         &self,
         uploads: &HashMap<FileUploadId, FileUploadInfo>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut upload_element = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -489,7 +493,7 @@ impl FileUpload {
             .iter()
             .sorted_by(|upload_a, upload_b| Ord::cmp(upload_a.0, upload_b.0))
             .for_each(|(_upload_id, upload)| {
-                let file_upload = self.render_single_file_upload_info(upload, appearance);
+                let file_upload = self.render_single_file_upload_info(upload, appearance, app);
                 upload_element.add_child(file_upload);
             });
 

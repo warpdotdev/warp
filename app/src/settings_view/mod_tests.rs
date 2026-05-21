@@ -1,5 +1,6 @@
 use super::*;
-use settings_page::MatchData;
+use crate::i18n::I18nKey;
+use settings_page::{search_terms_match, MatchData};
 
 // ── SettingsSection classification ──────────────────────────────────────────
 
@@ -164,6 +165,23 @@ fn match_data_countable_nonzero_is_truthy() {
 #[test]
 fn match_data_countable_zero_is_not_truthy() {
     assert!(!MatchData::Countable(0).is_truthy());
+}
+
+#[test]
+fn search_terms_match_preserves_english_and_adds_chinese_aliases() {
+    assert!(search_terms_match(
+        "appearance language display",
+        "language"
+    ));
+    assert!(search_terms_match(
+        "appearance language display",
+        "显示语言"
+    ));
+    assert!(search_terms_match(
+        "agent profiles permissions model",
+        "智能体 权限"
+    ));
+    assert!(!search_terms_match("appearance theme", "账单"));
 }
 
 // ── Display / FromStr round-trip ────────────────────────────────────────────
@@ -637,16 +655,16 @@ fn realistic_nav_items() -> Vec<SettingsNavItem> {
     vec![
         SettingsNavItem::Page(SettingsSection::Account),
         SettingsNavItem::Umbrella(SettingsUmbrella::new(
-            "Agents",
+            I18nKey::SettingsNavAgents,
             SettingsSection::ai_subpages().to_vec(),
         )),
         SettingsNavItem::Page(SettingsSection::BillingAndUsage),
         SettingsNavItem::Umbrella(SettingsUmbrella::new(
-            "Code",
+            I18nKey::SettingsNavCode,
             SettingsSection::code_subpages().to_vec(),
         )),
         SettingsNavItem::Umbrella(SettingsUmbrella::new(
-            "Cloud platform",
+            I18nKey::SettingsNavCloudPlatform,
             SettingsSection::cloud_platform_subpages().to_vec(),
         )),
         SettingsNavItem::Page(SettingsSection::Teams),

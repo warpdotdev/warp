@@ -103,6 +103,7 @@ impl DetailsBar {
                 notebook_data.mode,
                 editability,
                 appearance,
+                app,
             ));
         }
 
@@ -117,6 +118,7 @@ impl DetailsBar {
         mode: Mode,
         editability: ContentEditability,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut edit_button = match mode {
             Mode::View => icon_button(
@@ -135,12 +137,9 @@ impl DetailsBar {
 
         if matches!(editability, ContentEditability::RequiresLogin) {
             let ui_builder = appearance.ui_builder().clone();
-            edit_button = edit_button.with_tooltip(move || {
-                ui_builder
-                    .tool_tip("Sign in to edit".to_string())
-                    .build()
-                    .finish()
-            });
+            let tooltip = crate::i18n::tr_static(app, "Sign in to edit").to_string();
+            edit_button = edit_button
+                .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish());
         }
 
         Container::new(
@@ -174,13 +173,13 @@ impl DetailsBar {
         match editor.state {
             EditorState::None => appearance
                 .ui_builder()
-                .span("Viewing")
+                .span(crate::i18n::tr_static(app, "Viewing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),
             EditorState::CurrentUser => appearance
                 .ui_builder()
-                .span("Editing")
+                .span(crate::i18n::tr_static(app, "Editing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),

@@ -100,7 +100,7 @@ impl AcceptAutosuggestionKeybinding {
                     },
                 )
                 .into_item(),
-            MenuItemFields::new("Custom...")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Custom..."))
                 .with_on_select_action(
                     AcceptAutosuggestionKeybindingAction::OpenSettingsForCustomKeybinding,
                 )
@@ -158,7 +158,7 @@ impl AcceptAutosuggestionKeybinding {
                     menu.set_selected_by_name(accept_autosuggestion_keybinding_displayed, ctx);
                 // If the keybinding is not one of our default options, select the "Custom..." item.
                 if !found {
-                    menu.set_selected_by_name("Custom...", ctx);
+                    menu.set_selected_by_name(crate::i18n::tr_static(ctx, "Custom..."), ctx);
                 }
             } else {
                 // If the keybinding is not set, we show right arrow which always works.
@@ -345,7 +345,9 @@ impl View for AcceptAutosuggestionKeybinding {
             if !is_menu_open && state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .autosuggestion_tool_tip("Change keybinding".into())
+                    .autosuggestion_tool_tip(
+                        crate::i18n::tr_static(ctx, "Change keybinding").into(),
+                    )
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

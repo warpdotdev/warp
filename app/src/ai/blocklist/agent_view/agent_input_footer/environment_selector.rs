@@ -204,10 +204,10 @@ impl EnvironmentSelector {
         target: EnvironmentSelectorTarget,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button = ctx.add_typed_action_view(|_ctx| {
+        let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Globe4)
-                .with_tooltip("Choose an environment")
+                .with_tooltip(crate::i18n::tr_static(ctx, "Choose an environment"))
                 .with_size(ButtonSize::AgentInputButton)
                 .with_disabled_theme(DisabledTheme)
                 .on_click(|ctx| {
@@ -354,8 +354,8 @@ impl EnvironmentSelector {
         self.is_menu_open = is_open;
         if is_open {
             send_telemetry_from_ctx!(CloudAgentTelemetryEvent::EnvironmentSelectorOpened, ctx);
-            ctx.focus(&self.dropdown);
             self.highlight_selected_environment(ctx);
+            ctx.focus(&self.dropdown);
         }
         ctx.emit(EnvironmentSelectorEvent::MenuVisibilityChanged { open: is_open });
         ctx.notify();

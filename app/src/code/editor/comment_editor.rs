@@ -163,7 +163,7 @@ impl CommentEditor {
         ViewHandle<ActionButton>,
     ) {
         let save_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Comment", PrimaryTheme)
+            ActionButton::new(crate::i18n::tr_static(ctx, "Comment"), PrimaryTheme)
                 .with_keybinding(
                     KeystrokeSource::Fixed(Keystroke::parse("cmdorctrl-enter").unwrap_or_default()),
                     ctx,
@@ -178,16 +178,16 @@ impl CommentEditor {
             button.set_disabled(true, ctx);
         });
 
-        let close_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
+        let close_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Cancel"), NakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::CloseEditor);
                 })
                 .with_size(ButtonSize::Small)
         });
 
-        let remove_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Remove", DangerNakedTheme)
+        let remove_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Remove"), DangerNakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::RemoveComment);
                 })
@@ -275,7 +275,7 @@ impl CommentEditor {
         self.is_imported_comment = origin.is_imported_from_github();
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Update", ctx);
+            button.set_label(crate::i18n::tr_static(ctx, "Update"), ctx);
         });
         ctx.notify();
 
@@ -294,7 +294,7 @@ impl CommentEditor {
         self.is_imported_comment = false;
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Comment", ctx);
+            button.set_label(crate::i18n::tr_static(ctx, "Comment"), ctx);
         });
         ctx.notify();
 

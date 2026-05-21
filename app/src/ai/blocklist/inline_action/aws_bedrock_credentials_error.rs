@@ -59,17 +59,20 @@ impl AwsBedrockCredentialsErrorView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         // Run button
-        let run_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Refresh AWS Credentials", PrimaryTheme)
-                .with_size(ButtonSize::InlineActionHeader)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AwsBedrockCredentialsErrorAction::RunLoginCommand)
-                })
+        let run_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Refresh AWS Credentials"),
+                PrimaryTheme,
+            )
+            .with_size(ButtonSize::InlineActionHeader)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AwsBedrockCredentialsErrorAction::RunLoginCommand)
+            })
         });
 
         // Configure button
-        let configure_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Configure", NakedTheme)
+        let configure_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Configure"), NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AwsBedrockCredentialsErrorAction::Configure)

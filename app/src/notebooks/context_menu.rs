@@ -11,6 +11,7 @@ use warpui::{
 
 use crate::{
     editor::EditorView,
+    i18n::{self, I18nKey},
     menu::{self, Menu, MenuItem, MenuItemFields},
     pane_group::{focus_state::PaneFocusHandle, PaneEvent, SplitPaneState},
     util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke, CustomAction},
@@ -119,19 +120,19 @@ where
         };
 
         if has_selection && can_edit {
-            let item = MenuItemFields::new("Cut")
+            let item = MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCut))
                 .with_on_select_action(V::Action::from(ContextMenuAction::CutSelectedText))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Cut));
             items.push(item.into_item());
         }
         if has_selection {
-            let item = MenuItemFields::new("Copy")
+            let item = MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCopy))
                 .with_on_select_action(V::Action::from(ContextMenuAction::CopySelectedText))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Copy));
             items.push(item.into_item());
         }
         if can_edit {
-            let item = MenuItemFields::new("Paste")
+            let item = MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonPaste))
                 .with_on_select_action(V::Action::from(ContextMenuAction::Paste))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Paste));
             items.push(item.into_item());
@@ -158,7 +159,7 @@ where
         let mut items = vec![];
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend([
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneRight))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitRight(None),
                     )))
@@ -167,7 +168,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneLeft))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitLeft(None),
                     )))
@@ -176,7 +177,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneDown))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitDown(None),
                     )))
@@ -185,7 +186,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneUp))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitUp(None),
                     )))
@@ -216,7 +217,7 @@ where
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonClosePane))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::Close,
                     )))

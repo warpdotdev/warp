@@ -376,20 +376,27 @@ fn prepare_request_for_execution(
     }
 
     if status.is_some_and(|status| status.is_disapproved()) {
-        return Some("Orchestration config was disapproved");
+        return Some(crate::i18n::tr_static(
+            ctx,
+            "Orchestration config was disapproved",
+        ));
     }
 
     if BlocklistAIPermissions::as_ref(ctx)
         .get_run_agents_setting(ctx, Some(terminal_view_id))
         .is_never_allow()
     {
-        return Some("Running child agents is disabled by the active execution profile.");
+        return Some(crate::i18n::tr_static(
+            ctx,
+            "Running child agents is disabled by the active execution profile.",
+        ));
     }
 
     if !can_execute_with_auth_secret(request, ctx) {
-        return Some(
+        return Some(crate::i18n::tr_static(
+            ctx,
             "Cloud child agents using this harness require an API key before they can run.",
-        );
+        ));
     }
 
     None

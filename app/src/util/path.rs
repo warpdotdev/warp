@@ -28,7 +28,7 @@ pub fn display_name_with_host(path: &LocalOrRemotePath, ctx: &AppContext) -> Str
         LocalOrRemotePath::Remote(remote) => {
             let host_label = RemoteServerManager::as_ref(ctx)
                 .host_label(&remote.host_id)
-                .unwrap_or(UNKNOWN_HOST_LABEL);
+                .unwrap_or_else(|| crate::i18n::tr_static(ctx, UNKNOWN_HOST_LABEL));
             format!("{host_label}:{name}")
         }
     }
@@ -59,7 +59,7 @@ pub fn display_path_with_host(
         LocalOrRemotePath::Remote(remote) => {
             let host_label = RemoteServerManager::as_ref(ctx)
                 .host_label(&remote.host_id)
-                .unwrap_or(UNKNOWN_HOST_LABEL);
+                .unwrap_or_else(|| crate::i18n::tr_static(ctx, UNKNOWN_HOST_LABEL));
             format!("{host_label}:{}", path.display_path())
         }
     }

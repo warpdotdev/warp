@@ -357,7 +357,7 @@ impl PromptAlertView {
                         let upgrade_text = if !has_admin_permissions {
                             COMPARE_PLANS_TEXT
                         } else if team.billing_metadata.can_upgrade_to_build_plan() {
-                            "Upgrade to Build"
+                            crate::i18n::tr_static(app, "Upgrade to Build")
                         } else {
                             UPGRADE_TEXT
                         };
@@ -376,7 +376,7 @@ impl PromptAlertView {
                     let label =
                         if let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace() {
                             if workspace.billing_metadata.can_upgrade_to_build_plan() {
-                                "Upgrade to Build"
+                                crate::i18n::tr_static(app, "Upgrade to Build")
                             } else {
                                 UPGRADE_TEXT
                             }
@@ -386,9 +386,11 @@ impl PromptAlertView {
                     text_fragments.push(FormattedTextFragment::hyperlink(label, upgrade_url));
                 }
                 if UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
-                    text_fragments.push(FormattedTextFragment::plain_text(" or "));
+                    text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app, " or ",
+                    )));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        "use your own API keys",
+                        crate::i18n::tr_static(app, "use your own API keys"),
                         WorkspaceAction::ShowSettingsPageWithSearch {
                             search_query: "api".to_string(),
                             section: Some(SettingsSection::WarpAgent),

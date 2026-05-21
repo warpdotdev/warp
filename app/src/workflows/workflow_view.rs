@@ -43,6 +43,7 @@ use crate::{
         InteractionState, PlainTextEditorViewAction as EditorAction,
         PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions, TextStyleOperation,
     },
+    i18n::{self, I18nKey},
     menu::{MenuItem, MenuItemFields},
     network::NetworkStatus,
     pane_group::{
@@ -1929,6 +1930,7 @@ impl WorkflowView {
         &self,
         editability: ContentEditability,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let base_text_styles = UiComponentStyles {
             ..Default::default()
@@ -1938,7 +1940,7 @@ impl WorkflowView {
             WorkflowViewMode::Edit => {
                 let mode_text = appearance
                     .ui_builder()
-                    .span("Editing")
+                    .span(i18n::tr(app, I18nKey::CommonEditing))
                     .with_style(base_text_styles)
                     .build();
                 let edit_button = accent_icon_button(
@@ -1953,7 +1955,7 @@ impl WorkflowView {
             WorkflowViewMode::View => {
                 let mode_text = appearance
                     .ui_builder()
-                    .span("Viewing")
+                    .span(i18n::tr(app, I18nKey::CommonViewing))
                     .with_style(base_text_styles)
                     .build();
                 let edit_button = icon_button(
@@ -1971,12 +1973,9 @@ impl WorkflowView {
         if let Some((mode_text, mut edit_button)) = text_and_button {
             if matches!(editability, ContentEditability::RequiresLogin) {
                 let ui_builder = appearance.ui_builder().clone();
-                edit_button = edit_button.with_tooltip(move || {
-                    ui_builder
-                        .tool_tip("Sign in to edit".to_string())
-                        .build()
-                        .finish()
-                });
+                let tooltip = i18n::tr(app, I18nKey::WorkflowSignInToEditTooltip).to_string();
+                edit_button = edit_button
+                    .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish());
             }
             let edit_button = edit_button.build();
 
@@ -2732,8 +2731,10 @@ impl WorkflowView {
 
         crate::workspace::ToastStack::handle(ctx).update(ctx, |stack, ctx| {
             stack.add_ephemeral_toast(
-                DismissibleToast::error("Looks like you're out of AI credits.".into())
-                    .with_link(toast_link),
+                DismissibleToast::error(
+                    crate::i18n::tr_static(ctx, "Looks like you're out of AI credits.").into(),
+                )
+                .with_link(toast_link),
                 window_id,
                 ctx,
             );
@@ -2877,6 +2878,7 @@ impl WorkflowView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
             let ui_builder = appearance.ui_builder().clone();
+            let tooltip = i18n::tr(app, I18nKey::DriveRestoreWorkflowTooltip).to_string();
             action_row.add_child(
                 Align::new(
                     appearance
@@ -2885,13 +2887,8 @@ impl WorkflowView {
                             ButtonVariant::Basic,
                             self.ui_state_handles.restore_from_trash_button.clone(),
                         )
-                        .with_tooltip(move || {
-                            ui_builder
-                                .tool_tip("Restore workflow from trash".to_string())
-                                .build()
-                                .finish()
-                        })
-                        .with_text_label("Restore".to_string())
+                        .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
+                        .with_text_label(i18n::tr(app, I18nKey::CommonRestore).to_string())
                         .build()
                         .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkflowAction::Untrash))
                         .finish(),
@@ -2997,7 +2994,7 @@ impl View for WorkflowView {
             row.add_child(
                 Shrinkable::new(
                     1.,
-                    Container::new(self.render_edit_toggle_button(editability, appearance))
+                    Container::new(self.render_edit_toggle_button(editability, appearance, app))
                         .with_margin_right(CORE_HORIZONATAL_MARGIN)
                         .finish(),
                 )
@@ -3201,7 +3198,7 @@ impl BackingView for WorkflowView {
         // Add "Copy Link" to menu
         if let Some(link) = self.workflow_link(ctx) {
             menu_items.push(
-                MenuItemFields::new("Copy link")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCopyLink))
                     .with_on_select_action(WorkflowAction::CopyLink(link))
                     .with_icon(Icon::Link)
                     .into_item(),
@@ -3212,7 +3209,7 @@ impl BackingView for WorkflowView {
             if let Some(link) = self.workflow_link(ctx) {
                 if let Ok(url) = Url::parse(&link) {
                     menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
+                        MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonOpenOnDesktop))
                             .with_on_select_action(WorkflowAction::OpenLinkOnDesktop(url))
                             .with_icon(Icon::Laptop)
                             .into_item(),
@@ -3226,7 +3223,7 @@ impl BackingView for WorkflowView {
         // Add "Duplicate" to menu
         if space != Some(Space::Shared) {
             menu_items.push(
-                MenuItemFields::new("Duplicate")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonDuplicate))
                     .with_on_select_action(WorkflowAction::Duplicate)
                     .with_icon(Icon::Duplicate)
                     .into_item(),
@@ -3239,7 +3236,7 @@ impl BackingView for WorkflowView {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new("Trash")
+                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonTrash))
                     .with_on_select_action(WorkflowAction::Trash)
                     .with_icon(Icon::Trash)
                     .into_item(),

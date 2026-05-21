@@ -6,6 +6,7 @@ use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::i18n::{self, I18nKey};
 use warpui::{
     elements::{
         Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, DropShadow, Flex,
@@ -50,7 +51,8 @@ impl GoToLineView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Line number:Column", ctx);
+            editor
+                .set_placeholder_text(i18n::tr(ctx, I18nKey::CodeLineNumberColumnPlaceholder), ctx);
             editor
         });
 

@@ -41,6 +41,7 @@ mod external_secrets;
 mod font_fallback;
 mod global_resource_handles;
 mod gpu_state;
+mod i18n;
 mod input_classifier;
 mod interval_timer;
 mod linear;
@@ -957,7 +958,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_dev_icon(dev_icon);
 
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
-        app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
+        app_builder.set_dock_menu_builder(|ctx| app_menus::dock_menu(ctx));
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
