@@ -6705,13 +6705,24 @@ impl Input {
 
     /// Freeze the editor and put it in a loading state.
     pub fn freeze_input_in_loading_state(&mut self, ctx: &mut ViewContext<Self>) -> String {
+        let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        self.freeze_input_in_loading_state_with_text(&buffer_text, ctx);
+        buffer_text
+    }
+
+    /// Freeze the editor and render `"{display_text} ◌"` as the loading indicator.
+    /// Shared between the user-initiated viewer submission path (which passes the
+    /// editor's current buffer text) and the queued-prompt drain path (which passes
+    /// the popped prompt text without ever reading from / writing to the user's
+    /// in-progress buffer).
+    // TODO: the ◌ treatment is a stop-gap to rendering an svg to the right of the buffer text.
+    fn freeze_input_in_loading_state_with_text(
+        &mut self,
+        display_text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.editor.update(ctx, |editor, ctx| {
-            // Use an ephemeral edit to show the loading state
-            // and disallow edits.
-            // TODO: the ◌ treatment is a stop-gap to rendering an svg
-            // to the right of the buffer text.
-            let buffer_text = editor.buffer_text(ctx);
-            editor.set_buffer_text_ignoring_undo(&format!("{buffer_text} ◌"), ctx);
+            editor.set_buffer_text_ignoring_undo(&format!("{display_text} ◌"), ctx);
             editor.set_interaction_state(InteractionState::Selectable, ctx);
 
             // We manually set the text color to appear disabled.
@@ -6719,9 +6730,7 @@ impl Input {
             // but that disallows text selection.
             let appearance = Appearance::as_ref(ctx);
             editor.set_text_colors(TextColors::all_hint_color(appearance), ctx);
-
-            buffer_text
-        })
+        });
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
@@ -13234,29 +13243,69 @@ impl Input {
         ctx.emit(Event::ExecuteAIQuery);
     }
 
+    /// Routes a popped queued prompt to the correct submission path for the active pane,
+    /// without touching the editor buffer or freezing the input. Queue draining must not
+    /// borrow the user-initiated submission UI (loading indicator, buffer replace), because
+    /// the queue panel itself is already the "this prompt is in flight" affordance and the
+    /// user may be typing a different prompt locally.
     pub(crate) fn submit_queued_prompt_for_active_pane(
         &mut self,
         prompt: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.model.lock().shared_session_status().is_viewer() {
-            self.replace_buffer_content(&prompt, ctx);
-            let _ = self.submit_viewer_ai_query(ctx);
-            return;
-        }
-
-        if self
-            .ambient_agent_view_model()
-            .is_some_and(|ambient_agent_model| {
-                ambient_agent_model
-                    .as_ref(ctx)
-                    .is_ready_for_cloud_followup_prompt()
-            })
-        {
+        // Cloud follow-up path: the cloud run has ended an execution and the next queued
+        // prompt should start a new one. Wins over the viewer path because the old shared
+        // session is no longer live to receive a SendAgentPrompt.
+        let is_ready_for_cloud_followup =
+            self.ambient_agent_view_model()
+                .is_some_and(|ambient_agent_model| {
+                    ambient_agent_model
+                        .as_ref(ctx)
+                        .is_ready_for_cloud_followup_prompt()
+                });
+        if is_ready_for_cloud_followup {
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
         }
 
+        // Shared-session viewer path (covers an in-flight cloud run from the owner's client).
+        // Send the prompt straight to the sharer via Event::SendAgentPrompt — no buffer
+        // replace, no pending-attachment piggyback. When the user's editor is empty we
+        // also surface the standard `"<prompt> ◌"` loading affordance so the queued
+        // submission has visible feedback while the sharer ack flight is in flight; the
+        // `NetworkEvent::AgentPromptRequestInFlight` -> `unfreeze_and_clear_agent_input`
+        // hop will clear it once the sharer acknowledges receipt. If the user has typed
+        // something locally, we leave the buffer alone so their in-progress prompt is
+        // not clobbered.
+        if self.model.lock().shared_session_status().is_viewer() {
+            let server_conversation_token = self
+                .ai_context_model
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .and_then(|id| {
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .and_then(|conv| conv.server_conversation_token().cloned())
+                })
+                .and_then(|token| {
+                    token
+                        .as_str()
+                        .parse()
+                        .ok()
+                        .map(ServerConversationToken::from_uuid)
+                });
+            if self.editor.as_ref(ctx).buffer_text(ctx).is_empty() {
+                self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+            }
+            ctx.emit(Event::SendAgentPrompt {
+                server_conversation_token,
+                prompt,
+                attachments: vec![],
+            });
+            return;
+        }
+
+        // Local Agent Mode path.
         self.submit_queued_prompt(prompt, ctx);
     }
 
