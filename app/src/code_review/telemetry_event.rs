@@ -3,6 +3,7 @@ use std::fmt::Display;
 use serde::Serialize;
 use serde_json::json;
 use serde_with::SerializeDisplay;
+use std::time::Duration;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
@@ -229,6 +230,10 @@ pub enum CodeReviewTelemetryEvent {
         files_changed: usize,
         total_additions: usize,
         total_deletions: usize,
+        /// Time elapsed between when the diff load was requested and when the
+        /// diffs were ready. `None` if the load was not initiated through a
+        /// tracked entry point (e.g. background refresh).
+        load_duration: Option<Duration>,
     },
     /// Emitted when the code review find bar is opened or closed.
     FindBarToggled {
@@ -384,6 +389,7 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 files_changed,
                 total_additions,
                 total_deletions,
+                load_duration,
             } => Some(json!({
                 "is_local": is_local,
                 "mode": mode,
@@ -391,6 +397,7 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 "files_changed": files_changed,
                 "total_additions": total_additions,
                 "total_deletions": total_deletions,
+                "load_duration": load_duration,
             })),
             CodeReviewTelemetryEvent::FindBarToggled { is_local, is_open } => {
                 Some(json!({ "is_local": is_local, "is_open": is_open }))
