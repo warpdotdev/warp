@@ -6,15 +6,17 @@ use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::ChildView;
 use warpui::keymap::Keystroke;
 use warpui::r#async::Timer;
 use warpui::{
     elements::{
-        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+        Border, CacheOption, ChildAnchor, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, Hoverable, Icon, Image,
+        MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
+        Stack,
     },
     fonts::Weight,
     r#async::SpawnedFutureHandle,
@@ -27,7 +29,7 @@ use crate::{appearance::Appearance, themes::theme::Fill};
 
 use super::action_button::ActionButton;
 
-const TOAST_WIDTH: f32 = 464.;
+pub const DISMISSIBLE_TOAST_WIDTH: f32 = 464.;
 const TOAST_CORNER_RADIUS: f32 = 4.;
 const TEXT_MARGIN: f32 = 16.;
 const VERTICAL_PADDING: f32 = 8.;
@@ -321,6 +323,7 @@ pub struct DismissibleToast<A: Action + Clone> {
     /// same ID, as it's likely the older ones are now out-of-date.
     object_id: Option<String>,
     action_button: Option<ViewHandle<ActionButton>>,
+    qr_code_asset_id: Option<String>,
     /// Optional callback invoked when the toast body is clicked.
     pub(crate) on_body_click: Option<OnBodyClickCallback<A>>,
 }
@@ -339,6 +342,7 @@ impl<A: Action + Clone> DismissibleToast<A> {
             close_button_hover_state: Default::default(),
             object_id: Default::default(),
             action_button: Default::default(),
+            qr_code_asset_id: Default::default(),
             on_body_click: None,
         }
     }
@@ -368,6 +372,12 @@ impl<A: Action + Clone> DismissibleToast<A> {
     /// Inserts an action button to the right of the toast.
     pub fn with_action_button(mut self, button: ViewHandle<ActionButton>) -> Self {
         self.action_button = Some(button);
+        self
+    }
+
+    /// Renders a QR code image below the toast body.
+    pub fn with_qr_code_asset_id(mut self, asset_id: String) -> Self {
+        self.qr_code_asset_id = Some(asset_id);
         self
     }
 
@@ -428,7 +438,7 @@ impl<A: Action + Clone> DismissibleToast<A> {
                     ConstrainedBox::new(
                         link.render(ui_builder, self.flavor.text_color(appearance)),
                     )
-                    .with_max_width(TOAST_WIDTH / 3.)
+                    .with_max_width(DISMISSIBLE_TOAST_WIDTH / 3.)
                     .finish(),
                 )
                 .with_margin_left(TEXT_MARGIN)
@@ -479,8 +489,36 @@ impl<A: Action + Clone> DismissibleToast<A> {
                 toast_container
             };
 
+            let toast_content: Box<dyn Element> =
+                if let Some(qr_code_asset_id) = &self.qr_code_asset_id {
+                    let toast_body = ConstrainedBox::new(toast_element)
+                        .with_width(DISMISSIBLE_TOAST_WIDTH)
+                        .finish();
+                    let qr_code = ConstrainedBox::new(
+                        Image::new(
+                            AssetSource::Raw {
+                                id: qr_code_asset_id.clone(),
+                            },
+                            CacheOption::BySize,
+                        )
+                        .stretch()
+                        .finish(),
+                    )
+                    .with_width(DISMISSIBLE_TOAST_WIDTH)
+                    .with_height(DISMISSIBLE_TOAST_WIDTH)
+                    .finish();
+
+                    Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(toast_body)
+                        .with_child(Container::new(qr_code).with_margin_top(5.).finish())
+                        .finish()
+                } else {
+                    toast_element
+                };
+
             let mut stack = Stack::new()
-                .with_child(SavePosition::new(toast_element, &self.position_id(uuid)).finish());
+                .with_child(SavePosition::new(toast_content, &self.position_id(uuid)).finish());
 
             if mouse_state.is_hovered() || is_mobile {
                 stack.add_positioned_overlay_child(
