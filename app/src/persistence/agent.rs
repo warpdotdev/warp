@@ -1,12 +1,20 @@
 use diesel::associations::HasTable;
+use diesel::connection::DefaultLoadingMode;
 use diesel::{prelude::*, result::Error, SqliteConnection};
 use prost::Message;
 use std::collections::{HashMap, HashSet};
 use warp_multi_agent_api as api;
 
 use super::model::{AgentConversation, AgentConversationData};
-use crate::persistence::model::{AgentConversationRecord, AgentTaskRecord};
+use crate::persistence::model::AgentConversationRecord;
 use crate::persistence::schema::{self, agent_conversations, agent_tasks};
+
+// Persisted agent tasks can include large tool results (for example, file contents from
+// read/edit tools). Decoding and then eagerly converting those payloads during startup can
+// clone them several times and push app launch memory into multi-GB territory. Keep local
+// restore bounded; oversized conversations can still be loaded from the cloud when needed.
+const MAX_RESTORED_AGENT_TASK_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RESTORED_AGENT_CONVERSATION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Insertable, AsChangeset)]
 #[diesel(table_name = agent_conversations)]
@@ -120,14 +128,35 @@ pub(super) fn read_agent_conversations(
             }),
     );
 
-    let task_records: Vec<AgentTaskRecord> = agent_tasks::table
-        .select(AgentTaskRecord::as_select())
-        .load(conn)?;
+    let task_records = agent_tasks::table
+        .select((agent_tasks::conversation_id, agent_tasks::task))
+        .load_iter::<(String, Vec<u8>), DefaultLoadingMode>(conn)?;
 
     let mut invalid_conversation_ids = HashSet::new();
+    let mut restored_bytes_by_conversation = HashMap::<String, usize>::new();
     for task_record in task_records {
-        if let Some(conversation) = conversations_by_id.get_mut(&task_record.conversation_id) {
-            match api::Task::decode(&task_record.task[..]) {
+        let (task_conversation_id, task_bytes) = task_record?;
+        if let Some(conversation) = conversations_by_id.get_mut(&task_conversation_id) {
+            let task_bytes_len = task_bytes.len();
+            let restored_bytes = restored_bytes_by_conversation
+                .entry(task_conversation_id.clone())
+                .or_default();
+            *restored_bytes += task_bytes_len;
+
+            if task_bytes_len > MAX_RESTORED_AGENT_TASK_BYTES
+                || *restored_bytes > MAX_RESTORED_AGENT_CONVERSATION_BYTES
+            {
+                log::warn!(
+                    "Skipping persisted agent conversation {} because task restoration would decode {} bytes for this task and {} bytes total",
+                    conversation.conversation.conversation_id,
+                    task_bytes_len,
+                    *restored_bytes
+                );
+                invalid_conversation_ids.insert(conversation.conversation.conversation_id.clone());
+                continue;
+            }
+
+            match api::Task::decode(&task_bytes[..]) {
                 Ok(api_task) => {
                     conversation.tasks.push(api_task);
                 }
@@ -164,14 +193,28 @@ pub(crate) fn read_agent_conversation_by_id(
         return Ok(None);
     };
 
-    let task_records: Vec<AgentTaskRecord> = schema::agent_tasks::table
+    let task_records = schema::agent_tasks::table
         .filter(tasks_dsl::conversation_id.eq(conversation_id_str))
-        .select(AgentTaskRecord::as_select())
-        .load(conn)?;
+        .select((tasks_dsl::conversation_id, tasks_dsl::task))
+        .load_iter::<(String, Vec<u8>), DefaultLoadingMode>(conn)?;
 
     let mut decoded_tasks = Vec::new();
-    for task_record in task_records.into_iter() {
-        match api::Task::decode(&task_record.task[..]) {
+    let mut restored_bytes = 0;
+    for task_record in task_records {
+        let (_, task_bytes) = task_record?;
+        let task_bytes_len = task_bytes.len();
+        restored_bytes += task_bytes_len;
+
+        if task_bytes_len > MAX_RESTORED_AGENT_TASK_BYTES
+            || restored_bytes > MAX_RESTORED_AGENT_CONVERSATION_BYTES
+        {
+            log::warn!(
+                "Skipping persisted agent conversation {conversation_id_str} because task restoration would decode {task_bytes_len} bytes for this task and {restored_bytes} bytes total"
+            );
+            return Ok(None);
+        }
+
+        match api::Task::decode(&task_bytes[..]) {
             Ok(task) => decoded_tasks.push(task),
             Err(e) => {
                 log::error!("Failed to decode task protobuf: {e}");

@@ -1182,7 +1182,6 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
             assert_eq!(
                 request_ambient_agent_task_id_for_hidden_child(
                     panes,
-                    local_child_conversation_id,
                     child_pane_id,
                     ctx,
                 ),
