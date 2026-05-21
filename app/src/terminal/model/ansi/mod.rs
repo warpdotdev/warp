@@ -26,7 +26,7 @@ use crate::terminal::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
 use crate::terminal::model::escape_sequences::C0;
-use crate::terminal::model::index::VisibleRow;
+use crate::terminal::model::{index::VisibleRow, selection::ScrollDelta};
 
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
 
@@ -205,6 +205,7 @@ impl TmuxControlMode {
             control_mode_parser: TmuxControlModeParser::new(),
             control_mode_state: TmuxControlModeState {
                 ansi_processor: Box::new(Processor::new()),
+                background_notification_processors: Default::default(),
                 pane_for_window: Default::default(),
                 primary_pane: PrimaryPaneState::new(),
             },
@@ -214,6 +215,7 @@ impl TmuxControlMode {
 
 struct TmuxControlModeState {
     ansi_processor: Box<Processor>,
+    background_notification_processors: HashMap<u32, Box<Processor>>,
     pane_for_window: HashMap<u32, u32>,
     primary_pane: PrimaryPaneState,
 }
@@ -1685,6 +1687,7 @@ impl<'a, H: Handler + 'a, W: io::Write> TmuxPerformer<'a, H, W> {
                     .on_finish_byte_processing(&ProcessorInput::new(&bytes));
             } else {
                 for byte in bytes {
+                    self.process_background_pane_output(pane, byte);
                     self.handler
                         .tmux_control_mode_event(ControlModeEvent::BackgroundPaneOutput {
                             pane,
@@ -1713,8 +1716,173 @@ impl<'a, H: Handler + 'a, W: io::Write> TmuxPerformer<'a, H, W> {
             .advance(&mut performer, byte);
     }
 
+    fn process_background_pane_output(&mut self, pane: u32, byte: u8) {
+        let processor = self
+            .state
+            .background_notification_processors
+            .entry(pane)
+            .or_insert_with(|| Box::new(Processor::new()));
+        let mut handler = BackgroundPaneNotificationHandler::default();
+        processor.parse_bytes(&mut handler, &[byte], &mut io::sink());
+        for (title, body) in handler.pluggable_notifications {
+            self.handler.pluggable_notification(title, body);
+        }
+    }
+
     fn finish(self) -> Vec<u8> {
         self.primary_pane_output
+    }
+}
+
+#[derive(Default)]
+struct BackgroundPaneNotificationHandler {
+    pluggable_notifications: Vec<(Option<String>, String)>,
+}
+
+impl Handler for BackgroundPaneNotificationHandler {
+    fn set_title(&mut self, _: Option<String>) {}
+
+    fn set_cursor_style(&mut self, _: Option<CursorStyle>) {}
+
+    fn set_cursor_shape(&mut self, _shape: CursorShape) {}
+
+    fn input(&mut self, _c: char) {}
+
+    fn goto(&mut self, _: VisibleRow, _: usize) {}
+
+    fn goto_line(&mut self, _: VisibleRow) {}
+
+    fn goto_col(&mut self, _: usize) {}
+
+    fn insert_blank(&mut self, _: usize) {}
+
+    fn move_up(&mut self, _: usize) {}
+
+    fn move_down(&mut self, _: usize) {}
+
+    fn identify_terminal<W: io::Write>(&mut self, _: &mut W, _intermediate: Option<char>) {}
+
+    fn report_xtversion<W: io::Write>(&mut self, _: &mut W) {}
+
+    fn device_status<W: io::Write>(&mut self, _: &mut W, _: usize) {}
+
+    fn move_forward(&mut self, _: usize) {}
+
+    fn move_backward(&mut self, _: usize) {}
+
+    fn move_down_and_cr(&mut self, _: usize) {}
+
+    fn move_up_and_cr(&mut self, _: usize) {}
+
+    fn put_tab(&mut self, _count: u16) {}
+
+    fn backspace(&mut self) {}
+
+    fn carriage_return(&mut self) {}
+
+    fn linefeed(&mut self) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn bell(&mut self) {}
+
+    fn substitute(&mut self) {}
+
+    fn newline(&mut self) {}
+
+    fn set_horizontal_tabstop(&mut self) {}
+
+    fn scroll_up(&mut self, _: usize) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn scroll_down(&mut self, _: usize) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn insert_blank_lines(&mut self, _: usize) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn delete_lines(&mut self, _: usize) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn erase_chars(&mut self, _: usize) {}
+
+    fn delete_chars(&mut self, _: usize) {}
+
+    fn move_backward_tabs(&mut self, _count: u16) {}
+
+    fn move_forward_tabs(&mut self, _count: u16) {}
+
+    fn save_cursor_position(&mut self) {}
+
+    fn restore_cursor_position(&mut self) {}
+
+    fn clear_line(&mut self, _mode: LineClearMode) {}
+
+    fn clear_screen(&mut self, _mode: ClearMode) {}
+
+    fn clear_tabs(&mut self, _mode: TabulationClearMode) {}
+
+    fn reset_state(&mut self) {}
+
+    fn reverse_index(&mut self) -> ScrollDelta {
+        ScrollDelta::zero()
+    }
+
+    fn terminal_attribute(&mut self, _attr: Attr) {}
+
+    fn set_mode(&mut self, _mode: Mode) {}
+
+    fn unset_mode(&mut self, _: Mode) {}
+
+    fn set_keyboard_enhancement_flags(
+        &mut self,
+        _mode: KeyboardModes,
+        _apply: KeyboardModesApplyBehavior,
+    ) {
+    }
+
+    fn push_keyboard_enhancement_flags(&mut self, _mode: KeyboardModes) {}
+
+    fn pop_keyboard_enhancement_flags(&mut self, _count: u16) {}
+
+    fn query_keyboard_enhancement_flags<W: io::Write>(&mut self, _: &mut W) {}
+
+    fn set_scrolling_region(&mut self, _top: usize, _bottom: Option<usize>) {}
+
+    fn set_keypad_application_mode(&mut self) {}
+
+    fn unset_keypad_application_mode(&mut self) {}
+
+    fn set_active_charset(&mut self, _: CharsetIndex) {}
+
+    fn configure_charset(&mut self, _: CharsetIndex, _: StandardCharset) {}
+
+    fn set_color(&mut self, _: usize, _: ColorU) {}
+
+    fn dynamic_color_sequence<W: io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str) {}
+
+    fn reset_color(&mut self, _: usize) {}
+
+    fn clipboard_store(&mut self, _: u8, _: &[u8]) {}
+
+    fn clipboard_load(&mut self, _: u8, _: &str) {}
+
+    fn decaln(&mut self) {}
+
+    fn push_title(&mut self) {}
+
+    fn pop_title(&mut self) {}
+
+    fn text_area_size_pixels<W: io::Write>(&mut self, _: &mut W) {}
+
+    fn text_area_size_chars<W: io::Write>(&mut self, _: &mut W) {}
+
+    fn pluggable_notification(&mut self, title: Option<String>, body: String) {
+        self.pluggable_notifications.push((title, body));
     }
 }
 
@@ -1744,6 +1912,7 @@ where
                     self.primary_pane_output.push(byte);
                     self.process_primary_pane_output(byte, primary_pane);
                 } else {
+                    self.process_background_pane_output(pane, byte);
                     self.handler
                         .tmux_control_mode_event(ControlModeEvent::BackgroundPaneOutput {
                             pane,

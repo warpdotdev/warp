@@ -878,6 +878,46 @@ fn parse_osc777_missing_parts_ignored() {
     assert_eq!(handler.pluggable_notifications.len(), 0);
 }
 
+fn parse_tmux_control_mode_bytes(bytes: &[u8]) -> MockHandler {
+    let mut parser = Processor::new();
+    let mut handler = MockHandler::default();
+    let mut writer = io::sink();
+
+    parser.state.tmux_control_mode = Some(TmuxControlMode::new());
+    parser.parse_bytes(
+        &mut handler,
+        b"%begin 1622462330 1\nprimary window pane: @1 %0\n%end 1622462330 1\n",
+        &mut writer,
+    );
+    parser.parse_bytes(&mut handler, bytes, &mut writer);
+
+    handler
+}
+
+#[test]
+fn parse_osc777_notification_from_tmux_primary_pane() {
+    let handler = parse_tmux_control_mode_bytes(
+        b"%output %0 \\033]777;notify;Build Complete;Your build has finished\\007\n",
+    );
+
+    assert_eq!(handler.pluggable_notifications.len(), 1);
+    let (title, body) = &handler.pluggable_notifications[0];
+    assert_eq!(title.as_deref(), Some("Build Complete"));
+    assert_eq!(body, "Your build has finished");
+}
+
+#[test]
+fn parse_osc777_notification_from_tmux_background_pane() {
+    let handler = parse_tmux_control_mode_bytes(
+        b"%output %1 \\033]777;notify;Build Complete;Your build has finished\\007\n",
+    );
+
+    assert_eq!(handler.pluggable_notifications.len(), 1);
+    let (title, body) = &handler.pluggable_notifications[0];
+    assert_eq!(title.as_deref(), Some("Build Complete"));
+    assert_eq!(body, "Your build has finished");
+}
+
 #[test]
 fn tmux_pane_writer_formats_bytes_as_send_keys() {
     // Test that TmuxPaneWriter correctly converts writes to tmux send-keys format
