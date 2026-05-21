@@ -294,7 +294,6 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted when one or more comments are resolved.
     CommentResolved {
-        is_local: Option<bool>,
         /// Number of comments resolved by this operation.
         resolved_count: usize,
     },
@@ -456,10 +455,9 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 is_local,
                 fallback_count,
             } => Some(json!({ "is_local": is_local, "fallback_count": fallback_count })),
-            CodeReviewTelemetryEvent::CommentResolved {
-                is_local,
-                resolved_count,
-            } => Some(json!({ "is_local": is_local, "resolved_count": resolved_count })),
+            CodeReviewTelemetryEvent::CommentResolved { resolved_count } => {
+                Some(json!({ "resolved_count": resolved_count }))
+            }
             CodeReviewTelemetryEvent::CommentsReceived {
                 is_local,
                 raw_count,

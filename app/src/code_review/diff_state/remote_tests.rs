@@ -28,6 +28,7 @@ impl RemoteDiffStateModel {
             session_id: SessionId::default(),
             state,
             metadata,
+            tracked_diff_load_start_time: None,
         }
     }
 }
@@ -171,7 +172,10 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
             let emitted_content = emitted_content.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_content
                             .lock()
                             .expect("emitted content mutex should not be poisoned")
@@ -450,7 +454,10 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
             let emitted_paths = emitted_paths.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_paths
                             .lock()
                             .expect("emitted paths mutex should not be poisoned")

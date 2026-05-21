@@ -2403,27 +2403,6 @@ impl AIConversation {
                         Some(api::message::Message::UpdateReviewComments(comments)) => {
                             if let Some(comments_op) = comments.operation.as_ref() {
                                 if let Some(active_code_review) = self.code_review.as_mut() {
-                                    let is_local = match comments_op {
-                                        api::message::update_review_comments::Operation::AddressReviewComments(
-                                            addressed_comments,
-                                        ) => active_code_review
-                                            .pending_comments
-                                            .iter()
-                                            .filter(|item| {
-                                                addressed_comments
-                                                    .comment_ids
-                                                    .iter()
-                                                    .any(|comment_id| {
-                                                        item.id.to_string() == *comment_id
-                                                    })
-                                            })
-                                            .find_map(|item| {
-                                                item.diff
-                                                    .file_path
-                                                    .as_ref()
-                                                    .map(|path| path.is_local())
-                                            }),
-                                    };
                                     let resolved_count = update_comment_from_comment_operation(
                                         active_code_review,
                                         comments_op.clone(),
@@ -2431,7 +2410,6 @@ impl AIConversation {
                                     if resolved_count > 0 {
                                         send_telemetry_from_ctx!(
                                             CodeReviewTelemetryEvent::CommentResolved {
-                                                is_local,
                                                 resolved_count
                                             },
                                             ctx

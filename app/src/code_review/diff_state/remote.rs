@@ -9,6 +9,7 @@
 //! new mode.
 
 use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
+use instant::Instant;
 use std::sync::Arc;
 
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
@@ -48,6 +49,8 @@ pub struct RemoteDiffStateModel {
     metadata: Option<DiffMetadata>,
     /// The session through which the current server-side subscription was established.
     session_id: SessionId,
+    /// Start time for the latest caller-tracked full diff snapshot request.
+    tracked_diff_load_start_time: Option<Instant>,
 }
 
 impl warpui::Entity for RemoteDiffStateModel {
@@ -85,6 +88,7 @@ impl RemoteDiffStateModel {
             state: InternalRemoteDiffState::Loading,
             metadata: None,
             session_id,
+            tracked_diff_load_start_time: None,
         }
     }
 
@@ -176,7 +180,7 @@ impl RemoteDiffStateModel {
                 host_id,
                 ..
             } if *session_id == self.session_id && host_id == &self.remote_path.host_id => {
-                self.resubscribe(ctx);
+                self.resubscribe(false, ctx);
             }
             _ => {}
         }
@@ -188,13 +192,17 @@ impl RemoteDiffStateModel {
         if matches!(self.state, InternalRemoteDiffState::Disconnected) {
             return;
         }
+        self.tracked_diff_load_start_time = None;
         self.state = InternalRemoteDiffState::Disconnected;
         ctx.emit(DiffStateModelEvent::ConnectionLost);
     }
 
     /// Re-sends `GetDiffState` through the model's existing `session_id`
     /// and transitions to `Loading` while waiting for a fresh snapshot.
-    fn resubscribe(&mut self, ctx: &mut ModelContext<Self>) {
+    fn resubscribe(&mut self, track_load_duration: bool, ctx: &mut ModelContext<Self>) {
+        if track_load_duration {
+            self.tracked_diff_load_start_time = Some(Instant::now());
+        }
         let remote_path = self.remote_path.clone();
         let mode = self.mode.clone();
         let session_id = self.session_id;
@@ -202,7 +210,10 @@ impl RemoteDiffStateModel {
             mgr.get_diff_state(session_id, remote_path, proto::DiffMode::from(&mode), ctx);
         });
         self.state = InternalRemoteDiffState::Loading;
-        ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+        ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+            diffs: None,
+            load_duration: None,
+        });
     }
 
     // ── Proto → state conversion helpers ────────────────────────────────────────────────
@@ -215,14 +226,10 @@ impl RemoteDiffStateModel {
         match try_decode_snapshot(snapshot) {
             Ok((metadata, state, diffs)) => self.apply_snapshot(metadata, state, diffs, ctx),
             Err(error) => {
-                log::warn!("RemoteDiffStateModel: invalid diff state snapshot: {error}");
-                send_telemetry_from_ctx!(
-                    CodeReviewTelemetryEvent::LoadDiffFailed {
-                        is_local: Some(false),
-                        mode: self.mode.clone(),
-                        error: "Decode snapshot failed".to_string(),
-                    },
-                    ctx
+                self.tracked_diff_load_start_time = None;
+                warp_core::safe_error!(
+                    safe: ("RemoteDiffStateModel: failed to decode diff state snapshot"),
+                    full: ("RemoteDiffStateModel: failed to decode diff state snapshot: {error}")
                 );
             }
         }
@@ -242,14 +249,9 @@ impl RemoteDiffStateModel {
             Ok(Some(metadata)) => self.apply_metadata_update(&metadata, ctx),
             Ok(None) => {}
             Err(error) => {
-                log::warn!("RemoteDiffStateModel: invalid diff state metadata update: {error}");
-                send_telemetry_from_ctx!(
-                    CodeReviewTelemetryEvent::LoadMetadataFailed {
-                        is_local: Some(false),
-                        mode: self.mode.clone(),
-                        error: "Decode metadata update failed".to_string(),
-                    },
-                    ctx
+                warp_core::safe_error!(
+                    safe: ("RemoteDiffStateModel: failed to decode diff state metadata update"),
+                    full: ("RemoteDiffStateModel: failed to decode diff state metadata update: {error}")
                 );
             }
         }
@@ -265,14 +267,9 @@ impl RemoteDiffStateModel {
                 self.apply_file_delta(file_path, diff, metadata, ctx)
             }
             Err(error) => {
-                log::warn!("RemoteDiffStateModel: invalid diff state file delta: {error}");
-                send_telemetry_from_ctx!(
-                    CodeReviewTelemetryEvent::LoadDiffFailed {
-                        is_local: Some(false),
-                        mode: self.mode.clone(),
-                        error: "Decode file delta failed".to_string(),
-                    },
-                    ctx
+                warp_core::safe_error!(
+                    safe: ("RemoteDiffStateModel: failed to decode diff state file delta"),
+                    full: ("RemoteDiffStateModel: failed to decode diff state file delta: {error}")
                 );
             }
         }
@@ -289,7 +286,14 @@ impl RemoteDiffStateModel {
     /// so existing views subscribed to this model won't flash a loading state.
     /// The server response arrives as a `DiffStateSnapshotReceived` event and
     /// flows through `apply_snapshot` normally.
-    pub(crate) fn fetch_fresh_snapshot(&self, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn fetch_fresh_snapshot(
+        &mut self,
+        track_load_duration: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if track_load_duration {
+            self.tracked_diff_load_start_time = Some(Instant::now());
+        }
         let remote_path = self.remote_path.clone();
         let mode = self.mode.clone();
         let session_id = self.session_id;
@@ -315,14 +319,22 @@ impl RemoteDiffStateModel {
             // Disconnected is never produced by proto deserialization.
             DiffState::Disconnected => {}
             DiffState::NotInRepository => {
+                self.tracked_diff_load_start_time = None;
                 self.state = InternalRemoteDiffState::NotInRepository;
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+                ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                    diffs: None,
+                    load_duration: None,
+                });
             }
             DiffState::Loading => {
                 self.state = InternalRemoteDiffState::Loading;
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+                ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                    diffs: None,
+                    load_duration: None,
+                });
             }
             DiffState::Error(msg) => {
+                self.tracked_diff_load_start_time = None;
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         is_local: Some(false),
@@ -332,12 +344,16 @@ impl RemoteDiffStateModel {
                     ctx
                 );
                 self.state = InternalRemoteDiffState::Error(msg);
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+                ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                    diffs: None,
+                    load_duration: None,
+                });
             }
             DiffState::Loaded => {
                 let Some(base_content) = diffs else {
                     let error =
                         "Server reported loaded state but no diff data was available".to_string();
+                    self.tracked_diff_load_start_time = None;
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::LoadDiffFailed {
                             is_local: Some(false),
@@ -347,14 +363,22 @@ impl RemoteDiffStateModel {
                         ctx
                     );
                     self.state = InternalRemoteDiffState::Error(error);
-                    ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+                    ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                        diffs: None,
+                        load_duration: None,
+                    });
                     return;
                 };
                 let diffs = GitDiffData::from(&base_content);
+                let load_duration = self
+                    .tracked_diff_load_start_time
+                    .take()
+                    .map(|start| start.elapsed());
                 self.state = InternalRemoteDiffState::Loaded(diffs);
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(Some(Arc::new(
-                    base_content,
-                ))));
+                ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                    diffs: Some(Arc::new(base_content)),
+                    load_duration,
+                });
             }
         }
     }
@@ -523,7 +547,12 @@ impl RemoteDiffStateModel {
 
     // ── Write API ────────────────────────────────────────────────────
 
-    pub fn set_diff_mode(&mut self, mode: DiffMode, ctx: &mut ModelContext<Self>) {
+    pub fn set_diff_mode(
+        &mut self,
+        mode: DiffMode,
+        track_load_duration: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if self.mode == mode {
             return;
         }
@@ -532,7 +561,7 @@ impl RemoteDiffStateModel {
         // GetDiffState for the new mode through the same session.
         self.unsubscribe(ctx);
         self.mode = mode;
-        self.resubscribe(ctx);
+        self.resubscribe(track_load_duration, ctx);
     }
 
     /// Fetches branches for the remote repository via the `GetBranches` RPC.

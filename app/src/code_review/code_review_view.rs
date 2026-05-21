@@ -3,8 +3,7 @@ use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use instant::Instant;
+use std::time::Duration;
 
 use ai::project_context::model::ProjectContextModel;
 use indexmap::IndexMap;
@@ -645,10 +644,6 @@ pub struct CodeReviewView {
     code_review_footer: Option<ViewHandle<CodeFooterView>>,
     /// Active git-operation dialog overlay (commit / push / publish), if open.
     git_dialog: Option<ViewHandle<GitDialog>>,
-    /// Timestamp captured when a diff load is initiated. Cleared when the
-    /// corresponding `DiffLoadCompleted` telemetry event is emitted, so the
-    /// elapsed time between request and completion can be reported.
-    diff_load_start_time: Option<Instant>,
 }
 
 impl CodeReviewView {
@@ -729,10 +724,9 @@ impl CodeReviewView {
         // (and will make an RPC once that path is wired). We pass
         // should_fetch_base: false because re-opening the panel doesn't
         // need to fetch the base branch from origin.
-        self.start_diff_load_timer();
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
-            model.load_diffs_for_current_repo(false, ctx);
+            model.load_diffs_for_current_repo(false, true, ctx);
         });
     }
 
@@ -751,11 +745,6 @@ impl CodeReviewView {
         ctx.unsubscribe_to_model(&self.diff_state_model);
 
         self.code_review_footer = None;
-
-        // Drop any pending diff-load timer; the in-flight load (if any) will
-        // never reach `DiffLoadCompleted` for this view, so leaving the start
-        // time around would skew the next reported duration.
-        self.diff_load_start_time = None;
 
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(false, ctx);
@@ -1329,28 +1318,19 @@ impl CodeReviewView {
             is_open: false,
             code_review_footer: None,
             git_dialog: None,
-            diff_load_start_time: None,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
             view.fetch_branches_and_setup_dropdown(ctx);
         }
         if has_repo {
-            // The diff-load timer is intentionally not started here. The view
-            // isn't subscribed to `diff_state_model` until `on_open`, so any
-            // completion event would not be delivered to this view. `on_open`
-            // starts a fresh timer paired with `load_diffs_for_current_repo`.
-            view.invalidate_all(None, ctx);
+            // Tracked diff loading starts in `on_open`, after this view is
+            // subscribed to `diff_state_model`, so the completion event can
+            // be observed and logged.
+            view.invalidate_all(None, None, ctx);
         }
 
         view
-    }
-
-    /// Records the moment a diff load was requested so we can report the
-    /// elapsed time when the load completes. Overwrites any prior pending
-    /// timer — only the most recent request is tracked.
-    fn start_diff_load_timer(&mut self) {
-        self.diff_load_start_time = Some(Instant::now());
     }
 
     pub fn set_terminal_view(&mut self, terminal_view: WeakViewHandle<TerminalView>) {
@@ -1574,12 +1554,11 @@ impl CodeReviewView {
             ctx
         );
 
-        self.start_diff_load_timer();
         self.diff_state_model.update(ctx, |model, ctx| {
-            model.set_diff_mode(mode, false, ctx);
+            model.set_diff_mode(mode, false, true, ctx);
         });
         self.update_diff_selector_selection(ctx);
-        self.invalidate_all(None, ctx);
+        self.invalidate_all(None, None, ctx);
     }
 
     fn handle_find_event(
@@ -2295,8 +2274,11 @@ impl CodeReviewView {
                 self.fetch_branches_and_setup_dropdown(ctx);
                 self.update_diff_selector_selection(ctx);
             }
-            DiffStateModelEvent::NewDiffsComputed(diffs) => {
-                self.invalidate_all(diffs.as_ref().map(|d| d.as_ref()), ctx);
+            DiffStateModelEvent::NewDiffsComputed {
+                diffs,
+                load_duration,
+            } => {
+                self.invalidate_all(diffs.as_ref().map(|d| d.as_ref()), *load_duration, ctx);
                 if FeatureFlag::GitOperationsInCodeReview.is_enabled() {
                     self.update_git_operations_ui(ctx);
                 }
@@ -2442,12 +2424,10 @@ impl CodeReviewView {
     fn invalidate_all(
         &mut self,
         diff_data: Option<&GitDiffWithBaseContent>,
+        load_duration: Option<Duration>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.active_repo.is_none() {
-            // No load is associated with this view; drop any stale timer so a
-            // future call doesn't fold pre-repo time into the duration.
-            self.diff_load_start_time = None;
             return;
         };
 
@@ -2473,10 +2453,6 @@ impl CodeReviewView {
                     );
                     repo.state = CodeReviewViewState::NoRepoFound;
                 }
-                // No `DiffLoadCompleted` event will fire from this terminal
-                // state; drop the timer so a later recovery doesn't report an
-                // inflated duration.
-                self.diff_load_start_time = None;
                 ctx.notify();
                 return;
             }
@@ -2484,10 +2460,6 @@ impl CodeReviewView {
                 if let Some(repo) = self.active_repo.as_mut() {
                     repo.state = CodeReviewViewState::Error(err);
                 }
-                // Load did not complete successfully; drop the timer so a
-                // subsequent successful load doesn't include time spent in
-                // the error state.
-                self.diff_load_start_time = None;
                 ctx.notify();
                 return;
             }
@@ -2495,9 +2467,6 @@ impl CodeReviewView {
                 // Disconnected state is handled via the ConnectionLost event
                 // path, which preserves stale diffs. If invalidate_all is
                 // called while disconnected (e.g. from a stale push), ignore.
-                // Drop the timer so a reconnect-then-load (potentially much
-                // later) doesn't report the disconnect interval as load time.
-                self.diff_load_start_time = None;
                 return;
             }
             DiffState::Loaded => (),
@@ -2540,10 +2509,6 @@ impl CodeReviewView {
             });
         }
 
-        let load_duration = self
-            .diff_load_start_time
-            .take()
-            .map(|start| start.elapsed());
         send_telemetry_from_ctx!(
             CodeReviewTelemetryEvent::DiffLoadCompleted {
                 is_local,
@@ -5963,12 +5928,11 @@ impl CodeReviewView {
     }
 
     pub(crate) fn set_diff_base(&mut self, diff_mode: DiffMode, ctx: &mut ViewContext<Self>) {
-        self.start_diff_load_timer();
         self.diff_state_model.update(ctx, |diff_state_model, ctx| {
             diff_state_model.set_diff_mode_and_fetch_base(diff_mode, ctx);
         });
         self.update_diff_selector_selection(ctx);
-        self.invalidate_all(None, ctx);
+        self.invalidate_all(None, None, ctx);
     }
 
     /// Insert diff hunk as an inline attachment in the terminal input
@@ -7165,9 +7129,8 @@ impl TypedActionView for CodeReviewView {
                 self.save_files(unsaved_files.as_slice(), ctx);
             }
             CodeReviewAction::RefreshGitState => {
-                self.start_diff_load_timer();
                 self.diff_state_model.update(ctx, |model, ctx| {
-                    model.load_diffs_for_current_repo(false, ctx);
+                    model.load_diffs_for_current_repo(false, true, ctx);
                     model.refresh_metadata_and_pr_info(ctx);
                 });
             }

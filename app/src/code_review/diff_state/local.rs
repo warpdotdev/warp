@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use warp_util::standardized_path::StandardizedPath;
 
@@ -193,6 +194,8 @@ pub struct LocalDiffStateModel {
     computing_diffs_abort_handle: Option<SpawnedFutureHandle>,
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
     refreshing_pr_info_handle: Option<SpawnedFutureHandle>,
+    /// Start time for the latest caller-tracked full diff load.
+    tracked_diff_load_start_time: Option<Instant>,
     /// Branch name for which `refresh_pr_info` has been called at least once.
     /// Gates the metadata-refresh fallback so it only retries `gh pr view` once
     /// per branch when `pr_info` is `None` (e.g. branch has no PR, lookup
@@ -250,7 +253,7 @@ impl LocalDiffStateModel {
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 is_local: Some(true),
                                 mode: me.mode.clone(),
-                                error: "File invalidation error".to_string(),
+                                error: err.to_string(),
                             },
                             ctx
                         );
@@ -269,6 +272,7 @@ impl LocalDiffStateModel {
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
             refreshing_pr_info_handle: None,
+            tracked_diff_load_start_time: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
             file_invalidation: FileInvalidationState::new(queue),
@@ -296,7 +300,11 @@ impl LocalDiffStateModel {
                 // Repo detection completed but found no repository.
                 // Emit so subscribers (e.g. the server model) can drain
                 // pending responses with the NotInRepository state.
-                ctx.emit(DiffStateModelEvent::NewDiffsComputed(None));
+                me.tracked_diff_load_start_time = None;
+                ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+                    diffs: None,
+                    load_duration: None,
+                });
             });
         }
         model
@@ -311,6 +319,7 @@ impl LocalDiffStateModel {
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
             refreshing_pr_info_handle: None,
+            tracked_diff_load_start_time: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
         }
@@ -496,11 +505,12 @@ impl LocalDiffStateModel {
         &mut self,
         mode: DiffMode,
         should_fetch_base: bool,
+        track_load_duration: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         if self.mode != mode {
             self.mode = mode;
-            self.load_diffs_for_current_repo(should_fetch_base, ctx);
+            self.load_diffs_for_current_repo(should_fetch_base, track_load_duration, ctx);
         }
     }
 
@@ -509,7 +519,7 @@ impl LocalDiffStateModel {
     /// This is intended for the `insert_code_review_comments` flow where the
     /// requested base branch may never have been checked out.
     pub fn set_diff_mode_and_fetch_base(&mut self, mode: DiffMode, ctx: &mut ModelContext<Self>) {
-        self.set_diff_mode(mode, true, ctx);
+        self.set_diff_mode(mode, true, true, ctx);
     }
 
     /// Loads the actual diffs for the current repo.
@@ -518,8 +528,12 @@ impl LocalDiffStateModel {
     pub fn load_diffs_for_current_repo(
         &mut self,
         should_fetch_base: bool,
+        track_load_duration: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if track_load_duration {
+            self.tracked_diff_load_start_time = Some(Instant::now());
+        }
         // Cancels in-flight per-file invalidation tasks so that stale queue results cannot
         // race with the new full reload.
         self.queue_full_invalidation();
@@ -550,6 +564,7 @@ impl LocalDiffStateModel {
     pub fn load_diffs_for_current_repo(
         &mut self,
         _should_fetch_base: bool,
+        _track_load_duration: bool,
         _ctx: &mut ModelContext<Self>,
     ) {
         // Noop on WASM builds.
@@ -842,7 +857,7 @@ impl LocalDiffStateModel {
             },
             |me, result, ctx| match result {
                 Ok(_) => {
-                    me.load_diffs_for_current_repo(false, ctx);
+                    me.load_diffs_for_current_repo(false, false, ctx);
                     me.refresh_diff_metadata_for_current_repo(false, ctx);
                 }
                 Err(err) => {
@@ -1034,7 +1049,7 @@ impl LocalDiffStateModel {
         }
 
         if commit_updated || remote_ref_updated {
-            self.load_diffs_for_current_repo(false, ctx);
+            self.load_diffs_for_current_repo(false, false, ctx);
             // Don't emit MetadataRefreshed here — metadata hasn't been
             // recomputed yet. NewDiffsComputed handles the immediate UI
             // refresh, and the throttled metadata refresh will emit
@@ -1043,7 +1058,7 @@ impl LocalDiffStateModel {
         } else if index_lock_detected {
             if self.file_invalidation.invalidate_all_pending {
                 // Lock was released while a full invalidation was pending — reload now.
-                self.load_diffs_for_current_repo(false, ctx);
+                self.load_diffs_for_current_repo(false, false, ctx);
                 return true;
             }
             // Lock just appeared — suppress the per-file queue (data may be stale
@@ -1057,7 +1072,7 @@ impl LocalDiffStateModel {
         // by forcing a full reload. Without this, all subsequent file
         // invalidations would be silently deferred forever.
         if self.file_invalidation.invalidate_all_pending {
-            self.load_diffs_for_current_repo(false, ctx);
+            self.load_diffs_for_current_repo(false, false, ctx);
             return true;
         }
 
@@ -1084,7 +1099,7 @@ impl LocalDiffStateModel {
         });
 
         if gitignore_modified {
-            self.load_diffs_for_current_repo(false, ctx);
+            self.load_diffs_for_current_repo(false, false, ctx);
         } else {
             self.enqueue_file_invalidations(changed_files, ctx);
         }
@@ -1410,12 +1425,12 @@ impl LocalDiffStateModel {
                 metadata.pr_info = previous_pr_info;
                 self.metadata = Some(metadata);
             }
-            Err(_) => {
+            Err(e) => {
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
                         is_local: Some(true),
                         mode: self.mode.clone(),
-                        error: "Load metadata failed".to_string(),
+                        error: e.to_string(),
                     },
                     ctx
                 );
@@ -1449,7 +1464,7 @@ impl LocalDiffStateModel {
         }
 
         if should_reload_diffs {
-            self.load_diffs_for_current_repo(false, ctx);
+            self.load_diffs_for_current_repo(false, false, ctx);
         }
         if let Some(metadata) = self.metadata.clone() {
             ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata));
@@ -1462,23 +1477,32 @@ impl LocalDiffStateModel {
         diffs: DiffsWithBaseContent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if diffs.changes.is_err() {
-            send_telemetry_from_ctx!(
-                CodeReviewTelemetryEvent::LoadDiffFailed {
-                    is_local: Some(true),
-                    mode: self.mode.clone(),
-                    error: "Load diff data failed".to_string(),
-                },
-                ctx
-            );
-        }
+        let load_duration = match &diffs.changes {
+            Ok(_) => self
+                .tracked_diff_load_start_time
+                .take()
+                .map(|start| start.elapsed()),
+            Err(e) => {
+                self.tracked_diff_load_start_time = None;
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::LoadDiffFailed {
+                        is_local: Some(true),
+                        mode: self.mode.clone(),
+                        error: e.to_string(),
+                    },
+                    ctx
+                );
+                None
+            }
+        };
 
         self.state = InternalDiffState::Loaded((&diffs).into());
         // Compute merge base and flush deferred invalidations before emitting.
         self.recompute_merge_base_and_flush(ctx);
-        ctx.emit(DiffStateModelEvent::NewDiffsComputed(
-            diffs.changes.ok().map(Arc::new),
-        ));
+        ctx.emit(DiffStateModelEvent::NewDiffsComputed {
+            diffs: diffs.changes.ok().map(Arc::new),
+            load_duration,
+        });
     }
 
     /// Returns the number of lines in a given file. Returns `None` if the file is a binary file
@@ -2719,6 +2743,7 @@ impl LocalDiffStateModel {
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
             refreshing_pr_info_handle: None,
+            tracked_diff_load_start_time: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
             #[cfg(feature = "local_fs")]
