@@ -979,7 +979,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
             Message::new(vec![
                 MessageItem::Keystroke {
                     keystroke: Keystroke {
-                        key: "backspace".to_owned(),
+                        key: "i".to_owned(),
+                        cmd: true,
                         ..Default::default()
                     },
                     color: keystroke_color_override,
