@@ -15070,7 +15070,7 @@ impl TypedActionView for Input {
                             ctx,
                         );
                     });
-                    self.enter_ai_mode(Some(AppLevelOverride::ManualToggle.into()), ctx);
+                    self.enter_ai_mode(Some(AppLevelHeuristic::StartNewConversation.into()), ctx);
                 }
             }
             InputAction::OpenInlineHistoryMenu => {

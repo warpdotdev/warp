@@ -43,6 +43,10 @@ pub enum AppLevelHeuristic {
     ConversationContextRender,
     /// "Continue conversation" button forced AI mode.
     ContinueConversation,
+    /// Onboarding tutorial agent prompt forced AI mode.
+    OnboardingAgentPrompt,
+    /// Starting a new agent conversation forced AI mode.
+    StartNewConversation,
     /// Ask-AI flow (text/block selection, programmatic Ask-AI lock) forced AI mode.
     AskAi,
     /// Detected/composing slash or skill command forced AI mode.
