@@ -56,6 +56,10 @@ on:
         description: Build web artifacts.
         type: boolean
         default: true
+      validate_slack_changelog_payload:
+        description: Build and validate a representative Slack changelog payload without posting it.
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -1796,3 +1800,55 @@ jobs:
         with:
           path: changelog.json
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+
+  validate_slack_changelog_payload:
+    name: Validate Slack changelog payload
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_slack_changelog_payload == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build representative Slack changelog payload
+        shell: bash
+        run: |
+          CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
+          SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
+          cat > "$CHANGELOG_INPUT" <<'JSON'
+          {
+            "newFeatures": [
+              "Added tab dragging between windows. ([#9275](https://github.com/warpdotdev/warp/pull/9275))"
+            ],
+            "improvements": [
+              "Added `warposs://pane/{uuid}` deep links. ([#9655](https://github.com/warpdotdev/warp/pull/9655)) — [@Akeuuh](https://github.com/Akeuuh) ✨"
+            ],
+            "bugFixes": [
+              "Fixed file picker path truncation. ([#9885](https://github.com/warpdotdev/warp/pull/9885)) — [@bradleyjames](https://github.com/bradleyjames) ✨"
+            ],
+            "oz_updates": [
+              "Configurable max context window per profile. ([#9352](https://github.com/warpdotdev/warp/pull/9352))"
+            ]
+          }
+          JSON
+
+          python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
+            --input "$CHANGELOG_INPUT" \
+            --release-tag "v0.workflow-validation.stable_00" \
+            --output "$SLACK_PAYLOAD"
+
+          jq -e '
+            (.blocks | length) == 2 and
+            .blocks[0].type == "header" and
+            .blocks[0].text.text == "Changelog for v0.workflow-validation.stable_00" and
+            .blocks[1].type == "section" and
+            .blocks[1].expand == true and
+            (.blocks[1].text.text | contains("<https://github.com/warpdotdev/warp/pull/9275|#9275>")) and
+            (.blocks[1].text.text | contains("<https://github.com/Akeuuh|@Akeuuh>")) and
+            (.blocks[1].text.text | contains("<https://github.com/bradleyjames|@bradleyjames>"))
+          ' "$SLACK_PAYLOAD" >/dev/null
+          cat "$SLACK_PAYLOAD"
+
+      - name: Upload Slack payload artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: slack-changelog-payload-validation
+          path: ${{ runner.temp }}/slack-changelog-payload.json
