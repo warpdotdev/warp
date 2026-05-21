@@ -20,7 +20,7 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
 use warp_multi_agent_api::{self as api};
 use warpui::color::ColorU;
-use warpui::{EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 
 use super::api::ServerConversationToken;
 use super::task::helper::*;
@@ -85,6 +85,59 @@ impl TodoStatus {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, TodoStatus::Cancelled)
     }
+}
+
+fn footer_model_token_usage(
+    usage_metadata: &stream_finished::ConversationUsageMetadata,
+    custom_endpoint_display_label: impl Fn(&str) -> String,
+) -> Vec<ModelTokenUsage> {
+    let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
+    for (model_id, usage) in &usage_metadata.warp_token_usage {
+        let entry = token_usage.entry(model_id.clone()).or_default();
+        entry.warp_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .warp_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+    for (model_id, usage) in &usage_metadata.byok_token_usage {
+        let entry = token_usage.entry(model_id.clone()).or_default();
+        entry.byok_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .byok_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+    for (config_key, usage) in &usage_metadata.custom_endpoint_token_usage {
+        let label = custom_endpoint_display_label(config_key);
+        let entry = token_usage
+            .entry(format!("custom_endpoint~{config_key}"))
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: label,
+                ..Default::default()
+            });
+        entry.byok_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .byok_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+
+    token_usage
+        .into_iter()
+        .map(|(name, mut usage)| {
+            if usage.model_id.is_empty() {
+                usage.model_id = name;
+            }
+            usage
+        })
+        .collect()
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -1707,6 +1760,7 @@ impl AIConversation {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
         for usage in token_usage.into_iter() {
             let entry = self
@@ -1749,36 +1803,11 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-
-            let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
-            for (model_id, usage) in usage_metadata.warp_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.warp_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .warp_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-            for (model_id, usage) in usage_metadata.byok_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.byok_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .byok_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-
-            self.conversation_usage_metadata.token_usage = token_usage
-                .into_iter()
-                .map(|(name, mut usage)| {
-                    usage.model_id = name;
-                    usage
-                })
-                .collect();
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            self.conversation_usage_metadata.token_usage =
+                footer_model_token_usage(&usage_metadata, |config_key| {
+                    llm_preferences.custom_endpoint_usage_display_label(config_key)
+                });
 
             self.conversation_usage_metadata.tool_usage_metadata = usage_metadata
                 .tool_usage_metadata

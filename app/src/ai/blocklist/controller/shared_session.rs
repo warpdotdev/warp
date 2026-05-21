@@ -500,6 +500,7 @@ impl BlocklistAIController {
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
                     credits_spent: conversation.credits_spent(),
+                    platform_credits_spent: 0.0,
                     summarized: conversation.was_summarized(),
                     #[allow(deprecated)]
                     token_usage: conversation
@@ -518,6 +519,7 @@ impl BlocklistAIController {
                         .iter()
                         .filter_map(|u| u.to_proto_byok_usage())
                         .collect(),
+                    custom_endpoint_token_usage: Default::default(),
                 })
         });
 

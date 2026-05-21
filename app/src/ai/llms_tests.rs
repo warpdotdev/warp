@@ -204,6 +204,46 @@ fn custom_llm_display_name_falls_back_to_name_when_alias_missing() {
 }
 
 #[test]
+fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![
+                model("raw-alias", Some("Alias"), "uuid-alias"),
+                model("raw-name", None, "uuid-name"),
+                model("raw~name", None, "uuid-delimited-name"),
+            ],
+        )],
+        ..Default::default()
+    };
+    let preferences = LLMPreferences {
+        models_by_feature: ModelsByFeature::default(),
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: build_custom_llm_infos(&keys),
+    };
+
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-alias"),
+        "Alias"
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-name"),
+        "raw-name"
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-delimited-name"),
+        CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("unknown"),
+        CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL
+    );
+}
+
+#[test]
 fn custom_llm_infos_skip_endpoints_with_empty_api_key() {
     let keys = ai::api_keys::ApiKeys {
         custom_endpoints: vec![
