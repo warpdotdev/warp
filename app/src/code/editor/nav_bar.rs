@@ -6,7 +6,7 @@ use warp_editor::model::CoreEditorModel;
 use warpui::{
     elements::{
         Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
-        ParentElement, Shrinkable,
+        ParentElement, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch,
     },
     presenter::ChildView,
     ui_components::{
@@ -31,6 +31,7 @@ const NAV_BAR_HEIGHT: f32 = 40.;
 const NAV_BAR_ICON_SIZE: f32 = 16.;
 const NAV_BAR_ICON_PADDING: f32 = 4.;
 const NAV_BAR_SEPARATOR_PADDING: f32 = 12.;
+const NAV_BAR_COMPACT_WIDTH_THRESHOLD: f32 = 300.;
 
 // The ratio of rows to offset of when jumping to a diff nav (base is the total number of lines in viewport)
 const DIFF_NAV_OFFSET_PIXEL_RATIO: usize = 10;
@@ -65,6 +66,8 @@ pub struct NavBar {
     mouse_state_handles: MouseStateHandles,
     up_label_button: ViewHandle<ActionButton>,
     down_label_button: ViewHandle<ActionButton>,
+    up_icon_button: ViewHandle<ActionButton>,
+    down_icon_button: ViewHandle<ActionButton>,
 }
 
 impl NavBar {
@@ -88,6 +91,21 @@ impl NavBar {
                 .with_icon(Icon::ArrowDown)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateDown))
         });
+        let up_icon_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", NakedTheme)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_icon(Icon::ArrowUp)
+                .with_tooltip("Previous")
+                .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateUp))
+        });
+
+        let down_icon_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", NakedTheme)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_icon(Icon::ArrowDown)
+                .with_tooltip("Next")
+                .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateDown))
+        });
 
         Self {
             model,
@@ -95,6 +113,8 @@ impl NavBar {
             mouse_state_handles: Default::default(),
             up_label_button,
             down_label_button,
+            up_icon_button,
+            down_icon_button,
         }
     }
 
@@ -148,6 +168,7 @@ impl NavBar {
         appearance: &Appearance,
         background: Fill,
         total: usize,
+        is_compact: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let diff_text = appearance
@@ -181,16 +202,16 @@ impl NavBar {
         .with_border(Border::new(1.).with_border_fill(appearance.theme().surface_2()))
         .finish();
 
+        let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if !is_compact {
+            content.add_child(diff_text);
+        }
+        content.add_child(index);
+
         Align::new(
-            Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(diff_text)
-                    .with_child(index)
-                    .finish(),
-            )
-            .with_padding_right(16.)
-            .finish(),
+            Container::new(content.finish())
+                .with_padding_right(if is_compact { 8. } else { 16. })
+                .finish(),
         )
         .right()
         .finish()
@@ -230,16 +251,62 @@ impl NavBar {
         .finish()
     }
 
-    fn render_nav_label(&self, up: bool) -> Box<dyn Element> {
+    fn render_nav_label(&self, up: bool, is_compact: bool) -> Box<dyn Element> {
         let button_handle = if up {
-            &self.up_label_button
+            if is_compact {
+                &self.up_icon_button
+            } else {
+                &self.up_label_button
+            }
+        } else if is_compact {
+            &self.down_icon_button
         } else {
             &self.down_label_button
         };
 
         Container::new(Align::new(ChildView::new(button_handle).finish()).finish())
-            .with_padding_right(16.)
+            .with_padding_right(if is_compact { 8. } else { 16. })
             .finish()
+    }
+
+    fn render_nav_bar_content(
+        &self,
+        appearance: &Appearance,
+        total: usize,
+        editable: bool,
+        is_compact: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    self.render_match_index(
+                        appearance,
+                        appearance.theme().background(),
+                        total,
+                        is_compact,
+                        app,
+                    ),
+                )
+                .finish(),
+            )
+            .with_child(self.render_nav_label(true, is_compact))
+            .with_child(self.render_nav_label(false, is_compact));
+
+        // Do not render the revert button if there is nothing to revert or the editor is
+        // not in an editable interaction state. Hide it in the compact layout to keep the
+        // navigation controls inside narrow panes.
+        if !is_compact && editable && total > 0 {
+            row.add_child(self.render_revert_button(appearance));
+        }
+
+        if !is_compact && matches!(self.behavior, NavBarBehavior::Closable) {
+            row.add_child(self.render_close_button(appearance));
+        }
+
+        row.finish()
     }
 
     pub fn navigate_up(&mut self, ctx: &mut ViewContext<Self>) {
@@ -277,35 +344,19 @@ impl View for NavBar {
             InteractionState::Editable
         );
 
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    self.render_match_index(
-                        appearance,
-                        appearance.theme().background(),
-                        total,
-                        app,
-                    ),
-                )
-                .finish(),
-            )
-            .with_child(self.render_nav_label(true))
-            .with_child(self.render_nav_label(false));
-
-        // Do not render the revert button if there is nothing to revert or the editor is
-        // not in an editable interaction state.
-        if editable && total > 0 {
-            row.add_child(self.render_revert_button(appearance));
-        }
-
-        if matches!(self.behavior, NavBarBehavior::Closable) {
-            row.add_child(self.render_close_button(appearance));
-        }
+        let default_content = self.render_nav_bar_content(appearance, total, editable, false, app);
+        let compact_content = self.render_nav_bar_content(appearance, total, editable, true, app);
+        let content = SizeConstraintSwitch::new(
+            default_content,
+            [(
+                SizeConstraintCondition::WidthLessThan(NAV_BAR_COMPACT_WIDTH_THRESHOLD),
+                compact_content,
+            )],
+        )
+        .finish();
 
         Container::new(
-            ConstrainedBox::new(row.finish())
+            ConstrainedBox::new(content)
                 .with_height(NAV_BAR_HEIGHT)
                 .finish(),
         )
