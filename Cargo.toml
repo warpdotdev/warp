@@ -186,7 +186,7 @@ mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
-notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
+notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }

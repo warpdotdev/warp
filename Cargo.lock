@@ -4765,7 +4765,7 @@ dependencies = [
 [[package]]
 name = "file-id"
 version = "0.2.2"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "windows-sys 0.59.0",
 ]
@@ -8385,7 +8385,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "notify"
 version = "8.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "bitflags 2.9.4",
  "filetime",
@@ -8403,7 +8403,7 @@ dependencies = [
 [[package]]
 name = "notify-debouncer-full"
 version = "0.5.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "file-id",
  "log",
@@ -8429,7 +8429,7 @@ dependencies = [
 [[package]]
 name = "notify-types"
 version = "2.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 
 [[package]]
 name = "ntapi"
