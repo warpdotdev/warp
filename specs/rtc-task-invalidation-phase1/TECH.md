@@ -2,7 +2,7 @@
 
 ## Context
 
-RTC invalidations for cloud agent tasks cause excessive `GET /api/v1/agent/runs` requests. During a bug bash with multiple concurrent agents on a team, this triggered 429 rate limiting that blocked spawning new agents. See [investigation report](/Users/liliwilson/Downloads/05_18_2025%20429s%20when%20starting%20cloud%20agents.md) for full context.
+RTC invalidations for cloud agent tasks cause excessive `GET /api/v1/agent/runs` requests. During a bug bash with multiple concurrent agents on a team, this triggered 429 rate limiting that blocked spawning new agents.
 
 ### Current flow
 
@@ -79,39 +79,44 @@ fn handle_update_manager_event(&mut self, event: &UpdateManagerEvent, ctx: &mut 
         return;
     };
 
-    // (a) Details panel: if any window has this task focused, do a targeted single-task fetch.
-    //     This uses get_or_async_fetch_task_data which already deduplicates in-flight requests.
-    if self.is_task_actively_viewed(*task_id, ctx) {
-        self.refresh_single_task(*task_id, ctx);
-    }
-
-    // (b) List views: if management view or conversation list is open, do a throttled list-fetch.
-    if self.has_any_active_data_consumers() {
+    let has_list_consumers = self
+        .active_data_consumers_per_window
+        .values()
+        .any(|views| !views.is_empty());
+    if has_list_consumers {
+        // (a) List views: if management view or conversation list is open, do a throttled list-fetch.
         self.handle_rtc_for_list_views(*timestamp, ctx);
     } else {
-        // (c) Nothing open: mark dirty for later.
-        self.dirty_task_ids.insert(*task_id);
+        let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+            .get_terminal_view_id_for_ambient_task(*task_id)
+            .is_some();
+        if has_open_tab {
+            // (b) Details panel: if any window has this task focused, do a targeted single-task fetch.
+            //     This still respects per-task dedup and failure cooldowns.
+            self.async_fetch_task(task_id, ctx);
+        } else {
+            // (c) No list surface or open tab: mark dirty for a later list refresh.
+            record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+        }
     }
 }
 ```
 
-#### 2a. `is_task_actively_viewed`
+#### 2a. Open-tab check
 
 Check `ActiveAgentViewsModel` for whether the `task_id` has an open ambient session tab:
 
 ```rust path=null start=null
-fn is_task_actively_viewed(&self, task_id: AmbientAgentTaskId, ctx: &AppContext) -> bool {
-    ActiveAgentViewsModel::as_ref(ctx)
-        .get_terminal_view_id_for_ambient_task(task_id)
-        .is_some()
-}
+let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+    .get_terminal_view_id_for_ambient_task(*task_id)
+    .is_some();
 ```
 
-This covers any window where the task is open in a tab (not just the focused window). The details panel refresh is cheap — `get_or_async_fetch_task_data` won't spawn a second HTTP request if one is already in flight for the same task_id (it checks `TaskFetchState::InFlight` at `agent_conversations_model.rs:1532` and returns `None` immediately).
+This covers any window where the task is open in a tab (not just the focused window). It only runs when no list surface is open, so one RTC event does not trigger both a single-task fetch and a list-fetch.
 
-#### 2b. `refresh_single_task`
+#### 2b. `async_fetch_task`
 
-Call `get_or_async_fetch_task_data` which already exists, has per-task dedup (`TaskFetchState::InFlight`), backoff for failures, and emits `TasksUpdated` on completion. No new code needed — just call it.
+Call the shared task-fetch path which already has per-task dedup (`TaskFetchState::InFlight`), backoff for failures, and emits `TasksUpdated` on completion.
 
 #### 2c. `handle_rtc_for_list_views`
 
@@ -119,55 +124,40 @@ Extract the existing throttle logic from today's `handle_update_manager_event` i
 
 We keep the list-fetch (rather than batching single-task fetches) because: (1) the management view shows team tasks, so it needs to discover new tasks created by teammates — single-task fetches can only refresh known task_ids; (2) during bursts (20 tasks changing in a 5s window), 1 list-fetch is cheaper than 20 individual requests; (3) the big win is gating — not doing the list-fetch at all when the view isn't open.
 
-#### 2d. `has_any_active_data_consumers`
-
-```rust path=null start=null
-fn has_any_active_data_consumers(&self) -> bool {
-    self.active_data_consumers_per_window
-        .values()
-        .any(|views| !views.is_empty())
-}
-```
 
 ### 3. Dirty-on-open flush
 
-Add a `dirty_task_ids: HashSet<AmbientAgentTaskId>` field to `AgentConversationsModel`.
+Add a `dirty_since: Option<DateTime<Utc>>` field to `AgentConversationsModel`.
 
-In `register_view_open`, after the existing logic, flush dirty tasks:
+When an RTC event arrives while no list surface is open and the task does not have an open tab, keep the earliest timestamp in `dirty_since`.
+
+In `register_view_open`, after the existing logic, flush dirty state with one list refresh:
 
 ```rust path=null start=null
-if !self.dirty_task_ids.is_empty() {
-    let dirty_ids: Vec<_> = self.dirty_task_ids.drain().collect();
-    for task_id in dirty_ids {
-        self.get_or_async_fetch_task_data(&task_id, ctx);
-    }
+if let Some(dirty_since) = self.dirty_since.take() {
+    self.fetch_tasks_updated_after(dirty_since, ctx);
 }
 ```
 
-This uses single-task fetches (not a list-fetch) so it's bounded by the number of tasks that changed while the view was closed.
-
-Cap the dirty set at ~200 entries. If it overflows, clear it and do a full list-fetch on next view open instead.
+This keeps the closed-view path at zero requests, then performs one bounded list refresh when a list view becomes visible again.
 
 ### Summary of request reduction
 
 Before: every RTC event → 1 list-fetch (`GET /agent/runs?updated_after=...`), throttled to 1 per 5s.
 
 After:
-- Details panel open, nothing else → 1 single-task fetch per event (deduped by `TaskFetchState`)
+- Details panel open, no list surface open → 1 single-task fetch per event (deduped by `TaskFetchState`)
 - Management/convo list open → same list-fetch as today (throttled)
-- Nothing open → 0 requests, dirty marks only
-
-No safety-net periodic poll for now. The websocket `Listener` already triggers an object refresh on reconnection (`listener.rs:232`), which covers the main failure mode (disconnect). If we see data gaps from silently dropped messages, we can add a slow poll later.
+- No list surface or open tab → 0 requests, dirty timestamp only
 
 For a team of 10 running 5 agents with 4-5 state changes each: before = ~250 list-fetches across team in 5 min. After = ~0 list-fetches for users not looking at views, plus ~1 single-task fetch per user per agent they have open.
 
 ## Testing and validation
 
 **Unit tests** in `agent_conversations_model_tests.rs`:
-- RTC event with `task_id` when details panel has that task open → `get_or_async_fetch_task_data` called
-- RTC event when no views open → task_id added to `dirty_task_ids`, no fetch
-- `register_view_open` with dirty tasks → each dirty task fetched via single-task endpoint
-- Dirty set overflow (>200) → cleared, list-fetch on next open
+- RTC event with `task_id` when details panel has that task open and no list surface is open → targeted task refresh path used
+- RTC event when no list surface or open tab is present → earliest dirty timestamp recorded
+- `register_view_open` with `dirty_since` set → one `fetch_tasks_updated_after` call
 
 **Manual verification**:
 - Add `log::info!("[lili] ...")` in `handle_update_manager_event` to count fetches before/after

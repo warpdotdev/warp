@@ -528,7 +528,7 @@ pub struct AgentConversationsModel {
     /// and are absent from this map.
     task_fetch_state: HashMap<AmbientAgentTaskId, TaskFetchState>,
     rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState,
-    /// Earliest RTC timestamp received while no consumer view was open.
+    /// Earliest RTC timestamp received while no list surface was open.
     /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
     dirty_since: Option<DateTime<Utc>>,
 }
@@ -687,27 +687,28 @@ impl AgentConversationsModel {
             return;
         };
 
-        // (a) If this task has an open tab (any window), force a re-fetch.
-        let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
-            .get_terminal_view_id_for_ambient_task(*task_id)
-            .is_some();
-        if has_open_tab {
-            self.force_refresh_task(task_id, ctx);
-        }
-
         let has_list_consumers = self
             .active_data_consumers_per_window
             .values()
             .any(|views| !views.is_empty());
         if has_list_consumers {
-            // (b) If management view or conversation list is open, throttled list-fetch.
+            // (a) If management view or conversation list is open, throttled list-fetch.
             self.handle_rtc_for_list_views(*timestamp, ctx);
         } else {
-            // (c) Nothing open: record earliest timestamp for flush on next view open.
-            record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+            let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+                .get_terminal_view_id_for_ambient_task(*task_id)
+                .is_some();
+            if has_open_tab {
+                // (b) If this task has an open tab (any window), force a re-fetch.
+                self.async_fetch_task(task_id, ctx);
+            } else {
+                // (c) No list surface open: record earliest timestamp for flush on next view open.
+                record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+            }
         }
     }
 
+    // Handle RTC invalidations for list views, respecting the refresh throttling.
     fn handle_rtc_for_list_views(
         &mut self,
         timestamp: DateTime<Utc>,
@@ -978,7 +979,7 @@ impl AgentConversationsModel {
             .insert(view_id);
         self.update_polling_state(ctx);
 
-        // Flush dirty tasks accumulated while no view was open.
+        // Flush dirty tasks accumulated while no list surface was open.
         if let Some(dirty_since) = self.dirty_since.take() {
             self.fetch_tasks_updated_after(dirty_since, ctx);
         }
@@ -1561,6 +1562,7 @@ impl AgentConversationsModel {
         task_id: &AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<AmbientAgentTask> {
+        // If we already have it, return it
         if let Some(task) = self.tasks.get(task_id) {
             return Some(task.clone());
         }
@@ -1569,28 +1571,15 @@ impl AgentConversationsModel {
         None
     }
 
-    /// Invalidate the cached task and re-fetch from server. In-flight dedup and
-    /// failure cooldowns still apply.
-    fn force_refresh_task(
-        &mut self,
-        task_id: &AmbientAgentTaskId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.async_fetch_task(task_id, ctx);
-    }
-
     /// Consult fetch-state guards and spawn a fetch if allowed.
-    fn async_fetch_task(
-        &mut self,
-        task_id: &AmbientAgentTaskId,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    fn async_fetch_task(&mut self, task_id: &AmbientAgentTaskId, ctx: &mut ModelContext<Self>) {
         match self.task_fetch_state.get(task_id) {
             Some(TaskFetchState::InFlight) => return,
             Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
                 if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
                     return;
                 }
+                // Cooldown has elapsed; clear the entry and fall through to fetch again.
                 self.task_fetch_state.remove(task_id);
             }
             Some(TaskFetchState::TransientlyFailed { at, .. }) => {
@@ -1881,6 +1870,7 @@ impl AgentConversationsModel {
         self.abort_rtc_task_refresh_throttle();
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
+        self.dirty_since = None;
         // Reset the initial load flag so that we can retry the initial sync with the new logged in user
         self.has_finished_initial_load = false;
     }
