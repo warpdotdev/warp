@@ -1,10 +1,12 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
 use ignore::gitignore::Gitignore;
+#[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "local_fs")]
 use std::sync::Arc;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
@@ -580,6 +582,7 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// watches on those subtrees, but still descends into `.git/`,
 /// `.git/refs/heads/`, `.git/refs/remotes/<r>/`, and `.git/worktrees/<n>/`
 /// so the allowlisted children remain reachable on Linux.
+#[cfg(feature = "local_fs")]
 pub fn repo_watch_filter() -> WatchFilter {
     WatchFilter::with_filter(
         Arc::new(should_descend_into_git_path),
@@ -619,12 +622,7 @@ pub fn path_passes_filters(path: &Path, gitignores: &[Gitignore]) -> bool {
         path.to_path_buf()
     };
 
-    !matches_gitignores(
-        &to_check_path,
-        to_check_path.is_dir(),
-        gitignores,
-        true, /* check_ancestors */
-    ) && !should_ignore_git_path(&to_check_path)
+    path_passes_gitignore(&to_check_path, gitignores) && !should_ignore_git_path(&to_check_path)
 }
 
 /// Determines whether a file should be parsed by a treesitter query. For now the main criteria is it shouldn't
