@@ -1,5 +1,7 @@
 use super::{active_or_next_match, CachedBackgroundColor};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::ansi::CursorShape;
+use crate::terminal::model::cell::{Cell, DEFAULT_CHAR};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{grid_renderer, SizeInfo};
@@ -10,6 +12,49 @@ use warpui::units::{IntoLines, Lines, Pixels};
 
 fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
     RectF::from_points(vec2f(min_x, min_y), vec2f(max_x, max_y))
+}
+
+#[test]
+fn test_hidden_cursor_cell_keeps_visible_prompt_text() {
+    let cursor = Point::new(0, 0);
+    let mut visible_cell = Cell::default();
+    visible_cell.c = 'm';
+
+    assert!(!grid_renderer::should_skip_hidden_cursor_cell(
+        true,
+        None,
+        cursor,
+        cursor,
+        &visible_cell
+    ));
+
+    let mut space_cell = Cell::default();
+    space_cell.c = ' ';
+    assert!(grid_renderer::should_skip_hidden_cursor_cell(
+        true,
+        None,
+        cursor,
+        cursor,
+        &space_cell
+    ));
+
+    let default_cell = Cell::default();
+    assert_eq!(default_cell.c, DEFAULT_CHAR);
+    assert!(grid_renderer::should_skip_hidden_cursor_cell(
+        true,
+        None,
+        cursor,
+        cursor,
+        &default_cell
+    ));
+
+    assert!(!grid_renderer::should_skip_hidden_cursor_cell(
+        true,
+        Some(CursorShape::Block),
+        cursor,
+        cursor,
+        &default_cell
+    ));
 }
 
 // TODO(CORE-2002): Make test non-Mac specific by switching to using bundled Roboto font.

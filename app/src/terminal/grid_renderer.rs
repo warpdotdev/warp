@@ -3,7 +3,7 @@ mod cell_type;
 
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
-use crate::terminal::model::cell::{Cell, Flags};
+use crate::terminal::model::cell::{Cell, Flags, DEFAULT_CHAR};
 use crate::terminal::{color, SizeInfo};
 
 use crate::terminal::model::grid::Dimensions;
@@ -54,6 +54,19 @@ const UNDERLINE_THICKNESS_SCALE_FACTOR: f32 = 0.15;
 
 /// Diameter of the circle at the top of the selection cursor.
 const SELECTION_CURSOR_TOP_DIAMETER: f32 = 5.;
+
+fn should_skip_hidden_cursor_cell(
+    hide_cursor_cell: bool,
+    visible_cursor_shape: Option<CursorShape>,
+    current_point: Point,
+    cursor_render_point: Point,
+    cell: &Cell,
+) -> bool {
+    hide_cursor_cell
+        && visible_cursor_shape.is_none()
+        && current_point == cursor_render_point
+        && matches!(cell.c, DEFAULT_CHAR | ' ')
+}
 
 /// Stores count of occurrences of distinct colors as a grid is rendered, which we can use to
 /// compute the most common background color of a grid and color-match other UI elements against
@@ -623,16 +636,20 @@ fn render_grid_without_ligatures<'a>(
         };
 
         for col in 0..grid.columns() {
+            let cell = &row[col];
             let current_point = Point::new(row_idx, col);
 
-            // Skip the cursor cell when CLI agent rich input is open
+            // Skip empty cursor cells when CLI agent rich input is open
             // AND the agent draws its own cursor (SHOW_CURSOR is off).
             // When Warp draws the cursor (SHOW_CURSOR on), we keep the cell
             // and only suppress the draw_cursor call.
-            if hide_cursor_cell
-                && visible_cursor_shape.is_none()
-                && current_point == grid.cursor_render_point()
-            {
+            if should_skip_hidden_cursor_cell(
+                hide_cursor_cell,
+                visible_cursor_shape,
+                current_point,
+                grid.cursor_render_point(),
+                cell,
+            ) {
                 continue;
             }
 
@@ -694,7 +711,6 @@ fn render_grid_without_ligatures<'a>(
                 }
             }
             // Check if the current block match contains the point.
-            let cell = &row[col];
             let mut cell_type = CellType::default();
             let mut first_cell_in_link = false;
             let mut first_cell_in_secret = FirstCellInSecret::No;
@@ -1157,14 +1173,17 @@ fn render_grid_with_ligatures<'a>(
 
             let current_point = Point::new(row_idx, col);
 
-            // Skip the cursor cell when CLI agent rich input is open
+            // Skip empty cursor cells when CLI agent rich input is open
             // AND the agent draws its own cursor (SHOW_CURSOR is off).
             // When Warp draws the cursor (SHOW_CURSOR on), we keep the cell
             // and only suppress the draw_cursor call.
-            if hide_cursor_cell
-                && visible_cursor_shape.is_none()
-                && current_point == grid.cursor_render_point()
-            {
+            if should_skip_hidden_cursor_cell(
+                hide_cursor_cell,
+                visible_cursor_shape,
+                current_point,
+                grid.cursor_render_point(),
+                cell,
+            ) {
                 continue;
             }
 
