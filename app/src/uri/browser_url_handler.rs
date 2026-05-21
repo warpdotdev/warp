@@ -56,7 +56,7 @@ pub fn parse_current_url() -> Option<Url> {
 
 fn get_base_app_url() -> Option<Url> {
     if let Some(current_url) = parse_current_url() {
-        if is_conversation_url(&current_url) {
+        if should_preserve_current_url_on_base_fallback(&current_url) {
             return Some(current_url);
         }
         let mut new_url = current_url.clone();
@@ -68,9 +68,9 @@ fn get_base_app_url() -> Option<Url> {
     None
 }
 
-fn is_conversation_url(url: &Url) -> bool {
+fn should_preserve_current_url_on_base_fallback(url: &Url) -> bool {
     matches!(
         WebIntent::try_from_url(url),
-        Ok(WebIntent::ConversationView(_))
+        Ok(WebIntent::ConversationView(_) | WebIntent::SessionView(_))
     )
 }
