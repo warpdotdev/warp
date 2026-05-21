@@ -3480,7 +3480,7 @@ pub fn test_osc7_updates_current_working_directory() -> Builder {
             // OSC 7 is only honored when the host portion matches the local
             // hostname; substitute it dynamically so the test works on any
             // machine.
-            r#"printf "\033]7;file://$(hostname)/tmp/osc7-test\a""#.to_string(),
+            r#"mkdir -p /tmp/osc7-test && cd /tmp/osc7-test && printf "\033]7;file://$(hostname)/tmp/osc7-test\a""#.to_string(),
             ExpectedExitStatus::Success,
             (),
         ))
