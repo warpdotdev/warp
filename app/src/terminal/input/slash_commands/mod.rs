@@ -255,7 +255,7 @@ impl Input {
                 if detected_command.command.auto_enter_ai_mode
                     || !FeatureFlag::AgentView.is_enabled()
                 {
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(Some(AppLevelHeuristic::SlashCommand.into()), ctx);
                 }
 
                 if detected_command.command.name == commands::EDIT.name
@@ -282,7 +282,7 @@ impl Input {
                 }
 
                 // Skill commands always require AI mode
-                self.enter_ai_mode(ctx);
+                self.enter_ai_mode(Some(AppLevelHeuristic::SlashCommand.into()), ctx);
             }
         }
     }

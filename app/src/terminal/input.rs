@@ -6005,7 +6005,7 @@ impl Input {
         from: &voice_input::VoiceInputToggledFrom,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.enter_ai_mode(ctx);
+        self.enter_ai_mode(Some(AppLevelHeuristic::VoiceInputToggle.into()), ctx);
         let did_start_listening = self
             .editor
             .update(ctx, |editor, ctx| editor.toggle_voice_input(from, ctx));
@@ -6223,11 +6223,8 @@ impl Input {
     }
 
     /// Switches to AI mode but preserves current lock state.
-    fn enter_ai_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.enter_ai_mode_with_source(None, ctx);
-    }
 
-    fn enter_ai_mode_with_source(
+    fn enter_ai_mode(
         &mut self,
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ViewContext<Self>,
@@ -6266,7 +6263,7 @@ impl Input {
         {
             return;
         }
-        self.enter_ai_mode_with_source(decision_source, ctx);
+        self.enter_ai_mode(decision_source, ctx);
     }
 
     fn cycle_next_command_suggestion(&mut self, ctx: &mut ViewContext<Self>) {
@@ -10225,7 +10222,10 @@ impl Input {
                             self.was_intelligent_autosuggestion_accepted = true;
                         }
                         // Switch to AI input mode but preserve current lock state when accepting an Agent Mode query autosuggestion.
-                        self.enter_ai_mode(ctx);
+                        self.enter_ai_mode(
+                            Some(AppLevelHeuristic::AgentQueryAutosuggestionAccepted.into()),
+                            ctx,
+                        );
                         self.ai_context_model.update(ctx, |context_model, ctx| {
                             context_model.set_pending_context_block_ids(
                                 context_block_ids.clone(),
@@ -10464,7 +10464,10 @@ impl Input {
                             .as_ref(ctx)
                             .should_run_input_autodetection(ctx)
                         {
-                            self.enter_ai_mode(ctx);
+                            self.enter_ai_mode(
+                                Some(AppLevelHeuristic::AtContextMenuInsert.into()),
+                                ctx,
+                            );
                         }
 
                         // For InsertText, we replace the "@" and any filter text with the provided text
@@ -15060,7 +15063,7 @@ impl TypedActionView for Input {
                             ctx,
                         );
                     });
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(Some(AppLevelOverride::ManualToggle.into()), ctx);
                 }
             }
             InputAction::OpenInlineHistoryMenu => {

@@ -37,6 +37,8 @@ pub enum AppLevelHeuristic {
     WorkflowInsertion,
     /// Accepting a shell command autosuggestion forced Shell mode.
     CommandAutosuggestionAccepted,
+    /// Accepting an Agent Mode query autosuggestion forced AI mode.
+    AgentQueryAutosuggestionAccepted,
     /// Empty-buffer conversation context render forced AI so conversation context renders.
     ConversationContextRender,
     /// "Continue conversation" button forced AI mode.
@@ -63,6 +65,10 @@ pub enum AppLevelHeuristic {
     RestoreSavedConfig,
     /// `set_input_config_for_classic_mode` reset (CtrlC, delete-all-left, etc.).
     ClassicModeReset,
+    /// Toggling voice input forced AI mode.
+    VoiceInputToggle,
+    /// Inserting from the AI `@` context menu forced AI mode.
+    AtContextMenuInsert,
 }
 
 /// The source of the final input type decision applied to the user input.
