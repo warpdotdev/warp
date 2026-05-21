@@ -571,6 +571,150 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
     });
 }
 
+#[test]
+fn test_parent_task_status_stays_working_while_child_task_is_working() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let now = Utc::now();
+        let parent_task_id = make_uuid(4007);
+        let child_task_id = make_uuid(4008);
+
+        let mut parent_task = create_test_task(&parent_task_id, "user-a", now);
+        parent_task.state = AmbientAgentTaskState::Succeeded;
+        parent_task.children = vec![child_task_id.clone()];
+
+        let mut child_task = create_test_task(&child_task_id, "user-a", now);
+        child_task.state = AmbientAgentTaskState::InProgress;
+        child_task.parent_run_id = Some(parent_task_id.clone());
+
+        let mut model = create_test_model();
+        model.tasks.insert(parent_task.task_id, parent_task.clone());
+        model.tasks.insert(child_task.task_id, child_task);
+
+        app.update(|ctx| {
+            let parent_entry = model
+                .get_entry_by_id(
+                    &AgentConversationEntryId::AmbientRun(parent_task.task_id),
+                    ctx,
+                )
+                .expect("parent task entry should exist");
+
+            assert_eq!(
+                parent_entry.display.status,
+                AgentRunDisplayStatus::ConversationInProgress
+            );
+            assert_eq!(
+                parent_entry.display.status.status_filter(),
+                StatusFilter::Working
+            );
+            assert!(parent_entry.capabilities.can_cancel);
+        });
+    });
+}
+
+#[test]
+fn test_parent_task_status_stays_working_while_child_conversation_is_working() {
+    App::test((), |mut app| async move {
+        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        add_entry_projection_test_models(&mut app);
+        let history_model = BlocklistAIHistoryModel::handle(&app);
+
+        let now = Utc::now();
+        let parent_conversation_id = AIConversationId::new();
+        let child_conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        let parent_task_id = make_uuid(4009);
+        let child_task_id = make_uuid(4010);
+
+        let parent_conversation = create_restored_conversation(
+            parent_conversation_id,
+            "parent-root-task",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                run_id: Some(parent_task_id.clone()),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        let mut child_conversation = create_restored_conversation(
+            child_conversation_id,
+            "child-root-task",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: Some(parent_task_id.clone()),
+                agent_name: Some("child".to_string()),
+                orchestration_harness_type: None,
+                parent_conversation_id: Some(parent_conversation_id.to_string()),
+                is_remote_child: false,
+                run_id: Some(child_task_id),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        child_conversation.set_parent_conversation_id(parent_conversation_id);
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(
+                terminal_view_id,
+                vec![parent_conversation, child_conversation],
+                ctx,
+            );
+            model.update_conversation_status(
+                terminal_view_id,
+                parent_conversation_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+            model.update_conversation_status(
+                terminal_view_id,
+                child_conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let mut parent_task = create_test_task(&parent_task_id, "user-a", now);
+        parent_task.state = AmbientAgentTaskState::Succeeded;
+
+        let mut model = create_test_model();
+        model.tasks.insert(parent_task.task_id, parent_task.clone());
+
+        app.update(|ctx| {
+            let parent_entry = model
+                .get_entry_by_id(
+                    &AgentConversationEntryId::AmbientRun(parent_task.task_id),
+                    ctx,
+                )
+                .expect("parent task entry should exist");
+
+            assert_eq!(
+                parent_entry.display.status,
+                AgentRunDisplayStatus::ConversationInProgress
+            );
+            assert_eq!(
+                parent_entry.display.status.status_filter(),
+                StatusFilter::Working
+            );
+        });
+    });
+}
+
 /// Helper to generate a unique UUID for task IDs
 fn make_uuid(index: usize) -> String {
     format!("550e8400-e29b-41d4-a716-{:012}", index)
