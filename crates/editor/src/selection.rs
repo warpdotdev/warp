@@ -767,6 +767,17 @@ impl SelectionModel {
         unit: TextUnit,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.move_selection_by(direction, unit, 1, ctx);
+    }
+
+    /// Move in the given direction by the given step size, switching to a single cursor.
+    pub fn move_selection_by(
+        &mut self,
+        direction: TextDirection,
+        unit: TextUnit,
+        step_size: u32,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Update the selections by moving the head and tail, navigating starting on the head.
         self.update_selections_internal(
             |model, ctx, selection, goal_x| {
@@ -774,7 +785,7 @@ impl SelectionModel {
                     selection.head,
                     direction,
                     unit.clone(),
-                    1, // move_selection always moves by 1
+                    step_size,
                     *goal_x,
                     ctx,
                 );
