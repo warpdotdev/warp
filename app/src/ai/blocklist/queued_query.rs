@@ -27,6 +27,12 @@ pub enum QueuedQueryOrigin {
     QueueSlashCommand,
     /// Filed via the auto-queue toggle in the warping indicator.
     AutoQueueToggle,
+    /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
+    /// the summarize to finish.
+    CompactAndSlashCommand,
+    /// Filed as the follow-up prompt of a `/fork-and-compact <prompt>` slash command on the
+    /// forked conversation, waiting for the fork's summarize to finish.
+    ForkAndCompactSlashCommand,
 }
 
 /// A single queued prompt.

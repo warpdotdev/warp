@@ -89,6 +89,17 @@ fn queue_texts(
     else {
         return Vec::new();
     };
+    queue_texts_for(view, conversation_id, ctx)
+}
+
+/// Returns the queue rows for an explicit `conversation_id`, looked up against the
+/// `QueuedQueryModel` singleton. Useful for tests that need to target a conversation other than
+/// the currently selected one (e.g. `/fork-and-compact`).
+fn queue_texts_for(
+    _view: &TerminalView,
+    conversation_id: AIConversationId,
+    ctx: &ViewContext<TerminalView>,
+) -> Vec<(String, QueuedQueryOrigin)> {
     QueuedQueryModel::as_ref(ctx)
         .queue(conversation_id)
         .iter()
@@ -542,6 +553,141 @@ fn error_or_cancel_drain_leaves_queue_intact_when_input_is_non_empty() {
         model.read(&app, |m, _| {
             assert_eq!(m.queue(conv).len(), 2);
             assert_eq!(m.queue(conv)[0].text(), "first");
+        });
+    });
+}
+
+#[test]
+fn enqueue_followup_prompt_appends_compact_and_row_when_v2_is_enabled() {
+    // /compact-and follow-ups land in the queue with the CompactAndSlashCommand origin under V2.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+
+            view.enqueue_followup_prompt(
+                "follow up after summarize".to_owned(),
+                QueuedQueryOrigin::CompactAndSlashCommand,
+                conversation_id,
+                ctx,
+            );
+
+            assert_eq!(
+                queue_texts_for(view, conversation_id, ctx),
+                vec![(
+                    "follow up after summarize".to_owned(),
+                    QueuedQueryOrigin::CompactAndSlashCommand
+                )]
+            );
+            assert!(view.pending_user_query_view_id.is_none());
+        });
+    });
+}
+
+#[test]
+fn enqueue_followup_prompt_appends_fork_and_compact_row_when_v2_is_enabled() {
+    // /fork-and-compact follow-ups land in the queue with the ForkAndCompactSlashCommand origin.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+
+            view.enqueue_followup_prompt(
+                "work on the forked branch".to_owned(),
+                QueuedQueryOrigin::ForkAndCompactSlashCommand,
+                conversation_id,
+                ctx,
+            );
+
+            assert_eq!(
+                queue_texts_for(view, conversation_id, ctx),
+                vec![(
+                    "work on the forked branch".to_owned(),
+                    QueuedQueryOrigin::ForkAndCompactSlashCommand
+                )]
+            );
+        });
+    });
+}
+
+#[test]
+fn enqueue_followup_prompt_uses_supplied_conversation_id_when_v2_is_enabled() {
+    // /fork-and-compact passes the newly forked conversation id directly, which can differ from
+    // the currently selected conversation. The helper must respect that explicit id.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let selected_conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            let other_conversation_id = AIConversationId::new();
+            assert_ne!(selected_conversation_id, other_conversation_id);
+
+            view.enqueue_followup_prompt(
+                "goes to the forked id".to_owned(),
+                QueuedQueryOrigin::ForkAndCompactSlashCommand,
+                other_conversation_id,
+                ctx,
+            );
+
+            assert!(queue_texts_for(view, selected_conversation_id, ctx).is_empty());
+            assert_eq!(
+                queue_texts_for(view, other_conversation_id, ctx),
+                vec![(
+                    "goes to the forked id".to_owned(),
+                    QueuedQueryOrigin::ForkAndCompactSlashCommand
+                )]
+            );
+        });
+    });
+}
+
+#[test]
+fn enqueue_followup_prompt_falls_back_to_pending_block_when_v2_is_disabled() {
+    // With V2 off, the helper must call into the legacy send_user_query_after_next_conversation_finished
+    // path: no row gets appended to the queue model, and the queued_prompt_callback is armed so the
+    // pending-user-query block lifecycle continues to handle the follow-up exactly as today.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(false);
+        let _pending_user_query_indicator =
+            FeatureFlag::PendingUserQueryIndicator.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+
+            view.enqueue_followup_prompt(
+                "legacy follow up".to_owned(),
+                QueuedQueryOrigin::CompactAndSlashCommand,
+                conversation_id,
+                ctx,
+            );
+
+            assert!(QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .is_empty());
+            assert!(view.queued_prompt_callback.is_some());
+            assert!(view.pending_user_query_view_id.is_some());
         });
     });
 }
