@@ -67,6 +67,7 @@ pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion,
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use ai::index::full_source_code_embedding::manager::{BuildSource, CodebaseIndexManager};
 use async_channel::{Receiver, Sender};
+use base64::Engine as _;
 use block_banner::{render_warpification_banner, WarpificationMode, WarpifyBannerState};
 pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
 use block_onboarding::onboarding_agentic_suggestions_block::{
@@ -255,6 +256,7 @@ use crate::ai::blocklist::telemetry_banner::{should_collect_ai_ugc_telemetry, Te
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, TimingInfo,
 };
+use crate::ai::blocklist::PendingAttachment;
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
@@ -25328,6 +25330,7 @@ impl TypedActionView for TerminalView {
             | GenerateCodebaseIndex
             | LoadAgentModeConversation
             | DeleteAttachment { .. }
+            | OpenAttachmentLightbox { .. }
             | WriteCodebaseIndex
             | ToggleAutoexecuteMode
             | ToggleQueueNextPrompt
@@ -26022,6 +26025,63 @@ impl TypedActionView for TerminalView {
             DeleteAttachment { index } => {
                 self.ai_context_model.update(ctx, |context_model, ctx| {
                     context_model.remove_pending_attachment(*index, ctx);
+                });
+            }
+            OpenAttachmentLightbox { index } => {
+                let pending_images = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(attachment_index, attachment)| match attachment {
+                        PendingAttachment::Image(image) => Some((attachment_index, image.clone())),
+                        PendingAttachment::File(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let mut images = Vec::new();
+                let mut initial_index = None;
+                for (attachment_index, image) in pending_images {
+                    let image_bytes =
+                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                            Ok(image_bytes) => image_bytes,
+                            Err(error) => {
+                                log::warn!(
+                                "Failed to decode pending image attachment for lightbox: {error}"
+                            );
+                                continue;
+                            }
+                        };
+
+                    let asset_id = format!("pending-attachment-lightbox-{attachment_index}");
+                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                        asset_cache.insert_raw_asset_bytes::<ImageType>(
+                            asset_id.clone(),
+                            &image_bytes,
+                            ctx,
+                        );
+                    });
+
+                    if attachment_index == *index {
+                        initial_index = Some(images.len());
+                    }
+                    images.push(ui_components::lightbox::LightboxImage {
+                        source: ui_components::lightbox::LightboxImageSource::Resolved {
+                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
+                                id: asset_id,
+                            },
+                        },
+                        description: Some(image.file_name.clone()),
+                    });
+                }
+
+                let Some(initial_index) = initial_index else {
+                    return;
+                };
+
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                    images,
+                    initial_index,
                 });
             }
             WriteCodebaseIndex => {

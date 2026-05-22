@@ -8,10 +8,9 @@
 //! from the old `(repo_path, mode)` subscription and re-subscribing with the
 //! new mode.
 
-use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
-use instant::Instant;
 use std::sync::Arc;
 
+use instant::Instant;
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use warp_core::{send_telemetry_from_ctx, HostId, SessionId};
 use warp_util::remote_path::RemotePath;
@@ -22,6 +21,7 @@ use super::{
     DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, DiffStats, FileDiffAndContent,
     GitDiffData, GitDiffWithBaseContent,
 };
+use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
 use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
 use crate::remote_server::proto;
 use crate::util::git::{BranchEntry, Commit, PrInfo};

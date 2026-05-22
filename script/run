@@ -95,9 +95,6 @@ while (( "$#" )); do
   esac
 done
 
-common_skills_match_lock() {
-  ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "$@" --verify-only --quiet >/dev/null 2>&1
-}
 install_common_skills_or_continue() {
   if ! ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "$@"; then
     echo "error: unable to install common skills; continuing without them." >&2
@@ -116,8 +113,6 @@ if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
     else
       install_common_skills_or_continue --force --prompt-for-target
     fi
-  elif common_skills_match_lock "${COMMON_SKILLS_ARGS[@]}"; then
-    :
   else
     if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
       install_common_skills_or_continue "${COMMON_SKILLS_ARGS[@]}" --if-needed --quiet
