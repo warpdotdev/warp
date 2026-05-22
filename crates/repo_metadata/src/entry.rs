@@ -101,7 +101,7 @@ impl Entry {
         current_depth: usize,
         ignored_path_strategy: &IgnoredPathStrategy,
     ) -> Result<Self, BuildTreeError> {
-        Self::build_tree_with_ignored_ancestor(
+        Self::build_tree_with_ignored_path_interests_and_ancestor(
             path,
             files,
             gitignores,
@@ -109,6 +109,31 @@ impl Entry {
             max_depth,
             current_depth,
             ignored_path_strategy,
+            &[],
+            false,
+        )
+    }
+    /// Builds a tree of entries from a given path, loading ignored paths that match
+    /// one of the supplied component-sequence interests instead of leaving them lazy.
+    pub fn build_tree_with_ignored_path_interests(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+        ignored_path_strategy: &IgnoredPathStrategy,
+        ignored_path_interests: &[PathBuf],
+    ) -> Result<Self, BuildTreeError> {
+        Self::build_tree_with_ignored_path_interests_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            max_depth,
+            current_depth,
+            ignored_path_strategy,
+            ignored_path_interests,
             false,
         )
     }
@@ -118,10 +143,35 @@ impl Entry {
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+        ignored_path_strategy: &IgnoredPathStrategy,
+        ancestor_is_ignored: bool,
+    ) -> Result<Self, BuildTreeError> {
+        Self::build_tree_with_ignored_path_interests_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            max_depth,
+            current_depth,
+            ignored_path_strategy,
+            &[],
+            ancestor_is_ignored,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_tree_with_ignored_path_interests_and_ancestor(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
         mut remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
         ignored_path_strategy: &IgnoredPathStrategy,
+        ignored_path_interests: &[PathBuf],
         ancestor_is_ignored: bool,
     ) -> Result<Self, BuildTreeError> {
         let curr_path: PathBuf = path.into();
@@ -163,7 +213,7 @@ impl Entry {
                     }
                 }
                 IgnoredPathStrategy::IncludeLazy => {
-                    lazy_load = true;
+                    lazy_load = !matches_ignored_path_interest(&curr_path, ignored_path_interests);
                 }
                 IgnoredPathStrategy::Include => {}
             }
@@ -209,7 +259,7 @@ impl Entry {
                         };
 
                         if let Some(canonical_path) = canonical_path {
-                            match Entry::build_tree_with_ignored_ancestor(
+                            match Entry::build_tree_with_ignored_path_interests_and_ancestor(
                                 canonical_path,
                                 files,
                                 gitignores,
@@ -217,6 +267,7 @@ impl Entry {
                                 max_depth,
                                 current_depth + 1,
                                 ignored_path_strategy,
+                                ignored_path_interests,
                                 path_is_ignored,
                             ) {
                                 Ok(entry) => Some(entry),
@@ -361,6 +412,48 @@ pub fn is_git_internal_path(path: &Path) -> bool {
     })
 }
 
+fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]) -> bool {
+    let path_components: Vec<_> = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name),
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir => None,
+        })
+        .collect();
+
+    ignored_path_interests.iter().any(|interest| {
+        let interest_components: Vec<_> = interest
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => Some(name),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => None,
+            })
+            .collect();
+
+        if interest_components.is_empty() {
+            return false;
+        }
+
+        if path_components
+            .windows(interest_components.len())
+            .any(|window| window == interest_components.as_slice())
+        {
+            return true;
+        }
+
+        (1..interest_components.len()).any(|prefix_len| {
+            path_components.len() >= prefix_len
+                && path_components[path_components.len() - prefix_len..]
+                    == interest_components[..prefix_len]
+        })
+    })
+}
 /// Returns true if a path matches any of the gitignores.
 ///
 /// For example, if the directory `/target` is ignored:

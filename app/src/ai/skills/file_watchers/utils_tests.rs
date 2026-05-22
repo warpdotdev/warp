@@ -760,6 +760,76 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
 }
 
 #[test]
+fn find_skill_files_in_tree_includes_ignored_skill_files() {
+    VirtualFS::test("find_skills_ignored", |dirs, mut vfs| {
+        let repo = dirs.tests().join("repo");
+        vfs.mkdir("repo/.agents/skills/ignored-skill")
+            .with_files(vec![Stub::FileWithContent(
+                "repo/.agents/skills/ignored-skill/SKILL.md",
+                "name: ignored-skill",
+            )]);
+
+        let skill_file = Entry::File(FileMetadata::new(
+            repo.join(".agents/skills/ignored-skill/SKILL.md"),
+            true,
+        ));
+        let skill_dir = Entry::Directory(DirectoryEntry {
+            path: StandardizedPath::try_from_local(&repo.join(".agents/skills/ignored-skill"))
+                .unwrap(),
+            children: vec![skill_file],
+            ignored: true,
+            loaded: true,
+        });
+        let skills_dir = Entry::Directory(DirectoryEntry {
+            path: StandardizedPath::try_from_local(&repo.join(".agents/skills")).unwrap(),
+            children: vec![skill_dir],
+            ignored: true,
+            loaded: true,
+        });
+        let agents_dir = Entry::Directory(DirectoryEntry {
+            path: StandardizedPath::try_from_local(&repo.join(".agents")).unwrap(),
+            children: vec![skills_dir],
+            ignored: true,
+            loaded: true,
+        });
+        let root = Entry::Directory(DirectoryEntry {
+            path: StandardizedPath::try_from_local(&repo).unwrap(),
+            children: vec![agents_dir],
+            ignored: false,
+            loaded: true,
+        });
+
+        App::test((), |mut app| async move {
+            let watcher = app.add_singleton_model(DirectoryWatcher::new);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            let repo_handle = watcher.update(&mut app, |w, ctx| {
+                w.add_directory(
+                    StandardizedPath::from_local_canonicalized(&repo).unwrap(),
+                    ctx,
+                )
+                .unwrap()
+            });
+            let state = FileTreeState::new(root, vec![], Some(repo_handle));
+
+            let model_handle = app.add_singleton_model(RepoMetadataModel::new);
+            model_handle.update(&mut app, |model, ctx| {
+                let key = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                model.insert_test_state(key, state, ctx);
+            });
+
+            model_handle.read(&app, |model, ctx| {
+                let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+                assert_eq!(
+                    find_skill_files_in_tree(&repo_id, model, ctx),
+                    vec![LocalOrRemotePath::Local(
+                        repo.join(".agents/skills/ignored-skill/SKILL.md")
+                    )]
+                );
+            });
+        });
+    });
+}
+#[test]
 fn find_skill_files_in_tree_empty_repo() {
     VirtualFS::test("find_skills_empty", |dirs, mut vfs| {
         let repo = dirs.tests().join("repo");

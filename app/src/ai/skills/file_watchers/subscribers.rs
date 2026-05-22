@@ -11,44 +11,10 @@ use warpui::ModelContext;
 pub enum SkillRepositoryMessage {
     /// Initial scan of a home skills directory (e.g., `~/.agents`).
     HomeInitialScan { skills: Vec<ParsedSkill> },
-    /// Incremental file system updates from either a home provider directory or a project skills directory.
+    /// Incremental file system updates from a home provider directory.
     RepositoryUpdate { update: RepositoryUpdate },
     /// File changes detected in a resolved symlink target directory.
     SymlinkTargetUpdate { update: RepositoryUpdate },
-}
-
-/// A repository subscriber for project directories that forwards file change events to [`SkillManager`].
-pub struct ProjectSkillSubscriber {
-    pub message_tx: Sender<SkillRepositoryMessage>,
-}
-
-impl RepositorySubscriber for ProjectSkillSubscriber {
-    fn on_scan(
-        &mut self,
-        _repository: &Repository,
-        _ctx: &mut ModelContext<Repository>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        // Initial skill scanning is handled via RepositoryMetadataEvent::RepositoryUpdated,
-        // which fires AFTER the file tree is built. This subscriber is only used for
-        // incremental file change updates via on_files_updated.
-        Box::pin(async {})
-    }
-
-    fn on_files_updated(
-        &mut self,
-        _repository: &Repository,
-        update: &RepositoryUpdate,
-        _ctx: &mut ModelContext<Repository>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        let tx = self.message_tx.clone();
-        let update = update.clone();
-
-        Box::pin(async move {
-            let _ = tx
-                .send(SkillRepositoryMessage::RepositoryUpdate { update })
-                .await;
-        })
-    }
 }
 
 /// A repository subscriber for resolved symlink target directories.

@@ -44,6 +44,7 @@ pub fn find_skill_files_in_tree(
         include_folders: false,
         ..GetContentsArgs::default()
     }
+    .include_ignored()
     .with_filter(|content| {
         let RepoContent::File(file) = content else {
             return false;
