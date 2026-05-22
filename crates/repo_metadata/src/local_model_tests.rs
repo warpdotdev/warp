@@ -3,6 +3,21 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    use futures::channel::oneshot;
+    use futures::executor::block_on;
+    use ignore::gitignore::Gitignore;
+    use virtual_fs::{Stub, VirtualFS};
+    use warp_util::standardized_path::StandardizedPath;
+    use warpui::r#async::FutureExt as _;
+    use warpui::App;
+
     use crate::entry::{DirectoryEntry, Entry, FileMetadata};
     use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
     use crate::local_model::{
@@ -12,19 +27,6 @@ mod tests {
     use crate::repositories::DetectedRepositories;
     use crate::watcher::DirectoryWatcher;
     use crate::RepoMetadataError;
-    use futures::channel::oneshot;
-    use futures::executor::block_on;
-    use ignore::gitignore::Gitignore;
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::rc::Rc;
-    use std::task::Poll;
-    use std::time::Duration;
-    use virtual_fs::{Stub, VirtualFS};
-    use warp_util::standardized_path::StandardizedPath;
-    use warpui::r#async::FutureExt as _;
-    use warpui::App;
 
     impl LocalRepoMetadataModel {
         fn new_for_test() -> Self {

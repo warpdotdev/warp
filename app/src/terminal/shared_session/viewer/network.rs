@@ -24,7 +24,6 @@ use session_sharing_protocol::{
         UpdatePendingUserRoleResponse, UserID, WindowSize, WriteToPtyFailureReason,
         WriteToPtyRequestId, WriteToPtySeqNo,
     },
-    sharer::SessionSourceType,
     viewer::{
         DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
         ViewerRemovedReason,
@@ -52,7 +51,7 @@ use crate::{
             connect_endpoint,
             network::heartbeat::{Event as HeartbeatEvent, Heartbeat},
             viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-            EventNumber, SELECTION_THROTTLE_PERIOD,
+            EventNumber, SharedSessionSource, SELECTION_THROTTLE_PERIOD,
         },
         TerminalModel, TerminalView,
     },
@@ -264,7 +263,7 @@ impl Network {
             participant_list: Default::default(),
             input_replica_id: ReplicaId::random(),
             universal_developer_input_context: None,
-            source_type: SessionSourceType::default(),
+            source: SharedSessionSource::default(),
         });
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
@@ -533,8 +532,13 @@ impl Network {
                 // We use the more detailed source type here,
                 // ignoring the legacy source_type field (which was kept around for backwards compatibility).
                 detailed_source_type: source_type,
+                source_task_id,
                 ..
             } => {
+                let source = SharedSessionSource {
+                    source_type,
+                    source_task_id,
+                };
                 if matches!(self.stage, Stage::JoinedSuccessfully) {
                     log::warn!(
                         "Received unexpected JoinedSuccessfully message when we've already joined"
@@ -571,7 +575,7 @@ impl Network {
                     participant_list: Box::new(*participant_list),
                     input_replica_id: input_replica_id.into(),
                     universal_developer_input_context,
-                    source_type,
+                    source,
                 });
             }
             DownstreamMessage::RejoinedSuccessfully { participant_list } => {
@@ -1114,7 +1118,7 @@ pub enum NetworkEvent {
         participant_list: Box<ParticipantList>,
         input_replica_id: ReplicaId,
         universal_developer_input_context: Option<UniversalDeveloperInputContext>,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
     },
     FailedToJoin {
         reason: FailedToJoinReason,

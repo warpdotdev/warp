@@ -1,5 +1,7 @@
 //! Conversion between remote codebase indexing domain types and proto-generated types.
 
+use serde::Serialize;
+
 use crate::proto;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,7 +15,8 @@ pub struct RemoteCodebaseIndexStatus {
     pub root_hash: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteCodebaseIndexState {
     NotEnabled,
     Unavailable,

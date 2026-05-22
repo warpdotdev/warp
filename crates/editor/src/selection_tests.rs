@@ -1,31 +1,26 @@
 use std::sync::Arc;
 
 use serde_yaml::Value;
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
-use warpui::{App, ModelAsRef, units::IntoPixels};
-
-use crate::{
-    content::{
-        buffer::{
-            AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
-            InitialBufferState, SelectionOffsets, tests::TestEmbeddedItem,
-        },
-        selection_model::BufferSelectionModel,
-        text::{BufferBlockStyle, IndentBehavior, IndentUnit},
-    },
-    render::model::{
-        BlockItem, COMMAND_SPACING, ImageBlockConfig, RenderState,
-        test_utils::{TEST_STYLES, laid_out_paragraph},
-    },
-    selection::SelectionMode,
-};
-use string_offset::CharOffset;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::units::IntoPixels;
+use warpui::{App, ModelAsRef};
 
 use super::{SelectionModel, TextDirection, TextUnit};
+use crate::content::buffer::tests::TestEmbeddedItem;
+use crate::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
+    InitialBufferState, SelectionOffsets,
+};
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::{BufferBlockStyle, IndentBehavior, IndentUnit};
+use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph};
+use crate::render::model::{BlockItem, COMMAND_SPACING, ImageBlockConfig, RenderState};
+use crate::selection::SelectionMode;
 
 impl SelectionModel {
     /// The cursor location.

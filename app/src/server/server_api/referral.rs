@@ -1,17 +1,16 @@
-use super::ServerApi;
-use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use warp_core::channel::ChannelState;
-use warp_graphql::{
-    mutations::send_referral_invite_emails::{
-        SendReferralInviteEmails, SendReferralInviteEmailsResult, SendReferralInviteEmailsVariables,
-    },
-    queries::get_referral_info::{GetReferralInfo, GetReferralInfoVariables},
+use warp_graphql::mutations::send_referral_invite_emails::{
+    SendReferralInviteEmails, SendReferralInviteEmailsResult, SendReferralInviteEmailsVariables,
 };
+use warp_graphql::queries::get_referral_info::{GetReferralInfo, GetReferralInfoVariables};
+
+use super::ServerApi;
+use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 
 /// Referral information for the logged-in user
 pub struct ReferralInfo {

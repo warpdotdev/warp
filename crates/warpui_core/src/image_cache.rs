@@ -1,31 +1,25 @@
-use anyhow::{anyhow, Result};
 use core::fmt;
-use itertools::Itertools;
-use std::{
-    collections::HashMap,
-    error,
-    hash::{DefaultHasher, Hash, Hasher},
-    rc::Rc,
-    sync::{Arc, LazyLock},
-};
-use strum_macros::EnumIter;
+use std::collections::HashMap;
+use std::error;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::rc::Rc;
+use std::sync::{Arc, LazyLock};
 
-use crate::{
-    assets::asset_cache::{Asset, AssetCache, AssetSource, AssetState},
-    util::parse_u32,
-    Entity, SingletonEntity,
-};
-use image::{
-    codecs::{gif::GifDecoder, webp::WebPDecoder},
-    imageops::FilterType,
-    AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat,
-};
+use anyhow::{anyhow, Result};
+use image::codecs::gif::GifDecoder;
+use image::codecs::webp::WebPDecoder;
+use image::imageops::FilterType;
+use image::{AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat};
+use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
-use resvg::{
-    tiny_skia::{self, IntSize},
-    usvg,
-};
+use resvg::tiny_skia::{self, IntSize};
+use resvg::usvg;
+use strum_macros::EnumIter;
+
+use crate::assets::asset_cache::{Asset, AssetCache, AssetSource, AssetState};
+use crate::util::parse_u32;
+use crate::{Entity, SingletonEntity};
 
 const MIN_REFRESH_DELAY_MS: u32 = 50;
 

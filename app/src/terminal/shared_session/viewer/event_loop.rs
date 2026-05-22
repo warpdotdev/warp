@@ -1,23 +1,23 @@
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::features::FeatureFlag;
-use crate::terminal::model::block::AgentInteractionMetadata;
+use std::collections::HashMap;
+use std::io::{sink, Sink};
+use std::sync::Arc;
+
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, WindowSize,
 };
-use std::io::{sink, Sink};
-use std::sync::Arc;
 use warpui::{Entity, ModelContext, SingletonEntity, WeakViewHandle};
 
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::features::FeatureFlag;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self};
+use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
 use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
 use crate::terminal::{TerminalModel, TerminalView};
-
-use std::collections::HashMap;
 
 /// If we end up buffering more than this many events,
 /// this is an indication that we're too far ahead and

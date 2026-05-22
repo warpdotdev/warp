@@ -1,5 +1,8 @@
-use crate::terminal::model::{blocks::BlockList, index::Point, terminal_model::WithinBlock};
 use session_sharing_protocol::common::BlockPoint;
+
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::WithinBlock;
 
 impl WithinBlock<Point> {
     /// Converts an un-transformed block point

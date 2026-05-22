@@ -1,3 +1,9 @@
+use itertools::Itertools;
+use ordered_float::OrderedFloat;
+use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
@@ -10,11 +16,6 @@ use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionR
 use crate::search::item::{IconLocation, SearchItem};
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon;
-use itertools::Itertools;
-use ordered_float::OrderedFloat;
-use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
 
 pub const ENV_VAR_NAME_SEPARATOR: &str = ", ";
 

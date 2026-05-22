@@ -33,24 +33,22 @@ mod overlay;
 mod positioned;
 mod save_position;
 
+use log::warn;
 pub use offset_positioning::*;
 use overlay::Overlay;
 use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use positioned::*;
 pub use save_position::*;
-
-use crate::{
-    event::DispatchedEvent,
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-};
 
 use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SelectableElement, Selection, SelectionFragment, SizeConstraint,
 };
+use crate::event::DispatchedEvent;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
 use crate::ClipBounds;
-use log::warn;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 #[derive(Clone, Copy, Default)]
 pub enum EventDispatchMode {

@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
 use repo_metadata::{BuildTreeError, DirectoryWatcher, Repository};
@@ -13,7 +11,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use chrono::Utc;
         use super::changed_files::ChangedFiles;
-        use crate::index::path_passes_filters;
+        use crate::index::{is_git_internal_path, matches_gitignores};
         use ignore::gitignore::Gitignore;
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
         use warp_core::features::FeatureFlag;
@@ -29,19 +27,14 @@ cfg_if::cfg_if! {
 use warp_core::safe_anyhow;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{
-    codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress},
-    fragment_metadata::FragmentMetadata,
-    priority_queue::{BuildQueue, Priority},
-    snapshot::*,
-    store_client::StoreClient,
-    CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash,
-};
-
-use crate::{
-    index::locations::CodeContextLocation,
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
+use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
+use super::fragment_metadata::FragmentMetadata;
+use super::priority_queue::{BuildQueue, Priority};
+use super::snapshot::*;
+use super::store_client::StoreClient;
+use super::{CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash};
+use crate::index::locations::CodeContextLocation;
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 /// The interval for debouncing filesystem events.
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);
@@ -815,19 +808,24 @@ impl CodebaseIndexManager {
         self.indexing_enabled
     }
 
-    pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) {
+    pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) -> bool {
         if !self.is_indexing_enabled() {
-            return;
+            return false;
         }
-        let directory = dunce::canonicalize(&directory).unwrap_or(directory);
-        if !self.codebase_indices.contains_key(&directory) {
-            self.build_and_sync_codebase_index(BuildSource::FromPath(&directory), ctx);
-            self.record_codebase_index_status(&directory, ctx);
+        if self.root_path_for_codebase(&directory).is_none() {
+            if !self.build_and_sync_codebase_index(BuildSource::FromPath(&directory), ctx) {
+                return false;
+            }
+            let indexed_directory = self
+                .root_path_for_codebase(&directory)
+                .unwrap_or_else(|| directory.clone());
+            self.record_codebase_index_status(&indexed_directory, ctx);
             // Starting a new codebase index should be considered into sync state updates.
             ctx.emit(CodebaseIndexManagerEvent::NewIndexCreated {
-                root_path: directory,
+                root_path: indexed_directory,
             });
         }
+        true
     }
 
     #[cfg(feature = "local_fs")]
@@ -837,9 +835,21 @@ impl CodebaseIndexManager {
         gitignores: Arc<Vec<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let watch_filter = WatchFilter::with_filter(Arc::new(move |path| {
-            path_passes_filters(path, gitignores.as_slice())
-        }));
+        // The codebase indexer only cares about source files:
+        // skip anything inside `.git/` and anything matched by gitignore
+        // (including descendants of an ignored ancestor directory).
+        // The same predicate gates both directory descent and event emission.
+        let filter = Arc::new(move |path: &Path| {
+            !is_git_internal_path(path)
+                && !matches_gitignores(
+                    path,
+                    path.is_dir(),
+                    gitignores.as_slice(),
+                    true, /* check_ancestors */
+                )
+        });
+
+        let watch_filter = WatchFilter::with_filter(filter.clone(), filter);
         self.watcher.update(ctx, |watcher, _ctx| {
             std::mem::drop(watcher.register_path(
                 root_path,
@@ -867,12 +877,12 @@ impl CodebaseIndexManager {
         &mut self,
         build_source: BuildSource,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         if !self.is_indexing_enabled() {
-            return;
+            return false;
         }
         if !self.can_create_new_indices() {
-            return;
+            return false;
         }
 
         let repo_path = match build_source {
@@ -887,7 +897,7 @@ impl CodebaseIndexManager {
                 Ok(path) => path,
                 Err(e) => {
                     log::error!("Failed to canonicalize repository path: {e:?}");
-                    return;
+                    return false;
                 }
             };
 
@@ -898,7 +908,7 @@ impl CodebaseIndexManager {
             Ok(handle) => handle,
             Err(e) => {
                 log::error!("Failed to start tracking repository: {e:?}");
-                return;
+                return false;
             }
         };
 
@@ -933,6 +943,7 @@ impl CodebaseIndexManager {
                 index.update_timestamps_from_metadata(metadata);
             });
         }
+        true
     }
 
     /// Checks whether a snapshot exists for the index and attempts to load it;
@@ -1303,7 +1314,7 @@ impl CodebaseIndexManager {
         codebase_index.update(ctx, |index, _ctx| {
             // Check if the index is in a state where it can perform incremental updates
             let status = index.codebase_index_status();
-            if status.has_pending {
+            if status.last_sync_successful() != Some(true) {
                 return;
             }
 

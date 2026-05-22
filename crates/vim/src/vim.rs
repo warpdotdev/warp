@@ -1,5 +1,6 @@
 use warp_core::safe_info;
-use warpui::{keymap::Keystroke, Entity, ModelContext, ModelHandle, ViewContext};
+use warpui::keymap::Keystroke;
+use warpui::{Entity, ModelContext, ModelHandle, ViewContext};
 
 use crate::register::{valid_register_name, BLACK_HOLE_REGISTER};
 

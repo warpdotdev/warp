@@ -1,86 +1,70 @@
+use std::borrow::Cow;
+use std::boxed::Box;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use pathfinder_color::ColorU;
+#[cfg(not(target_family = "wasm"))]
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::contrast::{
+    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
+};
+use warp_core::ui::color::{coloru_with_opacity, Opacity, Rgb};
+use warp_core::ui::theme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Rect, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch,
+};
+use warpui::ui_components::components::UiComponentStyles;
+use warpui::ui_components::segmented_control::{
+    RenderableOptionConfig, SegmentedControl, SegmentedControlEvent, TooltipConfig,
+};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
+    View, ViewAsRef, ViewContext, ViewHandle,
+};
+
+use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::prompt::PromptIconButtonTheme;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIInputModel, InputConfig, InputType,
+};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::LLMPreferences;
+use crate::ai::AIRequestUsageModel;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
-use crate::{
-    ai::{blocklist::block::cli_controller::CLISubagentController, llms::LLMPreferences},
-    cloud_object::model::generic_string_model::StringModel,
-    settings::AISettingsChangedEvent,
-    terminal::profile_model_selector::{
-        calculate_max_profile_name_width, calculate_scaled_font_size,
-    },
-    terminal::view::ambient_agent::AmbientAgentViewModel,
-};
-use pathfinder_color::ColorU;
-#[cfg(not(target_family = "wasm"))]
-use settings::Setting as _;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use warpui::{
-    elements::{
-        ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
-        MainAxisAlignment, MainAxisSize, ParentElement, Radius, Rect, Shrinkable,
-        SizeConstraintCondition, SizeConstraintSwitch,
-    },
-    ui_components::{components::UiComponentStyles, segmented_control::RenderableOptionConfig},
-    AppContext, Element, Entity, EntityId, SingletonEntity as _, TypedActionView, View, ViewAsRef,
-    ViewContext, ViewHandle,
-};
-
-use warp_core::ui::{
-    color::{
-        coloru_with_opacity,
-        contrast::{foreground_color_with_minimum_contrast, MinimumAllowedContrast},
-        Opacity, Rgb,
-    },
-    theme,
-};
-
-use std::boxed::Box;
-use warpui::{
-    ui_components::segmented_control::{SegmentedControl, SegmentedControlEvent},
-    ModelHandle,
-};
-
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-
-use crate::ai::blocklist::prompt::PromptIconButtonTheme;
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
-
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::SettingsSection;
+use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::model::block::BlockMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::model::session::SessionType;
-use crate::{
-    ai::{
-        blocklist::{
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            BlocklistAIInputModel, InputConfig, InputType,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        AIRequestUsageModel,
-    },
-    network::NetworkStatus,
-    settings::AISettings,
-    settings_view::SettingsSection,
-    terminal::{
-        input::MenuPositioningProvider,
-        keys::TerminalKeybindings,
-        model::{block::BlockMetadata, session::Sessions},
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent},
-        shared_session::permissions_manager::SessionPermissionsManager,
-    },
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-    BlocklistAIHistoryModel,
+use crate::terminal::model::session::Sessions;
+use crate::terminal::profile_model_selector::{
+    calculate_max_profile_name_width, calculate_scaled_font_size, ProfileModelSelector,
+    ProfileModelSelectorEvent,
 };
-use warp_core::features::FeatureFlag;
-use warpui::ui_components::segmented_control::TooltipConfig;
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::BlocklistAIHistoryModel;
 
 pub enum AtContextMenuDisabledReason {
     #[cfg(target_family = "wasm")]
@@ -88,7 +72,7 @@ pub enum AtContextMenuDisabledReason {
     #[cfg(not(target_family = "wasm"))]
     NoObjectsAvailable,
     #[cfg(not(target_family = "wasm"))]
-    SshSession,
+    SshWithoutRemoteServer,
     #[cfg(not(target_family = "wasm"))]
     Subshell,
     #[cfg(not(target_family = "wasm"))]
@@ -103,7 +87,9 @@ impl AtContextMenuDisabledReason {
                 "No available objects in the current context.".to_string()
             }
             #[cfg(not(target_family = "wasm"))]
-            AtContextMenuDisabledReason::SshSession => "Not supported in SSH sessions".to_string(),
+            AtContextMenuDisabledReason::SshWithoutRemoteServer => {
+                "Not supported in SSH sessions without remote server".to_string()
+            }
             #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::Subshell => "Not supported in subshells".to_string(),
             #[cfg(target_family = "wasm")]
@@ -133,14 +119,32 @@ impl AtContextMenuDisabledReason {
         ctx: &AppContext,
     ) -> Option<AtContextMenuDisabledReason> {
         // Derive session information from block metadata and sessions
-        let (is_ssh_session, is_subshell) = active_block_metadata
+        let (is_ssh_without_remote_server, is_subshell) = active_block_metadata
             .and_then(|metadata| metadata.session_id())
             .and_then(|session_id| sessions.get(session_id))
             .map(|session| {
-                let is_ssh_session = session.is_legacy_ssh_session()
-                    || matches!(session.session_type(), SessionType::WarpifiedRemote { .. });
+                let session_type = session.session_type();
+                let has_connected_remote_server = matches!(
+                    session_type,
+                    SessionType::WarpifiedRemote { host_id: Some(_) }
+                );
+                // The @ menu requires repo metadata which is only available for:
+                // - Local sessions
+                // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
+                //
+                // Block when:
+                // - Legacy SSH without a remote server upgrade
+                // - WarpifiedRemote still connecting (host_id is None)
+                //
+                // Note: is_legacy_ssh_session() is set at bootstrap time and stays true
+                // even after the session transitions to WarpifiedRemote with a host_id.
+                // So we must check has_connected_remote_server first to avoid
+                // incorrectly blocking upgraded sessions.
+                let is_ssh_without_remote_server = !has_connected_remote_server
+                    && (session.is_legacy_ssh_session()
+                        || matches!(session_type, SessionType::WarpifiedRemote { host_id: None }));
                 let is_subshell = session.subshell_info().is_some();
-                (is_ssh_session, is_subshell)
+                (is_ssh_without_remote_server, is_subshell)
             })
             .unwrap_or((false, false));
 
@@ -153,8 +157,8 @@ impl AtContextMenuDisabledReason {
             return Some(AtContextMenuDisabledReason::DisabledInTerminalMode);
         }
 
-        if is_ssh_session {
-            return Some(AtContextMenuDisabledReason::SshSession);
+        if is_ssh_without_remote_server {
+            return Some(AtContextMenuDisabledReason::SshWithoutRemoteServer);
         }
         if is_subshell {
             return Some(AtContextMenuDisabledReason::Subshell);

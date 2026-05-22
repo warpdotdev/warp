@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+
 use warp_cli::agent::OutputFormat;
 
 use super::*;

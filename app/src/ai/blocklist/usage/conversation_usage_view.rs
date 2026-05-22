@@ -1,3 +1,17 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
     render_agent_avatar_disc, render_orchestrator_avatar_disc,
@@ -15,21 +29,6 @@ use crate::persistence::model::{
     PRIMARY_AGENT_CATEGORY,
 };
 use crate::ui_components::blended_colors;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::ConstrainedBox;
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Text,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {

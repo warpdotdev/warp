@@ -6,36 +6,32 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use cfg_if::cfg_if;
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-
-use crate::ai::{
-    agent::conversation::AIConversation, blocklist::BlocklistAIHistoryModel,
-    request_usage_model::RequestLimitInfo,
+use lazy_static::lazy_static;
+use regex::Regex;
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
+use settings::{
+    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::OperatingSystem;
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use cfg_if::cfg_if;
-use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
-use regex::Regex;
-use warpui::platform::OperatingSystem;
-use warpui::{
-    platform::keyboard::KeyCode, AppContext, Entity, EntityId, ModelContext, SingletonEntity,
-    UpdateModel,
-};
-
-use settings::{
-    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-
-use serde::{de::Deserializer, Deserialize, Serialize};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -1222,6 +1218,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
+    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
+    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
+        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
+    }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
     can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
@@ -1497,6 +1503,16 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
         description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
     }
+
+    auto_handoff_on_sleep_enabled: AutoHandoffOnSleepEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
+        description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
+    }
 ]);
 
 impl AISettings {
@@ -1740,6 +1756,14 @@ impl AISettings {
             && !*self.should_force_disable_ampersand_handoff
     }
 
+    pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && self
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            && *self.auto_handoff_on_sleep_enabled
+    }
+
     /// Determines whether a quota reset banner should be displayed to the user.
     ///
     /// The banner should be shown if the most recent completed billing cycle had
@@ -1890,6 +1914,10 @@ impl AISettings {
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
+    }
+
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
     }
 
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {

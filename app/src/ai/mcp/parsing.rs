@@ -2,20 +2,16 @@ use std::collections::HashMap;
 
 use chrono::DateTime;
 use handlebars::{get_arguments, render_template};
-
 #[cfg(feature = "local_fs")]
 use serde::Deserialize;
 
+use crate::ai::mcp::templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
+use crate::ai::mcp::templatable_installation::{
+    TemplatableMCPServerInstallation, VariableType, VariableValue,
+};
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
-
-use crate::{
-    ai::mcp::{
-        templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable},
-        templatable_installation::{TemplatableMCPServerInstallation, VariableType, VariableValue},
-    },
-    server::datetime_ext::DateTimeExt,
-};
+use crate::server::datetime_ext::DateTimeExt;
 
 /// Normalize MCP JSON input to ensure it has a server name wrapper.
 ///

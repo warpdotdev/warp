@@ -1,10 +1,10 @@
-use crate::platform::CapturedFrame;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
 use image::ImageEncoder;
 use instant::Instant;
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+
+use crate::platform::CapturedFrame;
 
 /// The lifecycle state of the capture recorder / capture loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,9 +1,10 @@
-use crate::server::ids::ServerId;
 use serde::Serialize;
 use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::features::FeatureFlag;
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+
+use crate::server::ids::ServerId;
 
 /// The entry point through which Cloud Mode was entered.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -20,7 +21,7 @@ pub enum CloudModeEntryPoint {
 }
 
 /// The entry point through which a local-to-cloud handoff was initiated.
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffEntryPoint {
     /// User typed `&` in the input to enter handoff compose mode.
@@ -30,6 +31,8 @@ pub enum HandoffEntryPoint {
     SlashCommand,
     /// User clicked the "Hand off to cloud" chip in the footer toolbar.
     FooterChip,
+    /// The client automatically initiated handoff for an eligible local agent.
+    Automatic,
 }
 
 /// Telemetry events for client interactions with cloud agents.

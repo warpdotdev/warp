@@ -4,44 +4,37 @@
 
 use std::path::Path;
 
-use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ChildView, ClippedScrollStateHandle, Container, CornerRadius, CrossAxisAlignment, Element,
-        Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    ui_components::{
-        components::{UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
-    AppContext, SingletonEntity, ViewContext, ViewHandle,
-};
-
-use crate::{
-    ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType},
-    code_review::{
-        git_dialog::{
-            interactive_path_future,
-            pr::{create_pr_with_ai_content, show_pr_created_toast},
-            render_branch_section, render_file_changes_box, should_send_git_ops_ai_request,
-            show_toast, user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent,
-            GitDialogMode,
-        },
-        telemetry_event::{CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind},
-    },
-    editor::{
-        EditorOptions, EditorView, Event as EditorEvent, InteractionState,
-        PropagateAndNoOpNavigationKeys, TextOptions,
-    },
-    server::server_api::ServerApiProvider,
-    ui_components::icons::Icon,
-    util::git::{
-        create_pr, get_diff_for_commit_message, get_file_change_entries, run_commit, run_push,
-        FileChangeEntry, PrInfo,
-    },
-    view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
-};
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    ChildView, ClippedScrollStateHandle, Container, CornerRadius, CrossAxisAlignment, Element,
+    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
+
+use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
+use crate::code_review::git_dialog::pr::{create_pr_with_ai_content, show_pr_created_toast};
+use crate::code_review::git_dialog::{
+    interactive_path_future, render_branch_section, render_file_changes_box,
+    should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog, GitDialogAction,
+    GitDialogEvent, GitDialogMode,
+};
+use crate::code_review::telemetry_event::{
+    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
+};
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, InteractionState,
+    PropagateAndNoOpNavigationKeys, TextOptions,
+};
+use crate::server::server_api::ServerApiProvider;
+use crate::ui_components::icons::Icon;
+use crate::util::git::{
+    create_pr, get_diff_for_commit_message, get_file_change_entries, run_commit, run_push,
+    FileChangeEntry, PrInfo,
+};
+use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 
 /// What should happen after a successful commit.
 #[allow(clippy::enum_variant_names)] // `Commit` prefix is intentional: describes the always-present first stage.
@@ -454,6 +447,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             }
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::GitDialogCompleted {
+                    is_local: Some(true),
                     operation,
                     status,
                     error,

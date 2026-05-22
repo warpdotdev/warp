@@ -13,116 +13,7 @@ pub mod status_bar;
 pub mod toggleable_items;
 pub mod view_impl;
 
-pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
-
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
-use crate::ai::agent::redaction::redact_secrets;
-use crate::ai::agent::telemetry::ForTelemetry as _;
-use crate::ai::agent::CancellationReason;
-use crate::ai::agent::PassiveSuggestionTrigger;
-use crate::ai::agent::SuggestPromptRequest;
-use crate::ai::agent::SuggestPromptResult;
-use crate::ai::agent::TodoOperation;
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
-use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
-use crate::ai::blocklist::context_model::AttachmentType;
-use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
-use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsEvent;
-use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
-use crate::ai::blocklist::BlocklistAIContextEvent;
-use crate::ai::blocklist::BlocklistAIContextModel;
-use crate::ai::blocklist::SuggestionDismissButtonTheme;
-#[cfg(not(target_family = "wasm"))]
-use repo_metadata::repositories::DetectedRepositories;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-
-#[cfg(feature = "local_fs")]
-use crate::ai::skills::SkillOpenOrigin;
-use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
-use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
-use crate::code::editor::view::CodeEditorRenderOptions;
-use crate::code::editor_management::CodeSource;
-use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
-use crate::terminal::model::BlockId;
-use crate::terminal::model_events::ModelEvent;
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::terminal::TerminalModel;
-use crate::view_components::action_button::{
-    ActionButtonTheme, NakedTheme, PrimaryTheme, SecondaryTheme,
-};
-use crate::view_components::compactible_action_button::CompactibleActionButton;
-use crate::AIAgentTodoList;
-use crate::FileEdit;
-use pathfinder_color::ColorU;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-
-use cli_controller::CLISubagentController;
-use cli_controller::CLISubagentEvent;
-use find::FindState;
-use model::AIBlockOutputStatus;
-use parking_lot::FairMutex;
-use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warpui::elements::get_rich_content_position_id;
-use warpui::elements::ClippedScrollStateHandle;
-use warpui::elements::TableStateHandle;
-use warpui::ui_components::radio_buttons::RadioButtonStateHandle;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentActionResultType;
-use crate::ai::agent::AIAgentOutput;
-use crate::ai::agent::AIAgentTextSection;
-use crate::ai::agent::AIIdentifiers;
-use crate::ai::agent::MessageId;
-use crate::ai::agent::RequestFileEditsResult;
-use crate::ai::agent::SearchCodebaseResult;
-use crate::ai::agent::SubagentCall;
-use crate::ai::agent::SubagentType;
-use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::action_model::NewConversationDecision;
-use crate::ai::blocklist::block::keyboard_navigable_buttons::KeyboardNavigableButtonBuilder;
-use crate::ai::blocklist::block::keyboard_navigable_buttons::KeyboardNavigableButtons;
-use crate::ai::blocklist::inline_action::ask_user_question_view::{
-    self, AskUserQuestionView, AskUserQuestionViewEvent,
-};
-use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::{
-    AwsBedrockCredentialsErrorEvent, AwsBedrockCredentialsErrorView,
-};
-use crate::ai::blocklist::inline_action::run_agents_card_view::{
-    self, RunAgentsCardView, RunAgentsCardViewEvent,
-};
-use crate::ai::blocklist::inline_action::search_codebase::{
-    SearchCodebaseView, SearchCodebaseViewEvent,
-};
-use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
-use crate::ai::blocklist::inline_action::web_search::WebSearchView;
-use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
-use crate::ai::AIRequestUsageModel;
-use crate::ai::AIRequestUsageModelEvent;
-use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::server::ids::SyncId;
-use crate::server::telemetry::AgentModeRewindEntrypoint;
-use crate::settings::InputSettings;
-use crate::terminal::view::{CodeDiffAction, TerminalAction};
-use crate::ui_components::icons::Icon;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
-use crate::view_components::action_button::ActionButton;
-use crate::view_components::action_button::ButtonSize;
-use crate::view_components::action_button::KeystrokeSource;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::Appearance;
-use crate::LLMPreferences;
-use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
-use pathfinder_geometry::vector::vec2f;
-use serde::Serialize;
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -130,119 +21,187 @@ use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::{cell::OnceCell, sync::Arc};
-use warp_util::path::ShellFamily;
-use warpui::elements::MainAxisAlignment;
-use warpui::elements::MainAxisSize;
-use warpui::elements::SecretRange;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::button::TextAndIcon;
-use warpui::ui_components::button::TextAndIconAlignment;
-use warpui::ui_components::components::UiComponent;
-use warpui::ui_components::components::UiComponentStyles;
+use std::sync::Arc;
 
-use crate::util::link_detection::*;
+use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use base64::Engine as _;
 use chrono::Duration;
+use cli_controller::{CLISubagentController, CLISubagentEvent};
+use find::FindState;
+use indexmap::IndexMap;
 use itertools::Itertools;
+use model::AIBlockOutputStatus;
+use parking_lot::{FairMutex, Mutex, RwLock};
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
+#[cfg(not(target_family = "wasm"))]
+use repo_metadata::repositories::DetectedRepositories;
 use secret_redaction::*;
+use serde::Serialize;
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
-use warp_editor::{
-    content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::path::ShellFamily;
+use warpui::assets::asset_cache::AssetCache;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    get_rich_content_position_id, ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, SecretRange, SelectionBound, SelectionHandle, TableStateHandle,
 };
+use warpui::image_cache::ImageType;
+use warpui::keymap::FixedBinding;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::text::SelectionType;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::RadioButtonStateHandle;
 use warpui::{
-    assets::asset_cache::AssetCache,
-    clipboard::ClipboardContent,
-    elements::{MouseStateHandle, SelectionBound, SelectionHandle},
-    image_cache::ImageType,
-    keymap::FixedBinding,
-    r#async::{SpawnedFutureHandle, Timer},
-    text::SelectionType,
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle, WindowId,
 };
 
+#[cfg(feature = "agent_mode_debug")]
+use self::code_diff_view::FileDiff;
+use self::model::{AIBlockModel, AIBlockModelHelper};
+use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
+use super::code_block::CodeSnippetButtonHandles;
+use super::controller::ClientIdentifiers;
+use super::inline_action::code_diff_view::{
+    CodeDiffState, CodeDiffView, CodeDiffViewAction, CodeDiffViewEvent,
+};
+use super::inline_action::requested_action::{CTRL_C_KEYSTROKE, ENTER_KEYSTROKE};
+use super::inline_action::requested_command_attribution::is_command_copied_from_document;
+use super::permissions::is_agent_mode_autonomy_allowed;
+use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
+use super::suggested_rule_modal::SuggestedRuleAndId;
+use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use super::{
+    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIPermissions, ResponseStreamId,
+};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::redaction::redact_secrets;
+use crate::ai::agent::telemetry::ForTelemetry as _;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentAttachment, AIAgentCitation,
-    AIAgentContext, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
-    CreateDocumentsResult, DocumentToCreate, EditDocumentsResult, ProgrammingLanguage,
-    RenderableAIError, RequestCommandOutputResult, SuggestedLoggingId, SummarizationType,
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentAttachment,
+    AIAgentCitation, AIAgentContext, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
+    CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
+    MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
+    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
+    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
+    SummarizationType, TodoOperation,
+};
+use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::NewConversationDecision;
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
+use crate::ai::blocklist::block::keyboard_navigable_buttons::{
+    KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
+};
+use crate::ai::blocklist::context_model::AttachmentType;
+use crate::ai::blocklist::inline_action::ask_user_question_view::{
+    self, AskUserQuestionView, AskUserQuestionViewEvent,
+};
+use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::{
+    AwsBedrockCredentialsErrorEvent, AwsBedrockCredentialsErrorView,
 };
 use crate::ai::blocklist::inline_action::code_diff_view;
+use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 use crate::ai::blocklist::inline_action::requested_command::{
     self, RequestedActionViewType, RequestedCommand, RequestedCommandView,
     RequestedCommandViewEvent,
 };
+use crate::ai::blocklist::inline_action::run_agents_card_view::{
+    self, RunAgentsCardView, RunAgentsCardViewEvent,
+};
+use crate::ai::blocklist::inline_action::search_codebase::{
+    SearchCodebaseView, SearchCodebaseViewEvent,
+};
+use crate::ai::blocklist::inline_action::suggested_unit_tests::{
+    SuggestedUnitTestsEvent, SuggestedUnitTestsView,
+};
+use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
+use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::permissions::{
     CommandExecutionPermission, CommandExecutionPermissionDeniedReason,
 };
 use crate::ai::blocklist::suggestion_chip_view::{SuggestedChipViewEvent, SuggestionChipView};
+use crate::ai::blocklist::{
+    BlocklistAIContextEvent, BlocklistAIContextModel, SuggestionDismissButtonTheme,
+};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::ai::get_relevant_files::controller::{
     GetRelevantFilesController, GetRelevantFilesControllerEvent,
 };
+#[cfg(feature = "local_fs")]
+use crate::ai::skills::SkillOpenOrigin;
+use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
+use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::AuthStateProvider;
-use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
-use crate::notebooks::editor::model::FileLinkResolutionContext;
-use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
-use crate::settings_view::SettingsSection;
-use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
-use crate::terminal::{ShellLaunchData, TerminalView};
-use crate::view_components::DismissibleToast;
-use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
-use crate::{report_error, report_if_error, ToastStack};
-use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
-
-use crate::editor::InteractionState;
-use crate::server::telemetry::{AutonomySettingToggleSource, InteractionSource};
-use crate::settings::{
-    AISettingsChangedEvent, AgentModeCodingPermissionsType, FontSettings, InputModeSettings,
-    InputModeSettingsChangedEvent,
-};
-use crate::view_components::find::FindEvent;
-
-use crate::terminal::{
-    find::TerminalFindModel,
-    model::secrets::RichContentSecretTooltipInfo,
-    safe_mode_settings::{
-        get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
-    },
-    view::{RichContentLink, RichContentLinkTooltipInfo},
-};
-
-use self::model::AIBlockModel;
-use self::model::AIBlockModelHelper;
-use super::inline_action::requested_action::CTRL_C_KEYSTROKE;
-use super::inline_action::requested_action::ENTER_KEYSTROKE;
-use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
-use super::suggested_rule_modal::SuggestedRuleAndId;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
+use crate::code::editor_management::CodeSource;
+use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
 use crate::code_review::comments::{
     attach_pending_imported_comments, convert_insert_review_comments, AttachedReviewComment,
     CommentId, CommentOrigin,
 };
+use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::code_review::CodeReviewTelemetryEvent;
-use crate::PrivacySettings;
-use crate::{
-    ai::agent::{AIAgentInput, ServerOutputId},
-    send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings::AISettings,
+use crate::editor::InteractionState;
+use crate::notebooks::editor::model::FileLinkResolutionContext;
+use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
+use crate::server::ids::SyncId;
+use crate::server::telemetry::{
+    AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
-
-use super::controller::ClientIdentifiers;
-use super::ResponseStreamId;
-use super::{
-    action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind},
-    code_block::CodeSnippetButtonHandles,
-    inline_action::code_diff_view::{
-        CodeDiffState, CodeDiffView, CodeDiffViewAction, CodeDiffViewEvent,
-    },
-    inline_action::requested_command_attribution::is_command_copied_from_document,
-    permissions::is_agent_mode_autonomy_allowed,
-    telemetry_banner::should_collect_ai_ugc_telemetry,
-    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIPermissions,
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, AgentModeCodingPermissionsType, FontSettings,
+    InputModeSettings, InputModeSettingsChangedEvent, InputSettings,
+};
+use crate::settings_view::SettingsSection;
+use crate::terminal::find::TerminalFindModel;
+use crate::terminal::model::secrets::RichContentSecretTooltipInfo;
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+use crate::terminal::model::BlockId;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::safe_mode_settings::{
+    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::view::{
+    CodeDiffAction, RichContentLink, RichContentLinkTooltipInfo, TerminalAction,
+};
+use crate::terminal::{ShellLaunchData, TerminalModel, TerminalView};
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::*;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
+    SecondaryTheme,
+};
+use crate::view_components::compactible_action_button::CompactibleActionButton;
+use crate::view_components::find::FindEvent;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{
+    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
+    LLMPreferences, PrivacySettings, ToastStack,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -2466,16 +2425,6 @@ impl AIBlock {
             }
         }
 
-        // Now that streaming is complete and all RunAgents requests are
-        // fully populated, re-evaluate auto-launch for any card that
-        // was created during streaming with an empty agent_run_configs.
-        let conversation_id_for_auto_launch = self.client_ids.conversation_id;
-        for view in self.run_agents_card_views.values() {
-            view.update(ctx, |card, ctx| {
-                card.try_auto_launch_on_stream_complete(conversation_id_for_auto_launch, ctx);
-            });
-        }
-
         // Collect UI state handles for code snippets, tables, and image
         // tooltips in a single pass. Each handle type is collected in the
         // order its section type appears, matching the indices used during
@@ -4125,19 +4074,9 @@ impl AIBlock {
     /// Handles find match focus changes by auto-expanding collapsed reasoning blocks
     /// that contain the focused match.
     fn handle_find_match_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
-        // Get the currently focused match ID from the terminal's find model
-        let focused_match_id = self
-            .find_model
-            .as_ref(ctx)
-            .block_list_find_run()
-            .and_then(|run| match run.focused_match() {
-                Some(crate::terminal::find::BlockListMatch::RichContent { match_id, .. }) => {
-                    Some(*match_id)
-                }
-                _ => None,
-            });
-
-        let Some(match_id) = focused_match_id else {
+        // Get the currently focused match ID from the terminal's find model.
+        // The helper handles both the sync and async find paths.
+        let Some(match_id) = self.find_model.as_ref(ctx).focused_rich_content_match_id() else {
             return;
         };
 
@@ -4575,6 +4514,7 @@ impl AIBlock {
         if !self.model.is_restored() {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::CommentsReceived {
+                    is_local: Some(repo_location.is_local()),
                     raw_count,
                     converted_count,
                     thread_count,
@@ -5993,6 +5933,11 @@ pub enum AIBlockAction {
     ViewScreenshot {
         action_id: AIAgentActionId,
     },
+    /// Open the lightbox for an image attached to an already-submitted user query
+    /// rendered inside this AI block.
+    OpenSubmittedAttachmentLightbox {
+        image_index: usize,
+    },
     ToggleImportedCommentCollapsed {
         action_id: AIAgentActionId,
         comment_index: usize,
@@ -6645,6 +6590,73 @@ impl TypedActionView for AIBlock {
                     .iter()
                     .position(|id| *id == action_id)
                     .unwrap_or(0);
+
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                    images,
+                    initial_index,
+                });
+            }
+            AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
+                let decoded_images = self
+                    .model
+                    .inputs_to_render(ctx)
+                    .iter()
+                    .filter_map(|input| input.context())
+                    .flat_map(|contexts| contexts.iter())
+                    .filter_map(|context| match context {
+                        AIAgentContext::Image(image) => Some(image),
+                        _ => None,
+                    })
+                    .enumerate()
+                    .filter_map(|(submitted_image_index, image)| {
+                        let image_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                                Ok(image_bytes) => image_bytes,
+                                Err(error) => {
+                                    log::warn!(
+                                        "Failed to decode submitted image attachment for lightbox: {error}"
+                                    );
+                                    return None;
+                                }
+                            };
+
+                        Some((submitted_image_index, image_bytes, image.file_name.clone()))
+                    })
+                    .collect_vec();
+                let mut images = Vec::new();
+                let mut initial_index = None;
+                for (submitted_image_index, image_bytes, file_name) in decoded_images {
+                    let asset_id = format!(
+                        "submitted-attachment-lightbox-{}-{submitted_image_index}",
+                        self.client_ids.client_exchange_id
+                    );
+                    // Raw assets are keyed by exchange/image index, so repeated opens replace the
+                    // same cache entry. `AssetCache` also enforces its raw-asset size cap when
+                    // inserting, so no lightbox-specific cleanup is needed here.
+                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                        asset_cache.insert_raw_asset_bytes::<ImageType>(
+                            asset_id.clone(),
+                            &image_bytes,
+                            ctx,
+                        );
+                    });
+
+                    if submitted_image_index == *image_index {
+                        initial_index = Some(images.len());
+                    }
+                    images.push(ui_components::lightbox::LightboxImage {
+                        source: ui_components::lightbox::LightboxImageSource::Resolved {
+                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
+                                id: asset_id,
+                            },
+                        },
+                        description: Some(file_name),
+                    });
+                }
+
+                let Some(initial_index) = initial_index else {
+                    return;
+                };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
                     images,

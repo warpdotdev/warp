@@ -4765,7 +4765,7 @@ dependencies = [
 [[package]]
 name = "file-id"
 version = "0.2.2"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "windows-sys 0.59.0",
 ]
@@ -6330,7 +6330,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -8385,7 +8385,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "notify"
 version = "8.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "bitflags 2.9.4",
  "filetime",
@@ -8403,7 +8403,7 @@ dependencies = [
 [[package]]
 name = "notify-debouncer-full"
 version = "0.5.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "file-id",
  "log",
@@ -8429,7 +8429,7 @@ dependencies = [
 [[package]]
 name = "notify-types"
 version = "2.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 
 [[package]]
 name = "ntapi"
@@ -8573,7 +8573,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.3.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -10000,7 +10000,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -10194,6 +10194,12 @@ name = "pxfm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"
@@ -10712,6 +10718,7 @@ dependencies = [
  "async-channel",
  "async-io",
  "async-process",
+ "bounded-vec-deque",
  "command",
  "dashmap",
  "futures",
@@ -11911,7 +11918,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=3a12b871dfd1019a66057e4d9b7d5c812b73ee8c#3a12b871dfd1019a66057e4d9b7d5c812b73ee8c"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=5a0ad6135809feee9da2e9efae8bd6b54b89172e#5a0ad6135809feee9da2e9efae8bd6b54b89172e"
 dependencies = [
  "byte-unit",
  "serde",
@@ -14436,6 +14443,7 @@ dependencies = [
  "prost 0.14.3",
  "prost-build",
  "prost-types",
+ "qrcode",
  "rand 0.8.6",
  "rangemap",
  "rayon",
@@ -14516,6 +14524,7 @@ dependencies = [
  "walkdir",
  "warp-command-signatures",
  "warp-workflows",
+ "warp_assets",
  "warp_cli",
  "warp_completer",
  "warp_core",
@@ -14599,6 +14608,15 @@ version = "0.1.0"
 source = "git+https://github.com/warpdotdev/workflows?rev=793a98ddda6ef19682aed66364faebd2829f0e01#793a98ddda6ef19682aed66364faebd2829f0e01"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "warp_assets"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rust-embed 8.7.2",
+ "warpui_core",
 ]
 
 [[package]]

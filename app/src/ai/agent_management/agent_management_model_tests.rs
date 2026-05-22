@@ -1,14 +1,13 @@
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle};
 
+use super::AgentNotificationsModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::BlocklistAIHistoryModel;
-
-use super::AgentNotificationsModel;
 
 fn setup_app(
     app: &mut App,

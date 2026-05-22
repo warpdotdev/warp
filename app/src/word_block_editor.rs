@@ -1,21 +1,22 @@
 use pathfinder_color::ColorU;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Wrap, WrapFill,
+};
+use warpui::fonts::FamilyId;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, Wrap, WrapFill,
-    },
-    fonts::FamilyId,
-    ui_components::components::{UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    editor::{EditorView, Event, InteractionState, SingleLineEditorOptions, TextOptions},
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event, InteractionState, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
 };
-use crate::{editor::PropagateAndNoOpNavigationKeys, themes::theme::Fill};
+use crate::themes::theme::Fill;
 
 pub struct WordBlockEditorView {
     editor_view: ViewHandle<EditorView>,

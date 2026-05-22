@@ -1,26 +1,20 @@
-use crate::{
-    content::text::BufferBlockStyle,
-    editor::EditorView,
-    extract_block,
-    render::model::{BlockItem, RenderState, RichTextStyles, bounds, viewport::ViewportItem},
-};
 use pathfinder_color::ColorU;
-use warpui::elements::ListIndentLevel;
-use warpui::{
-    AppContext, Element, SizeConstraint, WeakViewHandle,
-    elements::{
-        Align, Border, ConstrainedBox, Container, CornerRadius, Hoverable, Icon, MouseStateHandle,
-        Radius, Rect,
-    },
-    geometry::vector::vec2f,
-    platform::Cursor,
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, Hoverable, Icon, ListIndentLevel,
+    MouseStateHandle, Radius, Rect,
 };
+use warpui::geometry::vector::vec2f;
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, SizeConstraint, WeakViewHandle};
 
-use super::{
-    RenderableBlock, RichTextAction,
-    paint::RenderContext,
-    placeholder::{self, BlockPlaceholder},
-};
+use super::paint::RenderContext;
+use super::placeholder::{self, BlockPlaceholder};
+use super::{RenderableBlock, RichTextAction};
+use crate::content::text::BufferBlockStyle;
+use crate::editor::EditorView;
+use crate::extract_block;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState, RichTextStyles, bounds};
 
 // Minimum size constraint for the checkbox point. If the size is smaller than the constraint,
 // the svg won't render.

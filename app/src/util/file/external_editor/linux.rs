@@ -1,9 +1,7 @@
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use command::blocking::Command;
 use freedesktop_desktop_entry::DesktopEntry;

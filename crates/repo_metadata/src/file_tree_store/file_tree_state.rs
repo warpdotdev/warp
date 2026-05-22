@@ -1,11 +1,12 @@
-use crate::file_tree_store::FileTreeEntry;
-use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryState};
-use crate::{BuildTreeError, DirectoryEntry, Entry};
-use ignore::gitignore::Gitignore;
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::sync::Arc;
+
+use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
+
+use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState};
+use crate::{BuildTreeError, DirectoryEntry, Entry};
 
 #[derive(Debug, Clone)]
 pub(super) struct FileTreeMapStore {

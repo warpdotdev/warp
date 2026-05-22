@@ -1,11 +1,43 @@
 mod selection;
 
-use crate::ai::agent::{conversation::AIConversationId, AIAgentActionId};
-use crate::ai::blocklist::SerializedBlockListItem;
-use crate::terminal::block_filter::BlockFilterQuery;
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::ops::{AddAssign, Range, RangeInclusive};
+use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::anyhow;
+use chrono::{DateTime, Local};
+use instant::SystemTime;
+use selection::BlockListSelection;
+pub use selection::SelectionRange;
+use sum_tree::{Dimension, Item, SeekBias, SumTree};
+use warp_core::features::FeatureFlag;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warpui::color::ColorU;
+use warpui::r#async::executor::Background;
+use warpui::units::{IntoLines, IntoPixels, Lines};
+use warpui::{record_trace_event, AppContext, EntityId, ViewHandle};
+
+use super::ansi::{Handler, InputBufferValue};
+use super::block::{BlockId, BlockSize, BlockState, SerializedAIMetadata};
+use super::early_output::EarlyOutput;
+use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePath};
+use super::grid::RespectDisplayedOutput;
+use super::image_map::StoredImageMetadata;
+use super::kitty::{KittyAction, KittyResponse};
+use super::rich_content::RichContentType;
+use super::secrets::RespectObfuscatedSecrets;
+use super::selection::ScrollDelta;
+use super::terminal_model::RangeInModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
-use crate::terminal::event::AfterBlockCompletedEvent;
+use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
+use crate::terminal::block_filter::BlockFilterQuery;
+use crate::terminal::block_list_element::GridType;
+use crate::terminal::event::Event::{AfterBlockCompleted, TerminalClear};
+use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, Event as TerminalEvent};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
@@ -14,61 +46,15 @@ use crate::terminal::model::ansi::{
     TabulationClearMode,
 };
 use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
+use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
-use crate::terminal::view::SeparatorId;
-use crate::terminal::view::WithinBlockBanner;
-use crate::terminal::{
-    event::{
-        BlockType, Event as TerminalEvent,
-        Event::{AfterBlockCompleted, TerminalClear},
-    },
-    view::{InlineBannerId, InlineBannerItem},
-};
-use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
-use anyhow::anyhow;
-use chrono::{DateTime, Local};
-use instant::SystemTime;
-use std::io;
-use std::ops::{AddAssign, Range, RangeInclusive};
-use std::sync::Arc;
-use std::time::Duration;
-use sum_tree::{Dimension, Item, SeekBias, SumTree};
-use warp_core::features::FeatureFlag;
-use warpui::color::ColorU;
-use warpui::r#async::executor::Background;
-use warpui::record_trace_event;
-
-use std::collections::{HashMap, HashSet};
-use warpui::{
-    units::{IntoLines, IntoPixels, Lines},
-    AppContext, EntityId, ViewHandle,
-};
-
-use super::block::{BlockId, BlockSize, BlockState};
-use super::early_output::EarlyOutput;
-use super::grid::grid_handler::{FragmentBoundary, GridHandler, PossiblePath};
-use super::grid::RespectDisplayedOutput;
-use super::image_map::StoredImageMetadata;
-use super::kitty::{KittyAction, KittyResponse};
-use super::rich_content::RichContentType;
-use super::secrets::RespectObfuscatedSecrets;
-use super::{ansi::InputBufferValue, block::SerializedAIMetadata};
-
-use super::selection::ScrollDelta;
-use super::terminal_model::RangeInModel;
-use super::{ansi::Handler, grid::grid_handler::Link};
-use crate::ai::blocklist::AIBlock;
-use crate::terminal::block_list_element::GridType;
-use crate::terminal::model::blockgrid::BlockGrid;
-use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-
-use selection::BlockListSelection;
-pub use selection::SelectionRange;
+use crate::terminal::view::{InlineBannerId, InlineBannerItem, SeparatorId, WithinBlockBanner};
+use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
@@ -609,7 +595,7 @@ impl BlockList {
     /// block.
     /// 3. Create the `BootstrapStage::WarpInput` block through
     /// `create_warp_input_block`. From here on, there is always a default
-    /// block which is hidden until it is started.
+    /// block which is hidden while it is empty.
     /// 4. We progress through the bootstrap stages with the `finalize_block_and_advance_list` function.
     /// 5. After we hit `BootstrapStage::PostBootstrapPrecmd`, it's normal
     /// execution. `finalize_block_and_advance_list` is still the main function to advance the block list.
@@ -702,10 +688,6 @@ impl BlockList {
             }
         }
         self.create_warp_input_block();
-        // Note: We no longer call start() here.
-        // When shell input arrives, the block will be started (see the `input` handler).
-        // This ensures sessions without a shell (like cloude mode) don't permanently trigger is_active_and_long_running()
-        // since the block will never be finished.
     }
 
     pub(super) fn load_shared_session_scrollback(&mut self, scrollback: &[SerializedBlock]) {
@@ -793,8 +775,7 @@ impl BlockList {
     }
 
     /// This is an important function in the block list lifecycle. After this
-    /// is called, there's an invariant where we always have an active block
-    /// that's hidden until it's `start`ed.
+    /// is called, there's an invariant where we always have an active block.
     fn create_warp_input_block(&mut self) {
         self.create_new_block(
             BlockId::new(),
@@ -802,6 +783,8 @@ impl BlockList {
             Default::default(),
             None,
         );
+        self.start_active_block();
+        self.update_active_block_height();
         self.bootstrap_stage = BootstrapStage::WarpInput;
     }
 
@@ -892,9 +875,9 @@ impl BlockList {
             cursor.slice(&BlockIndex(self.blocks.len()), SeekBias::Left)
         };
 
-        // If the active block has started (i.e. is running)--then insert the gap _after_ the block.
-        // If the active block has not started (e.g. the user pressed ctrl-l)--insert the gap
-        // _before_ the active block so the next command the user executes is after the gap.
+        // If the active block is visible, insert the gap _after_ the block.
+        // If the active block is hidden, insert the gap _before_ the active block so the next
+        // visible content is after the gap.
         let gap_height = if let Some(height) = self.next_gap_height() {
             height
         } else {
@@ -910,7 +893,7 @@ impl BlockList {
         let agent_view_state = self.agent_view_state.clone();
         let active_block_height = self.active_block_mut().height(&agent_view_state).into();
 
-        if self.active_block().started() {
+        if active_block_height > BlockHeight::zero() {
             self.block_heights
                 .push(BlockHeightItem::Block(active_block_height));
             self.block_heights.push(gap);
@@ -1039,9 +1022,8 @@ impl BlockList {
         {
             self.append_item_to_blocklist(BlockHeightItem::RichContent(item))
         } else {
-            // If there's no long-running block, then the active block is a default block that is hidden
-            // until it's started. This is an invariant of the blocklist (see create_warp_input_block). In this
-            // case, we should add the rich content above that hidden block.
+            // If there's no long-running block, then the active block is a default block with no
+            // visible content. In this case, we should add the rich content above that hidden block.
             self.insert_non_block_item_before_block(
                 self.active_block_index(),
                 BlockHeightItem::RichContent(item),
@@ -1780,6 +1762,7 @@ impl BlockList {
             }
             None => Lines::zero(),
         };
+        let mut previous_block_height = BlockHeight::zero();
         let block_height = if let Some(block) = self.block_at(block_index) {
             block.height(&self.agent_view_state).into()
         } else {
@@ -1793,6 +1776,9 @@ impl BlockList {
             let mut cursor = self.block_heights.cursor::<BlockIndex, ()>();
             let next_index = block_index + BlockIndex(1);
             let mut tree_before_last_block = cursor.slice(&next_index, SeekBias::Left);
+            if let Some(BlockHeightItem::Block(height)) = cursor.item() {
+                previous_block_height = *height;
+            }
             tree_before_last_block.push(BlockHeightItem::Block(block_height));
 
             // Advance the cursor past the current block and take the suffix to get all the items
@@ -1850,6 +1836,20 @@ impl BlockList {
 
         if let Some(removed_index) = removed_gap_index {
             self.update_block_height_indices(BlockHeightUpdate::Removal(removed_index), false);
+        }
+
+        let should_emit_visible_bootstrap_block_event = previous_block_height
+            == BlockHeight::zero()
+            && block_height > BlockHeight::zero()
+            && self
+                .block_at(block_index)
+                .is_some_and(Block::should_emit_visible_bootstrap_block_event);
+        if should_emit_visible_bootstrap_block_event {
+            if let Some(block) = self.blocks.get_mut(block_index.0) {
+                block.mark_visible_bootstrap_block_event_sent();
+            }
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::VisibleBootstrapBlock);
         }
     }
 
@@ -2751,13 +2751,7 @@ impl BlockList {
         active_block.finish(0);
         self.update_active_block_height();
 
-        self.create_new_block(
-            BlockId::new(),
-            BootstrapStage::WarpInput,
-            None, /* precmd_value */
-            None, /* restored_block_is_local */
-        );
-        self.bootstrap_stage = BootstrapStage::WarpInput;
+        self.create_warp_input_block();
     }
 
     /// Starts the active block and resets block-to-block state. For local sessions, this is called
@@ -3011,6 +3005,10 @@ impl BlockList {
             None, /*precmd_value*/
             None, /* restored_block_was_local */
         );
+        if next_bootstrap_stage == BootstrapStage::ScriptExecution {
+            self.start_active_block();
+            self.update_active_block_height();
+        }
         if self.bootstrap_stage != next_bootstrap_stage {
             log::info!(
                 "Incrementing stage from {:?} to {:?}",
@@ -3362,17 +3360,6 @@ impl ansi::Handler for BlockList {
     }
 
     fn input(&mut self, c: char) {
-        let is_bootstrapped = self.is_bootstrapped();
-        let active_block = self.active_block_mut();
-
-        // We typically "start" blocks when we execute the command. Start basically
-        // means mark ready to render. For bootstrapping blocks, we start them
-        // when they receive input. Note this means that, for example, a bootstrap script that
-        // only executes `read` isn't supported.
-        if !active_block.started() && !is_bootstrapped {
-            self.start_active_block();
-            self.update_active_block_height();
-        }
         delegate!(self.input(c));
     }
 
@@ -3695,6 +3682,10 @@ impl ansi::Handler for BlockList {
         }
         self.finalize_block_and_advance_list(data);
         self.latest_block_finished_time = Some(instant::SystemTime::now());
+    }
+
+    fn set_current_working_directory(&mut self, path: String) {
+        delegate_to_block!(self.set_current_working_directory(path));
     }
 
     /// Receives metadata for the prompt and the next command, and

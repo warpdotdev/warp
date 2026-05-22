@@ -1,54 +1,43 @@
-use super::delegate::DispatchDelegate;
-use super::{
-    app, make_nsstring,
-    rendering::{is_integrated_gpu, Device, RendererManager},
-    RectFExt as _,
-};
-use anyhow::{anyhow, Result};
-use cocoa::appkit::{NSWindowButton, NSWindowStyleMask};
-use cocoa::foundation::{NSArray, NSPoint, NSRange, NSString, NSUInteger};
-use cocoa::{
-    appkit::{NSApp, NSView, NSWindow},
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSInteger, NSRect, NSSize},
-};
-use foreign_types::ForeignType;
-use itertools::Itertools;
-use num_traits::FromPrimitive;
-use objc::class;
-use objc::{
-    msg_send,
-    runtime::{Object, BOOL, NO, YES},
-    sel, sel_impl,
-};
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use warpui_core::event::ModifiersState;
-use warpui_core::platform::{
-    file_picker, FilePickerCallback, FilePickerConfiguration, FullscreenState, GraphicsBackend,
-    TerminationMode, WindowFocusBehavior,
-};
-use warpui_core::r#async::Timer;
-use warpui_core::rendering::GPUPowerPreference;
-use warpui_core::windowing::WindowCallbacks;
-use warpui_core::{
-    accessibility::AccessibilityContent,
-    actions::StandardAction,
-    platform::{self, WindowBounds, WindowOptions, WindowStyle},
-    r#async::executor,
-    Event, OptionalPlatformWindow, Scene, WindowId,
-};
-use warpui_core::{DisplayId, DisplayIdx};
-
-use instant::Instant;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::raw::c_uchar;
+use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cell::Cell, os::raw::c_uchar, panic, path::Path, ptr};
-use std::{cell::RefCell, ffi::c_void, rc::Rc};
-use std::{slice, str};
+use std::{panic, ptr, slice, str};
+
+use anyhow::{anyhow, Result};
+use cocoa::appkit::{NSApp, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
+use cocoa::base::{id, nil};
+use cocoa::foundation::{
+    NSArray, NSAutoreleasePool, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
+};
+use foreign_types::ForeignType;
+use instant::Instant;
+use itertools::Itertools;
+use num_traits::FromPrimitive;
+use objc::runtime::{Object, BOOL, NO, YES};
+use objc::{class, msg_send, sel, sel_impl};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui_core::accessibility::AccessibilityContent;
+use warpui_core::actions::StandardAction;
+use warpui_core::event::ModifiersState;
+use warpui_core::platform::{
+    self, file_picker, FilePickerCallback, FilePickerConfiguration, FullscreenState,
+    GraphicsBackend, TerminationMode, WindowBounds, WindowFocusBehavior, WindowOptions,
+    WindowStyle,
+};
+use warpui_core::r#async::{executor, Timer};
+use warpui_core::rendering::GPUPowerPreference;
+use warpui_core::windowing::WindowCallbacks;
+use warpui_core::{DisplayId, DisplayIdx, Event, OptionalPlatformWindow, Scene, WindowId};
+
+use super::delegate::DispatchDelegate;
+use super::rendering::{is_integrated_gpu, Device, RendererManager};
+use super::{app, make_nsstring, RectFExt as _};
 
 extern "C" {
     fn screenFrame() -> NSRect;

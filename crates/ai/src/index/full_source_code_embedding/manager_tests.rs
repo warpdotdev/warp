@@ -1,19 +1,16 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::index::full_source_code_embedding::store_client::MockStoreClient;
-#[cfg(feature = "local_fs")]
-use crate::index::full_source_code_embedding::SnapshotStorage;
 use warpui::App;
-
-use crate::workspace::WorkspaceMetadata;
 
 use super::{
     BuildSource, CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerConfig,
     CodebaseIndexStatus, CodebaseIndexStatusEventKey, CodebaseIndexingError, SyncProgress,
 };
+use crate::index::full_source_code_embedding::store_client::MockStoreClient;
+#[cfg(feature = "local_fs")]
+use crate::index::full_source_code_embedding::SnapshotStorage;
+use crate::workspace::WorkspaceMetadata;
 
 fn workspace_metadata(path: impl Into<PathBuf>) -> WorkspaceMetadata {
     WorkspaceMetadata {
@@ -215,7 +212,29 @@ fn index_directory_is_noop_when_indexing_disabled() {
         });
 
         manager.update(&mut app, |manager, ctx| {
-            manager.index_directory(PathBuf::from("repo"), ctx);
+            assert!(!manager.index_directory(PathBuf::from("repo"), ctx));
+            assert_eq!(manager.num_active_indices(), 0);
+        });
+    });
+}
+
+#[test]
+fn index_directory_reports_when_max_index_limit_prevents_creation() {
+    App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|ctx| {
+            CodebaseIndexManager::new(
+                Vec::new(),
+                Some(0),
+                1000,
+                32,
+                Arc::new(MockStoreClient),
+                true,
+                ctx,
+            )
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            assert!(!manager.index_directory(PathBuf::from("repo"), ctx));
             assert_eq!(manager.num_active_indices(), 0);
         });
     });
@@ -237,7 +256,8 @@ fn build_and_sync_is_noop_when_indexing_disabled() {
         });
 
         manager.update(&mut app, |manager, ctx| {
-            manager.build_and_sync_codebase_index(BuildSource::FromPath(Path::new("repo")), ctx);
+            assert!(!manager
+                .build_and_sync_codebase_index(BuildSource::FromPath(Path::new("repo")), ctx));
             assert_eq!(manager.num_active_indices(), 0);
         });
     });

@@ -1,16 +1,11 @@
 use warp_terminal::model::grid::cell::Flags;
 
-use crate::{
-    terminal::model::{
-        ansi::Handler as _,
-        blockgrid::BlockGrid,
-        grid::Dimensions as _,
-        index::{VisiblePoint, VisibleRow},
-    },
-    test_util::mock_blockgrid,
-};
-
 use super::*;
+use crate::terminal::model::ansi::Handler as _;
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::index::{VisiblePoint, VisibleRow};
+use crate::test_util::mock_blockgrid;
 
 /// Converts a vector of ranges into DisplayedRows objects with source FilterMatch.
 fn make_displayed_rows_from_ranges(ranges: Vec<RangeInclusive<usize>>) -> Vec<DisplayedRows> {

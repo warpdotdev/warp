@@ -2,8 +2,6 @@ mod legacy;
 mod maa;
 mod static_prompt_suggestions;
 
-use warpui::ModelHandle;
-
 pub use legacy::{
     PassiveSuggestionsEvent as LegacyPassiveSuggestionsEvent,
     PassiveSuggestionsModel as LegacyPassiveSuggestionsModel,
@@ -12,6 +10,7 @@ pub use maa::{
     PassiveSuggestionsEvent as MaaPassiveSuggestionsEvent,
     PassiveSuggestionsModel as MaaPassiveSuggestionsModel,
 };
+use warpui::ModelHandle;
 
 #[derive(Clone)]
 pub struct PassiveSuggestionsModels {

@@ -5,12 +5,11 @@
 //! coverage can run with the "v2" Cargo feature both enabled and disabled.
 use warp_js::TypedJsFunctionRef;
 
+use super::{TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND};
 use crate::signatures::{
     Argument, ArgumentValue, Arity, Command, CommandSignature, GeneratorFn, GeneratorResults,
     GeneratorScript, Opt, Priority, Suggestion, TemplateType,
 };
-
-use super::{TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND};
 
 lazy_static::lazy_static! {
     pub(crate) static ref TEST_GENERATOR_1_JS_FUNCTION: TypedJsFunctionRef<String, GeneratorResults> = TypedJsFunctionRef::<String, GeneratorResults>::new_for_test();

@@ -1,21 +1,20 @@
+use std::cell::Cell;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
+
 use anyhow::Result;
-use serde_yaml::{Mapping, Value};
-use std::{
-    cell::Cell,
-    collections::{HashMap, VecDeque},
-    rc::Rc,
-};
-
-use html5ever::{
-    Attribute, ParseOpts, parse_document, tendril::TendrilSink, tree_builder::TreeBuilderOpts,
-};
+use html5ever::tendril::TendrilSink;
+use html5ever::tree_builder::TreeBuilderOpts;
+use html5ever::{Attribute, ParseOpts, parse_document};
 use markup5ever_rcdom::{Node, NodeData, RcDom};
+use serde_yaml::{Mapping, Value};
 
+use crate::markdown_parser::RUNNABLE_BLOCK_MARKDOWN_LANG;
+use crate::weight::CustomWeight;
 use crate::{
     CodeBlockText, FormattedIndentTextInline, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextInline, FormattedTextLine,
     FormattedTextStyles, Hyperlink, OrderedFormattedIndentTextInline,
-    markdown_parser::RUNNABLE_BLOCK_MARKDOWN_LANG, weight::CustomWeight,
 };
 
 // Top element element tags we are not parsing for right now.

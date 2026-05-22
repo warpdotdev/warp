@@ -1,19 +1,18 @@
+use std::env;
+use std::fs::{self, File};
+use std::io::{IsTerminal, Write, copy};
 use std::path::{Path, PathBuf};
-use std::{
-    env,
-    fs::{self, File},
-    io::{IsTerminal, Write, copy},
-};
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use chrono::Local;
 use log::LevelFilter;
-use std::sync::OnceLock;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::{LogConfig, LogDestination};
-use warp_core::channel::ChannelState;
 
 const MAX_FILES_IN_GUI_ROTATION: usize = 5;
 const MAX_FILES_IN_CLI_ROTATION: usize = 10;

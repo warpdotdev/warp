@@ -16,12 +16,14 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use async_channel::Receiver;
+use serde::Serialize;
 use warpui::r#async::executor;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::client::RemoteServerLog;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::manager::RemoteServerExitStatus;
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
-use serde::Serialize;
 
 /// How the remote server binary was installed. Used for telemetry to
 /// distinguish direct remote downloads from client-side SCP uploads.
@@ -175,6 +177,10 @@ pub struct Connection {
     /// See [`crate::ssh::stop_control_master`] for the exact command.
     #[cfg(not(target_family = "wasm"))]
     pub control_path: Option<PathBuf>,
+    /// Tail buffer of the last N stderr lines from the SSH subprocess.
+    /// Drained on connection failure and attached to telemetry.
+    #[cfg(not(target_family = "wasm"))]
+    pub stderr_tail: RemoteServerLog,
 }
 
 /// Transport abstraction for remote server connections.

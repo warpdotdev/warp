@@ -1,22 +1,23 @@
-use cocoa::appkit::{NSApp, NSEventModifierFlags, NSMenu, NSMenuItem};
-use cocoa::base::selector;
-use cocoa::{
-    appkit::{
-        NSDownArrowFunctionKey, NSEndFunctionKey, NSF10FunctionKey, NSF11FunctionKey,
-        NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey, NSF16FunctionKey,
-        NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF1FunctionKey, NSF20FunctionKey,
-        NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey, NSF6FunctionKey,
-        NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSHomeFunctionKey, NSInsertFunctionKey,
-        NSLeftArrowFunctionKey, NSPageDownFunctionKey, NSPageUpFunctionKey,
-        NSRightArrowFunctionKey, NSUpArrowFunctionKey,
-    },
-    base::{id, nil},
-    foundation::{NSArray, NSAutoreleasePool, NSInteger},
+use std::boxed::Box;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::rc::Rc;
+
+use cocoa::appkit::{
+    NSApp, NSDownArrowFunctionKey, NSEndFunctionKey, NSEventModifierFlags, NSF10FunctionKey,
+    NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey,
+    NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF1FunctionKey,
+    NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey,
+    NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSHomeFunctionKey,
+    NSInsertFunctionKey, NSLeftArrowFunctionKey, NSMenu, NSMenuItem, NSPageDownFunctionKey,
+    NSPageUpFunctionKey, NSRightArrowFunctionKey, NSUpArrowFunctionKey,
 };
+use cocoa::base::{id, nil, selector};
+use cocoa::foundation::{NSArray, NSAutoreleasePool, NSInteger};
 use lazy_static::lazy_static;
 use objc::runtime::{NO, YES};
 use objc::{msg_send, sel, sel_impl};
-use std::{boxed::Box, cell::RefCell, collections::HashMap, ffi::c_void, rc::Rc};
 use warpui_core::actions::StandardAction;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::menu::{

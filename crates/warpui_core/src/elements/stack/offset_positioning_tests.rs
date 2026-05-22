@@ -1,5 +1,6 @@
-use super::*;
 use lazy_static::lazy_static;
+
+use super::*;
 
 lazy_static! {
     static ref OFFSET: Vector2F = vec2f(5., 10.);

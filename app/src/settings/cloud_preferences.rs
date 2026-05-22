@@ -1,22 +1,18 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject, UniquePer,
-    },
-    server::sync_queue::QueueItem,
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
 };
-
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision, UniquePer,
 };
+use crate::server::sync_queue::QueueItem;
 define_settings_group!(CloudPreferencesSettings, settings: [
    settings_sync_enabled: IsSettingsSyncEnabled {
        type: bool,
@@ -153,13 +149,6 @@ impl StringModel for Preference {
     fn warn_if_unsaved_at_quit() -> bool {
         // Don't block quitting on unsaved cloud prefs changes
         false
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Preference(server_preference) = server_cloud_object {
-            return Some(server_preference.model.clone().string_model);
-        }
-        None
     }
 
     fn model_format() -> GenericStringObjectFormat {

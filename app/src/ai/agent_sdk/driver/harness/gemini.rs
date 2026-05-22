@@ -10,15 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warpui::{ModelHandle, ModelSpawner};
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
-use crate::server::server_api::harness_support::HarnessSupportClient;
-use crate::server::server_api::ServerApi;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 use warp_managed_secrets::ManagedSecretValue;
+use warpui::{ModelHandle, ModelSpawner};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
@@ -27,6 +20,13 @@ use super::{
     write_temp_file, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload,
     SavePoint, ThirdPartyHarness,
 };
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::harness_support::HarnessSupportClient;
+use crate::server::server_api::ServerApi;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::CLIAgent;
 
 pub(crate) struct GeminiHarness;
 

@@ -1,18 +1,19 @@
-use super::{merge_repository_updates, Repository, RepositorySubscriber, TrackedRemoteRef};
-use crate::repositories::stub_git_repository;
-use crate::watcher::DirectoryWatcher;
-use crate::{RepositoryUpdate, TargetFile};
-use futures::channel::mpsc;
-use futures::{FutureExt as _, StreamExt as _};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
+
+use futures::channel::mpsc;
+use futures::{FutureExt as _, StreamExt as _};
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::Timer;
-use warpui::App;
-use warpui::ModelContext;
+use warpui::{App, ModelContext};
+
+use super::{merge_repository_updates, Repository, RepositorySubscriber, TrackedRemoteRef};
+use crate::repositories::stub_git_repository;
+use crate::watcher::DirectoryWatcher;
+use crate::{RepositoryUpdate, TargetFile};
 
 struct RecordingSubscriber {
     update_tx: mpsc::UnboundedSender<RepositoryUpdate>,

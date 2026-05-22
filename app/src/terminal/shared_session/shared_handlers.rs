@@ -16,8 +16,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
-use crate::terminal::TerminalView;
+use crate::terminal::{CLIAgent, TerminalView};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.

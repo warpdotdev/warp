@@ -1,14 +1,13 @@
 //! Hit-testing implementation for the rendering model.
 
 use num_traits::SaturatingSub;
+use string_offset::CharOffset;
 use sum_tree::SeekBias;
 use warpui::units::{IntoPixels, Pixels};
 
-use string_offset::CharOffset;
-
+use super::positioned::{Positioned, PositionedCursor};
 use super::{
     BlockItem, Height, HitTestBlockType, LayoutSummary, ParagraphBlock, RenderState, bounds,
-    positioned::{Positioned, PositionedCursor},
 };
 
 #[cfg(test)]
