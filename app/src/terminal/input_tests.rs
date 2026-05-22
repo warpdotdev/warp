@@ -6223,6 +6223,17 @@ fn test_input_buffer_submitted_telemetry_uses_raw_input_type_decision_source() {
             })
             .collect_vec()
     }
+    async fn wait_for_input_buffer_submitted_events() -> Vec<serde_json::Value> {
+        let mut events = Vec::new();
+        for _ in 0..100 {
+            events.extend(input_buffer_submitted_events());
+            if !events.is_empty() {
+                break;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
+        events
+    }
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -6248,9 +6259,7 @@ fn test_input_buffer_submitted_telemetry_uses_raw_input_type_decision_source() {
             input.input_enter(ctx);
         });
 
-        Timer::after(Duration::from_millis(10)).await;
-
-        let telemetry_events = input_buffer_submitted_events();
+        let telemetry_events = wait_for_input_buffer_submitted_events().await;
         assert_eq!(telemetry_events.len(), 1);
         assert_eq!(telemetry_events[0]["input_type"], "Shell");
         assert_eq!(telemetry_events[0]["is_locked"], true);
