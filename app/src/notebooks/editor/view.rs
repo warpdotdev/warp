@@ -75,7 +75,7 @@ use crate::util::tooltips::{
     render_tooltip, should_show_open_in_warp_link, TooltipLink, TooltipRedaction,
 };
 use crate::view_components::DismissibleToast;
-use crate::WorkspaceAction;
+use crate::workspace::WorkspaceAction;
 
 #[cfg(test)]
 #[path = "view_tests.rs"]
