@@ -517,6 +517,47 @@ impl super::TerminalView {
             );
 
             if let Some(absolute_path) = absolute_path {
+                // On Windows the NT kernel transparently normalizes trailing periods
+                // during `fs::metadata` lookups, so the literal capture of "foo.md."
+                // already succeeds above — the SUFFIXES_TO_REMOVE fallback loop never
+                // runs, and the highlight end_point is never shrunk.  We fix that
+                // parity gap here: when the captured token ends with '.' and is not a
+                // \\?\-prefixed verbatim path (which bypasses NT normalization and may
+                // legitimately name a file ending in '.'), retry with the dot stripped.
+                // If the stripped form also resolves, prefer it and shrink end_point
+                // by 1 so the visible link excludes the punctuation period.
+                //
+                // The \\?\ guard is necessary because on NAS/SMB servers backed by a
+                // POSIX filesystem, Win32 normalization is bypassed and "foo.md" and
+                // "foo.md." could be two distinct files; we must not conflate them.
+                #[cfg(target_os = "windows")]
+                if possible_path.path.path.ends_with('.')
+                    && !possible_path.path.path.starts_with(r"\\?\")
+                {
+                    let stripped = &possible_path.path.path[..possible_path.path.path.len() - 1];
+                    let stripped_clean_path = CleanPathResult {
+                        path: stripped.into(),
+                        line_and_column_num: possible_path.path.line_and_column_num,
+                    };
+                    if let Some(stripped_absolute_path) = absolute_path_if_valid(
+                        &stripped_clean_path,
+                        ShellPathType::ShellNative(working_directory.to_string()),
+                        shell_launch_data.as_ref(),
+                    ) {
+                        let new_end_point = possible_path
+                            .range
+                            .end()
+                            .wrapping_sub(max_columns, 1);
+                        link = Some(Self::create_valid_link(
+                            stripped_absolute_path,
+                            stripped_clean_path.line_and_column_num,
+                            *possible_path.range.start()..=new_end_point,
+                            &within_model_possible_path,
+                        ));
+                        break;
+                    }
+                }
+
                 link = Some(Self::create_valid_link(
                     absolute_path,
                     possible_path.path.line_and_column_num,
@@ -672,16 +713,22 @@ mod tests {
     /// at the end of a sentence) must produce a valid link after the period is stripped,
     /// and the returned path must not carry the trailing dot.
     ///
-    /// Two layers are exercised:
+    /// Three layers are exercised:
     ///
     /// 1. On POSIX: `SUFFIXES_TO_REMOVE` now includes `"."`, so `"foo.md."` produces a
     ///    `"foo.md"` fallback candidate when the literal name is not found on disk.
     ///
-    /// 2. On Windows: the NT kernel silently normalizes trailing periods in path lookups,
-    ///    so `fs::metadata("foo.md.")` resolves to `foo.md` and succeeds — but the returned
-    ///    `PathBuf` previously carried the literal trailing dot through to `is_markdown_file`,
-    ///    where `Path::extension()` returned `Some("")` and rejected the file.
-    ///    `absolute_path_if_valid` now strips the trailing dot before returning.
+    /// 2. On Windows (path resolution): the NT kernel silently normalizes trailing periods
+    ///    in path lookups, so `fs::metadata("foo.md.")` resolves to `foo.md` and succeeds
+    ///    — but the returned `PathBuf` previously carried the literal trailing dot through
+    ///    to `is_markdown_file`, where `Path::extension()` returned `Some("")` and rejected
+    ///    the file.  `absolute_path_if_valid` now strips the trailing dot before returning.
+    ///
+    /// 3. On Windows (highlight parity): because the literal lookup succeeds (layer 2),
+    ///    the `SUFFIXES_TO_REMOVE` fallback loop in `compute_valid_paths` never runs, so
+    ///    the highlight `end_point` was never shrunk.  A `cfg(target_os = "windows")`-gated
+    ///    branch in the success arm retries the stripped form and, when it resolves, uses
+    ///    the shrunk `end_point` — see `compute_valid_paths_windows_highlight_range_parity`.
     ///
     /// This test asserts both that a link is found **and** that the path in the link does
     /// not end with a period, catching regressions on either platform.
@@ -721,6 +768,87 @@ mod tests {
         assert!(
             !abs_path_str.ends_with('.'),
             "absolute path must not end with a period after stripping; got: {abs_path_str:?}"
+        );
+    }
+
+    /// Windows highlight-range parity for warpdotdev/warp#11477.
+    ///
+    /// On Windows the NT kernel normalizes trailing '.' in `fs::metadata` calls, so
+    /// `absolute_path_if_valid("foo.md.")` succeeds on the *first* call.  That means the
+    /// `SUFFIXES_TO_REMOVE` fallback loop in `compute_valid_paths` never executes, and
+    /// the highlight `end_point` is never shrunk — the user sees the trailing period
+    /// included in the clickable link region even though the file opens correctly.
+    ///
+    /// The `cfg(target_os = "windows")`-gated branch in the literal-lookup success arm
+    /// detects this situation, retries the stripped form, and — when it resolves — builds
+    /// the link with `end_point` shrunk by 1 column so the visible highlight excludes the
+    /// punctuation period.
+    ///
+    /// This test asserts that `Link.range.end().col` is `path.len() - 1` (the trailing '.'
+    /// excluded) and that the resolved path classifies as markdown (stripped form preferred).
+    ///
+    /// Note on the `\\?\` guard: the branch is skipped for `\\?\`-prefixed verbatim paths
+    /// because Win32 normalization is bypassed there and a POSIX-backed NAS could serve
+    /// distinct `foo.md` and `foo.md.` files.  That guard is verified by code inspection
+    /// rather than a hermetic test, because creating a real `\\?\`-prefixed temp directory
+    /// in a unit test requires elevated privileges and is not portable across CI environments.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn compute_valid_paths_windows_highlight_range_parity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("foo.md");
+        std::fs::write(&file_path, "").expect("write temp file");
+
+        let working_directory = dir
+            .path()
+            .to_str()
+            .expect("temp dir path is valid UTF-8");
+
+        // "foo.md." — the captured token including the trailing sentence period.
+        let token = "foo.md.";
+        let possible_paths = vec![make_possible_path(token)];
+
+        let result = TerminalView::compute_valid_paths(
+            working_directory,
+            possible_paths.into_iter(),
+            80,
+            None,
+        );
+
+        let file_link = result.expect(
+            "expected a file link for 'foo.md.' on Windows, got None",
+        );
+        let GridHighlightedLink::File(within_model) = file_link else {
+            panic!("expected GridHighlightedLink::File, got a URL link");
+        };
+        let inner = within_model.get_inner();
+
+        // The highlight end column must exclude the trailing '.': len - 1.
+        let expected_end_col = token.len() - 1;
+        let actual_end_col = inner.link.range.end().col;
+        assert_eq!(
+            actual_end_col,
+            expected_end_col,
+            "highlight end column should exclude trailing '.': expected col {expected_end_col}, \
+             got col {actual_end_col}"
+        );
+
+        // The resolved path must not carry the trailing dot (verifies the stripped form was used).
+        let abs_path_str = inner
+            .absolute_path
+            .to_str()
+            .expect("absolute path is valid UTF-8");
+        assert!(
+            !abs_path_str.ends_with('.'),
+            "absolute path must not end with a period; got: {abs_path_str:?}"
+        );
+
+        // The resolved path must have a .md extension (stripped form preferred over literal).
+        let extension = inner.absolute_path.extension().and_then(|e| e.to_str());
+        assert_eq!(
+            extension,
+            Some("md"),
+            "resolved path must have .md extension; got: {extension:?}"
         );
     }
 }
