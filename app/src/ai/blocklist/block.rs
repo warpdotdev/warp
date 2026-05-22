@@ -41,8 +41,8 @@ use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
 use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
@@ -50,14 +50,14 @@ use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SecretRange,
-    SelectionBound, SelectionHandle, TableStateHandle, get_rich_content_position_id,
+    get_rich_content_position_id, ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, SecretRange, SelectionBound, SelectionHandle, TableStateHandle,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text::SelectionType;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -154,13 +154,13 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor_management::CodeSource;
-use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
 use crate::code_review::comments::{
-    AttachedReviewComment, CommentId, CommentOrigin, attach_pending_imported_comments,
-    convert_insert_review_comments,
+    attach_pending_imported_comments, convert_insert_review_comments, AttachedReviewComment,
+    CommentId, CommentOrigin,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::code_review::CodeReviewTelemetryEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
@@ -174,12 +174,12 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
-use crate::terminal::model::BlockId;
 use crate::terminal::model::secrets::RichContentSecretTooltipInfo;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+use crate::terminal::model::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::{
-    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
+    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
 };
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::{
@@ -189,19 +189,19 @@ use crate::terminal::{ShellLaunchData, TerminalModel, TerminalView};
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
-use crate::view_components::DismissibleToast;
+use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
     SecondaryTheme,
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
+use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    AIAgentTodoList, Appearance, FileEdit, LLMPreferences, PrivacySettings, ToastStack,
-    report_error, report_if_error, send_telemetry_from_ctx,
+    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
+    LLMPreferences, PrivacySettings, ToastStack,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -4249,10 +4249,8 @@ impl AIBlock {
                             ..
                         } if speedbump_action_id == action_id && *shown.lock() => {
                             BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                                report_if_error!(
-                                    permissions
-                                        .set_should_autoexecute_readonly_commands(*checked, ctx)
-                                );
+                                report_if_error!(permissions
+                                    .set_should_autoexecute_readonly_commands(*checked, ctx));
                             });
                         }
                         AutonomySettingSpeedbump::ShouldShowForFileAccess {
@@ -4304,12 +4302,8 @@ impl AIBlock {
                                     permission,
                                     AgentModeCodingPermissionsType::AllowReadingSpecificFiles
                                 ) {
-                                    report_if_error!(
-                                        permissions.add_filepath_to_code_read_allowlist(
-                                            root_repo_path,
-                                            ctx
-                                        )
-                                    );
+                                    report_if_error!(permissions
+                                        .add_filepath_to_code_read_allowlist(root_repo_path, ctx));
                                 }
                             });
                         }
@@ -5949,7 +5943,8 @@ pub enum AIBlockAction {
     ViewScreenshot {
         action_id: AIAgentActionId,
     },
-    /// Open the lightbox for an image attached to the submitted user query.
+    /// Open the lightbox for an image attached to an already-submitted user query
+    /// rendered inside this AI block.
     OpenSubmittedAttachmentLightbox {
         image_index: usize,
     },
@@ -6208,11 +6203,9 @@ impl TypedActionView for AIBlock {
                     }
                 });
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .rule_suggestions_enabled_internal
-                            .set_value(false, ctx)
-                    );
+                    report_if_error!(settings
+                        .rule_suggestions_enabled_internal
+                        .set_value(false, ctx));
                 });
                 ctx.notify();
             }
@@ -6628,17 +6621,16 @@ impl TypedActionView for AIBlock {
                 let mut images = Vec::new();
                 let mut initial_index = None;
                 for (submitted_image_index, image) in submitted_images.iter().enumerate() {
-                    let image_bytes = match base64::engine::general_purpose::STANDARD
-                        .decode(&image.data)
-                    {
-                        Ok(image_bytes) => image_bytes,
-                        Err(error) => {
-                            log::warn!(
+                    let image_bytes =
+                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                            Ok(image_bytes) => image_bytes,
+                            Err(error) => {
+                                log::warn!(
                                 "Failed to decode submitted image attachment for lightbox: {error}"
                             );
-                            continue;
-                        }
-                    };
+                                continue;
+                            }
+                        };
 
                     let asset_id = format!(
                         "submitted-attachment-lightbox-{}-{submitted_image_index}",
