@@ -16,6 +16,8 @@ mod process_handle;
 pub mod artifact;
 pub mod scope;
 pub mod skill;
+mod sort_order;
+pub use sort_order::SortOrderArg;
 
 pub mod agent;
 pub mod api_key;

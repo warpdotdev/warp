@@ -171,8 +171,8 @@ use crate::ai::blocklist::{
     AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    SlashCommandRequest, BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX,
-    DRIVE_OBJECT_ATTACHMENT_REGEX,
+    InputTypeAutoDetectionSource, SlashCommandRequest, BLOCK_CONTEXT_ATTACHMENT_REGEX,
+    DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -199,7 +199,7 @@ use crate::cloud_object::model::actions::ObjectActionType;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::{CloudObject, Space};
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code_review::diff_state::DiffMode;
@@ -3047,7 +3047,12 @@ impl Input {
             if let Some(input_config) = input_config_to_restore {
                 let is_buffer_empty = me.editor.as_ref(ctx).buffer_text(ctx).is_empty();
                 me.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_config(*input_config, is_buffer_empty, ctx);
+                    ai_input_model.set_input_config(
+                        *input_config,
+                        is_buffer_empty,
+                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
+                        ctx,
+                    );
                 });
             }
 
@@ -3136,7 +3141,11 @@ impl Input {
                         me.ai_input_model.update(ctx, |ai_input_model, ctx| {
                             let is_auto_detection_enabled = !ai_input_model.is_input_type_locked();
                             if is_auto_detection_enabled {
-                                ai_input_model.set_input_type(InputType::AI, ctx);
+                                ai_input_model.set_input_type(
+                                    InputType::AI,
+                                    Some(InputTypeAutoDetectionSource::ConversationContextRender),
+                                    ctx,
+                                );
                             }
                         });
                     }
@@ -3760,6 +3769,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::CloudHandoffEnter),
                 ctx,
             );
         });
@@ -3795,6 +3805,8 @@ impl Input {
                     .flatten()
             },
             move |_input, touched_repo, ctx| {
+                use crate::cloud_object::CloudObjectLookup as _;
+
                 let Some(touched_repo) = touched_repo else {
                     return;
                 };
@@ -3845,6 +3857,7 @@ impl Input {
                 }
                 .unlocked_if_autodetection_enabled(true, ctx),
                 is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::CloudHandoffExit),
                 ctx,
             );
         });
@@ -3912,6 +3925,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::CloudHandoffEnter),
                 ctx,
             );
         });
@@ -4001,6 +4015,8 @@ impl Input {
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        use crate::cloud_object::CloudObjectLookup as _;
+
         if !FeatureFlag::OzHandoff.is_enabled()
             || !FeatureFlag::HandoffLocalCloud.is_enabled()
             || !cfg!(all(feature = "local_fs", not(target_family = "wasm")))
@@ -4931,10 +4947,15 @@ impl Input {
                                 is_locked: true,
                             },
                             false,
+                            Some(InputTypeAutoDetectionSource::FullscreenInlineHistoryCycling),
                             ctx,
                         );
                     } else {
-                        ai_input_model.set_input_type(InputType::Shell, ctx);
+                        ai_input_model.set_input_type(
+                            InputType::Shell,
+                            Some(InputTypeAutoDetectionSource::HistorySelection),
+                            ctx,
+                        );
                     }
                 });
             }
@@ -4944,7 +4965,11 @@ impl Input {
                 });
 
                 self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_type(InputType::AI, ctx);
+                    ai_input_model.set_input_type(
+                        InputType::AI,
+                        Some(InputTypeAutoDetectionSource::HistorySelection),
+                        ctx,
+                    );
                 });
             }
             inline_history::InlineHistoryMenuEvent::SelectConversation => {
@@ -5943,7 +5968,7 @@ impl Input {
         from: &voice_input::VoiceInputToggledFrom,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.enter_ai_mode(ctx);
+        self.enter_ai_mode(Some(InputTypeAutoDetectionSource::VoiceInputToggle), ctx);
         let did_start_listening = self
             .editor
             .update(ctx, |editor, ctx| editor.toggle_voice_input(from, ctx));
@@ -5954,8 +5979,11 @@ impl Input {
 
     fn select_image(&mut self, ctx: &mut ViewContext<Self>) {
         self.focus_input_box(ctx);
-
-        self.ensure_agent_mode_for_ai_features(true, ctx);
+        self.ensure_agent_mode_for_ai_features(
+            true,
+            Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
+            ctx,
+        );
 
         // Update image context options immediately after switching to AI mode
         // to ensure attach_images has the correct state
@@ -6045,7 +6073,7 @@ impl Input {
                     input_type: InputType::Shell,
                     is_locked: false, // Set to auto-detection mode
                 };
-                model.set_input_config(new_config, buffer_text.is_empty(), ctx);
+                model.set_input_config(new_config, buffer_text.is_empty(), None, ctx);
             });
         } else {
             // For non-empty buffer, run the actual auto-detection algorithm
@@ -6056,7 +6084,7 @@ impl Input {
                     input_type: current_config.input_type, // Keep current type temporarily
                     is_locked: false,                      // Enable auto-detection
                 };
-                model.set_input_config(new_config, buffer_text.is_empty(), ctx);
+                model.set_input_config(new_config, buffer_text.is_empty(), None, ctx);
             });
 
             // Then run auto-detection on the current buffer content
@@ -6103,7 +6131,12 @@ impl Input {
                             input_type,
                             is_locked: true,
                         };
-                        model.set_input_config(new_config, is_input_buffer_empty, ctx);
+                        model.set_input_config(
+                            new_config,
+                            is_input_buffer_empty,
+                            Some(InputTypeAutoDetectionSource::ManualToggle),
+                            ctx,
+                        );
                         false
                     }
                 });
@@ -6145,7 +6178,11 @@ impl Input {
             UniversalDeveloperInputButtonBarEvent::OpenSlashCommandMenu => {
                 self.focus_input_box(ctx);
                 if !FeatureFlag::AgentView.is_enabled() {
-                    self.ensure_agent_mode_for_ai_features(false, ctx);
+                    self.ensure_agent_mode_for_ai_features(
+                        false,
+                        Some(InputTypeAutoDetectionSource::SlashCommand),
+                        ctx,
+                    );
                 }
                 self.toggle_legacy_slash_commands_menu(ctx);
             }
@@ -6153,18 +6190,28 @@ impl Input {
     }
 
     /// Switches to AI mode but preserves current lock state.
-    fn enter_ai_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    fn enter_ai_mode(
+        &mut self,
+        decision_source: Option<InputTypeAutoDetectionSource>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |input_model, ctx| {
-            input_model.set_input_type(InputType::AI, ctx);
+            let new_config = input_model.input_config().with_input_type(InputType::AI);
+            input_model.set_input_config(new_config, is_input_buffer_empty, decision_source, ctx);
         });
     }
 
     /// Helper function to ensure agent mode when needed, using the same logic as SelectFile.
     /// This handles the transition from shell mode to agent mode while preserving lock semantics.
     /// Only forces agent mode if the user hasn't explicitly locked the mode to Shell.
+    ///
+    /// Pass `decision_source` to attribute the resulting input type change in NLD telemetry;
+    /// callers without a meaningful source may pass `None`.
     pub fn ensure_agent_mode_for_ai_features(
         &mut self,
         should_override_shell_lock: bool,
+        decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_input_model = self.ai_input_model.as_ref(ctx);
@@ -6177,8 +6224,7 @@ impl Input {
         {
             return;
         }
-
-        self.enter_ai_mode(ctx);
+        self.enter_ai_mode(decision_source, ctx);
     }
 
     fn cycle_next_command_suggestion(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6427,6 +6473,7 @@ impl Input {
                                     is_locked: true,
                                 },
                                 is_input_buffer_empty,
+                                None,
                                 ctx,
                             );
                         });
@@ -7241,7 +7288,11 @@ impl Input {
 
         // Set input type based on whether or not this is a shell or AI workflow.
         self.ai_input_model.update(ctx, |input_model, ctx| {
-            input_model.set_input_type(input_type, ctx);
+            input_model.set_input_type(
+                input_type,
+                Some(InputTypeAutoDetectionSource::WorkflowInsertion),
+                ctx,
+            );
         });
 
         // As the first step, clear the existing buffer so that selecting a workflow
@@ -7798,7 +7849,11 @@ impl Input {
                             } else {
                                 InputType::Shell
                             };
-                            ai_input_model.set_input_type(input_type, ctx);
+                            ai_input_model.set_input_type(
+                                input_type,
+                                Some(InputTypeAutoDetectionSource::HistorySelection),
+                                ctx,
+                            );
                         });
                     }
                     InputSuggestionsMode::CompletionSuggestions {
@@ -8063,6 +8118,7 @@ impl Input {
                             is_locked: original_input_was_locked,
                         },
                         original_buffer.is_empty(),
+                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
                         ctx,
                     );
                 });
@@ -9422,7 +9478,11 @@ impl Input {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) && edit_origin.is_user() {
                     let buffer_text = self.buffer_text(ctx);
                     if Self::buffer_contains_attachment_patterns(&buffer_text) {
-                        self.ensure_agent_mode_for_ai_features(false, ctx);
+                        self.ensure_agent_mode_for_ai_features(
+                            false,
+                            Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
+                            ctx,
+                        );
                     }
                 }
 
@@ -9607,6 +9667,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
+                                    Some(InputTypeAutoDetectionSource::AgentModePrefix),
                                     ctx,
                                 );
                             });
@@ -9714,6 +9775,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
+                                    Some(InputTypeAutoDetectionSource::ShellPrefix),
                                     ctx,
                                 );
                             });
@@ -10084,7 +10146,11 @@ impl Input {
                     } => {
                         // Switch to shell input mode but preserve current lock state when accepting a command autosuggestion.
                         self.ai_input_model.update(ctx, |input_model, ctx| {
-                            input_model.set_input_type(InputType::Shell, ctx);
+                            input_model.set_input_type(
+                                InputType::Shell,
+                                Some(InputTypeAutoDetectionSource::CommandAutosuggestionAccepted),
+                                ctx,
+                            );
                         });
                         if *was_intelligent_autosuggestion {
                             self.was_intelligent_autosuggestion_accepted = true;
@@ -10121,7 +10187,10 @@ impl Input {
                             self.was_intelligent_autosuggestion_accepted = true;
                         }
                         // Switch to AI input mode but preserve current lock state when accepting an Agent Mode query autosuggestion.
-                        self.enter_ai_mode(ctx);
+                        self.enter_ai_mode(
+                            Some(InputTypeAutoDetectionSource::AgentQueryAutosuggestionAccepted),
+                            ctx,
+                        );
                         self.ai_context_model.update(ctx, |context_model, ctx| {
                             context_model.set_pending_context_block_ids(
                                 context_block_ids.clone(),
@@ -10360,7 +10429,10 @@ impl Input {
                             .as_ref(ctx)
                             .should_run_input_autodetection(ctx)
                         {
-                            self.enter_ai_mode(ctx);
+                            self.enter_ai_mode(
+                                Some(InputTypeAutoDetectionSource::AtContextMenuInsert),
+                                ctx,
+                            );
                         }
 
                         // For InsertText, we replace the "@" and any filter text with the provided text
@@ -12602,12 +12674,16 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
+            let input_type_decision_source = input_model.last_ai_autodetection_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
+            let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
+                    input_type_decision_source,
                     was_lock_set_with_empty_buffer,
+                    block_id,
                 },
                 ctx
             );
@@ -12719,12 +12795,16 @@ impl Input {
             let input_model = self.ai_input_model.as_ref(ctx);
             let input_type = input_model.input_type();
             let is_locked = input_model.is_input_type_locked();
+            let last_ai_autodetection_source = input_model.last_ai_autodetection_source();
             let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
+            let block_id = self.model.lock().active_block_id().clone();
             send_telemetry_from_ctx!(
                 TelemetryEvent::InputBufferSubmitted {
                     input_type,
                     is_locked,
+                    input_type_decision_source: last_ai_autodetection_source,
                     was_lock_set_with_empty_buffer,
+                    block_id,
                 },
                 ctx
             );
@@ -13719,7 +13799,17 @@ impl Input {
                     input_type: InputType::AI,
                     is_locked: true,
                 };
-                ai_input_model.set_input_config(new_config, is_input_buffer_empty, ctx);
+                let decision_source = if has_locking_attachment {
+                    InputTypeAutoDetectionSource::AttachmentForcedAi
+                } else {
+                    InputTypeAutoDetectionSource::ManualToggle
+                };
+                ai_input_model.set_input_config(
+                    new_config,
+                    is_input_buffer_empty,
+                    Some(decision_source),
+                    ctx,
+                );
             });
         }
 
@@ -13740,7 +13830,12 @@ impl Input {
                 input_type: InputType::Shell,
                 is_locked: true,
             };
-            ai_input_model.set_input_config(new_config, is_input_buffer_empty, ctx);
+            ai_input_model.set_input_config(
+                new_config,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::ManualToggle),
+                ctx,
+            );
         });
 
         if steal_focus {
@@ -13761,7 +13856,12 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |model, ctx| {
-            model.set_input_config(config, is_input_buffer_empty, ctx);
+            model.set_input_config(
+                config,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::SessionSharingApply),
+                ctx,
+            );
         });
     }
 
@@ -13790,7 +13890,12 @@ impl Input {
             .unlocked_if_autodetection_enabled(true, ctx)
         };
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-            ai_input_model.set_input_config(new_config, true, ctx);
+            ai_input_model.set_input_config(
+                new_config,
+                true,
+                Some(InputTypeAutoDetectionSource::ShellPrefix),
+                ctx,
+            );
         });
     }
 
@@ -14013,7 +14118,7 @@ impl Input {
                 let new_config = ai_input_model
                     .input_config()
                     .unlocked_if_autodetection_enabled(is_in_fullscreen_agent_view, ctx);
-                ai_input_model.set_input_config(new_config, false, ctx);
+                ai_input_model.set_input_config(new_config, false, None, ctx);
             });
 
             let viewing_shared_session = self.model.lock().shared_session_status().is_viewer();
@@ -14931,7 +15036,10 @@ impl TypedActionView for Input {
                             ctx,
                         );
                     });
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(
+                        Some(InputTypeAutoDetectionSource::StartNewConversation),
+                        ctx,
+                    );
                 }
             }
             InputAction::OpenInlineHistoryMenu => {

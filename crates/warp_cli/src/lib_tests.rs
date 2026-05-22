@@ -381,6 +381,36 @@ fn agent_run_cloud_accepts_run_ambient_alias() {
 }
 
 #[test]
+fn agent_update_rejects_conflicting_remove_flags() {
+    let result = Args::try_parse_from([
+        "warp",
+        "agent",
+        "update",
+        "agent_123",
+        "--description",
+        "new",
+        "--remove-description",
+    ]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn agent_update_rejects_remove_all_secret_deltas() {
+    let result = Args::try_parse_from([
+        "warp",
+        "agent",
+        "update",
+        "agent_123",
+        "--add-secret",
+        "GITHUB_TOKEN",
+        "--remove-all-secrets",
+    ]);
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn agent_run_rejects_prompt_and_task_id() {
     let result = Args::try_parse_from([
         "warp",

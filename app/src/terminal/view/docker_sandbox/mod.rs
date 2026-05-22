@@ -1,6 +1,33 @@
 #[cfg(feature = "local_tty")]
 use std::sync::mpsc::SyncSender;
 
+use super::TerminalView;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::driver::{
+    environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(feature = "local_tty")]
+use crate::pane_group::TerminalViewResources;
+#[cfg(feature = "local_tty")]
+use crate::persistence::ModelEvent;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::cloud_objects::update_manager::UpdateManager;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::ids::{ServerId, SyncId};
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
+use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
+#[cfg(feature = "remote_tty")]
+use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
+#[cfg(feature = "local_tty")]
+use crate::terminal::TerminalManager;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
 #[cfg(feature = "local_tty")]
@@ -12,32 +39,6 @@ use warpui::ModelHandle;
 use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::{SingletonEntity, View, ViewHandle};
-
-use super::TerminalView;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::agent_sdk::driver::{
-    environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
-};
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-#[cfg(feature = "local_tty")]
-use crate::pane_group::TerminalViewResources;
-#[cfg(feature = "local_tty")]
-use crate::persistence::ModelEvent;
-#[cfg(not(target_family = "wasm"))]
-use crate::server::cloud_objects::update_manager::UpdateManager;
-#[cfg(not(target_family = "wasm"))]
-use crate::server::ids::{ServerId, SyncId};
-#[cfg(feature = "local_tty")]
-use crate::server::server_api::ServerApiProvider;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
-#[cfg(feature = "remote_tty")]
-use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
-#[cfg(feature = "local_tty")]
-use crate::terminal::TerminalManager;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///
@@ -203,6 +204,12 @@ impl TerminalView {
         ctx: &mut ViewContext<V>,
     ) {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
+        // Local Docker sandbox tabs are not backed by an Oz run ID, so setup event reporting is
+        // intentionally disabled for this environment preparation path.
+        let setup_events = SetupClientEventReporter::noop(
+            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+            ctx.background_executor().clone(),
+        );
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -232,6 +239,8 @@ impl TerminalView {
                 // Look up the environment by hardcoded ID.
                 let environment = spawner
                     .spawn(|_, ctx| {
+                        use crate::cloud_object::CloudObjectLookup as _;
+
                         let server_id = ServerId::try_from("SVhg783GBFQHk1OfdPfFU9").ok()?;
                         let sync_id = SyncId::ServerId(server_id);
                         CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
@@ -249,6 +258,7 @@ impl TerminalView {
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            setup_events,
                             ctx,
                         )
                     })

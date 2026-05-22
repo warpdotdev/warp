@@ -86,7 +86,7 @@ use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::{FontSettings, InputSettings};
 use crate::settings_view::SettingsSection;
-use crate::terminal::find::{BlockListMatch, TerminalFindModel};
+use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
@@ -2863,12 +2863,8 @@ pub fn get_highlight_ranges_for_find_matches(
 ) -> impl Iterator<Item = HighlightedRange> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
-        .block_list_find_run()
-        .and_then(|run| match run.focused_match() {
-            Some(BlockListMatch::RichContent { match_id, .. }) => Some(match_id),
-            _ => None,
-        })
-        .and_then(|match_id| find_state.location_for_match(*match_id));
+        .focused_rich_content_match_id()
+        .and_then(|match_id| find_state.location_for_match(match_id));
     let mut highlighted_ranges = vec![];
     for find_match_location in find_match_locations {
         let is_focused_match =

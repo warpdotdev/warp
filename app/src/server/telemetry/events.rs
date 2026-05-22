@@ -27,6 +27,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::{
     AIBlockResponseRating, CommandExecutionPermissionAllowedReason, InputType,
+    InputTypeAutoDetectionSource,
 };
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
@@ -2508,6 +2509,7 @@ pub enum TelemetryEvent {
     },
     AIExecutionProfileContextWindowSelected {
         tokens: Option<u32>,
+        model_id: String,
     },
     /// The AI input was not sent because there was already an in-flight request.
     AIInputNotSent {
@@ -2543,7 +2545,9 @@ pub enum TelemetryEvent {
     InputBufferSubmitted {
         input_type: input_classifier::InputType,
         is_locked: bool,
+        input_type_decision_source: Option<InputTypeAutoDetectionSource>,
         was_lock_set_with_empty_buffer: bool,
+        block_id: BlockId,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
     CreateProjectPromptSubmitted {
@@ -2878,6 +2882,14 @@ pub enum TelemetryEvent {
         attempt: u32,
         remote_os: Option<String>,
         remote_arch: Option<String>,
+    },
+    /// Emitted when the remote server daemon process finishes startup and
+    /// binds its Unix domain socket.  Reports the same `IntervalTimer`
+    /// data that `AppStartup` reports for the GUI, but from the headless
+    /// daemon process on the remote host.  Only emitted on success — if
+    /// the daemon crashes before binding, no event is sent.
+    RemoteServerDaemonStartup {
+        timing_data: Vec<warp_core::interval_timer::TimingDataPoint>,
     },
     /// Emitted when all reconnection attempts are exhausted.
     RemoteServerReconnectExhausted {
@@ -4320,6 +4332,9 @@ impl TelemetryEvent {
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
             })),
+            TelemetryEvent::RemoteServerDaemonStartup { timing_data } => {
+                Some(json!({ "timing_data": timing_data }))
+            }
             TelemetryEvent::RemoteServerSetupDuration {
                 duration_ms,
                 installed_binary,
@@ -4406,9 +4421,12 @@ impl TelemetryEvent {
                 "model_type": model_type,
                 "model_value": model_value,
             })),
-            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens } => Some(json!({
-                "tokens": tokens,
-            })),
+            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens, model_id } => {
+                Some(json!({
+                    "tokens": tokens,
+                    "model_id": model_id,
+                }))
+            }
             TelemetryEvent::AIInputNotSent {
                 entrypoint,
                 inputs,
@@ -4463,11 +4481,15 @@ impl TelemetryEvent {
             TelemetryEvent::InputBufferSubmitted {
                 input_type,
                 is_locked,
+                input_type_decision_source,
                 was_lock_set_with_empty_buffer,
+                block_id,
             } => Some(json!({
                 "input_type": input_type,
                 "is_locked": is_locked,
+                "input_type_decision_source": input_type_decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
+                "block_id": block_id,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
                 is_custom_prompt,
@@ -4732,6 +4754,7 @@ impl TelemetryEvent {
             TelemetryEvent::AgentExitedShellProcess { .. } => true,
             TelemetryEvent::CreateProjectPromptSubmitted { .. } => false,
             TelemetryEvent::CreateProjectPromptSubmittedContent { .. } => true,
+            TelemetryEvent::InputBufferSubmitted { .. } => false,
             TelemetryEvent::AgentModePrediction {
                 actual_next_command_run,
                 history_based_autosuggestion_state,
@@ -5137,7 +5160,6 @@ impl TelemetryEvent {
             | TelemetryEvent::InlineConversationMenuOpened { .. }
             | TelemetryEvent::InlineConversationMenuItemSelected { .. }
             | TelemetryEvent::AgentShortcutsViewToggled { .. }
-            | TelemetryEvent::InputBufferSubmitted { .. }
             | TelemetryEvent::RecentMenuItemSelected { .. }
             | TelemetryEvent::OpenRepoFolderSubmitted { .. }
             | TelemetryEvent::OutOfCreditsBannerClosed { .. }
@@ -5183,6 +5205,7 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
+            | TelemetryEvent::RemoteServerDaemonStartup { .. }
             | TelemetryEvent::RemoteServerDisconnection { .. }
             | TelemetryEvent::RemoteServerClientRequestError { .. }
             | TelemetryEvent::RemoteServerMessageDecodingError { .. }
@@ -5756,6 +5779,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerBinaryCheck
             | Self::RemoteServerInstallation
             | Self::RemoteServerInitialization
+            | Self::RemoteServerDaemonStartup
             | Self::RemoteServerDisconnection
             | Self::RemoteServerClientRequestError
             | Self::RemoteServerMessageDecodingError
@@ -6169,6 +6193,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerBinaryCheck => "RemoteServer.BinaryCheck",
             Self::RemoteServerInstallation => "RemoteServer.Installation",
             Self::RemoteServerInitialization => "RemoteServer.Initialization",
+            Self::RemoteServerDaemonStartup => "RemoteServer.DaemonStartup",
             Self::RemoteServerDisconnection => "RemoteServer.Disconnection",
             Self::RemoteServerClientRequestError => "RemoteServer.ClientRequestError",
             Self::RemoteServerMessageDecodingError => "RemoteServer.MessageDecodingError",
@@ -6329,7 +6354,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
 
     fn description(&self) -> &'static str {
         match self {
-            Self::AIExecutionProfileContextWindowSelected => {
+            Self::AIExecutionProfileContextWindowSelected { .. } => {
                 "Selected a context window limit for an execution profile's base model"
             }
             Self::AISuggestedAgentModeWorkflowAdded => {
@@ -7213,6 +7238,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerInitialization => {
                 "Remote server connection and initialization completed (success or failure)"
+            }
+            Self::RemoteServerDaemonStartup => {
+                "Remote server daemon startup completed and socket bound"
             }
             Self::RemoteServerDisconnection => {
                 "An established remote server connection was dropped"

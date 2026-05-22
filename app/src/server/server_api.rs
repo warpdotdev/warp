@@ -926,6 +926,57 @@ impl ServerApi {
             .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
+    /// Sends a PUT request to a public API endpoint and returns the raw response on success.
+    async fn put_public_api_response<B>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.put(&url).json(body);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
+    }
+
+    /// Sends a PUT request to a public API endpoint.
+    async fn put_public_api<B, R>(&self, path: &str, body: &B) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self.put_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
     /// Sends a POST request to a public API endpoint that returns no response body.
     async fn post_public_api_unit<B>(&self, path: &str, body: &B) -> Result<()>
     where
@@ -933,6 +984,36 @@ impl ServerApi {
     {
         self.post_public_api_response(path, body).await?;
         Ok(())
+    }
+
+    /// Sends a DELETE request to a public API endpoint that returns no response body.
+    async fn delete_public_api_unit(&self, path: &str) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.delete(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Sends a PATCH request to a public API endpoint that returns no response body.

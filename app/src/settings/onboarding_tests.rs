@@ -86,12 +86,12 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
             mcp_permissions: ActionPermission::AlwaysAllow,
             ..Default::default()
         };
-        let server_object = ServerAIExecutionProfile {
-            id: cloud_sync_id,
-            model: CloudAIExecutionProfileModel::new(cloud_profile),
-            metadata: mock_server_metadata(cloud_uid),
-            permissions: ServerPermissions::mock_personal(),
-        };
+        let server_object = ServerAIExecutionProfile::new(
+            cloud_sync_id,
+            CloudAIExecutionProfileModel::new(cloud_profile),
+            mock_server_metadata(cloud_uid),
+            ServerPermissions::mock_personal(),
+        );
 
         // Insert the existing user's cloud profile via the initial-load
         // path (no per-object events) and emit `InitialLoadCompleted` so

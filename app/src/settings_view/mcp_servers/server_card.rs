@@ -22,7 +22,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::{MCPServerState, TemplatableMCPServerManager};
 use crate::appearance::Appearance;
-use crate::cloud_object::CloudObject;
+use crate::cloud_object::{CloudObject, CloudObjectUuidLookup as _};
 use crate::settings_view::mcp_servers::{style, ServerCardItemId};
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::blended_colors;

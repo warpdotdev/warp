@@ -13,6 +13,7 @@ use winreg::{RegKey, RegValue};
 
 use crate::safe_info;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
+use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
 use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
 use crate::terminal::local_tty::PtyOptions;
 
@@ -198,6 +199,8 @@ fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
         format!("{IS_LOCAL_SESSION_NAME}/u"),
         format!("{SSH_SOCKET_DIR}/u"),
         format!("{CLIENT_VERSION_NAME}/u"),
+        format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+        format!("{FOCUS_URL_ENV}/u"),
     ];
 
     if FeatureFlag::HOANotifications.is_enabled() {
@@ -382,6 +385,8 @@ mod tests {
                 format!("{IS_LOCAL_SESSION_NAME}/u"),
                 format!("{SSH_SOCKET_DIR}/u"),
                 format!("{CLIENT_VERSION_NAME}/u"),
+                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+                format!("{FOCUS_URL_ENV}/u"),
             ],
         );
     }
@@ -402,6 +407,8 @@ mod tests {
                 format!("{IS_LOCAL_SESSION_NAME}/u"),
                 format!("{SSH_SOCKET_DIR}/u"),
                 format!("{CLIENT_VERSION_NAME}/u"),
+                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+                format!("{FOCUS_URL_ENV}/u"),
                 format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
                 format!("{INITIAL_WORKING_DIR_NAME}/pu"),
             ],

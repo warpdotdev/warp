@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
+use session_sharing_protocol::common::SessionId;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
-use session_sharing_protocol::common::SessionId;
-use std::sync::Arc;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 /// Ensures that session ID for locally owned shared conversations is linked
 /// to their `ai_tasks` row in the DB. This enables viewers to reconstruct

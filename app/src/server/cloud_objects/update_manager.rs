@@ -1,14 +1,15 @@
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::time::Duration;
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
@@ -1189,7 +1190,12 @@ impl UpdateManager {
                 )
             });
 
-        GenericCloudObject::<K, M>::bulk_upsert_event(&objects_without_pending_changes)
+        M::bulk_upsert_event(
+            objects_without_pending_changes
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
+        )
     }
 
     /// Generic handler deleting all objects of a given model type from the server (e.g. all updated/deleted notebooks or workflows).
@@ -3601,7 +3607,10 @@ impl UpdateManager {
 
         // Update sqlite with a single bulk request
         self.save_to_db(vec![GenericStringModel::<T, S>::bulk_upsert_event(
-            &objects,
+            objects
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
         )]);
 
         // Populate sync queue with a single bulk request

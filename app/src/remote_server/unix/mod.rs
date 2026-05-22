@@ -17,8 +17,10 @@ use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
 use warpui::r#async::executor;
+use warpui::SingletonEntity;
 
 use super::server_model::{ConnectionId, ServerModel};
+use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Run the `remote-server-daemon` subcommand.
 ///
@@ -68,6 +70,27 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     let _ = std::fs::set_permissions(&socket_path, Permissions::from_mode(0o600));
     listener.set_nonblocking(true).ok();
     log::info!("Daemon bound to {}", socket_path.display());
+
+    // Flush the accumulated IntervalTimer data as telemetry now that the
+    // daemon is ready to accept connections. The timer was created in
+    // `run_internal` and carries intervals from the full startup path
+    // (logging, SQLite, singleton models, etc.).
+    //
+    // All telemetry dependencies are ready at this point:
+    // `AppTelemetryContextProvider` and `AuthStateProvider` are
+    // registered during `initialize_app` (before `launch` calls us),
+    // and `TelemetryCollector` is already running its periodic flush.
+    // The flush sends directly to Rudderstack using a baked-in write
+    // key — no user auth token is required.
+    let timing_data =
+        warp_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
+            timer.mark_interval_end("DAEMON_SOCKET_BOUND");
+            timer.compute_stats()
+        });
+    send_telemetry_from_app_ctx!(
+        TelemetryEvent::RemoteServerDaemonStartup { timing_data },
+        ctx
+    );
 
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
 

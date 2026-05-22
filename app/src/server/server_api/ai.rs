@@ -360,6 +360,63 @@ pub struct ReportAgentEventRequest {
 pub struct ReportAgentEventResponse {
     pub sequence: i64,
 }
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentRunClientEventRequest {
+    pub event_uuid: String,
+    pub event_name: String,
+    pub timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<AgentRunClientEventPayload>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum AgentRunClientEventPayload {
+    SetupMetric(AgentRunClientSetupMetricPayload),
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentRunClientSetupMetricPayload {
+    pub start_ts: DateTime<Utc>,
+    pub finish_ts: DateTime<Utc>,
+    pub latency_ms: i64,
+    pub is_error: bool,
+}
+
+impl AgentRunClientEventRequest {
+    pub fn timeline_event(event_name: impl Into<String>, timestamp: DateTime<Utc>) -> Self {
+        Self {
+            event_uuid: uuid::Uuid::new_v4().to_string(),
+            event_name: event_name.into(),
+            timestamp,
+            payload: None,
+        }
+    }
+
+    pub fn setup_metric_event(
+        event_name: impl Into<String>,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            event_uuid: uuid::Uuid::new_v4().to_string(),
+            event_name: event_name.into(),
+            timestamp: finish_timestamp,
+            payload: Some(AgentRunClientEventPayload::SetupMetric(
+                AgentRunClientSetupMetricPayload {
+                    start_ts: start_timestamp,
+                    finish_ts: finish_timestamp,
+                    latency_ms: finish_timestamp
+                        .signed_duration_since(start_timestamp)
+                        .num_milliseconds()
+                        .max(0),
+                    is_error,
+                },
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReadAgentMessageResponse {
@@ -813,7 +870,7 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
 
 /// Source information for an agent skill.
 #[derive(Clone, serde::Deserialize, Debug, PartialEq)]
-pub struct AgentListSource {
+pub struct AgentSkillSource {
     pub owner: String,
     pub name: String,
     pub skill_path: String,
@@ -821,31 +878,93 @@ pub struct AgentListSource {
 
 /// Environment information for an agent skill.
 #[derive(Clone, serde::Deserialize, Debug, PartialEq)]
-pub struct AgentListEnvironment {
+pub struct AgentSkillEnvironment {
     pub uid: String,
     pub name: String,
 }
 
 /// A variant of an agent skill.
 #[derive(Clone, serde::Deserialize, Debug, PartialEq)]
-pub struct AgentListVariant {
+pub struct AgentSkillVariant {
     pub id: String,
     pub description: String,
     pub base_prompt: String,
-    pub source: AgentListSource,
-    pub environments: Vec<AgentListEnvironment>,
+    pub source: AgentSkillSource,
+    pub environments: Vec<AgentSkillEnvironment>,
 }
 
 /// An agent skill item with its variants.
 #[derive(Clone, serde::Deserialize, Debug, PartialEq)]
-pub struct AgentListItem {
+pub struct AgentSkillItem {
     pub name: String,
-    pub variants: Vec<AgentListVariant>,
+    pub variants: Vec<AgentSkillVariant>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListSkillsResponse {
+    agents: Vec<AgentSkillItem>,
+}
+
+/// Reference to a managed secret by name.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+pub struct SecretRef {
+    pub name: String,
+}
+
+/// JSON payload sent to `POST /agent/identities`.
+#[derive(Clone, serde::Serialize, Debug, PartialEq, Eq)]
+pub struct CreateAgentRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<String>,
+}
+
+/// JSON payload sent to `PUT /agent/identities/{uid}`.
+#[derive(Clone, Default, serde::Serialize, Debug, PartialEq, Eq)]
+pub struct UpdateAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Vec<SecretRef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<String>,
+}
+
+/// Public API representation of a named agent identity.
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq, Eq)]
+pub struct AgentResponse {
+    pub uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub available: bool,
+    pub created_at: DateTime<Utc>,
+    pub secrets: Vec<SecretRef>,
+    pub skills: Vec<String>,
+    pub base_model: Option<String>,
+    #[serde(default)]
+    pub environment_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct ListAgentsResponse {
-    agents: Vec<AgentListItem>,
+    agents: Vec<AgentResponse>,
+}
+fn build_agent_url(uid: &str) -> String {
+    format!("agent/identities/{}", urlencoding::encode(uid))
 }
 
 #[derive(Clone, serde::Deserialize, Debug, PartialEq, Eq)]
@@ -1018,10 +1137,42 @@ pub trait AIClient: 'static + Send + Sync {
         server_conversation_token: String,
     ) -> anyhow::Result<(), anyhow::Error>;
 
-    async fn list_agents(
+    async fn list_skills(
         &self,
         repo: Option<String>,
-    ) -> anyhow::Result<Vec<AgentListItem>, anyhow::Error>;
+    ) -> anyhow::Result<Vec<AgentSkillItem>, anyhow::Error>;
+
+    async fn list_agents(&self) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error>;
+
+    async fn list_agents_raw(&self) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    async fn get_agent(&self, uid: &str) -> anyhow::Result<AgentResponse, anyhow::Error>;
+
+    async fn get_agent_raw(&self, uid: &str) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    async fn create_agent(
+        &self,
+        request: CreateAgentRequest,
+    ) -> anyhow::Result<AgentResponse, anyhow::Error>;
+
+    async fn create_agent_raw(
+        &self,
+        request: CreateAgentRequest,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    async fn update_agent(
+        &self,
+        uid: &str,
+        request: UpdateAgentRequest,
+    ) -> anyhow::Result<AgentResponse, anyhow::Error>;
+
+    async fn update_agent_raw(
+        &self,
+        uid: &str,
+        request: UpdateAgentRequest,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    async fn delete_agent(&self, uid: &str) -> anyhow::Result<(), anyhow::Error>;
 
     async fn cancel_ambient_agent_task(
         &self,
@@ -1100,6 +1251,11 @@ pub trait AIClient: 'static + Send + Sync {
         run_id: &str,
         request: ReportAgentEventRequest,
     ) -> anyhow::Result<ReportAgentEventResponse, anyhow::Error>;
+    async fn post_agent_run_client_event(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
 
@@ -1984,16 +2140,67 @@ impl AIClient for ServerApi {
         }
     }
 
-    async fn list_agents(
+    async fn list_skills(
         &self,
         repo: Option<String>,
-    ) -> anyhow::Result<Vec<AgentListItem>, anyhow::Error> {
+    ) -> anyhow::Result<Vec<AgentSkillItem>, anyhow::Error> {
         let path = match repo {
             Some(repo) => format!("agent?repo={}", urlencoding::encode(&repo)),
             None => "agent".to_string(),
         };
-        let response: ListAgentsResponse = self.get_public_api(&path).await?;
+        let response: ListSkillsResponse = self.get_public_api(&path).await?;
         Ok(response.agents)
+    }
+
+    async fn list_agents(&self) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error> {
+        let response: ListAgentsResponse = self.get_public_api("agent/identities").await?;
+        Ok(response.agents)
+    }
+
+    async fn list_agents_raw(&self) -> anyhow::Result<serde_json::Value, anyhow::Error> {
+        self.get_public_api("agent/identities").await
+    }
+
+    async fn get_agent(&self, uid: &str) -> anyhow::Result<AgentResponse, anyhow::Error> {
+        self.get_public_api(&build_agent_url(uid)).await
+    }
+
+    async fn get_agent_raw(&self, uid: &str) -> anyhow::Result<serde_json::Value, anyhow::Error> {
+        self.get_public_api(&build_agent_url(uid)).await
+    }
+
+    async fn create_agent(
+        &self,
+        request: CreateAgentRequest,
+    ) -> anyhow::Result<AgentResponse, anyhow::Error> {
+        self.post_public_api("agent/identities", &request).await
+    }
+
+    async fn create_agent_raw(
+        &self,
+        request: CreateAgentRequest,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
+        self.post_public_api("agent/identities", &request).await
+    }
+
+    async fn update_agent(
+        &self,
+        uid: &str,
+        request: UpdateAgentRequest,
+    ) -> anyhow::Result<AgentResponse, anyhow::Error> {
+        self.put_public_api(&build_agent_url(uid), &request).await
+    }
+
+    async fn update_agent_raw(
+        &self,
+        uid: &str,
+        request: UpdateAgentRequest,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
+        self.put_public_api(&build_agent_url(uid), &request).await
+    }
+
+    async fn delete_agent(&self, uid: &str) -> anyhow::Result<(), anyhow::Error> {
+        self.delete_public_api_unit(&build_agent_url(uid)).await
     }
 
     async fn cancel_ambient_agent_task(
@@ -2282,6 +2489,19 @@ impl AIClient for ServerApi {
             .post_public_api(&format!("agent/events/{run_id}"), &request)
             .await?;
         Ok(response)
+    }
+    async fn post_agent_run_client_event(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        self.post_public_api_response_for_task(
+            run_id,
+            &format!("agent/runs/{run_id}/client-events"),
+            &request,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error> {

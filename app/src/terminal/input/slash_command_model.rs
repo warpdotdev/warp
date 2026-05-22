@@ -4,7 +4,9 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::blocklist::{BlocklistAIInputEvent, BlocklistAIInputModel};
+use crate::ai::blocklist::{
+    BlocklistAIInputEvent, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+};
 use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
@@ -193,7 +195,11 @@ impl SlashCommandModel {
             && !self.ai_input_model.as_ref(ctx).is_input_type_locked()
         {
             self.ai_input_model.update(ctx, |input_model, ctx| {
-                input_model.set_input_type(InputType::Shell, ctx);
+                input_model.set_input_type(
+                    InputType::Shell,
+                    Some(InputTypeAutoDetectionSource::SlashCommand),
+                    ctx,
+                );
             });
         }
 
@@ -332,7 +338,11 @@ impl SlashCommandModel {
                     // mode, either locked or unlocked; if the input were locked to shell mode then the
                     // state would be `DisabledUntilEmptyBuffer` and we would have shortcircuited above.
                     self.ai_input_model.update(ctx, |input_model, ctx| {
-                        input_model.set_input_type(InputType::AI, ctx);
+                        input_model.set_input_type(
+                            InputType::AI,
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
+                            ctx,
+                        );
                     });
                 }
                 self.state = SlashCommandEntryState::SlashCommand(detected_command);
@@ -346,7 +356,11 @@ impl SlashCommandModel {
 
                 // Skill commands always require AI mode
                 self.ai_input_model.update(ctx, |input_model, ctx| {
-                    input_model.set_input_type(InputType::AI, ctx);
+                    input_model.set_input_type(
+                        InputType::AI,
+                        Some(InputTypeAutoDetectionSource::SlashCommand),
+                        ctx,
+                    );
                 });
                 self.state = SlashCommandEntryState::SkillCommand(detected_skill);
             }
@@ -373,7 +387,11 @@ impl SlashCommandModel {
                     // handled appropriately. I am just making this change to preserve the existing
                     // product behavior (agent icon in NLD toggle becomes yellow).
                     self.ai_input_model.update(ctx, |input_model, ctx| {
-                        input_model.set_input_type(InputType::AI, ctx);
+                        input_model.set_input_type(
+                            InputType::AI,
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
+                            ctx,
+                        );
                     });
                 }
 

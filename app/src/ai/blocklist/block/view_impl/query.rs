@@ -16,8 +16,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 
 use super::common::{render_query_text, render_user_avatar, FindContext};
 use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
-use crate::ai::blocklist::block::AIBlockAction;
-use crate::ai::blocklist::block::{DetectedLinksState, SecretRedactionState};
+use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedactionState};
 use crate::ai::blocklist::AttachmentType;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;

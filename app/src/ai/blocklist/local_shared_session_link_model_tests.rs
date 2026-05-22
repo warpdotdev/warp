@@ -1,12 +1,14 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use session_sharing_protocol::common::SessionId;
+use warpui::App;
+
 use super::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, LocalSharedSessionLinkModel};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, MockAIClient};
-use session_sharing_protocol::common::SessionId;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use warpui::App;
 
 /// Parses a fixed UUID into an `AmbientAgentTaskId`. Using a constant uuid
 /// makes test failures easier to read than `Uuid::new_v4()`.

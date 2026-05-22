@@ -21,6 +21,7 @@ use super::{
     SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::harness_support::HarnessSupportClient;
@@ -154,16 +155,20 @@ impl HarnessRunner for GeminiHarnessRunner {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Create the external conversation record on the server.
-        let conversation_id = self
-            .client
-            .create_external_conversation(GEMINI_CLI_FORMAT)
-            .await
-            .map_err(|e| {
-                log::error!("Failed to create external conversation: {e}");
-                AgentDriverError::ConfigBuildFailed(e)
-            })?;
+        let conversation_id = setup_events
+            .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                self.client
+                    .create_external_conversation(GEMINI_CLI_FORMAT)
+                    .await
+                    .map_err(|e| {
+                        log::error!("Failed to create external conversation: {e}");
+                        AgentDriverError::ConfigBuildFailed(e)
+                    })
+            })
+            .await?;
         log::info!("Created external conversation {conversation_id}");
 
         let command = self.command.clone();

@@ -4074,19 +4074,9 @@ impl AIBlock {
     /// Handles find match focus changes by auto-expanding collapsed reasoning blocks
     /// that contain the focused match.
     fn handle_find_match_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
-        // Get the currently focused match ID from the terminal's find model
-        let focused_match_id = self
-            .find_model
-            .as_ref(ctx)
-            .block_list_find_run()
-            .and_then(|run| match run.focused_match() {
-                Some(crate::terminal::find::BlockListMatch::RichContent { match_id, .. }) => {
-                    Some(*match_id)
-                }
-                _ => None,
-            });
-
-        let Some(match_id) = focused_match_id else {
+        // Get the currently focused match ID from the terminal's find model.
+        // The helper handles both the sync and async find paths.
+        let Some(match_id) = self.find_model.as_ref(ctx).focused_rich_content_match_id() else {
             return;
         };
 

@@ -33,6 +33,14 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     }
 }
 
+pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app)
+        && llm
+            .host_configs
+            .get(&LLMModelHost::AwsBedrock)
+            .is_some_and(|config| config.enabled)
+}
+
 /// Key for cached LLM metadata in user preferences.
 ///
 /// Note: this key used to store a single [`AvailableLLMs`]

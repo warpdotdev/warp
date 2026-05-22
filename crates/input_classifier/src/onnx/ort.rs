@@ -9,6 +9,7 @@ use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
 
 use super::{ClassificationResult, Model};
+use crate::InputClassifierDecisionSource;
 
 pub struct InferenceRunner {
     session: Mutex<Session>,
@@ -84,6 +85,7 @@ impl super::InferenceRunner for InferenceRunner {
         Ok(ClassificationResult {
             p_ai: probabilities[0],
             p_shell: probabilities[1],
+            source: InputClassifierDecisionSource::InputClassifier,
         })
     }
 }

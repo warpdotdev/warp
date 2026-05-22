@@ -282,6 +282,20 @@ impl RemoteServerClient {
         )
     }
 
+    /// Returns `true` once the reader task has detected that the underlying
+    /// connection is gone (EOF or fatal error). The flag is one-way: a
+    /// client never transitions back to connected, since reconnection
+    /// produces a brand-new client instance.
+    ///
+    /// Callers can use this as a cheap, non-blocking gate to skip work
+    /// that would otherwise fail with [`ClientError::Disconnected`] and
+    /// fire a `RequestFailed` telemetry event. Returning `false` does
+    /// not guarantee the next request will succeed — it just means the
+    /// reader task has not yet observed a disconnect.
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected.load(Ordering::Acquire)
+    }
+
     /// Sends an `Initialize` request and awaits the `InitializeResponse`.
     pub async fn initialize(
         &self,

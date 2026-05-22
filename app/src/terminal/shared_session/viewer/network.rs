@@ -2,61 +2,55 @@
 //! connect to and communicate with the shared session.
 //! Adheres to the [`session-sharing-protocol`].
 
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::bail;
 use async_channel::Receiver;
+use futures_util::stream::AbortHandle;
+use futures_util::{SinkExt, StreamExt};
 use instant::Instant;
-use std::{pin::pin, sync::Arc};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-
-use futures_util::{stream::AbortHandle, SinkExt, StreamExt};
-
 use parking_lot::FairMutex;
-use session_sharing_protocol::{
-    common::{
-        ActivePrompt, ActivePromptUpdate, AddGuestsResponse, AgentAttachment,
-        AgentPromptFailureReason, AgentPromptRequest, AgentPromptRequestId,
-        CommandExecutionFailureReason, ControlAction, ControlActionFailureReason, FeatureSupport,
-        InputOperationId, InputOperationSeqNo, InputUpdate, LinkAccessLevelUpdateResponse,
-        ParticipantId, ParticipantList, ParticipantPresenceUpdate, RemoveGuestResponse, Role,
-        RoleRequestId, RoleRequestResponse, Selection, SelectionUpdate, ServerConversationToken,
-        SessionId, TeamAccessLevelUpdateResponse, TeamAclData, TelemetryContext,
-        UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate,
-        UpdatePendingUserRoleResponse, UserID, WindowSize, WriteToPtyFailureReason,
-        WriteToPtyRequestId, WriteToPtySeqNo,
-    },
-    viewer::{
-        DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
-        ViewerRemovedReason,
-    },
+use session_sharing_protocol::common::{
+    ActivePrompt, ActivePromptUpdate, AddGuestsResponse, AgentAttachment, AgentPromptFailureReason,
+    AgentPromptRequest, AgentPromptRequestId, CommandExecutionFailureReason, ControlAction,
+    ControlActionFailureReason, FeatureSupport, InputOperationId, InputOperationSeqNo, InputUpdate,
+    LinkAccessLevelUpdateResponse, ParticipantId, ParticipantList, ParticipantPresenceUpdate,
+    RemoveGuestResponse, Role, RoleRequestId, RoleRequestResponse, Selection, SelectionUpdate,
+    ServerConversationToken, SessionId, TeamAccessLevelUpdateResponse, TeamAclData,
+    TelemetryContext, UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate,
+    UpdatePendingUserRoleResponse, UserID, WindowSize, WriteToPtyFailureReason,
+    WriteToPtyRequestId, WriteToPtySeqNo,
 };
-
-use std::time::Duration;
+use session_sharing_protocol::viewer::{
+    DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
+    ViewerRemovedReason,
+};
 use warp_core::features::FeatureFlag;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity, WeakViewHandle,
 };
 use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 
-use crate::{
-    auth::{auth_state::AuthState, AuthStateProvider, UserUid},
-    editor::{CrdtOperation, ReplicaId},
-    server::{
-        server_api::{auth::AuthClient, ServerApiProvider},
-        telemetry::telemetry_context,
-    },
-    terminal::{
-        event_listener::ChannelEventListener,
-        model::block::BlockId,
-        shared_session::{
-            connect_endpoint,
-            network::heartbeat::{Event as HeartbeatEvent, Heartbeat},
-            viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-            EventNumber, SharedSessionSource, SELECTION_THROTTLE_PERIOD,
-        },
-        TerminalModel, TerminalView,
-    },
-    throttle::throttle,
+use crate::auth::auth_state::AuthState;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::editor::{CrdtOperation, ReplicaId};
+use crate::server::server_api::auth::AuthClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::telemetry_context;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
 };
+use crate::terminal::shared_session::{
+    connect_endpoint, EventNumber, SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+};
+use crate::terminal::{TerminalModel, TerminalView};
+use crate::throttle::throttle;
 
 /// The amount of time we will wait to batch consecutive write to pty requests before sending an event to the server.
 const PTY_WRITES_BATCH_THRESHOLD: Duration = if cfg!(test) {
