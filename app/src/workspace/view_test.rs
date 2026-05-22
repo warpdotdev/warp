@@ -3013,3 +3013,156 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
         });
     });
 }
+
+fn set_zoom_level(value: u16, ctx: &mut ViewContext<Workspace>) {
+    WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+        window_settings
+            .zoom_level
+            .set_value(value, ctx)
+            .expect("Failed to update zoom_level setting");
+    });
+}
+
+fn current_zoom_level(ctx: &AppContext) -> u16 {
+    *WindowSettings::as_ref(ctx).zoom_level.value()
+}
+
+fn visible_hud_zoom_level(workspace: &Workspace, ctx: &AppContext) -> Option<u16> {
+    workspace
+        .zoom_level_hud
+        .read(ctx, |hud, _| hud.visible_zoom_level())
+}
+
+#[test]
+fn test_increase_zoom_action_updates_setting_and_hud() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(100, ctx);
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+
+            assert_eq!(current_zoom_level(ctx), 110);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(110));
+        });
+    });
+}
+
+#[test]
+fn test_decrease_zoom_action_updates_setting_and_hud() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(100, ctx);
+
+            workspace.handle_action(&WorkspaceAction::DecreaseZoom, ctx);
+
+            assert_eq!(current_zoom_level(ctx), 90);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(90));
+        });
+    });
+}
+
+#[test]
+fn test_reset_zoom_action_shows_default_in_hud() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(150, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ResetZoom, ctx);
+
+            assert_eq!(
+                current_zoom_level(ctx),
+                crate::window_settings::ZoomLevel::default_value()
+            );
+            assert_eq!(
+                visible_hud_zoom_level(workspace, ctx),
+                Some(crate::window_settings::ZoomLevel::default_value())
+            );
+        });
+    });
+}
+
+#[test]
+fn test_zoom_in_at_max_shows_clamped_value_in_hud() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        let max_zoom = *crate::window_settings::ZoomLevel::VALUES.last().unwrap();
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(max_zoom, ctx);
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+
+            assert_eq!(current_zoom_level(ctx), max_zoom);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(max_zoom));
+        });
+    });
+}
+
+#[test]
+fn test_zoom_out_at_min_shows_clamped_value_in_hud() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        let min_zoom = *crate::window_settings::ZoomLevel::VALUES.first().unwrap();
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(min_zoom, ctx);
+
+            workspace.handle_action(&WorkspaceAction::DecreaseZoom, ctx);
+
+            assert_eq!(current_zoom_level(ctx), min_zoom);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(min_zoom));
+        });
+    });
+}
+
+#[test]
+fn test_repeated_zoom_actions_replace_hud_value() {
+    let _zoom_guard = FeatureFlag::UIZoom.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            set_zoom_level(100, ctx);
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(110));
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(125));
+
+            workspace.handle_action(&WorkspaceAction::DecreaseZoom, ctx);
+            assert_eq!(visible_hud_zoom_level(workspace, ctx), Some(110));
+        });
+    });
+}

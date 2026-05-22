@@ -350,6 +350,7 @@ use crate::view_components::action_button::ActionButton;
 use crate::view_components::callout_bubble::{
     render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
 };
+use crate::view_components::zoom_level_hud::ZoomLevelHud;
 use crate::view_components::{
     AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
 };
@@ -978,6 +979,7 @@ pub struct Workspace {
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
     update_toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
+    zoom_level_hud: ViewHandle<ZoomLevelHud>,
     /// We need to render some dynamic keybindings for our tooltips. These cannot be looked up in the
     /// render method, so look them up when the view is constructed and cache them here. Note that they
     /// need to be kept in sync as the keybindings change.
@@ -2888,6 +2890,8 @@ impl Workspace {
         let update_toast_stack =
             ctx.add_typed_action_view(|_| DismissibleToastStack::new(Duration::from_secs(4)));
 
+        let zoom_level_hud = ctx.add_view(|_| ZoomLevelHud::new());
+
         #[cfg(target_family = "wasm")]
         let wasm_nux_dialog = Self::build_wasm_nux_dialog(ctx);
 
@@ -3102,6 +3106,7 @@ impl Workspace {
             toast_stack,
             agent_toast_stack,
             update_toast_stack,
+            zoom_level_hud,
             cached_keybindings,
             prompt_editor_modal,
             agent_toolbar_editor_modal,
@@ -15665,11 +15670,11 @@ impl Workspace {
     }
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
+        let default_zoom = ZoomLevel::default_value();
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(ZoomLevel::default_value(), ctx));
+            report_if_error!(window_settings.zoom_level.set_value(default_zoom, ctx));
         });
+        self.show_zoom_level_hud(default_zoom, ctx);
     }
 
     fn adjust_zoom(&mut self, increase: bool, ctx: &mut ViewContext<Self>) {
@@ -15687,10 +15692,17 @@ impl Workspace {
             current_index.saturating_sub(1)
         };
 
+        let next_zoom = crate::window_settings::ZoomLevel::VALUES[next_index];
+
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
+            report_if_error!(window_settings.zoom_level.set_value(next_zoom, ctx));
+        });
+        self.show_zoom_level_hud(next_zoom, ctx);
+    }
+
+    fn show_zoom_level_hud(&mut self, zoom_level: u16, ctx: &mut ViewContext<Self>) {
+        self.zoom_level_hud.update(ctx, |hud, ctx| {
+            hud.show_zoom_level(zoom_level, ctx);
         });
     }
 
@@ -19053,6 +19065,17 @@ impl Workspace {
         OffsetPositioning::offset_from_save_position_element(
             TAB_CONTENT_POSITION_ID,
             vec2f(0., 16.),
+            PositionedElementOffsetBounds::WindowByPosition,
+            PositionedElementAnchor::TopMiddle,
+            ChildAnchor::TopMiddle,
+        )
+    }
+
+    /// Offset positioning for the transient zoom-level HUD.
+    fn zoom_level_hud_positioning(&self) -> OffsetPositioning {
+        OffsetPositioning::offset_from_save_position_element(
+            TAB_CONTENT_POSITION_ID,
+            vec2f(0., 24.),
             PositionedElementOffsetBounds::WindowByPosition,
             PositionedElementAnchor::TopMiddle,
             ChildAnchor::TopMiddle,
@@ -22882,6 +22905,13 @@ impl View for Workspace {
             ChildView::new(&self.toast_stack).finish(),
             self.global_toast_positioning(),
         );
+
+        if FeatureFlag::UIZoom.is_enabled() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.zoom_level_hud).finish(),
+                self.zoom_level_hud_positioning(),
+            );
+        }
 
         // Render agent toast stack (for agent-related notifications) if popup is not open
         if FeatureFlag::HOANotifications.is_enabled()

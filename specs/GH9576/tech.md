@@ -38,7 +38,7 @@ Workspace already has general toast infrastructure, but it is optimized for mess
 
 ### 1. Add a dedicated zoom HUD view
 
-Introduce a small view component under the workspace or shared view-components area, for example `app/src/workspace/zoom_level_hud.rs` or `app/src/view_components/zoom_level_hud.rs`. Keep it focused on this feature rather than extending `DismissibleToastStack`.
+Introduce a small view component under the shared view-components area at `app/src/view_components/zoom_level_hud.rs`. Keep it focused on this feature rather than extending `DismissibleToastStack`.
 
 Suggested shape:
 
@@ -112,7 +112,7 @@ Do not change:
 - `FeatureFlag::UIZoom` gating
 - the font-size fallback path used when `UIZoom` is disabled
 
-The HUD should only be reachable from zoom actions that are registered when `FeatureFlag::UIZoom` is enabled.
+The HUD should only be reachable from zoom actions that are registered when `FeatureFlag::UIZoom` is enabled. As an extra defensive layer, also gate the HUD's `add_positioned_overlay_child` call in `Workspace::render` on `FeatureFlag::UIZoom.is_enabled()` so the overlay never participates in layout when UI zoom is disabled, even if the helper is called by some unexpected path.
 
 ## End-to-end flow
 

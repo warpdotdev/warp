@@ -17,6 +17,7 @@ pub mod find;
 mod markdown_toggle_view;
 mod submittable_text_input;
 mod warning_box;
+pub mod zoom_level_hud;
 
 pub use agent_toast::*;
 pub use alert::Alert;
