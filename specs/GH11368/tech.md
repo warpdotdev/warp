@@ -1,8 +1,8 @@
 # Technical Spec: Support 'agy' (Antigravity) CLI Agent in Warp
 
-See `specs/GH11466/product.md` for the product spec.
+See `specs/GH11368/product.md` for the product spec.
 
-**Issue:** [warpdotdev/warp#11466](https://github.com/warpdotdev/warp/issues/11466)
+**Issue:** [warpdotdev/warp#11368](https://github.com/warpdotdev/warp/issues/11368)
 
 ## 1. Problem
 
