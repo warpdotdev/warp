@@ -17,7 +17,7 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::{InputType, InputClassifierDecisionSource};
+pub use input_classifier::{InputClassifierDecisionSource, InputType};
 
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

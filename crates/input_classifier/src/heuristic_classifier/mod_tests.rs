@@ -42,7 +42,10 @@ async fn detected_input_type(
     input: ParsedTokensSnapshot,
     context: &Context,
 ) -> InputType {
-    classifier.detect_input_type(input, context).await.input_type
+    classifier
+        .detect_input_type(input, context)
+        .await
+        .input_type
 }
 
 #[test]

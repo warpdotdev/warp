@@ -133,7 +133,10 @@ impl InputClassifier for OnnxClassifier {
         self.classify_input(input, context)
             .await
             .map(|classification| {
-                InputClassificationResult::new(classification.to_input_type(), classification.source)
+                InputClassificationResult::new(
+                    classification.to_input_type(),
+                    classification.source,
+                )
             })
             .unwrap_or(InputClassificationResult::new(
                 context.current_input_type,
