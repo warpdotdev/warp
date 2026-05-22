@@ -1626,6 +1626,7 @@ impl<V: warpui::View> PageType<V> {
                 if let Some(widget) = widget {
                     if widget.should_render(app) {
                         if let Some(title) = title {
+                            let title = crate::i18n::tr_static(app, title);
                             let col = Flex::column()
                                 .with_child(render_page_title(title, HEADER_FONT_SIZE, appearance))
                                 .with_child(widget.render_widget(view, false, appearance, app));
@@ -1645,6 +1646,7 @@ impl<V: warpui::View> PageType<V> {
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
+                    let title = crate::i18n::tr_static(app, title);
                     page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
                 }
                 for widget in widgets {
@@ -1664,6 +1666,7 @@ impl<V: warpui::View> PageType<V> {
             } => {
                 let mut page = Flex::column();
                 if let Some(title) = title {
+                    let title = crate::i18n::tr_static(app, title);
                     page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
                 }
                 let num_categories = categories.len();
@@ -1672,11 +1675,15 @@ impl<V: warpui::View> PageType<V> {
                         if let Some(subtitle) = category.subtitle {
                             page.add_child(render_sub_header_with_description(
                                 appearance,
-                                category.title,
-                                subtitle,
+                                crate::i18n::tr_static(app, category.title),
+                                crate::i18n::tr_static(app, subtitle),
                             ));
                         } else {
-                            page.add_child(render_sub_header(appearance, category.title, None));
+                            page.add_child(render_sub_header(
+                                appearance,
+                                crate::i18n::tr_static(app, category.title),
+                                None,
+                            ));
                         }
                     }
                     for widget in &category.widgets {

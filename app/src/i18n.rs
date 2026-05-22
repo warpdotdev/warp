@@ -981,13 +981,52 @@ pub fn tr_text<'a>(app: &AppContext, text: &'a str) -> Cow<'a, str> {
 }
 
 fn system_locale() -> Locale {
+    #[cfg(target_os = "macos")]
+    if let Some(locale) = macos_system_locale() {
+        return locale;
+    }
+
     let lang = std::env::var("LANG")
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if lang.starts_with("zh") {
+    locale_from_identifier(&lang)
+}
+
+fn locale_from_identifier(identifier: &str) -> Locale {
+    if identifier.to_ascii_lowercase().starts_with("zh") {
         Locale::ZhCn
     } else {
         Locale::EnUs
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_system_locale() -> Option<Locale> {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+    use warpui::platform::mac::utils::nsstring_as_str;
+
+    unsafe {
+        let locale_class = class!(NSLocale);
+        let locale: *const Object = msg_send![locale_class, currentLocale];
+        if locale.is_null() {
+            return None;
+        }
+
+        let is_language_code_supported: bool =
+            msg_send![locale, respondsToSelector: sel!(languageCode)];
+        let locale_identifier: *const Object = if is_language_code_supported {
+            msg_send![locale, languageCode]
+        } else {
+            msg_send![locale, localeIdentifier]
+        };
+
+        if locale_identifier.is_null() {
+            return None;
+        }
+
+        let locale_identifier = nsstring_as_str(locale_identifier).ok()?;
+        Some(locale_from_identifier(locale_identifier))
     }
 }
 
@@ -1012,17 +1051,24 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Custom" => "自定义",
         "Custom endpoints" => "自定义端点",
         "Configure notifications" => "配置通知",
+        "Cursor" => "光标",
         "Cycle suggestions" => "切换建议",
         "Debug output" => "调试输出",
+        "Choose the language used by Warp's interface." => "选择 Warp 界面使用的语言。",
+        "Display language" => "显示语言",
         "Edit in Warp" => "在 Warp 中编辑",
         "Enable" => "启用",
         "Enable Warp's Vim keybindings?" => "启用 Warp 的 Vim 快捷键？",
         "Enable alias expansion" => "启用别名展开",
         "Enter your credentials below." => "在下方输入你的凭据。",
         "From GitHub" => "来自 GitHub",
+        "Full-screen Apps" => "全屏应用",
         "Grace period (seconds)" => "宽限期（秒）",
+        "Icon" => "图标",
         "Increase it" => "提高上限",
         "Increase your limit" => "提高你的上限",
+        "Input" => "输入",
+        "Language" => "语言",
         "Learn about file support and formatting" => "了解文件支持和格式设置",
         "Learn More" => "了解更多",
         "Link to Documentation" => "查看文档",
@@ -1054,15 +1100,18 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Set permissions" => "设置权限",
         "Shell process exited" => "Shell 进程已退出",
         "Shell process exited prematurely!" => "Shell 进程提前退出！",
+        "Simplified Chinese" => "简体中文",
         "Skip (advanced)" => "跳过（高级）",
         "Suggestions:" => "建议：",
         "Switch back to horizontal tabs" => "切回水平标签页",
+        "Themes" => "主题",
         "This is an automated agent on your team." => "这是你团队中的自动化智能体。",
         "This suggestion is being edited in another tab." => "此建议正在另一个标签页中编辑。",
         " to continue." => "以继续。",
         "Troubleshoot" => "故障排查",
         "Try " => "尝试",
         "Use AWS Bedrock?" => "使用 AWS Bedrock？",
+        "Use system language" => "跟随系统语言",
         "View Context" => "查看上下文",
         "View details" => "查看详情",
         "View in Warp" => "在 Warp 中查看",
@@ -1587,6 +1636,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Warpify without TMUX" => "不使用 TMUX 进行 Warpify",
         "Welcome to Warp" => "欢迎使用 Warp",
         "Who has access" => "谁有访问权限",
+        "Window" => "窗口",
         "Working" => "运行中",
         "You haven’t set up any environments yet." => "你还没有设置任何环境。",
         "never" => "从未",
@@ -5200,5 +5250,12 @@ mod tests {
                 "missing Simplified Chinese entry for {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn locale_from_identifier_detects_chinese_prefixes() {
+        assert_eq!(locale_from_identifier("zh_CN.UTF-8"), Locale::ZhCn);
+        assert_eq!(locale_from_identifier("zh-Hans"), Locale::ZhCn);
+        assert_eq!(locale_from_identifier("en_US.UTF-8"), Locale::EnUs);
     }
 }

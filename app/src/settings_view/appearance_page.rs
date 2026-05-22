@@ -53,16 +53,17 @@ use crate::editor::{
 };
 use crate::features::FeatureFlag;
 use crate::gpu_state::{GPUState, GPUStateEvent};
+use crate::i18n::{self, I18nKey};
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::server::telemetry::{InputUXChangeOrigin, TelemetryEvent};
 use crate::settings::app_icon::{AppIcon, AppIconSettings};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
-    CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
-    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
-    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
-    DEFAULT_MONOSPACE_FONT_NAME,
+    CursorBlinkEnabled, CursorDisplayType, DisplayLanguage, EnforceMinimumContrast,
+    FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType,
+    InputModeSettings, InputModeState, InputSettings, InputSettingsChangedEvent, LanguageSettings,
+    MonospaceFontName, PaneSettings, ShouldDimInactivePanes, ThemeSettings, UseSystemTheme,
+    UseThinStrokes, DEFAULT_MONOSPACE_FONT_NAME,
 };
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
@@ -424,6 +425,7 @@ pub enum AppearancePageAction {
     SetFontFamily(String),
     SetAIFontFamily(String),
     SetThinStrokes(ThinStrokes),
+    SetDisplayLanguage(DisplayLanguage),
     SetInputMode {
         new_mode: InputMode,
         from_binding: bool,
@@ -488,6 +490,7 @@ pub struct AppearanceSettingsPageView {
     #[allow(dead_code)]
     thin_strokes_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     enforce_min_contrast_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    language_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_mode_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_type_radio_state: RadioButtonStateHandle,
     app_icon_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -549,6 +552,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                 });
             }
             SetThinStrokes(value) => self.set_thin_strokes(value, ctx),
+            SetDisplayLanguage(value) => self.set_display_language(*value, ctx),
             SetEnforceMinimumContrast(value) => {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
                     report_if_error!(font_settings
@@ -840,6 +844,12 @@ impl AppearanceSettingsPageView {
             ctx.notify()
         });
 
+        ctx.subscribe_to_model(&LanguageSettings::handle(ctx), |me, _, _, ctx| {
+            me.refresh_language_dropdown(ctx);
+            me.page = Self::build_page(ctx);
+            ctx.notify();
+        });
+
         ctx.subscribe_to_model(&InputSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, InputSettingsChangedEvent::InputBoxTypeSetting { .. }) {
                 let input_type = *InputSettings::as_ref(ctx).input_box_type;
@@ -1096,6 +1106,8 @@ impl AppearanceSettingsPageView {
             dropdown
         });
 
+        let language_dropdown = Self::build_language_dropdown(ctx);
+
         let app_icon_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
             dropdown.set_top_bar_max_width(INPUT_MODE_DROPDOWN_WIDTH);
@@ -1204,6 +1216,7 @@ impl AppearanceSettingsPageView {
             font_family_dropdown,
             font_weight_dropdown,
             thin_strokes_dropdown,
+            language_dropdown,
             input_mode_dropdown,
             input_type_radio_state,
             app_icon_dropdown,
@@ -1232,17 +1245,23 @@ impl AppearanceSettingsPageView {
     }
 
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
-        let mut categories = vec![Category::new(
-            "Themes",
-            vec![
-                Box::new(CreateCustomThemeWidget::default()),
-                Box::new(ThemeSelectWidget::default()),
-            ],
-        )];
+        let mut categories = vec![
+            Category::new(
+                i18n::tr(ctx, I18nKey::AppearanceCategoryLanguage),
+                vec![Box::new(LanguageWidget::default())],
+            ),
+            Category::new(
+                i18n::tr(ctx, I18nKey::AppearanceCategoryThemes),
+                vec![
+                    Box::new(CreateCustomThemeWidget::default()),
+                    Box::new(ThemeSelectWidget::default()),
+                ],
+            ),
+        ];
 
         if AppIconSettings::as_ref(ctx).is_supported_on_current_platform() {
             categories.push(Category::new(
-                "Icon",
+                i18n::tr(ctx, I18nKey::AppearanceCategoryIcon),
                 vec![Box::new(CustomAppIconWidget::default())],
             ));
         }
@@ -1286,7 +1305,10 @@ impl AppearanceSettingsPageView {
         }
 
         if !window_settings_widgets.is_empty() {
-            categories.push(Category::new("Window", window_settings_widgets));
+            categories.push(Category::new(
+                i18n::tr(ctx, I18nKey::AppearanceCategoryWindow),
+                window_settings_widgets,
+            ));
         }
 
         // Create the Input category with all widgets
@@ -1298,10 +1320,13 @@ impl AppearanceSettingsPageView {
             Box::new(InputModeWidget::default()),
         ];
 
-        categories.push(Category::new("Input", category_widgets));
+        categories.push(Category::new(
+            i18n::tr(ctx, I18nKey::AppearanceCategoryInput),
+            category_widgets,
+        ));
 
         categories.push(Category::new(
-            "Panes",
+            i18n::tr(ctx, I18nKey::AppearanceCategoryPanes),
             vec![
                 Box::new(DimInactivePanesWidget::default()),
                 Box::new(FocusFollowsMouseWidget::default()),
@@ -1315,7 +1340,10 @@ impl AppearanceSettingsPageView {
         if FeatureFlag::MinimalistUI.is_enabled() {
             block_settings_widgets.push(Box::new(ShowBlockDividersWidget::default()));
         }
-        categories.push(Category::new("Blocks", block_settings_widgets));
+        categories.push(Category::new(
+            i18n::tr(ctx, I18nKey::AppearanceCategoryBlocks),
+            block_settings_widgets,
+        ));
 
         let font_settings = FontSettings::as_ref(ctx);
         let mut text_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
@@ -1344,10 +1372,13 @@ impl AppearanceSettingsPageView {
             text_settings_widgets.push(Box::new(LigaturesWidget::default()));
         }
 
-        categories.push(Category::new("Text", text_settings_widgets));
+        categories.push(Category::new(
+            i18n::tr(ctx, I18nKey::AppearanceCategoryText),
+            text_settings_widgets,
+        ));
 
         categories.push(Category::new(
-            "Cursor",
+            i18n::tr(ctx, I18nKey::AppearanceCategoryCursor),
             vec![
                 Box::new(CursorTypeWidget::default()),
                 Box::new(BlinkingCursorWidget::default()),
@@ -1393,10 +1424,13 @@ impl AppearanceSettingsPageView {
             tab_settings_widgets.push(Box::new(DirectoryTabColorsWidget { add_picker }));
         }
 
-        categories.push(Category::new("Tabs", tab_settings_widgets));
+        categories.push(Category::new(
+            i18n::tr(ctx, I18nKey::AppearanceCategoryTabs),
+            tab_settings_widgets,
+        ));
 
         categories.push(Category::new(
-            "Full-screen Apps",
+            i18n::tr(ctx, I18nKey::AppearanceCategoryFullscreenApps),
             vec![Box::new(AltScreenPaddingWidget::default())],
         ));
 
@@ -1509,6 +1543,28 @@ impl AppearanceSettingsPageView {
             InputMode::PinnedToTop => "Pin to the top (Reverse mode)",
             InputMode::Waterfall => "Start at the top (Classic mode)",
         }
+    }
+
+    fn language_dropdown_item_label(app: &AppContext, val: DisplayLanguage) -> &'static str {
+        match val {
+            DisplayLanguage::System => i18n::tr(app, I18nKey::LanguagePreferenceSystem),
+            DisplayLanguage::English => i18n::tr(app, I18nKey::LanguagePreferenceEnglish),
+            DisplayLanguage::ChineseSimplified => {
+                i18n::tr(app, I18nKey::LanguagePreferenceChineseSimplified)
+            }
+        }
+    }
+
+    fn language_dropdown_items(app: &AppContext) -> Vec<DropdownItem<AppearancePageAction>> {
+        DisplayLanguage::ALL
+            .into_iter()
+            .map(|val| {
+                DropdownItem::new(
+                    Self::language_dropdown_item_label(app, val),
+                    AppearancePageAction::SetDisplayLanguage(val),
+                )
+            })
+            .collect()
     }
 
     fn app_icon_dropdown_item_label(val: AppIcon) -> &'static str {
@@ -2073,6 +2129,20 @@ impl AppearanceSettingsPageView {
         });
     }
 
+    fn set_display_language(&mut self, value: DisplayLanguage, ctx: &mut ViewContext<Self>) {
+        if *LanguageSettings::as_ref(ctx).display_language.value() == value {
+            return;
+        }
+
+        LanguageSettings::handle(ctx).update(ctx, |language_settings, ctx| {
+            report_if_error!(language_settings.display_language.set_value(value, ctx));
+        });
+
+        self.refresh_language_dropdown(ctx);
+        self.page = Self::build_page(ctx);
+        ctx.notify();
+    }
+
     pub fn toggle_jump_to_bottom_of_block_button(&mut self, ctx: &mut ViewContext<Self>) {
         let block_list_settings = BlockListSettings::handle(ctx);
         let new_value = {
@@ -2393,6 +2463,36 @@ impl AppearanceSettingsPageView {
 
             dropdown
         })
+    }
+
+    fn build_language_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Dropdown<AppearancePageAction>> {
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(INPUT_MODE_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(INPUT_MODE_DROPDOWN_WIDTH, ctx);
+
+            dropdown.set_items(Self::language_dropdown_items(ctx), ctx);
+            let current_value = *LanguageSettings::as_ref(ctx).display_language.value();
+            dropdown.set_selected_by_action(
+                AppearancePageAction::SetDisplayLanguage(current_value),
+                ctx,
+            );
+
+            dropdown
+        })
+    }
+
+    fn refresh_language_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        self.language_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_items(Self::language_dropdown_items(ctx), ctx);
+            let current_value = *LanguageSettings::as_ref(ctx).display_language.value();
+            dropdown.set_selected_by_action(
+                AppearancePageAction::SetDisplayLanguage(current_value),
+                ctx,
+            );
+        });
     }
 
     fn build_tab_close_button_position_dropdown(
@@ -3361,6 +3461,34 @@ impl SettingsWidget for InputTypeWidget {
             appearance,
             radio_buttons,
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct LanguageWidget {}
+
+impl SettingsWidget for LanguageWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "display language locale system english chinese simplified 中文 简体中文 语言"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            i18n::tr(app, I18nKey::AppearanceLanguageLabel),
+            Some(i18n::tr(app, I18nKey::AppearanceLanguageDescription)),
+            None,
+            LocalOnlyIconState::Hidden,
+            None,
+            &view.language_dropdown,
         )
     }
 }

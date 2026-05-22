@@ -9,9 +9,10 @@ use warpui::SingletonEntity;
 use warpui_extras::user_preferences;
 
 use super::{
-    migrate_native_settings_to_settings_file, needs_settings_file_migration,
+    migrate_native_settings_to_settings_file, needs_settings_file_migration, register_all_settings,
     SETTINGS_FILE_MIGRATION_COMPLETE_KEY,
 };
+use crate::settings::{DisplayLanguage, LanguageSettings};
 use crate::terminal::session_settings::{NotificationsMode, NotificationsSettings};
 
 // A minimal settings group with one public and one private setting, used to
@@ -53,6 +54,38 @@ fn init_test_app(ctx: &mut warpui::AppContext) {
     });
     ctx.add_singleton_model(|_| SettingsManager::default());
     MigrationTestSettings::register(ctx);
+}
+
+#[test]
+fn register_all_settings_registers_language_settings() {
+    warpui::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(move |_| {
+                PublicPreferences::new(
+                    Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+                )
+            });
+            ctx.add_singleton_model(move |_| -> PrivatePreferences {
+                PrivatePreferences::new(
+                    Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+                )
+            });
+            ctx.add_singleton_model(|_| SettingsManager::default());
+
+            register_all_settings(ctx);
+
+            assert!(
+                SettingsManager::as_ref(ctx)
+                    .public_storage_keys()
+                    .any(|key| key == "DisplayLanguage"),
+                "DisplayLanguage must be registered so appearance.language can be parsed and synced"
+            );
+            assert_eq!(
+                *LanguageSettings::as_ref(ctx).display_language.value(),
+                DisplayLanguage::System
+            );
+        });
+    });
 }
 
 #[test]
