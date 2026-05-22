@@ -33,7 +33,6 @@ use crate::terminal::cli_agent_sessions::{
 /// `CLIAgentSessionsModelEvent::StatusChanged`. Because these sessions do
 /// not create conversations in the history model, the driver must register
 /// a `terminal_view_id → task_id` mapping via `register_cli_session`.
-///
 pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
     /// Maps terminal view IDs to task IDs for third-party harness sessions
@@ -45,14 +44,18 @@ pub enum LocalAgentTaskSyncModelEvent {}
 
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
-/// which server field. `conversation_id` carries the server conversation
-/// token (see `ServerConversationToken`), not the client-local
-/// `AIConversationId`.
+/// which server field.
+///
+/// `server_conversation_token` is the server-assigned conversation token
+/// (see `ServerConversationToken`), passed to the server in the
+/// `conversation_id` field of `UpdateAgentTaskInput`. It is intentionally
+/// distinct from the client-local `AIConversationId`, which never crosses
+/// this boundary.
 #[derive(Default)]
 struct LocalTaskUpdate {
     task_state: Option<AgentTaskState>,
     session_id: Option<SessionId>,
-    conversation_id: Option<String>,
+    server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
 }
 
@@ -179,7 +182,7 @@ impl LocalAgentTaskSyncModel {
                 let (task_state, status_message) = map_conversation_status(conversation);
                 LocalTaskUpdate {
                     task_state: Some(task_state),
-                    conversation_id: conversation
+                    server_conversation_token: conversation
                         .server_conversation_token()
                         .map(|token| token.as_str().to_string()),
                     status_message,
@@ -244,7 +247,7 @@ impl LocalAgentTaskSyncModel {
         let LocalTaskUpdate {
             task_state,
             session_id,
-            conversation_id,
+            server_conversation_token,
             status_message,
         } = update;
         ctx.spawn(
@@ -254,13 +257,15 @@ impl LocalAgentTaskSyncModel {
                         task_id,
                         task_state,
                         session_id,
-                        conversation_id,
+                        server_conversation_token.clone(),
                         status_message,
                     )
                     .await
                 {
                     log::warn!(
-                        "LocalAgentTaskSyncModel: failed to update task {task_id} to {task_state:?}: {err:#}"
+                        "LocalAgentTaskSyncModel: failed to update task {task_id} \
+                         (state={task_state:?}, session_id={session_id:?}, \
+                         server_conversation_token={server_conversation_token:?}): {err:#}"
                     );
                 }
             },

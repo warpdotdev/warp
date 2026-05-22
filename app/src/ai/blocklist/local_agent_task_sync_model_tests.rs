@@ -211,7 +211,7 @@ fn register_cli_agent_sessions_model(app: &mut App) {
 }
 
 #[test]
-fn local_shared_session_established_fires_update_agent_task_with_session_id() {
+fn shared_session_link_fires_update_agent_task_with_session_id() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -247,7 +247,7 @@ fn local_shared_session_established_fires_update_agent_task_with_session_id() {
 }
 
 #[test]
-fn local_shared_session_established_uses_correct_argument_order() {
+fn shared_session_link_uses_correct_argument_order() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -295,7 +295,7 @@ fn local_shared_session_established_uses_correct_argument_order() {
 }
 
 #[test]
-fn local_shared_session_established_skips_viewer_conversations() {
+fn shared_session_link_skips_viewer_conversations() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -330,7 +330,7 @@ fn local_shared_session_established_skips_viewer_conversations() {
 }
 
 #[test]
-fn local_shared_session_established_skips_remote_child_conversations() {
+fn shared_session_link_skips_remote_child_conversations() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -363,7 +363,7 @@ fn local_shared_session_established_skips_remote_child_conversations() {
 }
 
 #[test]
-fn local_shared_session_established_skips_when_task_id_missing() {
+fn shared_session_link_skips_when_task_id_missing() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -395,7 +395,7 @@ fn local_shared_session_established_skips_when_task_id_missing() {
 }
 
 #[test]
-fn local_shared_session_established_skips_unknown_conversation() {
+fn shared_session_link_skips_unknown_conversation() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
