@@ -1570,6 +1570,7 @@ impl AIClient for ServerApi {
                             .map(|m| crate::ai::harness_availability::HarnessModelInfo {
                                 id: m.id.into_inner(),
                                 display_name: m.display_name,
+                                reasoning_level: m.reasoning_level,
                             })
                             .collect(),
                     })

@@ -7,12 +7,11 @@ pub mod test_utils;
 pub mod util;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-
 pub use heuristic_classifier::HeuristicClassifier;
 pub use input_type::InputType;
 #[cfg(feature = "onnx")]
 pub use onnx::{Model as OnnxModel, OnnxClassifier};
+use serde::{Deserialize, Serialize};
 
 /// Sources produced by the input classifier pipeline.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

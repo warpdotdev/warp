@@ -1,18 +1,3 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{
-    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, UserQueryMode,
-};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::{
-    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
-};
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
-use crate::server::ids::{ClientId, SyncId};
-use chrono::Local;
-use parking_lot::FairMutex;
-use session_sharing_protocol::common::CLIAgentSessionState;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -20,26 +5,42 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
+
+use chrono::Local;
+use parking_lot::FairMutex;
+use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpui::{
-    notification::UserNotification, platform::WindowStyle, Presenter, WindowInvalidation,
-};
-use warpui::{App, ReadModel};
+use warpui::notification::UserNotification;
+use warpui::platform::WindowStyle;
+use warpui::{App, Presenter, ReadModel, WindowInvalidation};
 
+use super::*;
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, UserQueryMode,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
-use crate::ai::blocklist::agent_view::ExitAgentViewError;
+use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, AgentViewState, ExitAgentViewError};
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
-    agent_view::{AgentViewEntryOrigin, AgentViewState},
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, InputType, ResponseStreamId,
 };
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+};
 use crate::ai::llms::LLMId;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
 use crate::context_chips::prompt::Prompt;
 use crate::editor::{AutosuggestionLocation, AutosuggestionType, CrdtOperation};
 use crate::features::FeatureFlag;
 use crate::pane_group::focus_state::PaneGroupFocusState;
-use crate::pane_group::{pane::PaneStack, BackingView, TerminalPaneId};
+use crate::pane_group::pane::PaneStack;
+use crate::pane_group::{BackingView, TerminalPaneId};
+use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
@@ -54,9 +55,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-
-use crate::terminal::model::ansi::{self, InitShellValue};
-use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
+use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
 use crate::terminal::model::grid::Dimensions as _;
@@ -69,16 +68,13 @@ use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
-use crate::terminal::CLIAgent;
-
-use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
-use crate::test_util::terminal::add_window_with_id_and_terminal;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::terminal::{CLIAgent, MockTerminalManager, TerminalManager, TerminalModel};
+use crate::test_util::terminal::{
+    add_window_with_id_and_terminal, initialize_app_for_terminal_view,
+};
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
-
-use super::*;
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
     let tips_model = app.add_model(|_| Default::default());

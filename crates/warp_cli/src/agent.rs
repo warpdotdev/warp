@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+use crate::SortOrderArg;
 use crate::config_file::ConfigFileArgs;
 use crate::environment::EnvironmentCreateArgs;
+use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
 use crate::scope::ObjectScope;
@@ -283,8 +285,8 @@ pub struct RunAgentArgs {
     ///
     /// When used with --prompt, the skill provides the base context and the prompt is the task.
     ///
-    /// To automate a skill on a schedule, use `oz schedule create --skill <SPEC>`.
-    #[arg(long = "skill", value_name = "SPEC")]
+    /// To automate a skill on a schedule, use `oz schedule create --skill <SKILL>`.
+    #[arg(long = "skill", value_name = "SKILL")]
     pub skill: Option<SkillSpec>,
 
     /// Name for this agent task.
@@ -436,8 +438,8 @@ pub struct RunCloudArgs {
     ///
     /// When used with --prompt, the skill provides the base context and the prompt is the task.
     ///
-    /// To automate a skill on a schedule, use `oz schedule create --skill <SPEC>`.
-    #[arg(long = "skill", value_name = "SPEC")]
+    /// To automate a skill on a schedule, use `oz schedule create --skill <SKILL>`.
+    #[arg(long = "skill", value_name = "SKILL")]
     pub skill: Option<SkillSpec>,
 
     /// Name for this agent task.
@@ -525,15 +527,6 @@ pub enum AgentSortByArg {
     CreatedAt,
 }
 
-/// Sort direction for named agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum AgentSortOrderArg {
-    #[value(name = "asc")]
-    Asc,
-    #[value(name = "desc")]
-    Desc,
-}
-
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
@@ -543,7 +536,7 @@ pub struct AgentListArgs {
 
     /// Sort direction. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-order", value_enum, value_name = "DIR")]
-    pub sort_order: Option<AgentSortOrderArg>,
+    pub sort_order: Option<SortOrderArg>,
 
     /// JSON formatting configuration.
     #[command(flatten)]
@@ -577,7 +570,7 @@ pub struct AgentCreateArgs {
     pub secrets: Vec<String>,
 
     /// Attach a skill to the agent. Repeat the flag for multiple skills.
-    #[arg(long = "skill", value_name = "SPEC")]
+    #[arg(long = "skill", value_name = "SKILL")]
     pub skills: Vec<String>,
 
     /// Base model for runs of this agent.
@@ -637,7 +630,7 @@ pub struct AgentUpdateArgs {
     /// Add a skill to the agent. Repeat the flag for multiple skills.
     #[arg(
         long = "add-skill",
-        value_name = "SPEC",
+        value_name = "SKILL",
         conflicts_with = "remove_all_skills"
     )]
     pub add_skills: Vec<String>,
@@ -645,7 +638,7 @@ pub struct AgentUpdateArgs {
     /// Remove a skill from the agent. Repeat the flag for multiple skills.
     #[arg(
         long = "remove-skill",
-        value_name = "SPEC",
+        value_name = "SKILL",
         conflicts_with = "remove_all_skills"
     )]
     pub remove_skills: Vec<String>,

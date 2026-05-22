@@ -1,7 +1,6 @@
-use warp_completer::{
-    ParsedTokenData, ParsedTokensSnapshot, meta::SpannedItem,
-    util::parse_current_commands_and_tokens,
-};
+use warp_completer::meta::SpannedItem;
+use warp_completer::util::parse_current_commands_and_tokens;
+use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
 
 use super::*;
 use crate::Context;

@@ -1,6 +1,6 @@
 //! Commands to interact with available agents via the public API.
 
-use warp_cli::agent::ListAgentConfigsArgs;
+use warp_cli::agent::ListAgentSkillsArgs;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::platform::TerminationMode;
@@ -238,7 +238,7 @@ impl AgentConfigRunner {
     /// Print a list of agents in a card-style format.
     fn print_agents_table(agents: &[AgentSkillItem]) {
         if agents.is_empty() {
-            println!("No agents found.");
+            println!("No skills found.");
             return;
         }
 
