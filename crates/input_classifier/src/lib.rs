@@ -17,11 +17,17 @@ pub use onnx::{Model as OnnxModel, OnnxClassifier};
 /// Sources produced by the input classifier pipeline.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputClassifierDecisionSource {
+    // Classification result coming from Onnx classifier
     InputClassifier,
+    // Classification result coming from fall back heuristic classifier when onnx classifier panicked
     InputClassifierFallbackHeuristic,
+    // Classification result coming from current input type when onnx classifier failed
     InputClassifierFallbackCurrentInput,
+    // Input match with ONE_OFF_NATURAL_LANGUAGE_WORDS
     NaturalLanguageOneOffAllowlist,
+    // Input match with ONE_OFF_SHELL_COMMAND_KEYWORDS
     ShellCommandAllowList,
+    // Classification result coming from is_likely_shell_command
     ShellHeuristic,
 }
 
