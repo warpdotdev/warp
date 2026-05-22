@@ -158,10 +158,16 @@ winget install -e --id Kitware.CMake
 winget install -e --id JRSoftware.InnoSetup
 
 # protoc (Protocol Buffers compiler) is required by prost-build.
-winget install protobuf
+winget install -e --id Google.Protobuf
+if (-not (Get-Command -Name protoc -Type Application -ErrorAction SilentlyContinue)) {
+    $env:PATH += ";$env:ProgramFiles\protobuf\bin"
+}
 
 # LLVM provides libclang, which is required by bindgen.
 winget install -e --id LLVM.LLVM
+if (-not (Get-Command -Name clang -Type Application -ErrorAction SilentlyContinue)) {
+    $env:PATH += ";$env:ProgramFiles\LLVM\bin"
+}
 
 # If we don't see gcloud command, try adding the install location to the PATH.
 if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
