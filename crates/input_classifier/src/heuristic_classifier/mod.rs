@@ -50,7 +50,10 @@ impl InputClassifier for HeuristicClassifier {
         if total_word_token_count == 1
             && is_one_off_natural_language_word_or_prefix(&word_tokens[0].to_lowercase())
         {
-            return (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist);
+            return (
+                InputType::AI,
+                InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
+            );
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {

@@ -34,8 +34,8 @@ pub enum InputTypeAutoDetectionSource {
     Denylist,
     /// Buffer text closely matched a recent shell history entry.
     HistoryMatch,
-    /// Input was classified as a follow-up to a preceding AI block.
-    AgentFollowUp,
+    /// Input matched the natural-language follow-up allowlist after a preceding AI block.
+    NaturalLanguageAgentFollowUpAllowList,
     /// Inline history menu / history-up suggestion selection set the input type.
     HistorySelection,
     /// Inserting a workflow into the input set the input type based on workflow kind.
@@ -801,14 +801,20 @@ impl BlocklistAIInputModel {
                     if matches!(current_input_type, InputType::AI)
                         && is_one_off_natural_language_word(first_token_str.to_lowercase().as_str())
                     {
-                        return (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist.into());
+                        return (
+                            InputType::AI,
+                            InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist.into(),
+                        );
                     }
 
                     // If this is clearly intended to be a follow-up to an AI block, classify it as AI.
                     if is_agent_follow_up
                         && is_agent_follow_up_input(&buffer_cloned.trim().to_lowercase())
                     {
-                        return (InputType::AI, InputTypeAutoDetectionSource::AgentFollowUp);
+                        return (
+                            InputType::AI,
+                            InputTypeAutoDetectionSource::NaturalLanguageAgentFollowUpAllowList,
+                        );
                     }
 
                     // If we have history entries (i.e., a live session), check for

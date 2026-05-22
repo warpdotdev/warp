@@ -20,7 +20,8 @@ pub enum InputClassifierDecisionSource {
     InputClassifier,
     InputClassifierFallbackHeuristic,
     InputClassifierFallbackCurrentInput,
-    OneOffWhitelist,
+    NaturalLanguageOneOffAllowlist,
+    ShellCommandAllowList,
     ShellHeuristic,
 }
 

@@ -145,7 +145,13 @@ fn test_input_detection_sources() {
         assert_eq!(decision, (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic));
         let token = mock_parsed_input_token_without_descriptions("explain");
         let decision = classifier.detect_input_type(token, &context).await;
-        assert_eq!(decision, (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist));
+        assert_eq!(
+            decision,
+            (
+                InputType::AI,
+                InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist
+            )
+        );
         let token = mock_parsed_input_token_without_descriptions("fix this");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(

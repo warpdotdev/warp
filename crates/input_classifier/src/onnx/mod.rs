@@ -105,7 +105,10 @@ impl InputClassifier for OnnxClassifier {
 
             // If the input is a single word and the word is one of a specific set of words, classify it as AI
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
-                return (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist);
+                return (
+                    InputType::AI,
+                    InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
+                );
             }
 
             // If the first token is one of a specific set of shell command keywords (e.g.: echo or sudo),
