@@ -41,7 +41,7 @@ pub fn update_generic_string_object_result_to_update_result(
                     })
                 }
                 GenericStringObjectUpdate::GenericStringObjectUpdateRejected(rejected) => {
-                    let format = rejected.conflicting_generic_string_object.format.clone();
+                    let format = rejected.conflicting_generic_string_object.format;
                     let boxed: Box<dyn ServerObject> = match format {
                         GenericStringObjectFormat::JsonEnvVarCollection => {
                             boxed_rejected_generic_string_object::<ServerEnvVarCollection>(

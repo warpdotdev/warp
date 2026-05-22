@@ -935,7 +935,7 @@ impl ObjectClient for ServerApi {
                 let mut updated_generic_string_objects = HashMap::new();
                 if let Some(objects) = output.generic_string_objects {
                     for gso in objects {
-                        match gso.format.clone() {
+                        match gso.format {
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                                 parse_server_gso::<EnvVarCollection, JsonSerializer>(
                                     &mut updated_generic_string_objects,

@@ -1136,7 +1136,7 @@ impl TryFrom<warp_graphql::object::CloudObject> for ServerCloudObject {
                 ServerFolder::try_from_gql(folder)?,
             )),
             warp_graphql::object::CloudObject::GenericStringObject(gso) => {
-                match gso.format.clone() {
+                match gso.format {
                     warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                         Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
                     }
@@ -1190,7 +1190,7 @@ impl TryFrom<CloudObjectWithDescendants> for ServerCloudObject {
             CloudObjectWithDescendants::FolderWithDescendants(fwd) => {
                 Ok(ServerCloudObject::Folder(ServerFolder::try_from_gql(fwd.folder)?))
             }
-            CloudObjectWithDescendants::GenericStringObject(gso) => match gso.format.clone() {
+            CloudObjectWithDescendants::GenericStringObject(gso) => match gso.format {
                 warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                     Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
                 }
