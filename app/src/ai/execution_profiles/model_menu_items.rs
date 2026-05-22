@@ -3,8 +3,8 @@ use std::sync::Arc;
 use itertools::Itertools;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, ParentElement, SavePosition,
-    Shrinkable, Text,
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, SavePosition, Shrinkable,
+    Text,
 };
 use warpui::fonts::{Properties, Style};
 use warpui::{Action, AppContext, Element, SingletonEntity as _};
@@ -14,17 +14,6 @@ use crate::ai::llms::{
     LLMInfo, LLMPreferences,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
-use itertools::Itertools;
-use std::sync::Arc;
-use warp_core::ui::Icon;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, SavePosition,
-        Shrinkable, Text,
-    },
-    fonts::{Properties, Style},
-    Action, AppContext, Element, SingletonEntity as _,
-};
 
 pub fn is_auto(llm: &LLMInfo) -> bool {
     llm.display_name.to_lowercase().contains("auto")

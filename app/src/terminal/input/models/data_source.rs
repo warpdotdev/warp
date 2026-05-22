@@ -19,8 +19,9 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
 use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
+    ModelSpecScoresLayout, MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION,
+    REASONING_LEVEL_TITLE,
 };
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
@@ -41,14 +42,6 @@ use crate::terminal::input::inline_menu::{
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
-
-use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
-    ModelSpecScoresLayout, MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION,
-    REASONING_LEVEL_TITLE,
-};
 
 const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 
