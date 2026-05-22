@@ -680,7 +680,7 @@ impl CommandSearchView {
             appearance
                 .ui_builder()
                 .link(
-                    "Upgrade".into(),
+                    crate::i18n::tr_static(app, "Upgrade").into(),
                     None,
                     Some(Box::new(move |ctx| {
                         ctx.dispatch_typed_action(CommandSearchAction::AttemptLoginGatedUpgrade);
@@ -692,7 +692,7 @@ impl CommandSearchView {
             appearance
                 .ui_builder()
                 .link(
-                    "Upgrade".into(),
+                    crate::i18n::tr_static(app, "Upgrade").into(),
                     None,
                     Some(Box::new(move |ctx| {
                         ctx.dispatch_typed_action(CommandSearchAction::OpenUpgradeLink(

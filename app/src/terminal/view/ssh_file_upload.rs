@@ -458,12 +458,19 @@ impl FileUpload {
         .finish()
     }
 
-    fn render_file_upload_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_file_upload_header(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         Container::new(
             FormattedTextElement::new(
                 FormattedText::new(vec![FormattedTextLine::Heading(FormattedTextHeader {
                     heading_size: 3,
-                    text: vec![FormattedTextFragment::plain_text("File Uploads")],
+                    text: vec![FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
+                        "File Uploads",
+                    ))],
                 })]),
                 appearance.ui_font_size(),
                 appearance.ui_font_family(),
@@ -486,7 +493,7 @@ impl FileUpload {
         let mut upload_element = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_child(self.render_file_upload_header(appearance));
+            .with_child(self.render_file_upload_header(appearance, app));
 
         // Sort by ID.
         uploads

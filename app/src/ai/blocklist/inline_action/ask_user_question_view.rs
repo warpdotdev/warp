@@ -770,7 +770,7 @@ impl AskUserQuestionView {
             ctx,
         );
         let skip_button = CompactibleActionButton::new(
-            "Skip all".to_string(),
+            crate::i18n::tr_static(ctx, "Skip all").to_string(),
             Some(KeystrokeSource::Fixed(CTRL_C_KEYSTROKE.clone())),
             ButtonSize::InlineActionHeader,
             AskUserQuestionViewAction::SkipAll,
@@ -779,7 +779,7 @@ impl AskUserQuestionView {
             ctx,
         );
         let next_button = CompactibleActionButton::new(
-            "Next".to_string(),
+            crate::i18n::tr_static(ctx, "Next").to_string(),
             Some(KeystrokeSource::Fixed(
                 Keystroke::parse("enter").expect("keystroke should parse"),
             )),
@@ -1295,7 +1295,7 @@ impl AskUserQuestionView {
                 .finish(),
         );
         content.add_child(
-            HeaderConfig::new("Agent questions", app)
+            HeaderConfig::new(crate::i18n::tr_static(app, "Agent questions"), app)
                 .with_icon(yellow_stop_icon(appearance))
                 .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
                 .render_header(app, Some(header_right.finish())),
@@ -1328,9 +1328,12 @@ impl AskUserQuestionView {
 
     fn render_unavailable(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         wrap_with_agent_output_item_spacing(
-            HeaderConfig::new("Questions unavailable".to_string(), app)
-                .with_icon(inline_action_icons::reverted_icon(appearance))
-                .render(app),
+            HeaderConfig::new(
+                crate::i18n::tr_static(app, "Questions unavailable").to_string(),
+                app,
+            )
+            .with_icon(inline_action_icons::reverted_icon(appearance))
+            .render(app),
             app,
         )
         .finish()

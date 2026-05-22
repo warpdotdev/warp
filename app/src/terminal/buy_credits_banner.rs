@@ -226,7 +226,11 @@ impl BuyCreditsBanner {
         }
     }
 
-    fn render_auto_reload_checkbox(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_auto_reload_checkbox(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let check_color = theme.background().into_solid();
         let auto_reload_enabled = self.auto_reload_enabled;
@@ -250,9 +254,13 @@ impl BuyCreditsBanner {
 
         let sub_text_color = theme.sub_text_color(theme.surface_1());
 
-        let label = Text::new_inline("Auto reload", appearance.ui_font_family(), 12.)
-            .with_color(sub_text_color.into())
-            .finish();
+        let label = Text::new_inline(
+            crate::i18n::tr_static(app, "Auto reload"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(sub_text_color.into())
+        .finish();
 
         // Get the selected amount for the tooltip
         let selected_credits = self
@@ -570,11 +578,15 @@ impl BuyCreditsBanner {
             if is_at_monthly_limit || would_purchase_exceed_limit {
                 // Create formatted text with clickable hyperlink
                 let warning_text_fragments = vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
                         "Purchasing these credits would take you over your monthly spend limit. ",
+                    )),
+                    FormattedTextFragment::hyperlink_action(
+                        crate::i18n::tr_static(app, "Increase it"),
+                        Action::ManageBilling,
                     ),
-                    FormattedTextFragment::hyperlink_action("Increase it", Action::ManageBilling),
-                    FormattedTextFragment::plain_text(" to continue."),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(app, " to continue.")),
                 ];
 
                 let formatted_warning = FormattedTextElement::new(
@@ -710,7 +722,7 @@ impl BuyCreditsBanner {
 
             if auto_reload_banner_toggle_ff {
                 children.push(
-                    Container::new(self.render_auto_reload_checkbox(appearance))
+                    Container::new(self.render_auto_reload_checkbox(appearance, app))
                         .with_margin_right(8.)
                         .finish(),
                 );

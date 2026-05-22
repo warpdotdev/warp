@@ -3839,16 +3839,20 @@ impl TerminalView {
             me.handle_menu_event(event, ctx);
         });
 
-        let slow_bootstrap_banner = ctx.add_typed_action_view(|_| {
+        let slow_bootstrap_banner = ctx.add_typed_action_view(|ctx| {
             Banner::<TerminalAction>::new_with_buttons(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
                         "Seems like your shell is taking a while to start...  ",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::tr_static(ctx, "More info"),
+                        KNOWN_ISSUES_URL,
                     ),
-                    FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
                 ]),
                 vec![BannerTextButton::new(
-                    "Show initialization block".to_string(),
+                    crate::i18n::tr_static(ctx, "Show initialization block").to_string(),
                     Rc::new(|event_ctx, _ctx, _position| {
                         event_ctx.dispatch_typed_action(BannerAction::<TerminalAction>::Action(
                             TerminalAction::ShowInitializationBlock,
@@ -3866,16 +3870,28 @@ impl TerminalView {
             me.handle_sessions_event(event.clone(), ctx);
         });
 
-        let control_master_error_banner = ctx.add_typed_action_view(|_| {
+        let control_master_error_banner = ctx.add_typed_action_view(|ctx| {
             Banner::new(BannerTextContent::formatted_text(vec![
-                FormattedTextFragment::plain_text("Seems like your completions are not working ("),
-                FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
-                FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    ctx,
+                    "Seems like your completions are not working (",
+                )),
+                FormattedTextFragment::hyperlink(
+                    crate::i18n::tr_static(ctx, "more info"),
+                    CONTROLMASTER_ISSUES_URL,
+                ),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    ctx,
+                    "). Enabling the SSH extension in ",
+                )),
                 FormattedTextFragment::hyperlink_action(
-                    "settings",
+                    crate::i18n::tr_static(ctx, "settings"),
                     TerminalAction::ShowWarpifySettings,
                 ),
-                FormattedTextFragment::plain_text(" may resolve this issue."),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    ctx,
+                    " may resolve this issue.",
+                )),
             ]))
         });
 
@@ -3883,12 +3899,16 @@ impl TerminalView {
             me.handle_controlmaster_error_banner_event(event, ctx);
         });
 
-        let incompatible_configuration_banner = ctx.add_typed_action_view(|_| {
+        let incompatible_configuration_banner = ctx.add_typed_action_view(|ctx| {
             Banner::new(BannerTextContent::formatted_text(vec![
-                FormattedTextFragment::plain_text(
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    ctx,
                     "Your shell configuration is incompatible with Warp...  ",
+                )),
+                FormattedTextFragment::hyperlink(
+                    crate::i18n::tr_static(ctx, "More info"),
+                    KNOWN_ISSUES_URL,
                 ),
-                FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
             ]))
         });
 
@@ -3896,14 +3916,20 @@ impl TerminalView {
             me.handle_incompatible_configuration_banner_event(event, ctx);
         });
 
-        let emacs_bindings_banner = ctx.add_typed_action_view(|_| {
+        let emacs_bindings_banner = ctx.add_typed_action_view(|ctx| {
             Banner::new_with_buttons(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text("Did you intend "),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
+                        "Did you intend ",
+                    )),
                     FormattedTextFragment::inline_code("ctrl-a"),
                     FormattedTextFragment::plain_text("/"),
                     FormattedTextFragment::inline_code("ctrl-e"),
-                    FormattedTextFragment::plain_text(" to move the cursor?"),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
+                        " to move the cursor?",
+                    )),
                 ]),
                 // Here, we use DismissalType::Temporary and DismissalType::Permanent variants
                 // as stand-ins for changing bindings vs. leaving them as-is.
@@ -16533,7 +16559,7 @@ impl TerminalView {
             return None;
         }
         Some(
-            MenuItemFields::new("Clear Blocks")
+            MenuItemFields::new(crate::i18n::tr_static(ctx, "Clear Blocks"))
                 .with_on_select_action(TerminalAction::ClearBuffer)
                 .with_key_shortcut_label(keybinding_name_to_display_string(
                     "terminal:clear_blocks",
@@ -21400,23 +21426,34 @@ impl TerminalView {
         let show_banner = if honor_ps1 {
             let banner_content = if shell_plugins.contains("p10k_unsupported") {
                 Some(BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::bold("Powerlevel10k now supports Warp!  "),
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::bold(crate::i18n::tr_static(
+                        ctx,
+                        "Powerlevel10k now supports Warp!  ",
+                    )),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
                         "You seem to be running an older (unsupported) version, please follow ",
-                    ),
+                    )),
                     FormattedTextFragment::hyperlink(
-                        "these instructions",
+                        crate::i18n::tr_static(ctx, "these instructions"),
                         P10K_UPDATE_INSTRUCTIONS_URL,
                     ),
-                    FormattedTextFragment::plain_text(" to update to the latest version."),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
+                        " to update to the latest version.",
+                    )),
                 ]))
             } else if shell_plugins.contains("pure") {
                 Some(BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
                         "Pure is not yet supported in Warp. You might consider one of the \
                         supported prompts as an alternative.  ",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::tr_static(ctx, "Learn more"),
+                        PROMPT_COMPATIBILITY_URL,
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", PROMPT_COMPATIBILITY_URL),
                 ]))
             } else {
                 None
@@ -22678,6 +22715,7 @@ impl TerminalView {
                     state,
                     SessionSettings::as_ref(app).notifications.mode,
                     appearance,
+                    app,
                 ),
             );
         }
@@ -22703,6 +22741,7 @@ impl TerminalView {
                     state,
                     &self.inline_banners_state.notifications_error_banner.error,
                     appearance,
+                    app,
                 ),
             );
         }
@@ -22710,14 +22749,17 @@ impl TerminalView {
         for (banner_id, state) in &self.inline_banners_state.ssh_banners {
             inline_banners.insert(
                 *banner_id,
-                render_inline_ssh_wrapper_banner(state, appearance),
+                render_inline_ssh_wrapper_banner(state, appearance, app),
             );
         }
 
         if let AliasExpansionBanner::Open { state } =
             &self.inline_banners_state.alias_expansion_banner
         {
-            inline_banners.insert(state.id, render_alias_expansion_banner(state, appearance));
+            inline_banners.insert(
+                state.id,
+                render_alias_expansion_banner(state, appearance, app),
+            );
         }
 
         if let Some(ShellProcessTerminatedBanner {
@@ -22727,7 +22769,7 @@ impl TerminalView {
         {
             inline_banners.insert(
                 banner_id,
-                render_shell_process_terminated_banner(appearance, was_premature_termination),
+                render_shell_process_terminated_banner(appearance, was_premature_termination, app),
             );
         }
 
@@ -22787,14 +22829,14 @@ impl TerminalView {
         if let Some(open_in_warp_banner) = &self.inline_banners_state.open_in_warp_banner {
             inline_banners.insert(
                 open_in_warp_banner.id,
-                render_open_in_warp_banner(open_in_warp_banner, self.view_id, appearance),
+                render_open_in_warp_banner(open_in_warp_banner, self.view_id, appearance, app),
             );
         }
 
         if let Some(vim_banner_state) = &self.inline_banners_state.vim_banner_state {
             inline_banners.insert(
                 vim_banner_state.id,
-                render_vim_mode_banner(vim_banner_state, appearance),
+                render_vim_mode_banner(vim_banner_state, appearance, app),
             );
         }
 
@@ -22819,14 +22861,14 @@ impl TerminalView {
         if let Some(banner_state) = &self.inline_banners_state.aws_bedrock_login_banner {
             inline_banners.insert(
                 banner_state.id,
-                render_aws_bedrock_login_banner(banner_state, appearance),
+                render_aws_bedrock_login_banner(banner_state, appearance, app),
             );
         }
 
         if let Some(banner_state) = &self.inline_banners_state.aws_cli_not_installed_banner {
             inline_banners.insert(
                 banner_state.id,
-                render_aws_cli_not_installed_banner(banner_state, appearance),
+                render_aws_cli_not_installed_banner(banner_state, appearance, app),
             );
         }
 
@@ -22977,9 +23019,13 @@ impl TerminalView {
                             .finish(),
                     )
                     .with_child(
-                        Text::new_inline("Loading session...", appearance.ui_font_family(), 14.)
-                            .with_color(color.into())
-                            .finish(),
+                        Text::new_inline(
+                            crate::i18n::tr_static(app, "Loading session..."),
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
                     )
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .finish(),

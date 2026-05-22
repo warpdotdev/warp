@@ -1,4 +1,4 @@
-use warpui::{elements::MouseStateHandle, Element};
+use warpui::{elements::MouseStateHandle, AppContext, Element};
 
 use crate::{appearance::Appearance, terminal::view::TerminalAction};
 
@@ -25,11 +25,12 @@ pub enum AwsBedrockLoginBannerAction {
 pub fn render_aws_bedrock_login_banner(
     state: &AwsBedrockLoginBannerState,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
     let buttons = vec![
         InlineBannerTextButton {
-            text: "Don't show again".to_owned(),
+            text: crate::i18n::tr_static(app, "Don't show again").to_owned(),
             text_color: active_ui_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::AwsBedrockLoginBanner(
@@ -42,7 +43,7 @@ pub fn render_aws_bedrock_login_banner(
             variant: InlineBannerTextButtonVariant::Secondary,
         },
         InlineBannerTextButton {
-            text: "Log into AWS".to_owned(),
+            text: crate::i18n::tr_static(app, "Log into AWS").to_owned(),
             text_color: active_ui_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::AwsBedrockLoginBanner(
@@ -63,7 +64,10 @@ pub fn render_aws_bedrock_login_banner(
 
     // Use sub_text_color for description to differentiate from title
     let description_text = warpui::elements::Text::new(
-        "Your Warp admin has enabled AWS Bedrock for your team.",
+        crate::i18n::tr_static(
+            app,
+            "Your Warp admin has enabled AWS Bedrock for your team.",
+        ),
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 2.,
     )
@@ -74,7 +78,7 @@ pub fn render_aws_bedrock_login_banner(
         InlineBannerStyle::Recommendation,
         appearance,
         InlineBannerContent {
-            title: "Use AWS Bedrock?".to_string(),
+            title: crate::i18n::tr_static(app, "Use AWS Bedrock?").to_string(),
             content: Some(vec![description_text]),
             buttons,
             close_button: Some(close_button),

@@ -3001,13 +3001,17 @@ impl PaneGroup {
             ctx.notify();
         });
 
-        let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
+        let user_default_shell_changed_banner = ctx.add_typed_action_view(|ctx| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        ctx,
                         "Warp doesn't currently support your default shell, falling back to zsh.  ",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::tr_static(ctx, "Learn more"),
+                        WARP_SHELL_COMPATIBILITY_DOCS,
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
             )
         });

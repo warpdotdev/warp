@@ -320,7 +320,7 @@ fn init_top_level_dropdown(
     })
     .collect_vec();
     items.push(DropdownItem::new(
-        "Advanced".to_string(),
+        crate::i18n::tr_static(ctx, "Advanced").to_string(),
         WorkingDirectoryAction::SetGlobalWorkingDirectoryMode(None),
     ));
     let advanced_item_index = items.len() - 1;

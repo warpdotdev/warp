@@ -485,13 +485,14 @@ impl ServerCardView {
         &self,
         tools: &[String],
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let text_color =
             blended_colors::text_sub(appearance.theme(), appearance.theme().background());
 
         if tools.is_empty() {
             return Text::new(
-                "No tools available".to_string(),
+                crate::i18n::tr_static(app, "No tools available").to_string(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -1045,7 +1046,7 @@ impl View for ServerCardView {
             info_column = self.add_subtitle_lines(info_column, appearance, app);
 
             if let Some(tools) = &self.tools {
-                let tools_info_row = self.render_tools_expandable(tools, appearance);
+                let tools_info_row = self.render_tools_expandable(tools, appearance, app);
                 info_column = info_column.with_child(tools_info_row)
             }
 

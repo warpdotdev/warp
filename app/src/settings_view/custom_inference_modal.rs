@@ -104,7 +104,10 @@ impl CustomEndpointModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("e.g., Zach's external models", ctx);
+            editor.set_placeholder_text(
+                crate::i18n::tr_static(ctx, "e.g., Zach's external models"),
+                ctx,
+            );
             if let Some(ep) = endpoint {
                 editor.set_buffer_text(&ep.name, ctx);
             }
@@ -124,7 +127,10 @@ impl CustomEndpointModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Please include 'https://'", ctx);
+            editor.set_placeholder_text(
+                crate::i18n::tr_static(ctx, "Please include 'https://'"),
+                ctx,
+            );
             if let Some(ep) = endpoint {
                 editor.set_buffer_text(&ep.url, ctx);
             }
@@ -145,7 +151,7 @@ impl CustomEndpointModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("e.g., sk-...", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "e.g., sk-..."), ctx);
             if let Some(ep) = endpoint {
                 editor.set_buffer_text(&ep.api_key, ctx);
             }
@@ -198,8 +204,8 @@ impl CustomEndpointModal {
                 me.handle_model_editor_event(&editor, event, ctx);
             });
         }
-        let remove_endpoint_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Remove", DangerSecondaryTheme)
+        let remove_endpoint_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Remove"), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CustomEndpointModalAction::RemoveEndpoint);
@@ -241,7 +247,7 @@ impl CustomEndpointModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("e.g., GLM-5-FP8", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "e.g., GLM-5-FP8"), ctx);
             if let Some(n) = name {
                 editor.set_buffer_text(n, ctx);
             }
@@ -261,7 +267,7 @@ impl CustomEndpointModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("e.g., GLM-5", ctx);
+            editor.set_placeholder_text(crate::i18n::tr_static(ctx, "e.g., GLM-5"), ctx);
             if let Some(a) = alias {
                 editor.set_buffer_text(a, ctx);
             }
@@ -620,7 +626,10 @@ impl View for CustomEndpointModal {
         column.add_child(
             Container::new(
                 Text::new(
-                    "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input.",
+                    crate::i18n::tr_static(
+                        app,
+                        "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input.",
+                    ),
                     appearance.ui_font_family(),
                     LABEL_FONT_SIZE,
                 )
@@ -787,7 +796,7 @@ impl View for CustomEndpointModal {
                         ButtonVariant::Secondary,
                         self.add_model_button_mouse_state.clone(),
                     )
-                    .with_text_label("+ Add model".to_string())
+                    .with_text_label(crate::i18n::tr_static(app, "+ Add model").to_string())
                     .with_style(UiComponentStyles {
                         font_size: Some(14.),
                         padding: Some(Coords::uniform(6.).left(8.).right(8.)),
@@ -822,7 +831,7 @@ impl View for CustomEndpointModal {
                     ButtonVariant::Secondary,
                     self.cancel_button_mouse_state.clone(),
                 )
-                .with_text_label("Cancel".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "Cancel").to_string())
                 .with_style(button_style)
                 .build()
                 .on_click(move |ctx, _, _| {
@@ -835,9 +844,9 @@ impl View for CustomEndpointModal {
             .ui_builder()
             .button(ButtonVariant::Accent, self.save_button_mouse_state.clone())
             .with_text_label(if is_editing {
-                "Save".to_string()
+                crate::i18n::tr_static(app, "Save").to_string()
             } else {
-                "Add endpoint".to_string()
+                crate::i18n::tr_static(app, "Add endpoint").to_string()
             })
             .with_style(button_style);
         if !is_valid {

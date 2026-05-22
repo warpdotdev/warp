@@ -753,18 +753,25 @@ impl CategoriesView {
         }
     }
 
-    fn render_empty_list_placeholder(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let no_workflows_text =
-            CategoriesView::text_label("No matching workflows found.", appearance);
+    fn render_empty_list_placeholder(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let no_workflows_text = CategoriesView::text_label(
+            crate::i18n::tr_static(app, "No matching workflows found."),
+            appearance,
+        );
 
-        let mut workflow_documentation_link_text =
-            Flex::row().with_child(CategoriesView::text_label("Try ", appearance));
+        let mut workflow_documentation_link_text = Flex::row().with_child(
+            CategoriesView::text_label(crate::i18n::tr_static(app, "Try "), appearance),
+        );
 
         workflow_documentation_link_text.add_child(
             appearance
                 .ui_builder()
                 .link(
-                    "creating your own workflow".into(),
+                    crate::i18n::tr_static(app, "creating your own workflow").into(),
                     Some(
                         "https://docs.warp.dev/knowledge-and-collaboration/warp-drive/workflows"
                             .into(),
@@ -1006,7 +1013,7 @@ impl CategoriesView {
             .finish()
     }
 
-    fn render_workflow_list(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_workflow_list(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let workflows: Vec<_> = self
             .filtered_workflows()
             .map(|workflow_with_highlight| {
@@ -1019,7 +1026,7 @@ impl CategoriesView {
             .collect();
 
         if workflows.is_empty() {
-            return self.render_empty_list_placeholder(appearance);
+            return self.render_empty_list_placeholder(appearance, app);
         }
 
         let selected_index = self.selected_workflow_index;
@@ -1231,7 +1238,8 @@ impl View for CategoriesView {
                                     .with_width(150.)
                                     .finish(),
                                 // The list of workflows.
-                                Shrinkable::new(1., self.render_workflow_list(appearance)).finish(),
+                                Shrinkable::new(1., self.render_workflow_list(appearance, app))
+                                    .finish(),
                             ])
                             .with_main_axis_size(MainAxisSize::Max)
                             .finish(),

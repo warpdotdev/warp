@@ -209,16 +209,19 @@ impl EnableAutoReloadModalBody {
         });
     }
 
-    fn render_content(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_content(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let explanation_fragments = vec![
-            FormattedTextFragment::plain_text("When enabled, "),
-            FormattedTextFragment::bold("auto-reload"),
+            FormattedTextFragment::plain_text(crate::i18n::tr_static(app, "When enabled, ")),
+            FormattedTextFragment::bold(crate::i18n::tr_static(app, "auto-reload")),
             FormattedTextFragment::plain_text(
-                " will automatically purchase your selected package when you run out. ",
+                crate::i18n::tr_static(
+                    app,
+                    " will automatically purchase your selected package when you run out. ",
+                ),
             ),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::tr_static(app, "Learn more"),
                 "https://docs.warp.dev/support-and-community/plans-and-billing/add-on-credits#id-2.-enable-auto-reload",
             ),
         ];
@@ -340,7 +343,7 @@ impl View for EnableAutoReloadModalBody {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        let content = Container::new(self.render_content(appearance))
+        let content = Container::new(self.render_content(appearance, app))
             .with_horizontal_padding(MODAL_PADDING)
             .with_margin_top(0.) // let the header padding handle the top margin
             .finish();

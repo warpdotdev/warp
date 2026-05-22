@@ -115,7 +115,11 @@ impl UndoCloseView {
     }
 
     /// Renders the editor for the grace period duration.
-    fn render_grace_period_editor(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_grace_period_editor(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let border_color = if self.is_grace_period_valid {
@@ -137,7 +141,7 @@ impl UndoCloseView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Grace period (seconds)",
+                        crate::i18n::tr_static(app, "Grace period (seconds)"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -201,7 +205,7 @@ impl View for UndoCloseView {
 
         if enabled {
             column.add_child(render_group(
-                [self.render_grace_period_editor(appearance)],
+                [self.render_grace_period_editor(appearance, app)],
                 appearance,
             ));
         }

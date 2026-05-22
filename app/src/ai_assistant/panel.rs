@@ -846,12 +846,13 @@ impl AIAssistantPanelView {
         &self,
         appearance: &Appearance,
         buffer_len: usize,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         Flex::row()
             .with_children([
                 Container::new(
                     Text::new_inline(
-                        "Character limit exceeded.",
+                        crate::i18n::tr_static(app, "Character limit exceeded."),
                         appearance.ui_font_family(),
                         BODY_FONT_SIZE,
                     )
@@ -1116,9 +1117,11 @@ impl View for AIAssistantPanelView {
             let buffer_text = self.editor.as_ref(app).buffer_text(app);
             if self.is_prompt_too_long(buffer_text.as_str()) {
                 panel.add_child(
-                    Container::new(
-                        self.render_editor_size_warning(appearance, buffer_text.chars().count()),
-                    )
+                    Container::new(self.render_editor_size_warning(
+                        appearance,
+                        buffer_text.chars().count(),
+                        app,
+                    ))
                     .with_padding_left(PANEL_HORIZONTAL_PADDING)
                     .with_padding_bottom(5.)
                     .with_padding_top(10.)

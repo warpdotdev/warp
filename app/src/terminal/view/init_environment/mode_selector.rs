@@ -124,11 +124,12 @@ impl EnvironmentSetupModeSelector {
         }
     }
 
-    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let title = Text::new(
-            "Choose how you'd like to set up your environment".to_string(),
+            crate::i18n::tr_static(app, "Choose how you'd like to set up your environment")
+                .to_string(),
             appearance.ui_font_family(),
             TITLE_FONT_SIZE,
         )
@@ -193,6 +194,7 @@ impl EnvironmentSetupModeSelector {
         mouse_state: MouseStateHandle,
         action: EnvironmentSetupModeSelectorAction,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
@@ -250,10 +252,14 @@ impl EnvironmentSetupModeSelector {
                 .with_border(Border::all(1.).with_border_color(avatar_border))
                 .finish();
 
-            let title_text = Text::new(title.to_string(), font_family, OPTION_TITLE_FONT_SIZE)
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .with_color(active_text.into())
-                .finish();
+            let title_text = Text::new(
+                crate::i18n::tr_static(app, title).to_string(),
+                font_family,
+                OPTION_TITLE_FONT_SIZE,
+            )
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_color(active_text.into())
+            .finish();
 
             let mut title_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -261,11 +267,14 @@ impl EnvironmentSetupModeSelector {
                 .with_child(title_text);
 
             if is_suggested {
-                let suggested_text =
-                    Text::new("Suggested".to_string(), font_family, OPTION_DESC_FONT_SIZE)
-                        .with_style(Properties::default().weight(Weight::Medium))
-                        .with_color(badge_text_color)
-                        .finish();
+                let suggested_text = Text::new(
+                    crate::i18n::tr_static(app, "Suggested").to_string(),
+                    font_family,
+                    OPTION_DESC_FONT_SIZE,
+                )
+                .with_style(Properties::default().weight(Weight::Medium))
+                .with_color(badge_text_color)
+                .finish();
 
                 let suggested = Container::new(suggested_text)
                     .with_horizontal_padding(8.)
@@ -278,12 +287,15 @@ impl EnvironmentSetupModeSelector {
                 title_row.add_child(Container::new(suggested).with_margin_left(8.).finish());
             }
 
-            let description_text =
-                Text::new(description.to_string(), font_family, OPTION_DESC_FONT_SIZE)
-                    .with_style(Properties::default().weight(Weight::Normal))
-                    .with_color(nonactive_text.into())
-                    .soft_wrap(true)
-                    .finish();
+            let description_text = Text::new(
+                crate::i18n::tr_static(app, description).to_string(),
+                font_family,
+                OPTION_DESC_FONT_SIZE,
+            )
+            .with_style(Properties::default().weight(Weight::Normal))
+            .with_color(nonactive_text.into())
+            .soft_wrap(true)
+            .finish();
 
             let text_content = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -328,7 +340,7 @@ impl EnvironmentSetupModeSelector {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let header = Container::new(self.render_header(appearance))
+        let header = Container::new(self.render_header(appearance, app))
             .with_padding_top(HEADER_PADDING_TOP)
             .with_padding_bottom(HEADER_PADDING_BOTTOM)
             .with_padding_left(HEADER_PADDING_HORIZONTAL)
@@ -344,6 +356,7 @@ impl EnvironmentSetupModeSelector {
             self.remote_github_mouse_state.clone(),
             EnvironmentSetupModeSelectorAction::SelectRemoteGitHub,
             appearance,
+            app,
         );
 
         let local_repos_option = self.render_option(
@@ -355,6 +368,7 @@ impl EnvironmentSetupModeSelector {
             self.local_repos_mouse_state.clone(),
             EnvironmentSetupModeSelectorAction::SelectLocalRepositories,
             appearance,
+            app,
         );
 
         let options = Flex::column()

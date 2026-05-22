@@ -436,7 +436,7 @@ impl PromptRenderHelper {
             let prompt = PromptAndPadding {
                 element: PromptAndPaddingElement::Text(Box::new(
                     Text::new_inline(
-                        "Loading prompt...",
+                        crate::i18n::tr_static(app, "Loading prompt..."),
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )

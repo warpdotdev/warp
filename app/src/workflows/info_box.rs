@@ -416,7 +416,11 @@ impl WorkflowsMoreInfoView {
         flex_column.finish()
     }
 
-    fn render_command_edited_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_command_edited_menu(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let contents = Flex::row()
             .with_child(
                 Container::new(
@@ -439,7 +443,7 @@ impl WorkflowsMoreInfoView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Command edited.",
+                        crate::i18n::tr_static(app, "Command edited."),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -461,7 +465,7 @@ impl WorkflowsMoreInfoView {
                         ButtonVariant::Text,
                         self.button_mouse_states.reset_command.clone(),
                     )
-                    .with_centered_text_label(String::from("Reset"))
+                    .with_centered_text_label(crate::i18n::tr_static(app, "Reset").to_string())
                     .with_style(UiComponentStyles {
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(appearance.monospace_font_size()),
@@ -486,7 +490,11 @@ impl WorkflowsMoreInfoView {
             .finish()
     }
 
-    fn render_keyboard_shortcut_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_keyboard_shortcut_menu(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let cycle_parameter_text = Flex::row()
             .with_child(
                 appearance
@@ -504,7 +512,7 @@ impl WorkflowsMoreInfoView {
                     1.,
                     Container::new(
                         Text::new_inline(
-                            "to cycle parameters",
+                            crate::i18n::tr_static(app, "to cycle parameters"),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size(),
                         )
@@ -665,6 +673,7 @@ impl WorkflowsMoreInfoView {
                     self,
                     workflow_source.to_string(),
                     appearance,
+                    app,
                 ));
             }
         }
@@ -782,9 +791,9 @@ impl WorkflowsMoreInfoView {
         }
 
         if !self.show_shift_tab_treatment {
-            children.push(self.render_command_edited_menu(appearance));
+            children.push(self.render_command_edited_menu(appearance, app));
         } else if !workflow.arguments().is_empty() {
-            children.push(self.render_keyboard_shortcut_menu(appearance));
+            children.push(self.render_keyboard_shortcut_menu(appearance, app));
         }
 
         match input_mode {
@@ -1004,12 +1013,13 @@ impl WorkflowsMoreInfoView {
         &self,
         workflow_source: String,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             appearance
                 .ui_builder()
                 .link(
-                    "View Context".into(),
+                    crate::i18n::tr_static(app, "View Context").into(),
                     Some(workflow_source),
                     None,
                     self.button_mouse_states.view_context.clone(),

@@ -1387,7 +1387,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                crate::i18n::tr_static(app, "No results found"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1403,7 +1403,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Loading results...",
+                crate::i18n::tr_static(app, "Loading results..."),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1420,7 +1420,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Code symbols indexing...",
+                crate::i18n::tr_static(app, "Code symbols indexing..."),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

@@ -432,14 +432,14 @@ impl LaunchConfigSaveModal {
     }
 
     /// Renders the title of the modal
-    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let header = Flex::row()
             .with_child(
                 Shrinkable::new(
                     1.0,
                     Align::new(
                         Text::new_inline(
-                            "Save Current Configuration",
+                            crate::i18n::tr_static(app, "Save Current Configuration"),
                             appearance.header_font_family(),
                             appearance.header_font_size(),
                         )
@@ -518,7 +518,7 @@ impl LaunchConfigSaveModal {
 
         // Title of modal
         let header = Flex::column().with_child(
-            ConstrainedBox::new(self.render_header(appearance))
+            ConstrainedBox::new(self.render_header(appearance, app))
                 .with_max_height(60.)
                 .finish(),
         );
@@ -528,7 +528,7 @@ impl LaunchConfigSaveModal {
                 appearance
                     .ui_builder()
                     .link(
-                        "Link to Documentation".to_string(),
+                        crate::i18n::tr_static(app, "Link to Documentation").to_string(),
                         Some(
                             "https://docs.warp.dev/terminal/sessions/launch-configurations"
                                 .to_string(),
@@ -550,7 +550,10 @@ impl LaunchConfigSaveModal {
             SaveState::Success => header
                 .with_child(
                     self.render_formatted_text_line(appearance, vec![
-                        FormattedTextFragment::plain_text("Saved successfully to "),
+                        FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                            app,
+                            "Saved successfully to ",
+                        )),
                         FormattedTextFragment::inline_code(self.file_name.clone().unwrap_or_default()),
                         FormattedTextFragment::plain_text(".")
                     ])

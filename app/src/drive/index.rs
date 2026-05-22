@@ -2245,10 +2245,14 @@ impl DriveIndex {
         .finish();
 
         let or_text = Container::new(
-            Text::new_inline("Or", appearance.ui_font_family(), ITEM_FONT_SIZE)
-                .with_color(appearance.theme().nonactive_ui_text_color().into())
-                .with_style(Properties::default().weight(Weight::Medium))
-                .finish(),
+            Text::new_inline(
+                crate::i18n::tr_static(app, "Or"),
+                appearance.ui_font_family(),
+                ITEM_FONT_SIZE,
+            )
+            .with_color(appearance.theme().nonactive_ui_text_color().into())
+            .with_style(Properties::default().weight(Weight::Medium))
+            .finish(),
         )
         .with_margin_top(14.)
         .finish();

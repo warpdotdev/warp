@@ -322,6 +322,7 @@ impl CommentEditor {
         &self,
         appearance: &Appearance,
         background: ColorU,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let sub_text_color = theme.sub_text_color(Fill::Solid(background)).into_solid();
@@ -330,7 +331,7 @@ impl CommentEditor {
             .finish();
 
         let label = Text::new(
-            "Comment imported from GitHub".to_string(),
+            crate::i18n::tr_static(app, "Comment imported from GitHub").to_string(),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -366,7 +367,12 @@ impl CommentEditor {
             .finish()
     }
 
-    fn render_footer_row(&self, appearance: &Appearance, background: ColorU) -> Box<dyn Element> {
+    fn render_footer_row(
+        &self,
+        appearance: &Appearance,
+        background: ColorU,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let action_buttons = self.render_action_buttons();
         let footer_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -377,7 +383,7 @@ impl CommentEditor {
                 .with_child(
                     Shrinkable::new(
                         1.,
-                        self.render_github_import_indicator(appearance, background),
+                        self.render_github_import_indicator(appearance, background, app),
                     )
                     .finish(),
                 )
@@ -403,7 +409,7 @@ impl View for CommentEditor {
         let background = blended_colors::neutral_2(theme);
         let border_color = blended_colors::neutral_4(theme);
 
-        let footer_row = self.render_footer_row(appearance, background);
+        let footer_row = self.render_footer_row(appearance, background, ctx);
 
         Container::new(
             ConstrainedBox::new(

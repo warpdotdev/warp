@@ -649,7 +649,10 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             items.push(
                 Container::new(
                     Text::new(
-                        "Run your agent task in an isolated cloud environment.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Run your agent task in an isolated cloud environment.",
+                        ),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -663,9 +666,15 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             // Second line: text with "Visit docs" hyperlink.
             let description_with_link = FormattedText::new([FormattedTextLine::Line(vec![
                 FormattedTextFragment::plain_text(
-                    "Use cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
+                    crate::i18n::tr_static(
+                        app,
+                        "Use cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
+                    ),
                 ),
-                FormattedTextFragment::hyperlink("Visit docs", CLOUD_AGENT_DOCS_URL),
+                FormattedTextFragment::hyperlink(
+                    crate::i18n::tr_static(app, "Visit docs"),
+                    CLOUD_AGENT_DOCS_URL,
+                ),
             ])]);
 
             items.push(
@@ -883,7 +892,7 @@ fn render_recent_conversations_section(
         .with_child(
             Container::new(
                 Text::new(
-                    "RECENT ACTIVITY",
+                    crate::i18n::tr_static(app, "RECENT ACTIVITY"),
                     appearance.ui_font_family(),
                     header_font_size,
                 )
@@ -1114,7 +1123,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                 .with_child(
                                     Container::new(
                                         Text::new(
-                                            "View changelog",
+                                            crate::i18n::tr_static(app, "View changelog"),
                                             appearance.ui_font_family(),
                                             appearance.monospace_font_size() - 2.,
                                         )

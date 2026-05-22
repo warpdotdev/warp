@@ -1001,7 +1001,10 @@ impl View for SettingsImportView {
         if display_new_session_text {
             new_session_setting_text = Container::new(
                 Text::new(
-                    "Some settings will take effect when you open a new session.",
+                    crate::i18n::tr_static(
+                        app,
+                        "Some settings will take effect when you open a new session.",
+                    ),
                     font_family,
                     font_size,
                 )

@@ -107,9 +107,13 @@ impl View for RewindConfirmationDialog {
         let rewind_button_label = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Text::new_inline("Rewind", appearance.ui_font_family(), 14.)
-                    .with_color(text_color)
-                    .finish(),
+                Text::new_inline(
+                    crate::i18n::tr_static(app, "Rewind"),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(text_color)
+                .finish(),
             )
             .with_child(
                 Container::new(
@@ -161,9 +165,13 @@ impl View for RewindConfirmationDialog {
                 } else {
                     cancel_text_color
                 };
-                Text::new_inline("Cancel", appearance.ui_font_family(), 14.)
-                    .with_color(color.into_solid())
-                    .finish()
+                Text::new_inline(
+                    crate::i18n::tr_static(app, "Cancel"),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(color.into_solid())
+                .finish()
             })
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(RewindConfirmationAction::Cancel))
@@ -188,7 +196,10 @@ impl View for RewindConfirmationDialog {
             )
             .with_child(
                 Text::new_inline(
-                    "Rewinding does not affect files edited manually or via shell commands.",
+                    crate::i18n::tr_static(
+                        app,
+                        "Rewinding does not affect files edited manually or via shell commands.",
+                    ),
                     appearance.ui_font_family(),
                     12.,
                 )

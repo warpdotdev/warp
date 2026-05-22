@@ -166,7 +166,7 @@ impl View for TerminalViewZeroStateBlock {
             )
             .with_child(
                 Text::new(
-                    "New terminal session",
+                    crate::i18n::tr_static(app, "New terminal session"),
                     appearance.ui_font_family(),
                     title_font_size,
                 )
@@ -296,7 +296,7 @@ impl View for TerminalViewZeroStateBlock {
                 theme.disabled_text_color(theme.background())
             };
             Text::new(
-                "Don't show again",
+                crate::i18n::tr_static(app, "Don't show again"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size() - 4.,
             )

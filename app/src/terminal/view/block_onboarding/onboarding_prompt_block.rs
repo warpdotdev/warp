@@ -149,6 +149,7 @@ impl OnboardingPromptBlock {
     fn render_prompt_button(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
         mouse_state_handle: MouseStateHandle,
         prompt_type: OnboardingPromptType,
     ) -> Box<dyn Element> {
@@ -184,7 +185,7 @@ impl OnboardingPromptBlock {
 
                     ConstrainedBox::new(
                         Container::new(if prompt_type == OnboardingPromptType::WarpDefault {
-                            self.render_warp_prompt_button_interior(appearance)
+                            self.render_warp_prompt_button_interior(appearance, app)
                         } else {
                             self.render_existing_prompt_button_interior(appearance)
                         })
@@ -327,7 +328,11 @@ impl OnboardingPromptBlock {
             .finish()
     }
 
-    fn render_warp_prompt_button_interior(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_warp_prompt_button_interior(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         // Pixel values pulled from Figma mocks
         // https://www.figma.com/file/y888viqzWBoMpFTxQqkQEN/Activation?node-id=568:1595&mode=dev
         const HEADER_TEXT: &str = "Warp prompt";
@@ -394,7 +399,7 @@ impl OnboardingPromptBlock {
                     1.,
                     Align::new(
                         Text::new_inline(
-                            "Customizable in appearance settings.",
+                            crate::i18n::tr_static(app, "Customizable in appearance settings."),
                             font_family,
                             ui_font_size,
                         )
@@ -444,11 +449,13 @@ impl View for OnboardingPromptBlock {
                     .with_main_axis_alignment(MainAxisAlignment::Start)
                     .with_child(self.render_prompt_button(
                         appearance,
+                        ctx,
                         self.mouse_state_handle_warp_prompt.clone(),
                         OnboardingPromptType::WarpDefault,
                     ))
                     .with_child(self.render_prompt_button(
                         appearance,
+                        ctx,
                         self.mouse_state_handle_existing_prompt.clone(),
                         OnboardingPromptType::PS1,
                     ))

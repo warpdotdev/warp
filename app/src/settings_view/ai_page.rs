@@ -1678,8 +1678,8 @@ impl AISettingsPageView {
     ) -> Vec<ViewHandle<ActionButton>> {
         (0..count)
             .map(|index| {
-                let button = ctx.add_typed_action_view(move |_| {
-                    ActionButton::new("Edit", SecondaryTheme)
+                let button = ctx.add_typed_action_view(move |ctx| {
+                    ActionButton::new(crate::i18n::tr_static(ctx, "Edit"), SecondaryTheme)
                         .with_icon(Icon::Pencil)
                         .with_size(ButtonSize::Small)
                         .on_click(move |ctx| {
@@ -7401,10 +7401,13 @@ impl ApiKeysWidget {
         let appearance = Appearance::as_ref(app);
         let text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+                crate::i18n::tr_static(
+                    app,
+                    "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+                ),
             ),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::tr_static(app, "Learn more"),
                 CUSTOM_INFERENCE_LEARN_MORE_URL,
             ),
         ];
@@ -7427,7 +7430,11 @@ impl ApiKeysWidget {
             .finish()
     }
 
-    fn render_custom_inference_info_icon(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_custom_inference_info_icon(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let icon = Container::new(
             ConstrainedBox::new(
                 Icon::Info
@@ -7442,14 +7449,20 @@ impl ApiKeysWidget {
 
         let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(
-                "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
+                crate::i18n::tr_static(
+                    app,
+                    "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
+                ),
             ),
             FormattedTextFragment::hyperlink(
-                "Warp's Terms of Service",
+                crate::i18n::tr_static(app, "Warp's Terms of Service"),
                 CUSTOM_INFERENCE_TERMS_URL,
             ),
             FormattedTextFragment::plain_text(
-                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
+                crate::i18n::tr_static(
+                    app,
+                    ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
+                ),
             ),
         ])]);
         let tooltip_background = appearance.theme().tooltip_background();
@@ -7647,7 +7660,7 @@ impl SettingsWidget for ApiKeysWidget {
                     .with_margin_bottom(0.)
                     .finish(),
                 )
-                .with_child(self.render_custom_inference_info_icon(appearance))
+                .with_child(self.render_custom_inference_info_icon(appearance, app))
                 .finish();
 
             let header_row = Flex::row()
@@ -7689,7 +7702,7 @@ impl SettingsWidget for ApiKeysWidget {
                 column.add_child(
                     Container::new(
                         Text::new_inline(
-                            "Custom endpoints",
+                            crate::i18n::tr_static(app, "Custom endpoints"),
                             appearance.ui_font_family(),
                             CONTENT_FONT_SIZE,
                         )
@@ -7725,56 +7738,68 @@ impl SettingsWidget for ApiKeysWidget {
         // Upgrade CTA if BYOK not enabled
         if !is_byo_enabled {
             let auth_state = AuthStateProvider::as_ref(app).get();
-            let upgrade_text_fragments = if let Some(team) =
-                UserWorkspaces::as_ref(app).current_team()
-            {
-                if team.billing_metadata.customer_type == CustomerType::Enterprise {
-                    vec![
-                        FormattedTextFragment::hyperlink("Contact sales", "mailto:sales@warp.dev"),
-                        FormattedTextFragment::plain_text(
-                            " to enable bringing your own API keys on your Enterprise plan.",
-                        ),
-                    ]
-                } else {
-                    let current_user_email = auth_state.user_email().unwrap_or_default();
-                    let has_admin_permissions = team.has_admin_permissions(&current_user_email);
-                    let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
-                    if has_admin_permissions {
+            let upgrade_text_fragments =
+                if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+                    if team.billing_metadata.customer_type == CustomerType::Enterprise {
                         vec![
                             FormattedTextFragment::hyperlink(
-                                i18n::tr(app, I18nKey::AiUpgradeBuildPlan),
-                                upgrade_url,
+                                i18n::tr_static(app, "Contact sales"),
+                                "mailto:sales@warp.dev",
                             ),
-                            FormattedTextFragment::plain_text(i18n::tr(
+                            FormattedTextFragment::plain_text(i18n::tr_static(
                                 app,
-                                I18nKey::AiUseOwnApiKeys,
+                                " to enable bringing your own API keys on your Enterprise plan.",
                             )),
                         ]
                     } else {
-                        vec![FormattedTextFragment::plain_text(i18n::tr(
-                            app,
-                            I18nKey::AiAskAdminUpgradeBuild,
-                        ))]
+                        let current_user_email = auth_state.user_email().unwrap_or_default();
+                        let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+                        let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
+                        if has_admin_permissions {
+                            vec![
+                                FormattedTextFragment::hyperlink(
+                                    i18n::tr(app, I18nKey::AiUpgradeBuildPlan),
+                                    upgrade_url,
+                                ),
+                                FormattedTextFragment::plain_text(i18n::tr(
+                                    app,
+                                    I18nKey::AiUseOwnApiKeys,
+                                )),
+                            ]
+                        } else {
+                            vec![FormattedTextFragment::plain_text(i18n::tr(
+                                app,
+                                I18nKey::AiAskAdminUpgradeBuild,
+                            ))]
+                        }
                     }
-                }
-            } else if FeatureFlag::SoloUserByok.is_enabled()
-                && auth_state.is_anonymous_or_logged_out()
-            {
-                vec![
-                    FormattedTextFragment::hyperlink_action(
-                        "Create an account",
-                        AISettingsPageAction::SignupAnonymousUser,
-                    ),
-                    FormattedTextFragment::plain_text(" to use your own API keys."),
-                ]
-            } else {
-                let user_id = auth_state.user_id().unwrap_or_default();
-                let upgrade_url = UserWorkspaces::upgrade_link(user_id);
-                vec![
-                    FormattedTextFragment::hyperlink("Upgrade to the Build plan", upgrade_url),
-                    FormattedTextFragment::plain_text(" to use your own API keys."),
-                ]
-            };
+                } else if FeatureFlag::SoloUserByok.is_enabled()
+                    && auth_state.is_anonymous_or_logged_out()
+                {
+                    vec![
+                        FormattedTextFragment::hyperlink_action(
+                            i18n::tr_static(app, "Create an account"),
+                            AISettingsPageAction::SignupAnonymousUser,
+                        ),
+                        FormattedTextFragment::plain_text(i18n::tr_static(
+                            app,
+                            " to use your own API keys.",
+                        )),
+                    ]
+                } else {
+                    let user_id = auth_state.user_id().unwrap_or_default();
+                    let upgrade_url = UserWorkspaces::upgrade_link(user_id);
+                    vec![
+                        FormattedTextFragment::hyperlink(
+                            i18n::tr_static(app, "Upgrade to the Build plan"),
+                            upgrade_url,
+                        ),
+                        FormattedTextFragment::plain_text(i18n::tr_static(
+                            app,
+                            " to use your own API keys.",
+                        )),
+                    ]
+                };
 
             let upgrade_text_element = FormattedTextElement::new(
                 FormattedText::new([FormattedTextLine::Line(upgrade_text_fragments)]),

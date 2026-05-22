@@ -835,9 +835,13 @@ fn render_new_environment_footer<A: OrchestrationControlAction>(
                         .finish(),
                 )
                 .with_child(
-                    Text::new_inline("New environment", font_family, font_size)
-                        .with_color(text_color.into())
-                        .finish(),
+                    Text::new_inline(
+                        crate::i18n::tr_static(app, "New environment"),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(text_color.into())
+                    .finish(),
                 )
                 .finish(),
         )
@@ -1163,12 +1167,17 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
             }
             AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Loading…").with_disabled(true),
+                    MenuItemFields::new(crate::i18n::tr_static(ctx_dropdown, "Loading…"))
+                        .with_disabled(true),
                 ));
             }
             AuthSecretFetchState::Failed(_) => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Unable to load secrets").with_disabled(true),
+                    MenuItemFields::new(crate::i18n::tr_static(
+                        ctx_dropdown,
+                        "Unable to load secrets",
+                    ))
+                    .with_disabled(true),
                 ));
             }
         }
@@ -1743,10 +1752,11 @@ pub fn render_mode_toggle<A: OrchestrationControlAction>(
     appearance: &Appearance,
     active_segment_bg: Option<Fill>,
     full_width: bool,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let label = Text::new(
-        "Agent location".to_string(),
+        crate::i18n::tr_static(app, "Agent location").to_string(),
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 1.,
     )

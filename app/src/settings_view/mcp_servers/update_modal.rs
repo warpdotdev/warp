@@ -341,7 +341,7 @@ impl UpdateModalBody {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Update",
+                    crate::i18n::tr_static(app, "Update"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -427,7 +427,7 @@ impl View for UpdateModalBody {
         // Add update options
         if self.update_options.is_empty() {
             let no_updates_text = Text::new(
-                "No updates available",
+                crate::i18n::tr_static(ctx, "No updates available"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )

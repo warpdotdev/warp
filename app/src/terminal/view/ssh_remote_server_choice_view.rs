@@ -121,11 +121,12 @@ impl SshRemoteServerChoiceView {
         // Match the Figma design: a plain title row, no icon / chevron /
         // action buttons. `HeaderConfig` without an `interaction_mode` set
         // renders exactly that.
-        HeaderConfig::new("Choose your experience for this remote session:", app)
-            .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(
-                PROMPT_BORDER_RADIUS,
-            )))
-            .render_header(app, None)
+        HeaderConfig::new(
+            crate::i18n::tr_static(app, "Choose your experience for this remote session:"),
+            app,
+        )
+        .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(PROMPT_BORDER_RADIUS)))
+        .render_header(app, None)
     }
 
     fn render_buttons(&self) -> Box<dyn Element> {
@@ -134,7 +135,7 @@ impl SshRemoteServerChoiceView {
             .finish()
     }
 
-    fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_footer(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let muted_color = internal_colors::neutral_5(theme);
         let accent_color = theme.accent().into_solid();
@@ -156,9 +157,13 @@ impl SshRemoteServerChoiceView {
 
         let checkbox_label =
             Hoverable::new(self.do_not_ask_again_label_mouse_state.clone(), move |_| {
-                Text::new("Don't ask me this again", ui_font_family, footer_font_size)
-                    .with_color(muted_color)
-                    .finish()
+                Text::new(
+                    crate::i18n::tr_static(app, "Don't ask me this again"),
+                    ui_font_family,
+                    footer_font_size,
+                )
+                .with_color(muted_color)
+                .finish()
             })
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
@@ -176,7 +181,7 @@ impl SshRemoteServerChoiceView {
         let manage_settings_link = appearance
             .ui_builder()
             .link(
-                "Manage Warpify settings".into(),
+                crate::i18n::tr_static(app, "Manage Warpify settings").into(),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::OpenWarpifySettings);
@@ -238,7 +243,7 @@ impl View for SshRemoteServerChoiceView {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(self.render_header(app))
             .with_child(self.render_buttons())
-            .with_child(self.render_footer(appearance))
+            .with_child(self.render_footer(appearance, app))
             .finish();
 
         let border_color = blended_colors::neutral_2(theme);

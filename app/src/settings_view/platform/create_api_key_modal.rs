@@ -725,10 +725,13 @@ impl View for CreateApiKeyModal {
                 );
 
                 if selected_key_type == ApiKeyType::Agent {
-                    let agent_label =
-                        Text::new("Agent", appearance.ui_font_family(), LABEL_FONT_SIZE)
-                            .with_color(theme.active_ui_text_color().into())
-                            .finish();
+                    let agent_label = Text::new(
+                        crate::i18n::tr_static(app, "Agent"),
+                        appearance.ui_font_family(),
+                        LABEL_FONT_SIZE,
+                    )
+                    .with_color(theme.active_ui_text_color().into())
+                    .finish();
                     col.add_child(Container::new(agent_label).with_margin_bottom(4.).finish());
 
                     let available_agents: Vec<&AgentIdentity> =
@@ -736,7 +739,7 @@ impl View for CreateApiKeyModal {
 
                     if !self.is_loading_agents && available_agents.is_empty() {
                         let empty_text = Text::new(
-                            "No agents available. Create one first.",
+                            crate::i18n::tr_static(app, "No agents available. Create one first."),
                             appearance.ui_font_family(),
                             LABEL_FONT_SIZE,
                         )
@@ -749,7 +752,9 @@ impl View for CreateApiKeyModal {
                                 ButtonVariant::Secondary,
                                 self.create_agent_button_mouse_state.clone(),
                             )
-                            .with_text_label("Create agent".to_string())
+                            .with_text_label(
+                                crate::i18n::tr_static(app, "Create agent").to_string(),
+                            )
                             .with_style(button_style)
                             .build()
                             .on_click(|ctx, _, _| {

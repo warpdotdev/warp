@@ -272,11 +272,14 @@ impl AgentInputFooter {
                 });
             button.set_active(is_nld_enabled, ctx);
             button.set_tooltip(
-                Some(if is_nld_enabled {
-                    DISABLE_NLD_TOOLTIP
-                } else {
-                    ENABLE_NLD_TOOLTIP
-                }),
+                Some(crate::i18n::tr_static(
+                    ctx,
+                    if is_nld_enabled {
+                        DISABLE_NLD_TOOLTIP
+                    } else {
+                        ENABLE_NLD_TOOLTIP
+                    },
+                )),
                 ctx,
             );
             button
@@ -289,11 +292,14 @@ impl AgentInputFooter {
             me.nld_button.update(ctx, |button, ctx| {
                 button.set_active(is_nld_enabled, ctx);
                 button.set_tooltip(
-                    Some(if is_nld_enabled {
-                        DISABLE_NLD_TOOLTIP
-                    } else {
-                        ENABLE_NLD_TOOLTIP
-                    }),
+                    Some(crate::i18n::tr_static(
+                        ctx,
+                        if is_nld_enabled {
+                            DISABLE_NLD_TOOLTIP
+                        } else {
+                            ENABLE_NLD_TOOLTIP
+                        },
+                    )),
                     ctx,
                 );
             });
@@ -349,10 +355,10 @@ impl AgentInputFooter {
         // Fast-forward (auto-approve) toggle button.
         // Uses FastForwardButtonTheme so the button keeps its one-off semantics.
         // The theme still delegates its fill to the shared chip background.
-        let fast_forward_button = ctx.add_typed_action_view(|_ctx| {
+        let fast_forward_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", FastForwardButtonTheme)
                 .with_icon(Icon::FastForward)
-                .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
+                .with_tooltip(crate::i18n::tr_static(ctx, FAST_FORWARD_OFF_TOOLTIP))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -366,7 +372,10 @@ impl AgentInputFooter {
         let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud (or type &)")
+                .with_tooltip(crate::i18n::tr_static(
+                    _ctx,
+                    "Hand off to cloud (or type &)",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -602,10 +611,10 @@ impl AgentInputFooter {
             },
         );
 
-        let start_remote_control_button = ctx.add_typed_action_view(|_ctx| {
+        let start_remote_control_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("/remote-control", RemoteControlButtonTheme)
                 .with_icon(Icon::Phone01)
-                .with_tooltip(START_REMOTE_CONTROL_TOOLTIP)
+                .with_tooltip(crate::i18n::tr_static(ctx, START_REMOTE_CONTROL_TOOLTIP))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -1368,10 +1377,13 @@ impl AgentInputFooter {
                                 DismissibleToast::error(format!("{error_label}: {err}"));
                             if let Some(log_path) = log_path {
                                 toast = toast.with_link(
-                                    ToastLink::new("See logs for details".to_owned())
-                                        .with_onclick_action(WorkspaceAction::OpenFilePath {
-                                            path: log_path,
-                                        }),
+                                    ToastLink::new(
+                                        crate::i18n::tr_static(ctx, "See logs for details")
+                                            .to_owned(),
+                                    )
+                                    .with_onclick_action(
+                                        WorkspaceAction::OpenFilePath { path: log_path },
+                                    ),
                                 );
                             }
                             toast
@@ -1395,11 +1407,20 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.install_success_message())
-            .unwrap_or("Warp plugin installed. Please restart the session to activate.");
+            .map(|message| crate::i18n::tr_static(ctx, message).to_owned())
+            .unwrap_or_else(|| {
+                crate::i18n::tr_static(
+                    ctx,
+                    "Warp plugin installed. Please restart the session to activate.",
+                )
+                .to_owned()
+            });
+        let progress_toast = crate::i18n::tr_static(ctx, "Installing Warp plugin...").to_owned();
+        let error_label = crate::i18n::tr_static(ctx, "Failed to install Warp plugin").to_owned();
         self.handle_plugin_operation(
-            "Installing Warp plugin...",
-            "Failed to install Warp plugin",
-            success_msg,
+            progress_toast.as_ref(),
+            error_label.as_ref(),
+            success_msg.as_ref(),
             PluginChipTelemetryKind::Install,
             |manager| async move { manager.install().await },
             ctx,
@@ -1412,11 +1433,20 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.update_success_message())
-            .unwrap_or("Warp plugin updated. Please restart the session to activate.");
+            .map(|message| crate::i18n::tr_static(ctx, message).to_owned())
+            .unwrap_or_else(|| {
+                crate::i18n::tr_static(
+                    ctx,
+                    "Warp plugin updated. Please restart the session to activate.",
+                )
+                .to_owned()
+            });
+        let progress_toast = crate::i18n::tr_static(ctx, "Updating Warp plugin...").to_owned();
+        let error_label = crate::i18n::tr_static(ctx, "Failed to update Warp plugin").to_owned();
         self.handle_plugin_operation(
-            "Updating Warp plugin...",
-            "Failed to update Warp plugin",
-            success_msg,
+            progress_toast.as_ref(),
+            error_label.as_ref(),
+            success_msg.as_ref(),
             PluginChipTelemetryKind::Update,
             |manager| async move { manager.update().await },
             ctx,
@@ -1768,7 +1798,10 @@ impl AgentInputFooter {
         match &self.cli_voice_input_state {
             CLIVoiceInputState::Stopped => {
                 if !crate::ai::AIRequestUsageModel::as_ref(ctx).can_request_voice() {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::i18n::tr_static(ctx, "Voice input limit reached").as_ref(),
+                        ctx,
+                    );
                     return;
                 }
 
@@ -1884,11 +1917,17 @@ impl AgentInputFooter {
             }
             Err(e) => match e {
                 TranscribeError::QuotaLimit => {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::i18n::tr_static(ctx, "Voice input limit reached").as_ref(),
+                        ctx,
+                    );
                 }
                 _ => {
                     log::error!("Failed to transcribe CLI voice input: {e:?}");
-                    self.show_cli_voice_error_toast("Failed to transcribe voice input", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::i18n::tr_static(ctx, "Failed to transcribe voice input").as_ref(),
+                        ctx,
+                    );
                 }
             },
         }
@@ -1928,9 +1967,13 @@ impl AgentInputFooter {
     fn show_cli_microphone_access_toast(&self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
-                "Failed to start voice input (you may need to enable Microphone access)",
-            ));
+            let toast = DismissibleToast::error(
+                crate::i18n::tr_static(
+                    ctx,
+                    "Failed to start voice input (you may need to enable Microphone access)",
+                )
+                .to_owned(),
+            );
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
@@ -1941,10 +1984,13 @@ impl AgentInputFooter {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
             if let Some(toggle_key) = settings.maybe_setup_first_time_voice(ctx) {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::success(format!(
-                        "Voice input is enabled. You can also press and hold the `{}` key to activate voice input (configure in Settings > AI > Voice)",
-                        toggle_key.display_name()
-                    ));
+                    let toast = DismissibleToast::success(
+                        crate::i18n::tr_static(
+                            ctx,
+                            "Voice input is enabled. You can also press and hold the `{key}` key to activate voice input (configure in Settings > AI > Voice)",
+                        )
+                        .replace("{key}", &toggle_key.display_name()),
+                    );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1970,7 +2016,7 @@ impl AgentInputFooter {
         };
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
-            button.set_tooltip(Some(tooltip), ctx);
+            button.set_tooltip(Some(crate::i18n::tr_static(ctx, tooltip)), ctx);
             button.set_active(is_active, ctx);
         });
     }
@@ -1989,7 +2035,7 @@ impl AgentInputFooter {
         };
         self.start_remote_control_button.update(ctx, |button, ctx| {
             button.set_disabled(login_required, ctx);
-            button.set_tooltip(Some(tooltip), ctx);
+            button.set_tooltip(Some(crate::i18n::tr_static(ctx, tooltip)), ctx);
         });
     }
 
@@ -2291,7 +2337,10 @@ fn render_ftu_callout(
                     Expanded::new(
                         1.,
                         Text::new(
-                            "Now using Full Terminal Agent's default model.",
+                            crate::i18n::tr_static(
+                                app,
+                                "Now using Full Terminal Agent's default model.",
+                            ),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size() - 2.,
                         )

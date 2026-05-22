@@ -108,7 +108,7 @@ impl WebSearchView {
 
         if pages.is_empty() {
             let no_results = Text::new_inline(
-                "No URLs found".to_string(),
+                crate::i18n::tr_static(app, "No URLs found").to_string(),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

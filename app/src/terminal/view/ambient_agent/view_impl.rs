@@ -868,7 +868,7 @@ impl TerminalView {
         let ui_state = &ambient_agent_model.ui_state;
         let screen = if ambient_agent_model.is_cancelled() {
             // Show cancelled screen
-            render_cloud_mode_cancelled_screen(appearance)
+            render_cloud_mode_cancelled_screen(appearance, app)
         } else if let Some(auth_url) = ambient_agent_model.github_auth_url() {
             // Show GitHub auth required screen
             render_cloud_mode_github_auth_required_screen(

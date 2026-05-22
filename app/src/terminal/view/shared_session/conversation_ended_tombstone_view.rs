@@ -197,9 +197,12 @@ impl ConversationEndedTombstoneView {
             ctx.add_typed_action_view(|ctx| ArtifactButtonsRow::new(&display_data.artifacts, ctx));
         let continue_in_cloud_button = match tombstone_cta {
             Some(TombstoneCta::ContinueInCloud { task_id }) => {
-                Some(ctx.add_typed_action_view(move |_| {
-                    ActionButton::new("Continue", PrimaryTheme)
-                        .with_tooltip("Continue this cloud conversation")
+                Some(ctx.add_typed_action_view(move |ctx| {
+                    ActionButton::new(crate::i18n::tr_static(ctx, "Continue"), PrimaryTheme)
+                        .with_tooltip(crate::i18n::tr_static(
+                            ctx,
+                            "Continue this cloud conversation",
+                        ))
                         .on_click(move |ctx| {
                             ctx.dispatch_typed_action(
                                 ConversationEndedTombstoneAction::ContinueInCloud { task_id },
@@ -347,12 +350,17 @@ impl ConversationEndedTombstoneView {
         view
     }
 
-    fn render_header(&self, is_transcript: bool, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(
+        &self,
+        is_transcript: bool,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         if is_transcript {
             return Text::new(
-                "You're viewing a snapshot",
+                crate::i18n::tr_static(app, "You're viewing a snapshot"),
                 appearance.overline_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -407,12 +415,18 @@ impl ConversationEndedTombstoneView {
             .finish()
     }
 
-    fn render_snapshot_subtitle(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_snapshot_subtitle(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "This shared conversation shows the state when you opened it. \
-                 If the agent is still running, refresh to see the latest progress.",
+                crate::i18n::tr_static(
+                    app,
+                    "This shared conversation shows the state when you opened it. If the agent is still running, refresh to see the latest progress.",
+                ),
                 appearance.overline_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -577,10 +591,10 @@ impl View for ConversationEndedTombstoneView {
         let mut left_column = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(self.render_header(is_transcript, appearance));
+            .with_child(self.render_header(is_transcript, appearance, app));
 
         if is_transcript {
-            left_column.add_child(self.render_snapshot_subtitle(appearance));
+            left_column.add_child(self.render_snapshot_subtitle(appearance, app));
         }
 
         let metadata_margin_top = if is_transcript { 12. } else { 4. };

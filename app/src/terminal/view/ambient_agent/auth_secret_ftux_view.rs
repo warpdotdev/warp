@@ -699,10 +699,14 @@ impl AuthSecretFtuxView {
 
         let main_text = {
             let description = if self.current_type_info().is_some() {
-                "Enter your credentials below.".to_string()
+                crate::i18n::tr_static(app, "Enter your credentials below.").to_string()
             } else {
                 let display_name = harness_display::display_name(self.harness);
-                format!("Select an API key type to use {display_name} in the cloud with Oz.")
+                crate::i18n::tr_static(
+                    app,
+                    "Select an API key type to use {display_name} in the cloud with Oz.",
+                )
+                .replace("{display_name}", display_name)
             };
             Text::new_inline(description, font_family, DESCRIPTION_FONT_SIZE)
                 .with_color(theme.foreground().into())
@@ -711,7 +715,7 @@ impl AuthSecretFtuxView {
         };
 
         let privacy_text = Text::new_inline(
-            "Your credentials are encrypted end-to-end. ".to_string(),
+            crate::i18n::tr_static(app, "Your credentials are encrypted end-to-end. ").to_string(),
             font_family,
             TYPE_DESCRIPTION_FONT_SIZE,
         )
@@ -724,8 +728,11 @@ impl AuthSecretFtuxView {
             .current_type_info()
             .map(|info| info.learn_more_url)
             .unwrap_or_else(|| learn_more_url_for_harness(self.harness));
-        let learn_more_label =
-            format!("Learn more about authentication for {harness_name} in Warp.");
+        let learn_more_label = crate::i18n::tr_static(
+            app,
+            "Learn more about authentication for {harness_name} in Warp.",
+        )
+        .replace("{harness_name}", harness_name);
         let learn_more = Hoverable::new(self.learn_more_mouse_state.clone(), move |state| {
             let color = if state.is_hovered() {
                 accent_color
@@ -832,7 +839,7 @@ impl AuthSecretFtuxView {
         let theme = appearance.theme();
         let label_color = internal_colors::text_sub(theme, theme.surface_1());
         let label = Text::new_inline(
-            "Share with team".to_string(),
+            crate::i18n::tr_static(app, "Share with team").to_string(),
             appearance.ui_font_family(),
             TYPE_DESCRIPTION_FONT_SIZE,
         )

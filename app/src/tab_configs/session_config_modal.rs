@@ -162,11 +162,11 @@ impl SessionConfigModal {
 
     // ── Rendering ──
 
-    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let title = FormattedTextElement::from_str(
-            "Create your first tab config",
+            crate::i18n::tr_static(app, "Create your first tab config"),
             appearance.ui_font_family(),
             24.,
         )
@@ -195,7 +195,11 @@ impl SessionConfigModal {
             .finish()
     }
 
-    fn render_session_type_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_session_type_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         session_config_rendering::render_session_type_pills(
             &self.session_types,
             self.selected_session_type_index,
@@ -204,10 +208,15 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::SelectSessionType(i));
             },
             appearance,
+            app,
         )
     }
 
-    fn render_directory_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_directory_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         session_config_rendering::render_directory_picker(
             &self.selected_directory,
             self.directory_button_mouse_state.clone(),
@@ -215,10 +224,11 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::OpenDirectoryPicker);
             },
             appearance,
+            app,
         )
     }
 
-    fn render_checkboxes(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_checkboxes(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         session_config_rendering::render_worktree_checkbox(
             self.enable_worktree,
             self.is_git_repo,
@@ -228,12 +238,14 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::ToggleWorktree);
             },
             appearance,
+            app,
         )
     }
 
     fn render_autogenerate_worktree_branch_name_checkbox(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         session_config_rendering::render_autogenerate_worktree_branch_name_checkbox(
             self.autogenerate_worktree_branch_name,
@@ -247,6 +259,7 @@ impl SessionConfigModal {
                 );
             },
             appearance,
+            app,
         )
     }
 }
@@ -269,29 +282,29 @@ impl View for SessionConfigModal {
 
         let mut form = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(self.render_header(appearance));
+            .with_child(self.render_header(appearance, app));
 
         if self.show_session_type_row {
             form.add_child(
-                Container::new(self.render_session_type_section(appearance))
+                Container::new(self.render_session_type_section(appearance, app))
                     .with_margin_top(SECTION_GAP)
                     .finish(),
             );
         }
 
         form.add_child(
-            Container::new(self.render_directory_section(appearance))
+            Container::new(self.render_directory_section(appearance, app))
                 .with_margin_top(SECTION_GAP)
                 .finish(),
         );
 
         form.add_child(
-            Container::new(self.render_checkboxes(appearance))
+            Container::new(self.render_checkboxes(appearance, app))
                 .with_margin_top(SECTION_GAP)
                 .finish(),
         );
         form.add_child(
-            Container::new(self.render_autogenerate_worktree_branch_name_checkbox(appearance))
+            Container::new(self.render_autogenerate_worktree_branch_name_checkbox(appearance, app))
                 .with_margin_top(8.)
                 .finish(),
         );

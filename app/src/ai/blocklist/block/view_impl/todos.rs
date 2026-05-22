@@ -46,7 +46,7 @@ pub(super) fn render_todos(
 
     // Add collapsible header.
     let id = id.clone();
-    let mut header_config = HeaderConfig::new("Tasks", app)
+    let mut header_config = HeaderConfig::new(crate::i18n::tr_static(app, "Tasks"), app)
         .with_interaction_mode(InteractionMode::ManuallyExpandable(
             ExpandedConfig::new(state.is_expanded, state.header_toggle_mouse_state.clone())
                 .with_toggle_callback(move |ctx| {

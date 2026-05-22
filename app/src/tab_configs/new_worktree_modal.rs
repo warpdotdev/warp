@@ -288,11 +288,15 @@ impl NewWorktreeModal {
         });
     }
 
-    fn render_section_label(text: &str, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_section_label(
+        text: &'static str,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         Container::new(
             Text::new_inline(
-                text.to_string(),
+                crate::i18n::tr_static(app, text).to_string(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -332,7 +336,7 @@ impl View for NewWorktreeModal {
         // ── Header (custom — Modal wrapper has no title) ────────────────
         let header = {
             let title = Text::new_inline(
-                "New worktree".to_string(),
+                crate::i18n::tr_static(app, "New worktree").to_string(),
                 appearance.ui_font_family(),
                 HEADER_TITLE_FONT_SIZE,
             )
@@ -414,12 +418,16 @@ impl View for NewWorktreeModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         // Repo picker
-        body.add_child(Self::render_section_label("Select repository", appearance));
+        body.add_child(Self::render_section_label(
+            "Select repository",
+            appearance,
+            app,
+        ));
         body.add_child(ChildView::new(&self.repo_picker).finish());
 
         // Branch picker (with gap)
         body.add_child(
-            Container::new(Self::render_section_label("Select branch", appearance))
+            Container::new(Self::render_section_label("Select branch", appearance, app))
                 .with_margin_top(SECTION_GAP)
                 .finish(),
         );
@@ -471,7 +479,7 @@ impl View for NewWorktreeModal {
             .with_child(checkbox_element)
             .with_child(
                 Text::new_inline(
-                    "Autogenerate worktree branch name".to_string(),
+                    crate::i18n::tr_static(app, "Autogenerate worktree branch name").to_string(),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -492,6 +500,7 @@ impl View for NewWorktreeModal {
                 Container::new(Self::render_section_label(
                     "Worktree branch name",
                     appearance,
+                    app,
                 ))
                 .with_margin_top(SECTION_GAP)
                 .finish(),

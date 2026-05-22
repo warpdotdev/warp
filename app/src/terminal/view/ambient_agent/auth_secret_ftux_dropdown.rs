@@ -93,7 +93,10 @@ impl AuthSecretFtuxDropdown {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search secrets or create a new one", ctx);
+            editor.set_placeholder_text(
+                crate::i18n::tr_static(ctx, "Search secrets or create a new one"),
+                ctx,
+            );
             editor
         });
 
@@ -309,6 +312,9 @@ impl AuthSecretFtuxDropdown {
         let availability = HarnessAvailabilityModel::as_ref(ctx);
         let query = self.search_query.trim().to_lowercase();
         let compact = self.compact_mode;
+        let no_secrets_found_label = crate::i18n::tr_static(ctx, "No secrets found").to_owned();
+        let loading_label = crate::i18n::tr_static(ctx, "Loading…").to_owned();
+        let unable_to_load_label = crate::i18n::tr_static(ctx, "Unable to load secrets").to_owned();
 
         let mut items: Vec<MenuItem<FtuxDropdownAction>> = Vec::new();
 
@@ -318,12 +324,16 @@ impl AuthSecretFtuxDropdown {
             // Compact (modal) mode: only render "+ New …" entries.
             for (index, info) in auth_secret_types_for_harness(harness).iter().enumerate() {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new(format!("New {}", info.display_name))
-                        .with_font_size_override(FONT_SIZE)
-                        .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                        .with_override_hover_background_color(hover_background)
-                        .with_icon(Icon::Plus)
-                        .with_on_select_action(FtuxDropdownAction::SelectNewType(index)),
+                    MenuItemFields::new(format!(
+                        "{} {}",
+                        crate::i18n::tr_static(ctx, "New"),
+                        info.display_name
+                    ))
+                    .with_font_size_override(FONT_SIZE)
+                    .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                    .with_override_hover_background_color(hover_background)
+                    .with_icon(Icon::Plus)
+                    .with_on_select_action(FtuxDropdownAction::SelectNewType(index)),
                 ));
             }
             self.menu.update(ctx, |menu, ctx| {
@@ -356,7 +366,7 @@ impl AuthSecretFtuxDropdown {
                 }
                 if !matched {
                     items.push(MenuItem::Item(
-                        MenuItemFields::new("No secrets found")
+                        MenuItemFields::new(no_secrets_found_label.clone())
                             .with_font_size_override(FONT_SIZE)
                             .with_padding_override(
                                 MENU_ITEM_VERTICAL_PADDING,
@@ -369,7 +379,7 @@ impl AuthSecretFtuxDropdown {
             }
             AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Loading…")
+                    MenuItemFields::new(loading_label.clone())
                         .with_font_size_override(FONT_SIZE)
                         .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                         .with_disabled(true)
@@ -378,7 +388,7 @@ impl AuthSecretFtuxDropdown {
             }
             AuthSecretFetchState::Failed(_) => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Unable to load secrets")
+                    MenuItemFields::new(unable_to_load_label.clone())
                         .with_font_size_override(FONT_SIZE)
                         .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                         .with_disabled(true)
@@ -391,12 +401,16 @@ impl AuthSecretFtuxDropdown {
 
         for (index, info) in auth_secret_types_for_harness(harness).iter().enumerate() {
             items.push(MenuItem::Item(
-                MenuItemFields::new(format!("New {}", info.display_name))
-                    .with_font_size_override(FONT_SIZE)
-                    .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_override_hover_background_color(hover_background)
-                    .with_icon(Icon::Plus)
-                    .with_on_select_action(FtuxDropdownAction::SelectNewType(index)),
+                MenuItemFields::new(format!(
+                    "{} {}",
+                    crate::i18n::tr_static(ctx, "New"),
+                    info.display_name
+                ))
+                .with_font_size_override(FONT_SIZE)
+                .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                .with_override_hover_background_color(hover_background)
+                .with_icon(Icon::Plus)
+                .with_on_select_action(FtuxDropdownAction::SelectNewType(index)),
             ));
         }
 
@@ -404,8 +418,11 @@ impl AuthSecretFtuxDropdown {
 
         items.push(MenuItem::Item(
             MenuItemFields::new_with_label(
-                "Skip (advanced)",
-                "Only if your key is already set in the environment (e.g. injected as a Kubernetes secret)",
+                crate::i18n::tr_static(ctx, "Skip (advanced)"),
+                crate::i18n::tr_static(
+                    ctx,
+                    "Only if your key is already set in the environment (e.g. injected as a Kubernetes secret)",
+                ),
             )
             .with_font_size_override(FONT_SIZE)
             .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
@@ -497,8 +514,11 @@ impl AuthSecretFtuxDropdown {
         let theme = appearance.theme();
         let color = internal_colors::text_sub(theme, theme.surface_1());
         Text::new_inline(
-            "No secrets found. Save to use this value directly or click the key to add a secret."
-                .to_string(),
+            crate::i18n::tr_static(
+                app,
+                "No secrets found. Save to use this value directly or click the key to add a secret.",
+            )
+            .to_string(),
             appearance.ui_font_family(),
             HELPER_FONT_SIZE,
         )

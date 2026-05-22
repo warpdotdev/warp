@@ -246,12 +246,15 @@ impl HarnessSelector {
         let header_text_color = theme.disabled_text_color(theme.surface_2()).into_solid();
         let disabled_text_color = theme.disabled_text_color(theme.surface_2()).into_solid();
         let border = Border::all(1.).with_border_fill(theme.outline());
+        let disabled_tooltip =
+            crate::i18n::tr_static(ctx, "Disabled by your administrator").to_owned();
         let availability_model = HarnessAvailabilityModel::as_ref(ctx);
         let items = build_menu_items(
             availability_model,
             hover_background,
             header_text_color,
             disabled_text_color,
+            disabled_tooltip,
         );
         self.menu.update(ctx, |menu, ctx| {
             menu.set_border(Some(border));
@@ -283,6 +286,7 @@ fn build_menu_items(
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
     disabled_text_color: pathfinder_color::ColorU,
+    disabled_tooltip: String,
 ) -> Vec<MenuItem<HarnessSelectorAction>> {
     let header = MenuItem::Header {
         fields: MenuItemFields::new(MENU_HEADER_LABEL)
@@ -314,7 +318,7 @@ fn build_menu_items(
             fields = fields
                 .with_disabled(true)
                 .with_override_text_color(disabled_text_color)
-                .with_tooltip("Disabled by your administrator");
+                .with_tooltip(disabled_tooltip.clone());
         }
         items.push(MenuItem::Item(fields));
     }

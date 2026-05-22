@@ -296,10 +296,15 @@ impl AgentAssistedEnvironmentModal {
         ctx.notify();
     }
 
-    fn render_section_title(&self, title: &str, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_section_title(
+        &self,
+        title: &'static str,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         Text::new(
-            title.to_string(),
+            crate::i18n::tr_static(app, title),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -332,19 +337,23 @@ impl AgentAssistedEnvironmentModal {
             .finish()
     }
 
-    fn render_selected_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_selected_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(8.);
 
-        col.add_child(self.render_section_title("Selected repos", appearance));
+        col.add_child(self.render_section_title("Selected repos", appearance, app));
 
         if self.selected_repo_paths.is_empty() {
             col.add_child(
                 Text::new(
-                    "No repos selected yet",
+                    crate::i18n::tr_static(app, "No repos selected yet"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() * 0.95,
                 )
@@ -407,7 +416,11 @@ impl AgentAssistedEnvironmentModal {
         col.finish()
     }
 
-    fn render_available_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_available_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let mut col = Flex::column()
@@ -420,7 +433,7 @@ impl AgentAssistedEnvironmentModal {
             .with_child(
                 Expanded::new(
                     1.,
-                    self.render_section_title("Available indexed repos", appearance),
+                    self.render_section_title("Available indexed repos", appearance, app),
                 )
                 .finish(),
             )
@@ -515,7 +528,7 @@ impl AgentAssistedEnvironmentModal {
         if !has_any_available {
             col.add_child(
                 Text::new(
-                    "All locally indexed repos are already selected.",
+                    crate::i18n::tr_static(app, "All locally indexed repos are already selected."),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() * 0.95,
                 )
@@ -620,9 +633,15 @@ impl AgentAssistedEnvironmentModal {
 
     fn render_dialog(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let description = if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            "Select locally indexed repos to provide context for the environment creation agent."
+            crate::i18n::tr_static(
+                app,
+                "Select locally indexed repos to provide context for the environment creation agent.",
+            )
         } else {
-            "Select repos to provide context for the environment creation agent."
+            crate::i18n::tr_static(
+                app,
+                "Select repos to provide context for the environment creation agent.",
+            )
         }
         .to_string();
 
@@ -641,12 +660,12 @@ impl AgentAssistedEnvironmentModal {
         let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(16.)
-            .with_child(self.render_selected_section(appearance))
-            .with_child(self.render_available_section(appearance))
+            .with_child(self.render_selected_section(appearance, app))
+            .with_child(self.render_available_section(appearance, app))
             .finish();
 
         let dialog = Dialog::new(
-            "Select repos for your environment".to_string(),
+            crate::i18n::tr_static(app, "Select repos for your environment").to_string(),
             Some(description),
             dialog_styles(appearance),
         )

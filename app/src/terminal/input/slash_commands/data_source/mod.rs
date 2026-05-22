@@ -626,7 +626,7 @@ impl InlineItem {
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *command_id },
             icon_path: command.icon_path,
             name: command.name.to_owned(),
-            description: Some(command.description.to_owned()),
+            description: Some(crate::i18n::tr_static(app, command.description).to_owned()),
             font_family: appearance.monospace_font_family(),
             name_match_result: None,
             description_match_result: None,

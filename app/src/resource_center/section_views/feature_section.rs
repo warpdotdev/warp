@@ -204,14 +204,19 @@ impl FeatureSectionView {
         .finish()
     }
 
-    fn render_item_title(&self, item: &FeatureItem, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_item_title(
+        &self,
+        item: &FeatureItem,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let title_color = appearance.theme().active_ui_text_color();
 
         Align::new(
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.title.to_string(), true)
+                    .wrappable_text(crate::i18n::tr_static(app, item.title).to_string(), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         font_color: (Some(title_color.into())),
@@ -231,11 +236,15 @@ impl FeatureSectionView {
         &self,
         item: &FeatureItem,
         appearance: &Appearance,
+        app: &AppContext,
         color: Fill,
     ) -> Box<dyn Element> {
         appearance
             .ui_builder()
-            .wrappable_text(item.description.to_string(), true)
+            .wrappable_text(
+                crate::i18n::tr_static(app, item.description).to_string(),
+                true,
+            )
             .with_style(UiComponentStyles {
                 font_size: Some(DESCRIPTION_FONT_SIZE),
                 font_color: Some(color.into()),
@@ -249,6 +258,7 @@ impl FeatureSectionView {
         &self,
         item: &FeatureItem,
         appearance: &Appearance,
+        app: &AppContext,
         state: Option<&MouseState>,
         is_completed: bool,
         show_gamified: bool,
@@ -260,7 +270,7 @@ impl FeatureSectionView {
 
         // title
         element_title
-            .add_child(Shrinkable::new(1., self.render_item_title(item, appearance)).finish());
+            .add_child(Shrinkable::new(1., self.render_item_title(item, appearance, app)).finish());
 
         // keyboard shortcut
         if let Some(keystroke) = &item.shortcut {
@@ -285,7 +295,7 @@ impl FeatureSectionView {
         };
 
         // description
-        element.add_child(self.render_description(item, appearance, description_color));
+        element.add_child(self.render_description(item, appearance, app, description_color));
 
         let mut feature_item = Flex::row();
         if !is_completed && show_gamified {
@@ -308,6 +318,7 @@ impl FeatureSectionView {
         &self,
         feature_item: FeatureItem,
         appearance: &Appearance,
+        app: &AppContext,
         index: usize,
         is_tip_completed: bool,
         show_gamified: bool,
@@ -316,6 +327,7 @@ impl FeatureSectionView {
             Tip::Hint(_) => self.build_feature_item(
                 &feature_item,
                 appearance,
+                app,
                 None,
                 is_tip_completed,
                 show_gamified,
@@ -327,6 +339,7 @@ impl FeatureSectionView {
                         self.build_feature_item(
                             &feature_item,
                             appearance,
+                            app,
                             Some(state),
                             is_tip_completed,
                             show_gamified,
@@ -464,6 +477,7 @@ impl View for FeatureSectionView {
                             self.render_feature_item(
                                 feature_item.clone(),
                                 appearance,
+                                app,
                                 index,
                                 tips_completed.features_used.contains(&feature_item.feature),
                                 show_gamified,

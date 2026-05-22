@@ -1,5 +1,7 @@
 use serde::Serialize;
-use warpui::{elements::MouseStateHandle, notification::RequestPermissionsOutcome, Element};
+use warpui::{
+    elements::MouseStateHandle, notification::RequestPermissionsOutcome, AppContext, Element,
+};
 
 use crate::{
     appearance::Appearance,
@@ -44,11 +46,12 @@ pub fn render_inline_notifications_discovery_banner(
     state: &NotificationsDiscoveryBannerState,
     notifications_mode: NotificationsMode,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
 
     let learn_more_button = InlineBannerTextButton {
-        text: "Learn more".to_string(),
+        text: crate::i18n::tr_static(app, "Learn more").to_string(),
         text_color: active_ui_text_color,
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -61,7 +64,7 @@ pub fn render_inline_notifications_discovery_banner(
         variant: InlineBannerTextButtonVariant::Secondary,
     };
     let troubleshoot_button = InlineBannerTextButton {
-        text: "Troubleshoot".to_string(),
+        text: crate::i18n::tr_static(app, "Troubleshoot").to_string(),
         text_color: active_ui_text_color,
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -76,19 +79,25 @@ pub fn render_inline_notifications_discovery_banner(
 
     let (title, buttons) = match notifications_mode {
         NotificationsMode::Dismissed => (
-            "We won't show this banner again, but you can always go to Settings to enable notifications.",
+            crate::i18n::tr_static(
+                app,
+                "We won't show this banner again, but you can always go to Settings to enable notifications.",
+            ),
             vec![],
         ),
         NotificationsMode::Disabled => (
-            "Notifications were turned off, but you can always go to Settings to enable notifications.",
+            crate::i18n::tr_static(
+                app,
+                "Notifications were turned off, but you can always go to Settings to enable notifications.",
+            ),
             vec![],
         ),
         NotificationsMode::Unset => (
-            trigger.discovery_banner_copy(),
+            crate::i18n::tr_static(app, trigger.discovery_banner_copy()),
             vec![
                 learn_more_button,
                 InlineBannerTextButton {
-                    text: "Enable".to_string(),
+                    text: crate::i18n::tr_static(app, "Enable").to_string(),
                     text_color: active_ui_text_color,
                     button_state: InlineBannerButtonState {
                         on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -108,20 +117,32 @@ pub fn render_inline_notifications_discovery_banner(
             let (title, docs_button) = match request_outcome {
                 Some(request_outcome) => match request_outcome {
                     RequestPermissionsOutcome::Accepted => (
-                        "Success! You are now ready to receive desktop notifications.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Success! You are now ready to receive desktop notifications.",
+                        ),
                         learn_more_button,
                     ),
                     RequestPermissionsOutcome::PermissionsDenied => (
-                        "Warp was denied permissions to send you notifications.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Warp was denied permissions to send you notifications.",
+                        ),
                         troubleshoot_button,
                     ),
                     RequestPermissionsOutcome::OtherError { .. } => (
-                        "Something went wrong while requesting permissions.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Something went wrong while requesting permissions.",
+                        ),
                         troubleshoot_button,
                     ),
                 },
                 None => (
-                    "Don't forget to 'Allow' the permissions request to finish setting up notifications.",
+                    crate::i18n::tr_static(
+                        app,
+                        "Don't forget to 'Allow' the permissions request to finish setting up notifications.",
+                    ),
                     learn_more_button,
                 ),
             };
@@ -131,7 +152,7 @@ pub fn render_inline_notifications_discovery_banner(
                 vec![
                     docs_button,
                     InlineBannerTextButton {
-                        text: "Configure notifications".to_string(),
+                        text: crate::i18n::tr_static(app, "Configure notifications").to_string(),
                         text_color: active_ui_text_color,
                         button_state: InlineBannerButtonState {
                             on_click_event: TerminalAction::NotificationsDiscoveryBanner(

@@ -7,7 +7,7 @@ use warpui::elements::{
     ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::Element;
+use warpui::{AppContext, Element};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
@@ -51,6 +51,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
 pub fn render_welcome_banner(
     close_button: &ViewHandle<ActionButton>,
     cta_button: &ViewHandle<ActionButton>,
+    app: &AppContext,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     // Hero image with close button overlay
@@ -85,9 +86,13 @@ pub fn render_welcome_banner(
     );
 
     // "New" badge
-    let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-        .with_color(PhenomenonStyle::modal_badge_text())
-        .finish();
+    let text = Text::new_inline(
+        crate::i18n::tr_static(app, "New").to_string(),
+        appearance.ui_font_family(),
+        14.,
+    )
+    .with_color(PhenomenonStyle::modal_badge_text())
+    .finish();
     let badge = ConstrainedBox::new(
         Container::new(
             Flex::row()
@@ -106,7 +111,10 @@ pub fn render_welcome_banner(
 
     // Title
     let title = Text::new(
-        "Introducing universal agent support: level up any coding agent with Warp",
+        crate::i18n::tr_static(
+            app,
+            "Introducing universal agent support: level up any coding agent with Warp",
+        ),
         appearance.ui_font_family(),
         20.,
     )
@@ -133,14 +141,22 @@ pub fn render_welcome_banner(
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(2.)
             .with_child(
-                Text::new_inline(item.title.to_string(), appearance.ui_font_family(), 14.)
-                    .with_color(PhenomenonStyle::modal_feature_title_text())
-                    .finish(),
+                Text::new_inline(
+                    crate::i18n::tr_static(app, item.title).to_string(),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(PhenomenonStyle::modal_feature_title_text())
+                .finish(),
             )
             .with_child(
-                Text::new(item.description, appearance.ui_font_family(), 14.)
-                    .with_color(PhenomenonStyle::modal_feature_description_text())
-                    .finish(),
+                Text::new(
+                    crate::i18n::tr_static(app, item.description),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(PhenomenonStyle::modal_feature_description_text())
+                .finish(),
             )
             .finish();
 

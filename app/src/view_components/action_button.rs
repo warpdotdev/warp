@@ -532,7 +532,7 @@ impl ActionButton {
                 Some(
                     Container::new(
                         Text::new_inline(
-                            "Beta",
+                            crate::i18n::tr_static(app, "Beta"),
                             appearance.ui_font_family(),
                             overall_height - padding.top() - padding.bottom(),
                         )

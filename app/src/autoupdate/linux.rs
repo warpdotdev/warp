@@ -205,23 +205,31 @@ mod package_manager {
                 FormattedTextLine::Heading(FormattedTextHeader {
                     // Make this an <h3>
                     heading_size: 3,
-                    text: vec![FormattedTextFragment::bold(format!(
-                        "Run {package_manager_name} to update"
-                    ))],
+                    text: vec![FormattedTextFragment::bold(
+                        crate::i18n::tr_static(app, "Run {package_manager_name} to update")
+                            .replace("{package_manager_name}", &package_manager_name),
+                    )],
                 }),
                 FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("If you installed Warp using "),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
+                        "If you installed Warp using ",
+                    )),
                     FormattedTextFragment::bold(package_manager_name),
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                        app,
                         " or a compatible tool, the pre-filled command will update Warp for you.",
-                    ),
+                    )),
                 ]),
             ];
 
             if self.package_manager.needs_repository_configuration() {
                 lines.push(FormattedTextLine::Line(vec![
                     FormattedTextFragment::plain_text(
-                        "\nThe command below includes a one-time configuration of the Warp package repository and PGP signing key.",
+                        crate::i18n::tr_static(
+                            app,
+                            "\nThe command below includes a one-time configuration of the Warp package repository and PGP signing key.",
+                        ),
                     ),
                 ]));
             }
@@ -231,22 +239,29 @@ mod package_manager {
                 .distribution_update_disabled_repository()
             {
                 lines.push(FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text(
-                        "\nThe ",
-                    ),
+                    FormattedTextFragment::plain_text(crate::i18n::tr_static(app, "\nThe ")),
                     FormattedTextFragment::inline_code("warp_handle_dist_upgrade"),
                     FormattedTextFragment::plain_text(
-                        " function ensures the Warp package repository is enabled, as we've detected you recently upgraded your distribution.",
+                        crate::i18n::tr_static(
+                            app,
+                            " function ensures the Warp package repository is enabled, as we've detected you recently upgraded your distribution.",
+                        ),
                     ),
                 ]));
             }
 
             lines.push(FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text("\nReview the command below, then "),
-                FormattedTextFragment::bold("press enter"),
-                FormattedTextFragment::plain_text(" to install the update and re-launch Warp.  "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    app,
+                    "\nReview the command below, then ",
+                )),
+                FormattedTextFragment::bold(crate::i18n::tr_static(app, "press enter")),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    app,
+                    " to install the update and re-launch Warp.  ",
+                )),
                 FormattedTextFragment::hyperlink(
-                    "Please report any issues",
+                    crate::i18n::tr_static(app, "Please report any issues"),
                     "https://github.com/warpdotdev/Warp/issues/new/choose",
                 ),
             ]));

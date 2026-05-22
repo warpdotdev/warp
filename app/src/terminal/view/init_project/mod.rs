@@ -633,7 +633,10 @@ impl InitStepBlock {
                 )
                 .with_header(
                     HeaderConfig::new(
-                        "Would you like the Agent to index this codebase? This will lead to more efficient and tailored help.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Would you like the Agent to index this codebase? This will lead to more efficient and tailored help.",
+                        ),
                         app,
                     )
                     .with_icon(yellow_stop_icon(appearance))

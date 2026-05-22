@@ -682,7 +682,11 @@ fn render_zero_state(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.)
         .with_child(
-            Text::new("No conversations yet", appearance.ui_font_family(), 14.)
+            Text::new(
+                crate::i18n::tr_static(app, "No conversations yet"),
+                appearance.ui_font_family(),
+                14.,
+            )
                 .with_color(theme.sub_text_color(theme.background()).into_solid())
                 .with_style(Properties::default().weight(Weight::Semibold))
                 .finish(),
@@ -690,7 +694,10 @@ fn render_zero_state(
         .with_child(
             ConstrainedBox::new(
                 FormattedTextElement::from_str(
-                    "Your active and past conversations with local and ambient agents will appear here.",
+                    crate::i18n::tr_static(
+                        app,
+                        "Your active and past conversations with local and ambient agents will appear here.",
+                    ),
                     appearance.ui_font_family(),
                     14.,
                 )
@@ -705,9 +712,13 @@ fn render_zero_state(
 
     let new_conversation_button =
         Hoverable::new(zero_state_button_mouse_state, move |mouse_state| {
-            let label = Text::new_inline("New conversation", appearance.ui_font_family(), 12.)
-                .with_color(theme.main_text_color(theme.background()).into_solid())
-                .finish();
+            let label = Text::new_inline(
+                crate::i18n::tr_static(app, "New conversation"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(theme.main_text_color(theme.background()).into_solid())
+            .finish();
 
             let button_content = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1184,7 +1195,7 @@ impl View for ConversationListView {
         } else if self.item_count() == 0 {
             Container::new(
                 Text::new_inline(
-                    "No matching conversations",
+                    crate::i18n::tr_static(app, "No matching conversations"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

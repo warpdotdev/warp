@@ -70,6 +70,7 @@ fn render_collapsed_comment_card(
         CornerRadius::with_all(Radius::Pixels(8.)),
         on_header_click,
         appearance,
+        app,
     );
 
     comment_card_container(header, theme)
@@ -82,6 +83,7 @@ fn render_comment_file_path_header(
     corner_radius: CornerRadius,
     on_header_click: Option<&HeaderClickHandler>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -109,7 +111,7 @@ fn render_comment_file_path_header(
 
         let outdated_chip = Container::new(
             Text::new(
-                "Outdated",
+                crate::i18n::tr_static(app, "Outdated"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -161,6 +163,7 @@ fn render_comment_text_section(
     is_imported_from_github: bool,
     metadata_trailing_element: Option<Box<dyn Element>>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let background = Fill::Solid(neutral_1(theme));
@@ -172,7 +175,7 @@ fn render_comment_text_section(
     if is_imported_from_github {
         left_section.add_child(
             Text::new(
-                "From GitHub".to_string(),
+                crate::i18n::tr_static(app, "From GitHub").to_string(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -410,6 +413,7 @@ impl CommentViewCard {
             CornerRadius::with_top(Radius::Pixels(8.)),
             on_header_click,
             appearance,
+            app,
         ));
 
         match &self.diff_content {
@@ -430,6 +434,7 @@ impl CommentViewCard {
             self.source.origin.is_imported_from_github(),
             metadata_trailing_element,
             appearance,
+            app,
         ));
         comment_card_container(card.finish(), theme)
     }

@@ -300,6 +300,8 @@ impl AuthSecretSelector {
         let hover_background: Fill = internal_colors::neutral_4(theme).into();
         let header_text_color = theme.disabled_text_color(theme.surface_2()).into_solid();
         let border = Border::all(1.).with_border_fill(theme.outline());
+        let loading_label = crate::i18n::tr_static(ctx, "Loading…").to_owned();
+        let unable_to_load_label = crate::i18n::tr_static(ctx, "Unable to load secrets").to_owned();
 
         let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
         let availability = HarnessAvailabilityModel::as_ref(ctx);
@@ -307,6 +309,8 @@ impl AuthSecretSelector {
             availability.auth_secrets_for(harness),
             hover_background,
             header_text_color,
+            loading_label,
+            unable_to_load_label,
         );
 
         self.menu.update(ctx, |menu, ctx| {
@@ -390,6 +394,8 @@ fn build_main_menu_items(
     fetch_state: &AuthSecretFetchState,
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
+    loading_label: String,
+    unable_to_load_label: String,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
     let header = MenuItem::Header {
         fields: MenuItemFields::new(MENU_HEADER_LABEL)
@@ -426,7 +432,7 @@ fn build_main_menu_items(
         }
         AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Loading…")
+                MenuItemFields::new(loading_label)
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_disabled(true)
@@ -435,7 +441,7 @@ fn build_main_menu_items(
         }
         AuthSecretFetchState::Failed(_) => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Unable to load secrets")
+                MenuItemFields::new(unable_to_load_label)
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_disabled(true)

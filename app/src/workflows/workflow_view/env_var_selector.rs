@@ -88,7 +88,7 @@ impl EnvVarSelector {
         env_vars.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
         let remove_item = std::iter::once(DropdownItem::new(
-            "None",
+            crate::i18n::tr_static(ctx, "None"),
             EnvVarSelectorAction::Select(None),
         ));
 

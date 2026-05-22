@@ -141,7 +141,7 @@ impl SearchItem for RewindSearchItem {
         let changes_element: Box<dyn Element> = if self.is_current {
             // "Current" item shows "No code to be restored"
             Text::new_inline(
-                "No code to be restored".to_string(),
+                crate::i18n::tr_static(app, "No code to be restored").to_string(),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )
@@ -174,7 +174,7 @@ impl SearchItem for RewindSearchItem {
             row.finish()
         } else {
             Text::new_inline(
-                "No code to be restored".to_string(),
+                crate::i18n::tr_static(app, "No code to be restored").to_string(),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )

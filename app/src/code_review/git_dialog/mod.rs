@@ -203,6 +203,7 @@ fn user_facing_git_error(raw: &str) -> &'static str {
 fn render_branch_section(
     branch_name: impl Into<String>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let branch_name = branch_name.into();
     let theme = appearance.theme();
@@ -210,7 +211,7 @@ fn render_branch_section(
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Branch",
+        crate::i18n::tr_static(app, "Branch"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -683,11 +684,10 @@ impl GitDialog {
     }
 
     fn render_body(&self, app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
         match &self.mode {
             GitDialogMode::Commit(state) => commit::render_body(state, &self.branch_name, app),
-            GitDialogMode::Push(state) => push::render_body(state, &self.branch_name, appearance),
-            GitDialogMode::CreatePr(state) => pr::render_body(state, &self.branch_name, appearance),
+            GitDialogMode::Push(state) => push::render_body(state, &self.branch_name, app),
+            GitDialogMode::CreatePr(state) => pr::render_body(state, &self.branch_name, app),
         }
     }
 

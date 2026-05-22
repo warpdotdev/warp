@@ -539,8 +539,8 @@ pub(super) fn render_body(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
-    let branch_section = render_branch_section(branch_name, appearance);
-    let changes_section = render_changes_section(state, appearance);
+    let branch_section = render_branch_section(branch_name, appearance, app);
+    let changes_section = render_changes_section(state, appearance, app);
     let message_section = render_message_editor(state, appearance, app);
     let intent_section = render_intent_buttons(state);
 
@@ -564,13 +564,17 @@ pub(super) fn render_body(
         .finish()
 }
 
-fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_changes_section(
+    state: &CommitState,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let changes_label = Text::new(
-        "Changes",
+        crate::i18n::tr_static(app, "Changes"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -578,7 +582,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .finish();
 
     let include_label = Text::new(
-        "Include unstaged",
+        crate::i18n::tr_static(app, "Include unstaged"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -632,7 +636,7 @@ fn render_message_editor(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let label = Text::new(
-        "Commit message",
+        crate::i18n::tr_static(app, "Commit message"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

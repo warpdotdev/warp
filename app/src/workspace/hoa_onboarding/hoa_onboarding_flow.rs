@@ -387,15 +387,24 @@ impl HoaOnboardingFlow {
         extra_child: Option<Box<dyn Element>>,
         button: &ViewHandle<ActionButton>,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let title = Text::new(title, appearance.ui_font_family(), 16.)
-            .with_color(callout_title_color(appearance))
-            .with_style(Properties::default().weight(Weight::Bold))
-            .finish();
+        let title = Text::new(
+            crate::i18n::tr_static(app, title),
+            appearance.ui_font_family(),
+            16.,
+        )
+        .with_color(callout_title_color(appearance))
+        .with_style(Properties::default().weight(Weight::Bold))
+        .finish();
 
-        let description = Text::new(description, appearance.ui_font_family(), 14.)
-            .with_color(callout_body_color(appearance))
-            .finish();
+        let description = Text::new(
+            crate::i18n::tr_static(app, description),
+            appearance.ui_font_family(),
+            14.,
+        )
+        .with_color(callout_body_color(appearance))
+        .finish();
 
         let mut body_content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -433,7 +442,7 @@ impl HoaOnboardingFlow {
             .finish();
 
         let checkbox_label = Text::new_inline(
-            "Switch back to horizontal tabs".to_string(),
+            crate::i18n::tr_static(app, "Switch back to horizontal tabs").to_string(),
             appearance.ui_font_family(),
             12.,
         )
@@ -459,12 +468,13 @@ impl HoaOnboardingFlow {
             Some(checkbox_row),
             button,
             appearance,
+            app,
         )
     }
 
-    fn render_inbox_callout(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_inbox_callout(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let title = Text::new(
-            "Meet your new agent inbox",
+            crate::i18n::tr_static(app, "Meet your new agent inbox"),
             appearance.ui_font_family(),
             16.,
         )
@@ -474,7 +484,7 @@ impl HoaOnboardingFlow {
 
         // Build the description with an inline "Learn more" hyperlink.
         let learn_more_fragment = FormattedTextFragment {
-            text: "Learn more".into(),
+            text: crate::i18n::tr_static(app, "Learn more").into(),
             styles: FormattedTextStyles {
                 underline: true,
                 hyperlink: Some(Hyperlink::Url(
@@ -486,7 +496,10 @@ impl HoaOnboardingFlow {
 
         let formatted = FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(
-                "Warp pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
+                crate::i18n::tr_static(
+                    app,
+                    "Warp pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
+                ),
             ),
             learn_more_fragment,
         ])]);
@@ -521,7 +534,11 @@ impl HoaOnboardingFlow {
         Flex::column().with_child(body).with_child(footer).finish()
     }
 
-    fn render_tab_config_step(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_tab_config_step(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let form = tab_config_step::render_tab_config_form(
             tab_config_step::TabConfigFormState {
                 session_types: &self.session_types,
@@ -554,6 +571,7 @@ impl HoaOnboardingFlow {
                 },
             },
             appearance,
+            app,
         );
 
         let footer = self.render_callout_footer(&self.finish_button, appearance);
@@ -589,6 +607,7 @@ impl View for HoaOnboardingFlow {
                 let banner = welcome_banner::render_welcome_banner(
                     &self.close_button,
                     &self.cta_button,
+                    app,
                     appearance,
                 );
 
@@ -618,7 +637,7 @@ impl View for HoaOnboardingFlow {
                 )
             }
             HoaOnboardingStep::AgentInboxCallout => {
-                let content = self.render_inbox_callout(appearance);
+                let content = self.render_inbox_callout(appearance, app);
                 render_callout_bubble(
                     content,
                     &CalloutBubbleConfig {
@@ -630,7 +649,7 @@ impl View for HoaOnboardingFlow {
                 )
             }
             HoaOnboardingStep::TabConfig => {
-                let tab_content = self.render_tab_config_step(appearance);
+                let tab_content = self.render_tab_config_step(appearance, app);
                 let use_vertical = *TabSettings::as_ref(app).use_vertical_tabs;
                 let (arrow_direction, arrow_position) = if use_vertical {
                     (

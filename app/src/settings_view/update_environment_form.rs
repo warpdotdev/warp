@@ -485,10 +485,12 @@ impl UpdateEnvironmentForm {
             })
         });
 
-        let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
-            })
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Cancel"), SecondaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
+                },
+            )
         });
         // Set up editor subscriptions
         ctx.subscribe_to_view(&name_editor, |me, _, event, ctx| match event {
@@ -1657,9 +1659,13 @@ impl UpdateEnvironmentForm {
                         theme.active_ui_text_color()
                     };
 
-                    Text::new_inline("Share with team", font_family, font_size)
-                        .with_color(color.into())
-                        .finish()
+                    Text::new_inline(
+                        crate::i18n::tr_static(app, "Share with team"),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(color.into())
+                    .finish()
                 },
             )
             .with_cursor(Cursor::PointingHand)
@@ -1937,7 +1943,7 @@ impl UpdateEnvironmentForm {
 
         field.add_child(
             Text::new(
-                "Description",
+                crate::i18n::tr_static(app, "Description"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -1984,23 +1990,27 @@ impl UpdateEnvironmentForm {
         field.finish()
     }
 
-    fn render_repos_field(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         // Route to appropriate rendering based on dropdown state
         if self.github_dropdown_state.is_loading {
-            self.render_repos_field_loading(appearance)
+            self.render_repos_field_loading(appearance, app)
         } else if self.github_dropdown_state.auth_url.is_some() {
-            self.render_repos_field_unauthed(appearance)
+            self.render_repos_field_unauthed(appearance, app)
         } else if self.github_dropdown_state.load_error_message.is_some() {
-            self.render_repos_field_error(appearance)
+            self.render_repos_field_error(appearance, app)
         } else {
-            self.render_repos_field_authed(appearance)
+            self.render_repos_field_authed(appearance, app)
         }
     }
 
-    fn render_repos_field_label(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field_label(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         Text::new(
-            "Repo(s)",
+            crate::i18n::tr_static(app, "Repo(s)"),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -2009,14 +2019,18 @@ impl UpdateEnvironmentForm {
         .finish()
     }
 
-    fn render_repos_field_loading(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field_loading(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        field.add_child(self.render_repos_field_label(appearance));
+        field.add_child(self.render_repos_field_label(appearance, app));
 
         if !self.form_state.selected_repos.is_empty() {
             field.add_child(self.render_selected_repo_chips(appearance));
@@ -2030,7 +2044,7 @@ impl UpdateEnvironmentForm {
                     .with_child(
                         Container::new(
                             Text::new(
-                                "Loading...",
+                                crate::i18n::tr_static(app, "Loading..."),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2054,14 +2068,18 @@ impl UpdateEnvironmentForm {
         field.finish()
     }
 
-    fn render_repos_field_unauthed(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field_unauthed(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        field.add_child(self.render_repos_field_label(appearance));
+        field.add_child(self.render_repos_field_label(appearance, app));
 
         if !self.form_state.selected_repos.is_empty() {
             field.add_child(self.render_selected_repo_chips(appearance));
@@ -2119,7 +2137,7 @@ impl UpdateEnvironmentForm {
                         )
                         .with_child(
                             Text::new(
-                                "Auth with GitHub",
+                                crate::i18n::tr_static(app, "Auth with GitHub"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2160,20 +2178,26 @@ impl UpdateEnvironmentForm {
         field.finish()
     }
 
-    fn render_repos_field_error(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field_error(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let message = self
             .github_dropdown_state
             .load_error_message
             .clone()
-            .unwrap_or_else(|| "Failed to load GitHub repositories".to_string());
+            .unwrap_or_else(|| {
+                crate::i18n::tr_static(app, "Failed to load GitHub repositories").to_string()
+            });
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        field.add_child(self.render_repos_field_label(appearance));
+        field.add_child(self.render_repos_field_label(appearance, app));
 
         if !self.form_state.selected_repos.is_empty() {
             field.add_child(self.render_selected_repo_chips(appearance));
@@ -2233,7 +2257,7 @@ impl UpdateEnvironmentForm {
                             )
                             .with_child(
                                 Text::new(
-                                    "Retry",
+                                    crate::i18n::tr_static(app, "Retry"),
                                     appearance.ui_font_family(),
                                     appearance.ui_font_size(),
                                 )
@@ -2285,14 +2309,18 @@ impl UpdateEnvironmentForm {
         field.finish()
     }
 
-    fn render_repos_field_authed(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_field_authed(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        field.add_child(self.render_repos_field_label(appearance));
+        field.add_child(self.render_repos_field_label(appearance, app));
 
         // Build chevron button for toggling dropdown
         // Note: Don't add a click handler here since the entire container is clickable
@@ -2414,7 +2442,7 @@ impl UpdateEnvironmentForm {
         let mut stack = Stack::new().with_child(input_container);
 
         if self.github_dropdown_state.is_expanded {
-            let dropdown = self.render_repos_dropdown(appearance);
+            let dropdown = self.render_repos_dropdown(appearance, app);
             let dismissible_dropdown = Dismiss::new(dropdown)
                 .on_dismiss(|ctx, _app| {
                     ctx.dispatch_typed_action(UpdateEnvironmentFormAction::CloseReposDropdown);
@@ -2468,15 +2496,22 @@ impl UpdateEnvironmentForm {
         field.add_child(input_row);
 
         if self.show_repo_helper_text {
-            field.add_child(self.render_repo_helper_text_row(appearance));
+            field.add_child(self.render_repo_helper_text_row(appearance, app));
         }
         field.finish()
     }
 
-    fn render_repo_helper_text_row(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repo_helper_text_row(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let helper = Text::new(
-            "Type owner/repo and press Enter to add, or select from dropdown.",
+            crate::i18n::tr_static(
+                app,
+                "Type owner/repo and press Enter to add, or select from dropdown.",
+            ),
             appearance.ui_font_family(),
             appearance.ui_font_size() * 0.85,
         )
@@ -2502,7 +2537,7 @@ impl UpdateEnvironmentForm {
             // Plain text part
             text_row.add_child(
                 Text::new(
-                    "Missing a repo?",
+                    crate::i18n::tr_static(app, "Missing a repo?"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() * 0.85,
                 )
@@ -2520,7 +2555,7 @@ impl UpdateEnvironmentForm {
                         theme.accent()
                     };
                     Text::new(
-                        "Configure access on GitHub",
+                        crate::i18n::tr_static(app, "Configure access on GitHub"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size() * 0.85,
                     )
@@ -2660,7 +2695,7 @@ impl UpdateEnvironmentForm {
         row.finish()
     }
 
-    fn render_repos_dropdown(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_repos_dropdown(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         // Filter repos based on input text
@@ -2689,7 +2724,7 @@ impl UpdateEnvironmentForm {
             content.add_child(
                 Container::new(
                     Text::new(
-                        "No repositories found",
+                        crate::i18n::tr_static(app, "No repositories found"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -3538,7 +3573,7 @@ impl View for UpdateEnvironmentForm {
         ));
 
         page.add_child(self.render_description_field(appearance, app));
-        page.add_child(self.render_repos_field(appearance));
+        page.add_child(self.render_repos_field(appearance, app));
         page.add_child(self.render_docker_image_field(appearance));
         page.add_child(self.render_setup_commands_field(appearance));
 

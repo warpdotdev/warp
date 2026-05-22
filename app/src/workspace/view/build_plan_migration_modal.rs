@@ -646,8 +646,11 @@ impl BuildPlanMigrationModal {
         features_list.add_child(and_more);
 
         let learn_more_fragments = vec![
-            FormattedTextFragment::plain_text("Learn more on our "),
-            FormattedTextFragment::hyperlink("pricing page", "https://www.warp.dev/pricing"),
+            FormattedTextFragment::plain_text(crate::i18n::tr_static(app, "Learn more on our ")),
+            FormattedTextFragment::hyperlink(
+                crate::i18n::tr_static(app, "pricing page"),
+                "https://www.warp.dev/pricing",
+            ),
             FormattedTextFragment::plain_text("."),
         ];
         let learn_more = Container::new(

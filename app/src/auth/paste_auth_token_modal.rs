@@ -238,7 +238,7 @@ impl View for PasteAuthTokenModalView {
         let ui_builder = appearance.ui_builder();
 
         let title = FormattedTextElement::from_str(
-            "Paste your auth token below",
+            crate::i18n::tr_static(app, "Paste your auth token below"),
             appearance.ui_font_family(),
             16.,
         )
@@ -265,7 +265,10 @@ impl View for PasteAuthTokenModalView {
 
         let subtitle_color = internal_colors::text_sub(theme, dialog_surface_solid);
         let subtitle = FormattedTextElement::from_str(
-            "Paste your auth token from the browser to get complete login.",
+            crate::i18n::tr_static(
+                app,
+                "Paste your auth token from the browser to get complete login.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -306,7 +309,7 @@ impl View for PasteAuthTokenModalView {
 
         if let Some(reason) = &self.last_failure_reason {
             let error_text = FormattedTextElement::new(
-                reason.to_formatted_text(),
+                reason.to_formatted_text(app),
                 14.,
                 appearance.ui_font_family(),
                 appearance.monospace_font_family(),

@@ -38,14 +38,18 @@ pub struct RemoveCustomEndpointConfirmationDialog {
 
 impl RemoveCustomEndpointConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Cancel);
             })
         });
 
-        let confirm_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Remove endpoint", DangerPrimaryTheme).on_click(|ctx| {
+        let confirm_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::i18n::tr_static(ctx, "Remove endpoint"),
+                DangerPrimaryTheme,
+            )
+            .on_click(|ctx| {
                 ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Confirm);
             })
         });
@@ -101,7 +105,11 @@ impl View for RemoveCustomEndpointConfirmationDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let description = "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward.".to_string();
+        let description = crate::i18n::tr_static(
+            app,
+            "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward.",
+        )
+        .to_string();
 
         let endpoint_title = Text::new_inline(
             self.endpoint_name.clone(),

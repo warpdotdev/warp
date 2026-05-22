@@ -2355,6 +2355,7 @@ impl TeamsWidget {
                         delete_disabled_reason,
                         team_metadata.uid,
                         appearance,
+                        app,
                     ))
                     .with_padding_right(24.)
                     .finish(),
@@ -2825,7 +2826,7 @@ impl TeamsWidget {
                         appearance
                             .ui_builder()
                             .link(
-                                "Reset links".into(),
+                                crate::i18n::tr_static(app, "Reset links").into(),
                                 None,
                                 Some(Box::new(move |ctx| {
                                     ctx.dispatch_typed_action(TeamsPageAction::ResetInviteLinks {
@@ -3433,6 +3434,7 @@ impl TeamsWidget {
         delete_disabled_reason: TeamDeleteDisabledReason,
         team_uid: ServerId,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let description = self.render_sub_text(
             delete_disabled_reason.user_facing_message().into(),
@@ -3446,7 +3448,7 @@ impl TeamsWidget {
             let link = appearance
                 .ui_builder()
                 .link(
-                    "Manage plan".into(),
+                    crate::i18n::tr_static(app, "Manage plan").into(),
                     None,
                     Some(Box::new(move |ctx| {
                         ctx.dispatch_typed_action(

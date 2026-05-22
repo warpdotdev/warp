@@ -144,7 +144,7 @@ impl View for AwsBedrockCredentialsErrorView {
 
         let make_alert_text = || {
             Text::new(
-                "AWS credentials expired or missing",
+                crate::i18n::tr_static(app, "AWS credentials expired or missing"),
                 appearance.ui_font_family(),
                 14.,
             )
@@ -155,11 +155,12 @@ impl View for AwsBedrockCredentialsErrorView {
 
         let make_detail_text = || {
             Text::new(
-                format!(
-                    "Failed to authenticate with AWS Bedrock when using {}. \
-                     Run `{}` to refresh credentials.",
-                    self.model_name, self.login_command
-                ),
+                crate::i18n::tr_static(
+                    app,
+                    "Failed to authenticate with AWS Bedrock when using {model}. Run `{command}` to refresh credentials.",
+                )
+                .replace("{model}", &self.model_name)
+                .replace("{command}", &self.login_command),
                 appearance.ui_font_family(),
                 14.,
             )
@@ -193,7 +194,7 @@ impl View for AwsBedrockCredentialsErrorView {
             .finish();
 
             let checkbox_label = Text::new(
-                "Always run automatically",
+                crate::i18n::tr_static(app, "Always run automatically"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size() - 1.,
             )

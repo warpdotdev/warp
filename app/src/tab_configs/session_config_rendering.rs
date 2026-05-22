@@ -12,8 +12,7 @@ use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
-use warpui::Element;
-use warpui::EventContext;
+use warpui::{AppContext, Element, EventContext};
 
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::WarpTheme;
@@ -57,6 +56,7 @@ pub fn render_session_type_pills<F>(
     pill_mouse_states: &[MouseStateHandle],
     on_select: F,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -68,6 +68,7 @@ where
         on_select,
         None,
         appearance,
+        app,
     )
 }
 
@@ -81,6 +82,7 @@ pub fn render_session_type_pills_with_background<F>(
     on_select: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -90,13 +92,17 @@ where
     let on_accent_bg = bg.is_some();
     let on_select = Arc::new(on_select);
 
-    let label = Text::new_inline("Session type".to_string(), appearance.ui_font_family(), 12.)
-        .with_color(if on_accent_bg {
-            callout_label_color(appearance)
-        } else {
-            blended_colors::text_disabled(theme, bg_fill)
-        })
-        .finish();
+    let label = Text::new_inline(
+        crate::i18n::tr_static(app, "Session type").to_string(),
+        appearance.ui_font_family(),
+        12.,
+    )
+    .with_color(if on_accent_bg {
+        callout_label_color(appearance)
+    } else {
+        blended_colors::text_disabled(theme, bg_fill)
+    })
+    .finish();
 
     let mut pills_row = Flex::row().with_spacing(PILL_GAP);
 
@@ -197,6 +203,7 @@ pub fn render_directory_picker<F>(
     mouse_state: MouseStateHandle,
     on_click: F,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -207,6 +214,7 @@ where
         on_click,
         None,
         appearance,
+        app,
     )
 }
 
@@ -217,6 +225,7 @@ pub fn render_directory_picker_with_background<F>(
     on_click: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -227,7 +236,7 @@ where
     let on_accent_bg = bg.is_some();
 
     let label = Text::new_inline(
-        "Select directory".to_string(),
+        crate::i18n::tr_static(app, "Select directory").to_string(),
         appearance.ui_font_family(),
         12.,
     )
@@ -294,6 +303,7 @@ pub fn render_worktree_checkbox<F>(
     tooltip_mouse_state: MouseStateHandle,
     on_toggle: F,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -306,6 +316,7 @@ where
         on_toggle,
         None,
         appearance,
+        app,
     )
 }
 
@@ -318,6 +329,7 @@ pub fn render_worktree_checkbox_with_background<F>(
     on_toggle: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut warpui::EventContext, warpui::geometry::vector::Vector2F) + 'static,
@@ -353,18 +365,17 @@ where
     let checkbox_el = if disabled {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
+        let tooltip_text =
+            crate::i18n::tr_static(app, "Select a git repository to enable worktree support")
+                .to_string();
         Hoverable::new(tooltip_mouse_state, move |state| {
             let mut stack = Stack::new();
             stack.add_child(checkbox_el);
             if state.is_hovered() {
                 let tooltip = Container::new(
-                    Text::new_inline(
-                        "Select a git repository to enable worktree support".to_string(),
-                        font_family,
-                        12.,
-                    )
-                    .with_color(theme.background().into_solid())
-                    .finish(),
+                    Text::new_inline(tooltip_text.clone(), font_family, 12.)
+                        .with_color(theme.background().into_solid())
+                        .finish(),
                 )
                 .with_horizontal_padding(14.)
                 .with_vertical_padding(6.)
@@ -403,7 +414,10 @@ where
         blended_colors::text_sub(theme, theme.background())
     };
     let label = Text::new(
-        "Automatically create a worktree when opening a new tab",
+        crate::i18n::tr_static(
+            app,
+            "Automatically create a worktree when opening a new tab",
+        ),
         appearance.ui_font_family(),
         12.,
     )
@@ -425,6 +439,7 @@ pub fn render_autogenerate_worktree_branch_name_checkbox<F>(
     tooltip_mouse_state: MouseStateHandle,
     on_toggle: F,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -437,6 +452,7 @@ where
         on_toggle,
         None,
         appearance,
+        app,
     )
 }
 
@@ -449,6 +465,7 @@ pub fn render_autogenerate_worktree_branch_name_checkbox_with_background<F>(
     on_toggle: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -484,20 +501,19 @@ where
     let checkbox_el = if disabled {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
+        let tooltip_text = crate::i18n::tr_static(
+            app,
+            "You must select that you want to automatically create a worktree in order to select this",
+        )
+        .to_string();
         Hoverable::new(tooltip_mouse_state, move |state| {
             let mut stack = Stack::new();
             stack.add_child(checkbox_el);
             if state.is_hovered() {
                 let tooltip = Container::new(
-                    Text::new_inline(
-                        "You must select that you want to automatically create a \
-                         worktree in order to select this"
-                            .to_string(),
-                        font_family,
-                        12.,
-                    )
-                    .with_color(theme.background().into_solid())
-                    .finish(),
+                    Text::new_inline(tooltip_text.clone(), font_family, 12.)
+                        .with_color(theme.background().into_solid())
+                        .finish(),
                 )
                 .with_horizontal_padding(14.)
                 .with_vertical_padding(6.)
@@ -537,7 +553,7 @@ where
     };
 
     let label = Text::new(
-        "Auto-generate worktree branch name",
+        crate::i18n::tr_static(app, "Auto-generate worktree branch name"),
         appearance.ui_font_family(),
         12.,
     )

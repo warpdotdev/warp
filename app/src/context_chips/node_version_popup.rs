@@ -181,7 +181,7 @@ impl NodeVersionPopupView {
 
         col.add_child(
             Text::new(
-                "Install nvm to enable version switching",
+                crate::i18n::tr_static(app, "Install nvm to enable version switching"),
                 styles.ui_font_family,
                 styles.detail_font_size + 2.,
             )
@@ -193,7 +193,7 @@ impl NodeVersionPopupView {
         col.add_child(
             Container::new(
                 Text::new(
-                    "This menu helps you switch between Node.js versions — but it requires nvm to be installed.",
+                    crate::i18n::tr_static(app, "This menu helps you switch between Node.js versions — but it requires nvm to be installed."),
                     styles.ui_font_family,
                     styles.detail_font_size,
                 )
@@ -242,7 +242,7 @@ impl NodeVersionPopupView {
         // Heading
         col.add_child(
             Text::new(
-                "No node versions installed",
+                crate::i18n::tr_static(app, "No node versions installed"),
                 styles.ui_font_family,
                 styles.detail_font_size + 2.,
             )
@@ -255,7 +255,7 @@ impl NodeVersionPopupView {
         col.add_child(
             Container::new(
                 Text::new(
-                    "Try installing versions with nvm",
+                    crate::i18n::tr_static(app, "Try installing versions with nvm"),
                     styles.ui_font_family,
                     styles.detail_font_size,
                 )
@@ -286,10 +286,14 @@ impl NodeVersionPopupView {
 
         col.add_child(
             Container::new(
-                Text::new("Installed", styles.ui_font_family, styles.detail_font_size)
-                    .with_style(Properties::default())
-                    .with_color(styles.secondary_text_color)
-                    .finish(),
+                Text::new(
+                    crate::i18n::tr_static(app, "Installed"),
+                    styles.ui_font_family,
+                    styles.detail_font_size,
+                )
+                .with_style(Properties::default())
+                .with_color(styles.secondary_text_color)
+                .finish(),
             )
             .with_horizontal_padding(12.)
             .finish(),

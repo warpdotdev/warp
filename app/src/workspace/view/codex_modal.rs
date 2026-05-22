@@ -87,14 +87,18 @@ impl CodexModal {
         }
     }
 
-    fn render_new_badge(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_new_badge(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         // Magenta/pink color for the badge
         let magenta: ColorU = theme.terminal_colors().normal.magenta.into();
         Container::new(
-            Text::new("New", appearance.ui_font_family(), 12.)
-                .with_color(magenta)
-                .finish(),
+            Text::new(
+                crate::i18n::tr_static(app, "New"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(magenta)
+            .finish(),
         )
         .with_vertical_padding(4.)
         .with_horizontal_padding(10.)
@@ -108,11 +112,11 @@ impl CodexModal {
         let theme = appearance.theme();
 
         // "New" badge
-        let new_badge = self.render_new_badge(appearance);
+        let new_badge = self.render_new_badge(appearance, app);
 
         // Title
         let title = FormattedTextElement::from_str(
-            "Use Codex models in Warp",
+            crate::i18n::tr_static(app, "Use Codex models in Warp"),
             appearance.ui_font_family(),
             24.,
         )
@@ -125,7 +129,10 @@ impl CodexModal {
 
         // Description - first paragraph
         let description_1 = FormattedTextElement::from_str(
-            "Codex is OpenAI's most advanced agentic coding model for real-world engineering.",
+            crate::i18n::tr_static(
+                app,
+                "Codex is OpenAI's most advanced agentic coding model for real-world engineering.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -137,8 +144,10 @@ impl CodexModal {
 
         // Description - second paragraph
         let description_2 = FormattedTextElement::from_str(
-            "Use Codex directly in Oz and leverage \
-            features like in-app code review, agent session sharing and file editing.",
+            crate::i18n::tr_static(
+                app,
+                "Use Codex directly in Oz and leverage features like in-app code review, agent session sharing and file editing.",
+            ),
             appearance.ui_font_family(),
             14.,
         )

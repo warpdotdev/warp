@@ -483,7 +483,7 @@ impl InstallationModalBody {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Install",
+                    crate::i18n::tr_static(app, "Install"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -614,7 +614,7 @@ impl View for InstallationModalBody {
                 .finish()
         } else {
             Text::new(
-                "No MCP server selected",
+                crate::i18n::tr_static(ctx, "No MCP server selected"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )

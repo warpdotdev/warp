@@ -345,10 +345,12 @@ impl BillingAndUsagePageV2View {
             me.handle_addon_credit_modal_close_event(event, ctx);
         });
 
-        let load_more_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Load more", SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
-            })
+        let load_more_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::i18n::tr_static(ctx, "Load more"), SecondaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
+                },
+            )
         });
 
         let billing_cycle_usage_section =
@@ -584,10 +586,14 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_size(MainAxisSize::Max);
 
         plan_header.add_child(
-            Text::new_inline("Plan", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(appearance.theme().active_ui_text_color().into())
-                .finish(),
+            Text::new_inline(
+                crate::i18n::tr_static(app, "Plan"),
+                appearance.ui_font_family(),
+                HEADER_FONT_SIZE,
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(appearance.theme().active_ui_text_color().into())
+            .finish(),
         );
 
         let mut right_side = Flex::row()
@@ -820,6 +826,7 @@ impl BillingAndUsagePageV2View {
                         &reset_str,
                         base_remaining,
                         outline_color,
+                        app,
                     ),
                 )
                 .finish(),
@@ -837,6 +844,7 @@ impl BillingAndUsagePageV2View {
                         &classified.personal.expiry_label(),
                         classified.personal.total_balance(),
                         outline_color,
+                        app,
                     ),
                 )
                 .finish(),
@@ -854,6 +862,7 @@ impl BillingAndUsagePageV2View {
                         &classified.team.expiry_label(),
                         classified.team.total_balance(),
                         outline_color,
+                        app,
                     ),
                 )
                 .finish(),
@@ -864,10 +873,14 @@ impl BillingAndUsagePageV2View {
             Flex::column()
                 .with_child(
                     Container::new(
-                        Text::new_inline("Balance", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                            .with_style(Properties::default().weight(Weight::Bold))
-                            .with_color(theme.active_ui_text_color().into())
-                            .finish(),
+                        Text::new_inline(
+                            crate::i18n::tr_static(app, "Balance"),
+                            appearance.ui_font_family(),
+                            HEADER_FONT_SIZE,
+                        )
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
                     )
                     .with_margin_bottom(12.)
                     .finish(),
@@ -933,7 +946,7 @@ impl BillingAndUsagePageV2View {
                     ButtonVariant::Secondary,
                     self.ambient_trial_mouse_states.new_agent_button.clone(),
                 )
-                .with_text_label("New agent".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "New agent").to_string())
                 .with_style(UiComponentStyles {
                     font_color: Some(bg),
                     background: Some(fg.into()),
@@ -969,7 +982,7 @@ impl BillingAndUsagePageV2View {
                     ButtonVariant::Secondary,
                     self.ambient_trial_mouse_states.buy_more_button.clone(),
                 )
-                .with_text_label("Buy more".to_string())
+                .with_text_label(crate::i18n::tr_static(app, "Buy more").to_string())
                 .with_style(UiComponentStyles {
                     background: Some(bg.into()),
                     font_size: Some(14.),
@@ -1462,7 +1475,10 @@ impl BillingAndUsagePageV2View {
             let spend_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_children([
-                    ui_builder.span("Monthly spend limit").build().finish(),
+                    ui_builder
+                        .span(crate::i18n::tr_static(app, "Monthly spend limit"))
+                        .build()
+                        .finish(),
                     Shrinkable::new(1., Align::new(info_icon).left().finish()).finish(),
                     icon_button(
                         appearance,
@@ -1481,7 +1497,7 @@ impl BillingAndUsagePageV2View {
             upper_section.add_child(spend_row);
 
             if let Some(purchased_row) =
-                Self::render_purchased_this_month_row(workspace, appearance)
+                Self::render_purchased_this_month_row(workspace, appearance, app)
             {
                 upper_section.add_child(purchased_row);
             }
@@ -1515,6 +1531,7 @@ impl BillingAndUsagePageV2View {
     fn render_purchased_this_month_row(
         workspace: &Workspace,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let bonus_grants = &workspace.bonus_grants_purchased_this_month;
         if bonus_grants.total_credits_purchased == 0 {
@@ -1525,9 +1542,13 @@ impl BillingAndUsagePageV2View {
         let cost_dollars = bonus_grants.cents_spent as f64 / 100.0;
         let theme = appearance.theme();
 
-        let label = Text::new_inline("Purchased this month", appearance.ui_font_family(), 12.)
-            .with_color(theme.active_ui_text_color().into())
-            .finish();
+        let label = Text::new_inline(
+            crate::i18n::tr_static(app, "Purchased this month"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(theme.active_ui_text_color().into())
+        .finish();
 
         let credits_text = if credits_purchased == 1 {
             "1 credit".to_string()
@@ -1804,12 +1825,16 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_child(
                 Container::new(
-                    Text::new_inline("Last 30 days", appearance.ui_font_family(), 14.)
-                        .with_color(blended_colors::text_sub(
-                            appearance.theme(),
-                            appearance.theme().surface_1(),
-                        ))
-                        .finish(),
+                    Text::new_inline(
+                        crate::i18n::tr_static(app, "Last 30 days"),
+                        appearance.ui_font_family(),
+                        14.,
+                    )
+                    .with_color(blended_colors::text_sub(
+                        appearance.theme(),
+                        appearance.theme().surface_1(),
+                    ))
+                    .finish(),
                 )
                 .with_vertical_margin(12.)
                 .finish(),
@@ -1913,19 +1938,26 @@ impl BillingAndUsagePageV2View {
                 )
                 .with_child(
                     Container::new(
-                        Text::new("No usage history", appearance.ui_font_family(), 14.)
-                            .with_color(blended_colors::text_sub(
-                                appearance.theme(),
-                                appearance.theme().surface_1(),
-                            ))
-                            .finish(),
+                        Text::new(
+                            crate::i18n::tr_static(app, "No usage history"),
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(blended_colors::text_sub(
+                            appearance.theme(),
+                            appearance.theme().surface_1(),
+                        ))
+                        .finish(),
                     )
                     .with_margin_bottom(4.)
                     .finish(),
                 )
                 .with_child(
                     Text::new(
-                        "Kick off an agent task to view usage history here.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Kick off an agent task to view usage history here.",
+                        ),
                         appearance.ui_font_family(),
                         14.,
                     )
@@ -2232,6 +2264,7 @@ fn render_balance_card(
     date: &str,
     remaining: i64,
     border_color: ColorU,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_color = blended_colors::text_sub(theme, theme.background());
@@ -2246,10 +2279,14 @@ fn render_balance_card(
     .with_height(8.)
     .finish();
 
-    let label_text = Text::new_inline(label.to_string(), appearance.ui_font_family(), 12.)
-        .with_color(sub_color)
-        .with_style(Properties::default().weight(Weight::Semibold))
-        .finish();
+    let label_text = Text::new_inline(
+        crate::i18n::tr_text(app, label).to_string(),
+        appearance.ui_font_family(),
+        12.,
+    )
+    .with_color(sub_color)
+    .with_style(Properties::default().weight(Weight::Semibold))
+    .finish();
 
     let date_text = Clipped::new(
         Text::new_inline(date.to_string(), appearance.ui_font_family(), 10.)
@@ -2280,9 +2317,13 @@ fn render_balance_card(
     .with_style(Properties::default().weight(Weight::Semibold))
     .finish();
 
-    let remaining_label = Text::new_inline("remaining", appearance.ui_font_family(), 14.)
-        .with_color(sub_color)
-        .finish();
+    let remaining_label = Text::new_inline(
+        crate::i18n::tr_static(app, "remaining"),
+        appearance.ui_font_family(),
+        14.,
+    )
+    .with_color(sub_color)
+    .finish();
 
     let value_row = Flex::row()
         .with_child(credit_count)

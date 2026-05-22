@@ -348,10 +348,13 @@ fn render_usage_tooltip_content(row: &MemberUsageRow, appearance: &Appearance) -
 
 /// Small text-only tooltip surfaced on hover of the service-account info
 /// icon. Mirrors the visual treatment of `render_aggregate_legend_tooltip`.
-fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Element> {
+fn render_service_account_info_tooltip(
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "This is an automated agent on your team.".to_string(),
+        crate::i18n::tr_static(app, "This is an automated agent on your team.").to_string(),
         appearance.ui_font_family(),
         12.,
     )
@@ -376,6 +379,7 @@ fn build_row_card(
     team_max_credits: i64,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let card_bg = theme.background().into_solid();
@@ -443,7 +447,7 @@ fn build_row_card(
             stack.add_child(icon);
             if state.is_hovered() {
                 stack.add_positioned_overlay_child(
-                    render_service_account_info_tooltip(appearance),
+                    render_service_account_info_tooltip(appearance, app),
                     OffsetPositioning::offset_from_parent(
                         vec2f(0., -TOOLTIP_GAP),
                         ParentOffsetBounds::WindowByPosition,
@@ -544,10 +548,11 @@ fn render_member_row(
     tooltip_mouse_state: MouseStateHandle,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     // No segments => no tooltip needed.
     if row.segments.is_empty() {
-        return build_row_card(row, team_max_credits, mouse_states, appearance);
+        return build_row_card(row, team_max_credits, mouse_states, appearance, app);
     }
 
     // The info icon sits inside the row card, so hovering it would otherwise
@@ -567,6 +572,7 @@ fn render_member_row(
             team_max_credits,
             mouse_states,
             appearance,
+            app,
         ));
 
         let info_hovered = info_state
@@ -716,7 +722,7 @@ pub fn render_rows(
     ) {
         column.add_child(header);
     }
-    column.add_child(render_member_row_list(&rows, mouse_states, appearance));
+    column.add_child(render_member_row_list(&rows, mouse_states, appearance, app));
     column.finish()
 }
 
@@ -818,6 +824,7 @@ fn render_member_row_list(
     rows: &[MemberUsageRow],
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -830,6 +837,7 @@ fn render_member_row_list(
             tooltip_state,
             mouse_states,
             appearance,
+            app,
         ));
     }
     column.finish()

@@ -79,10 +79,11 @@ pub fn warpify_description(
     let theme = appearance.theme();
 
     let description = FormattedText::new(vec![FormattedTextLine::Line(vec![
-        FormattedTextFragment::plain_text(
-            "Bring Warp's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more. "
-        ),
-        FormattedTextFragment::hyperlink("Learn more", SSH_DOCS_URL),
+        FormattedTextFragment::plain_text(crate::i18n::tr_static(
+            app,
+            "Bring Warp's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more. ",
+        )),
+        FormattedTextFragment::hyperlink(crate::i18n::tr_static(app, "Learn more"), SSH_DOCS_URL),
     ])]);
     warpify::render::build_description_row(description, theme, appearance, hyperlink_index.clone())
         .with_hyperlink_font_color(appearance.theme().accent().into_solid())

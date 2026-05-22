@@ -15,7 +15,7 @@ use warpui::{
         MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
     },
     platform::Cursor,
-    ViewContext,
+    AppContext, SingletonEntity, ViewContext,
 };
 
 use crate::{
@@ -192,28 +192,33 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
 pub(super) fn render_body(
     state: &PushState,
     branch_name: &str,
-    appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
     let mut body = Flex::column().with_child(
-        Container::new(render_branch_section(branch_name, appearance))
+        Container::new(render_branch_section(branch_name, appearance, app))
             .with_margin_bottom(16.)
             .finish(),
     );
 
     if !state.commits.is_empty() {
-        body.add_child(render_commits_section(state, appearance));
+        body.add_child(render_commits_section(state, appearance, app));
     }
 
     body.finish()
 }
 
-fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_commits_section(
+    state: &PushState,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Included commits",
+        crate::i18n::tr_static(app, "Included commits"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -340,7 +345,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
             } else {
                 let loading = Container::new(
                     Text::new(
-                        "Loading…",
+                        crate::i18n::tr_static(app, "Loading…"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )

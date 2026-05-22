@@ -5,8 +5,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
-use warpui::Element;
-use warpui::EventContext;
+use warpui::{AppContext, Element, EventContext};
 
 use crate::appearance::Appearance;
 use crate::tab_configs::session_config::SessionType;
@@ -47,6 +46,7 @@ pub fn render_tab_config_form<F1, F2, F3, F4>(
     state: TabConfigFormState<'_>,
     handlers: TabConfigFormHandlers<F1, F2, F3, F4>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element>
 where
     F1: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -56,7 +56,7 @@ where
 {
     let callout_bg = callout_background_fill(appearance).into_solid();
     let title = Text::new(
-        "Create your first tab config",
+        crate::i18n::tr_static(app, "Create your first tab config"),
         appearance.ui_font_family(),
         16.,
     )
@@ -65,7 +65,10 @@ where
     .finish();
 
     let description = Text::new(
-        "Set up a reusable starting point for your tabs. Pick a repo, choose a session type, and optionally attach a worktree. Use it whenever you want to open a tab with this setup.",
+        crate::i18n::tr_static(
+            app,
+            "Set up a reusable starting point for your tabs. Pick a repo, choose a session type, and optionally attach a worktree. Use it whenever you want to open a tab with this setup.",
+        ),
         appearance.ui_font_family(),
         14.,
     )
@@ -79,6 +82,7 @@ where
         handlers.on_select_session_type,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let directory_section = session_config_rendering::render_directory_picker_with_background(
@@ -87,6 +91,7 @@ where
         handlers.on_open_directory_picker,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let worktree_section = session_config_rendering::render_worktree_checkbox_with_background(
@@ -97,6 +102,7 @@ where
         handlers.on_toggle_worktree,
         Some(callout_bg),
         appearance,
+        app,
     );
 
     let autogenerate_section =
@@ -108,6 +114,7 @@ where
             handlers.on_toggle_autogenerate,
             Some(callout_bg),
             appearance,
+            app,
         );
 
     Flex::column()

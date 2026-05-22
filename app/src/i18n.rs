@@ -1008,6 +1008,83 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Add environment variables" => "添加环境变量",
         "Add file diff as context" => "将文件 diff 添加为上下文",
         "Add repo" => "添加仓库",
+        "Advanced" => "高级",
+        "Agent location" => "智能体位置",
+        "Are you still there?" => "你还在吗？",
+        "AWS CLI Not Installed" => "未安装 AWS CLI",
+        "Beta" => "测试版",
+        "Billed to API" => "按 API 计费",
+        "Character limit exceeded." => "超出字符数限制。",
+        "Command edited." => "命令已编辑。",
+        "Comment imported from GitHub" => "从 GitHub 导入的评论",
+        "Custom" => "自定义",
+        "Custom endpoints" => "自定义端点",
+        "Configure notifications" => "配置通知",
+        "Cycle suggestions" => "切换建议",
+        "Debug output" => "调试输出",
+        "Edit in Warp" => "在 Warp 中编辑",
+        "Enable" => "启用",
+        "Enable Warp's Vim keybindings?" => "启用 Warp 的 Vim 快捷键？",
+        "Enable alias expansion" => "启用别名展开",
+        "Enter your credentials below." => "在下方输入你的凭据。",
+        "From GitHub" => "来自 GitHub",
+        "Grace period (seconds)" => "宽限期（秒）",
+        "Increase it" => "提高上限",
+        "Increase your limit" => "提高你的上限",
+        "Learn about file support and formatting" => "了解文件支持和格式设置",
+        "Learn More" => "了解更多",
+        "Link to Documentation" => "查看文档",
+        "Log into AWS" => "登录 AWS",
+        "Loading prompt..." => "正在加载提示词...",
+        "Manage AI Autonomy permissions" => "管理 AI 自主权限",
+        "Manage plan" => "管理方案",
+        "Manage suggested code banner settings" => "管理建议代码横幅设置",
+        "Meet your new agent inbox" => "认识你的新智能体收件箱",
+        "Monthly overage spending limit" => "月度超额支出上限",
+        "NEW" => "新",
+        "Never Warpify this host" => "永不 Warpify 此主机",
+        "No URLs fetched" => "未获取到 URL",
+        "No URLs found" => "未找到 URL",
+        "No agents available. Create one first." => "没有可用智能体。请先创建一个。",
+        "No code to be restored" => "没有可恢复的代码",
+        "No matching workflows found." => "未找到匹配的工作流。",
+        "Outdated" => "已过时",
+        "Paste your auth token below" => "在下方粘贴你的认证令牌",
+        "Project Skill" => "项目技能",
+        "Provided API key is not valid" => "提供的 API 密钥无效",
+        "Queued" => "已排队",
+        "RECENT ACTIVITY" => "最近活动",
+        "Recommended" => "推荐",
+        "References" => "引用",
+        "Reset" => "重置",
+        "Reset links" => "重置链接",
+        "Save Current Configuration" => "保存当前配置",
+        "Set permissions" => "设置权限",
+        "Shell process exited" => "Shell 进程已退出",
+        "Shell process exited prematurely!" => "Shell 进程提前退出！",
+        "Skip (advanced)" => "跳过（高级）",
+        "Suggestions:" => "建议：",
+        "Switch back to horizontal tabs" => "切回水平标签页",
+        "This is an automated agent on your team." => "这是你团队中的自动化智能体。",
+        "This suggestion is being edited in another tab." => "此建议正在另一个标签页中编辑。",
+        " to continue." => "以继续。",
+        "Troubleshoot" => "故障排查",
+        "Try " => "尝试",
+        "Use AWS Bedrock?" => "使用 AWS Bedrock？",
+        "View Context" => "查看上下文",
+        "View details" => "查看详情",
+        "View in Warp" => "在 Warp 中查看",
+        "Warp's Terms of Service" => "Warp 服务条款",
+        "Warp SSH wrapper disabled" => "Warp SSH 包装器已禁用",
+        "Warp SSH wrapper enabled" => "Warp SSH 包装器已启用",
+        "Warp can auto-expand aliases." => "Warp 可以自动展开别名。",
+        "You're viewing a snapshot" => "你正在查看快照",
+        "Your credentials are encrypted end-to-end. " => "你的凭据已进行端到端加密。",
+        "You’re out of credits" => "你的点数已用完",
+        "creating your own workflow" => "创建你自己的工作流",
+        "this conversation" => "此对话",
+        "to cycle parameters" => "切换参数",
+        "troubleshooting docs" => "故障排查文档",
         "Add rule" => "添加规则",
         "Already the default" => "已是默认值",
         "Always allow" => "始终允许",
@@ -1028,6 +1105,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Ask the agent to check this command now, skipping its timer." => {
             "让智能体立即检查此命令，跳过计时器。"
         }
+        "Agent" => "智能体",
         "Ask the Warp agent to assist" => "让 Warp 智能体协助",
         "Ask the Warp agent to resume" => "让 Warp 智能体恢复",
         "alias name" => "别名名称",
@@ -1056,6 +1134,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Close session" => "关闭会话",
         "Close Welcome Tips" => "关闭欢迎提示",
         "Cloud agent run" => "云端智能体运行",
+        "Cloud agent" => "云端智能体",
         "Cloud-only" => "仅云端",
         "Collapse" => "折叠",
         "Comment" => "评论",
@@ -1091,7 +1170,11 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Choose a locally set up project and we’ll help you set up an environment based on it" => {
             "选择一个已在本地设置好的项目，我们会基于它帮你配置环境"
         }
+        "Choose a locally set up project and we'll help you set up an environment based on it" => {
+            "选择一个已在本地设置好的项目，我们会基于它帮你配置环境"
+        }
         "Choose how you’d like to set up your environment:" => "选择你想如何设置环境：",
+        "Choose how you'd like to set up your environment" => "选择你想如何设置环境",
         "Create" => "创建",
         "Create New Project" => "新建项目",
         "Create New Tab" => "新建标签页",
@@ -1179,6 +1262,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Edit API Keys" => "编辑 API 密钥",
         "Edit Variables" => "编辑变量",
         "Edit config" => "编辑配置",
+        "Edit" => "编辑",
         "Edit rule" => "编辑规则",
         "Editing" => "编辑中",
         "Embed" => "嵌入",
@@ -1195,6 +1279,9 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Executable path" => "可执行文件路径",
         "Expand" => "展开",
         "Failed" => "失败",
+        "Failed to load agents. Please close and try again." => {
+            "加载智能体失败。请关闭后重试。"
+        }
         "Failed to share environment with team" => "无法与团队共享环境",
         "File" => "文件",
         "File explorer" => "文件浏览器",
@@ -1224,6 +1311,9 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
             "安装 Warp 插件以在 Warp 中启用丰富的智能体通知"
         }
         "Install nvm" => "安装 nvm",
+        "Enable Warp shell integration in this session" => {
+            "在此会话中启用 Warp Shell 集成"
+        }
         "Invite" => "邀请",
         "Last 24 hours" => "过去 24 小时",
         "Last edited" => "上次编辑",
@@ -1295,6 +1385,7 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Panes" => "窗格",
         "Pane title as" => "窗格标题显示为",
         "Personal" => "个人",
+        "Personal credits" => "个人点数",
         "Pick a theme for when your system is in dark mode." => "为系统深色模式选择主题。",
         "Pick a theme for when your system is in light mode." => "为系统浅色模式选择主题。",
         "Plan" => "计划",
@@ -1390,6 +1481,9 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Successfully updated environment" => "环境已成功更新",
         "Summary" => "摘要",
         "Suggested" => "建议",
+        "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config" => {
+            "选择你想使用的 GitHub 仓库，我们会建议基础镜像和配置"
+        }
         "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config" => {
             "选择你想使用的 GitHub 仓库，我们会建议基础镜像和配置"
         }
@@ -1398,11 +1492,13 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Switch to Business" => "切换到 Business",
         "Switch to the Build plan" => "切换到 Build 方案",
         "Teammates with the link" => "拥有链接的团队成员",
+        "Team credits" => "团队点数",
         "Agent conversations" => "智能体对话",
         "Tab configs" => "标签页配置",
         "Tab item" => "标签项",
         "Tabs panel" => "标签页面板",
         "Tabs" => "标签页",
+        "Terminal" => "终端",
         "Text" => "文本",
         "The Agentic Development Environment" => "智能体开发环境",
         "To toggle this panel" => "用于切换此面板",
@@ -1441,6 +1537,13 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Upgrade plan" => "升级套餐",
         "bring your own key" => "自带密钥",
         "Use latest codex model" => "使用最新 Codex 模型",
+        "Use Codex models in Warp" => "在 Warp 中使用 Codex 模型",
+        "Codex is OpenAI's most advanced agentic coding model for real-world engineering." => {
+            "Codex 是 OpenAI 面向真实工程场景的先进智能体编码模型。"
+        }
+        "Use Codex directly in Oz and leverage features like in-app code review, agent session sharing and file editing." => {
+            "直接在 Oz 中使用 Codex，并利用应用内代码审查、智能体会话共享和文件编辑等功能。"
+        }
         "Use agent" => "使用智能体",
         "Use the agent" => "使用智能体",
         "Value (optional)" => "值（可选）",
@@ -1503,11 +1606,33 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Essentials" => "核心",
         "Blocks" => "块",
         "Input Editor" => "输入编辑器",
+        "Local agent" => "本地智能体",
         "Fundamentals" => "基础",
+        "Repo(s)" => "仓库",
+        "Failed to load GitHub repositories" => "加载 GitHub 仓库失败",
+        "Auth with GitHub" => "通过 GitHub 认证",
+        "Type owner/repo and press Enter to add, or select from dropdown." => {
+            "输入 owner/repo 并按 Enter 添加，或从下拉列表中选择。"
+        }
+        "Missing a repo?" => "缺少仓库？",
+        "Configure access on GitHub" => "在 GitHub 上配置访问权限",
+        "No repositories found" => "未找到仓库",
+        "Selected repos" => "已选仓库",
+        "Available indexed repos" => "可用的已索引仓库",
+        "No repos selected yet" => "尚未选择仓库",
+        "All locally indexed repos are already selected." => "所有本地已索引仓库都已选择。",
+        "Select repos to provide context for the environment creation agent." => {
+            "选择仓库，为环境创建智能体提供上下文。"
+        }
+        "Select locally indexed repos to provide context for the environment creation agent." => {
+            "选择本地已索引仓库，为环境创建智能体提供上下文。"
+        }
+        "Select repos for your environment" => "为你的环境选择仓库",
         "Open AI Command Suggestions" => "打开 AI 命令建议",
         "A little gift" => "一点小礼物",
         "Break out of your laptop with cloud agents" => "用云端智能体突破本机限制",
         "Buy credits" => "购买点数",
+        "Base credits" => "基础点数",
         "Cloud agents" => "云端智能体",
         "Compare plans" => "比较方案",
         "Introducing Oz" => "Oz 介绍",
@@ -2222,6 +2347,474 @@ fn zh_cn_static(text: &str) -> Option<&'static str> {
         "Yes, delete" => "是，删除",
         "Yes, leave" => "是，离开",
         "Leave Team" => "离开团队",
+        "+ Add model" => "添加模型",
+        "Add endpoint" => "添加端点",
+        "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward." => {
+            "确定要移除此端点吗？之后你将无法在智能体会话中使用它的模型。"
+        }
+        "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. " => {
+            "自动检测并启动全局范围第三方 AI 智能体配置文件（例如主目录中）里的 MCP 服务器。在仓库内检测到的服务器永远不会自动启动，必须在下方“检测自”区域中逐个启用。"
+        }
+        "Balance" => "余额",
+        "Copy URL" => "复制 URL",
+        "Copy conversation text" => "复制对话文本",
+        "Copy output as Markdown" => "复制输出为 Markdown",
+        "Copy path" => "复制路径",
+        "Copy prompt" => "复制提示",
+        "Copy share link" => "复制共享链接",
+        "Fork" => "派生",
+        "Fork from here" => "从此处派生",
+        "Last 30 days" => "最近 30 天",
+        "New" => "新",
+        "No usage history" => "暂无用量历史",
+        "Please include 'https://'" => "请包含 'https://'",
+        "Purchased this month" => "本月已购买",
+        "Remove endpoint" => "移除端点",
+        "Rewind to before here" => "回退到此处之前",
+        "Save as prompt" => "另存为提示词",
+        "remaining" => "剩余",
+        "e.g., GLM-5" => "例如，GLM-5",
+        "e.g., GLM-5-FP8" => "例如，GLM-5-FP8",
+        "e.g., Zach's external models" => "例如，Zach 的外部模型",
+        "e.g., sk-..." => "例如，sk-...",
+        "Accept w/o orchestration" => "不编排并接受",
+        "Authenticate GitHub" => "认证 GitHub",
+        "Add-on credits" => "附加点数",
+        " on GitHub so we can better identify the problem." => {
+            " 到 GitHub，这样我们能更好地定位问题。"
+        }
+        " for more powerful cloud agents." => " 以使用更强大的云端智能体。",
+        "Agent questions" => "智能体问题",
+        "As you or the Agent make changes, you'll be able to track them here." => {
+            "当你或智能体进行更改时，可以在这里跟踪这些更改。"
+        }
+        "Auto reload" => "自动补充",
+        "auto-reload" => "自动补充",
+        "Background color" => "背景颜色",
+        "Bring Warp's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more. " => {
+            "将 Warp 功能带到远程会话中，包括块、完整文本编辑、自动补全、Oz 等。"
+        }
+        "Choose your experience for this remote session:" => "选择此远程会话的体验：",
+        "Cloud agents require an environment that they'll run in to get their task done. Create your first environment below. You'll be able to edit the environment later, or add new environments when you need them." => {
+            "云端智能体需要一个运行环境来完成任务。请在下方创建你的第一个环境。之后你可以编辑该环境，或在需要时添加新环境。"
+        }
+        "Code review" => "代码审查",
+        "Continue this cloud conversation" => "继续此云端对话",
+        "Contact sales" => "联系销售",
+        "Create an account" => "创建账户",
+        "Create agent" => "创建智能体",
+        "Choose your agent" => "选择智能体",
+        "Check out the " => "查看 ",
+        " to learn more." => " 了解更多。",
+        "Getting started with Oz cloud agents" => "Oz 云端智能体入门",
+        "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI." => {
+            "可直接在 Warp 中通过集成（Linear、Slack）、事件（GitHub、内置计划任务）或 Oz SDK/CLI 以编程方式启动 Oz 云端智能体。"
+        }
+        "Oz documentation" => "Oz 文档",
+        "Quick start: Visit oz.warp.dev for a UI-based setup experience." => {
+            "快速开始：访问 oz.warp.dev 使用图形化设置体验。"
+        }
+        "Manual setup: Create a Slack or Linear integration with the Oz CLI" => {
+            "手动设置：使用 Oz CLI 创建 Slack 或 Linear 集成"
+        }
+        "Create an environment" => "创建环境",
+        "First, set up an environment to create an integration." => {
+            "首先，设置一个环境来创建集成。"
+        }
+        "Use Warp's environment setup command to have an agent help you through it. " => {
+            "使用 Warp 的环境设置命令，让智能体帮助你完成。"
+        }
+        "Or, supply your own existing docker image." => "或者，提供你现有的 Docker 镜像。",
+        "Create an integration" => "创建集成",
+        "Integrate Slack or Linear to assign Warp's Agent tasks with @Warp. " => {
+            "集成 Slack 或 Linear，以便使用 @Warp 分配 Warp 智能体任务。"
+        }
+        "Create Environment" => "创建环境",
+        "Create Environment (CLI)" => "创建环境（CLI）",
+        "Create Linear Integration" => "创建 Linear 集成",
+        "Create Slack Integration" => "创建 Slack 集成",
+        "Create your first tab config" => "创建第一个标签页配置",
+        "Changes" => "更改",
+        "Error loading diffs" => "加载差异失败",
+        "Error" => "错误",
+        "Artifacts" => "产物",
+        "Environment setup commands" => "环境设置命令",
+        "Environment details" => "环境详情",
+        "Open in Oz" => "在 Oz 中打开",
+        "Initial query" => "初始查询",
+        "Credits used" => "已用点数",
+        "Run time" => "运行时间",
+        " Retry" => " 重试",
+        "This file has unsaved changes. {shortcut} to save" => {
+            "此文件有未保存的更改。按 {shortcut} 保存"
+        }
+        "Diff is too large to render" => "差异过大，无法渲染",
+        "Binary file - no diff available" => "二进制文件，没有可用差异",
+        "File renamed without changes" => "文件已重命名，无内容更改",
+        "New empty file" => "新建空文件",
+        "Unable to load file content" => "无法加载文件内容",
+        "No file selected" => "未选择文件",
+        "No files to discard" => "没有可丢弃的文件",
+        "No matches" => "无匹配项",
+        "Included commits" => "包含的提交",
+        "Include unstaged" => "包含未暂存更改",
+        "Commit message" => "提交消息",
+        "Install" => "安装",
+        "No updates available" => "没有可用更新",
+        "No MCP server selected" => "未选择 MCP 服务器",
+        "No tools available" => "没有可用工具",
+        "Custom models" => "自定义模型",
+        "Disabled by your administrator" => "已被管理员禁用",
+        "Don't ask me this again" => "不要再次询问",
+        "Docker image to use for the environment" => "环境使用的 Docker 镜像",
+        "Fix with Oz" => "使用 Oz 修复",
+        "filing an issue" => "提交 issue",
+        "Free credits" => "免费点数",
+        "GitHub link or local filepath to the repository" => "仓库的 GitHub 链接或本地文件路径",
+        "Grep for " => "Grep 搜索 ",
+        "Grepping for " => "正在 Grep 搜索 ",
+        "Hand off to cloud (or type &)" => "移交到云端（或输入 &）",
+        "ID of the environment to integrate with" => "要集成的环境 ID",
+        "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. " => {
+            "要对 SSH 会话启用 Warpify，需要安装较新版本的 tmux（>=3.0）。"
+        }
+        "In order to Warpify your SSH session, tmux must be installed. " => {
+            "要对 SSH 会话启用 Warpify，需要先安装 tmux。"
+        }
+        "Installed" => "已安装",
+        "Loading session..." => "正在加载会话...",
+        "Loading…" => "加载中…",
+        "Manage Warpify settings" => "管理 Warpify 设置",
+        "Manage Agent permissions" => "管理智能体权限",
+        "More info" => "更多信息",
+        "more info" => "更多信息",
+        "Name for the environment" => "环境名称",
+        "New conversation" => "新对话",
+        "New environment" => "新环境",
+        "No conversations yet" => "暂无对话",
+        "No open changes" => "没有打开的更改",
+        "No secrets found" => "未找到密钥",
+        "No secrets found. Save to use this value directly or click the key to add a secret." => {
+            "未找到密钥。保存后可直接使用此值，或点击密钥图标添加密钥。"
+        }
+        "No folders have been initialized yet." => "尚未初始化任何文件夹。",
+        "Or" => "或",
+        "Please report any issues" => "请报告任何问题",
+        "Questions unavailable" => "问题不可用",
+        "Raw" => "原始",
+        "Reload Credits" => "补充点数",
+        "Rendered" => "渲染后",
+        "Runs autonomously in a cloud environment you choose. Best for parallel or long-running work." => {
+            "在你选择的云端环境中自主运行。最适合并行或长时间运行的工作。"
+        }
+        "Runs on your machine and requires supervision. Best for quick, interactive tasks." => {
+            "在你的机器上运行，需要你监督。最适合快速、交互式任务。"
+        }
+        "Search secrets or create a new one" => "搜索密钥或新建密钥",
+        "Sending message to " => "正在发送消息给 ",
+        "Session type" => "会话类型",
+        "Set up a reusable starting point for your tabs. Pick a repo, choose a session type, and optionally attach a worktree. Use it whenever you want to open a tab with this setup." => {
+            "为标签页设置可复用的起点。选择仓库、会话类型，并可选择附加工作树。之后需要用这套设置打开标签页时可随时使用。"
+        }
+        "Share with team" => "与团队共享",
+        "Show initialization block" => "显示初始化块",
+        "Start a new Oz cloud agent" => "启动新的 Oz 云端智能体",
+        "Tasks" => "任务",
+        "Theme name" => "主题名称",
+        "Total overages" => "超额总量",
+        "Unable to load secrets" => "无法加载密钥",
+        "Usage" => "用量",
+        "Use cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. " => {
+            "使用云端智能体运行并行智能体、构建可自主运行的智能体，并随时随地查看智能体状态。"
+        }
+        "Use Oz cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. " => {
+            "使用 Oz 云端智能体运行并行智能体、构建可自主运行的智能体，并随时随地查看智能体状态。"
+        }
+        "Visit docs" => "查看文档",
+        "We are actively working on improving the stability of SSH in Warp. Please consider " => {
+            "我们正在积极提升 Warp 中 SSH 的稳定性。请考虑"
+        }
+        "When enabled, " => "启用后，",
+        " will automatically purchase your selected package when you run out. " => {
+            " 会在点数用完时自动购买你选择的套餐。"
+        }
+        "Why do I need tmux?" => "为什么需要 tmux？",
+        "pricing page" => "价格页面",
+        "press enter" => "按 Enter",
+        "settings" => "设置",
+        "these instructions" => "这些说明",
+        "{display_name} is not available for free users. " => {
+            "{display_name} 不对免费用户开放。"
+        }
+        "Run {package_manager_name} to update" => "运行 {package_manager_name} 进行更新",
+        "Runs" => "运行",
+        "Loading cloud agent runs" => "正在加载云端智能体运行",
+        "Loading agents..." => "正在加载智能体...",
+        "No results matched your filters" => "没有符合筛选条件的结果",
+        "Fork current conversation" => "复刻当前对话",
+        "No matching conversations" => "没有匹配的对话",
+        "No tabs match your search." => "没有匹配搜索的标签页。",
+        "No results found" => "未找到结果",
+        "Loading results..." => "正在加载结果...",
+        "Code symbols indexing..." => "正在索引代码符号...",
+        "I'm looking for..." => "我想查找...",
+        "Example queries" => "示例查询",
+        "Failed to start environment" => "启动环境失败",
+        "GitHub Authentication Required" => "需要 GitHub 认证",
+        "Please authenticate with GitHub to continue" => "请通过 GitHub 认证以继续",
+        "Cloud Agent Run Cancelled" => "云端智能体运行已取消",
+        "No cloud environment was started" => "未启动云端环境",
+        "Allow" => "允许",
+        "Skip all" => "全部跳过",
+        "Refine" => "优化",
+        "Take over" => "接管",
+        "Take control" => "取得控制权",
+        "Run" => "运行",
+        "Reject" => "拒绝",
+        "AWS credentials expired or missing" => "AWS 凭证已过期或缺失",
+        "Failed to authenticate with AWS Bedrock when using {model}. Run `{command}` to refresh credentials." => {
+            "使用 {model} 时无法通过 AWS Bedrock 认证。运行 `{command}` 刷新凭证。"
+        }
+        "Always run automatically" => "始终自动运行",
+        "New terminal session" => "新终端会话",
+        "Thinking..." => "正在思考...",
+        "Customizable in appearance settings." => "可在外观设置中自定义。",
+        "Project explorer unavailable" => "项目资源管理器不可用",
+        "Add as context" => "添加为上下文",
+        "This file has saved changes that are not reflected here." => {
+            "此文件有已保存但尚未反映到这里的更改。"
+        }
+        "Install nvm to enable version switching" => "安装 nvm 以启用版本切换",
+        "This menu helps you switch between Node.js versions — but it requires nvm to be installed." => {
+            "此菜单可帮助你切换 Node.js 版本，但需要先安装 nvm。"
+        }
+        "No node versions installed" => "未安装 Node 版本",
+        "Try installing versions with nvm" => "尝试使用 nvm 安装版本",
+        "New worktree" => "新建工作树",
+        "Select repository" => "选择仓库",
+        "Select branch" => "选择分支",
+        "Autogenerate worktree branch name" => "自动生成工作树分支名称",
+        "Worktree branch name" => "工作树分支名称",
+        "Select directory" => "选择目录",
+        "Select a git repository to enable worktree support" => {
+            "选择一个 Git 仓库以启用工作树支持"
+        }
+        "Automatically create a worktree when opening a new tab" => {
+            "打开新标签页时自动创建工作树"
+        }
+        "You must select that you want to automatically create a worktree in order to select this" => {
+            "需要先选择自动创建工作树，才能选择此项"
+        }
+        "Auto-generate worktree branch name" => "自动生成工作树分支名称",
+        "Warp will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis." => {
+            "达到此美元限额后，Warp 将阻止使用高级模型。该限额每月重置。"
+        }
+        "Note that AI credits made near your chosen limit may exceed it by a few dollars." => {
+            "请注意，接近所选限额时产生的 AI 点数费用可能会超出几美元。"
+        }
+        "Kick off an agent task to view usage history here." => {
+            "启动一个智能体任务后，可在此查看使用历史。"
+        }
+        "Enable terminal command autodetection" => "启用终端命令自动检测",
+        "Disable terminal command autodetection" => "禁用终端命令自动检测",
+        "Turn off auto-approve all agent actions" => "关闭所有智能体操作的自动批准",
+        "Auto-approve all agent actions for this task" => "自动批准此任务的所有智能体操作",
+        "Start remote control" => "启动远程控制",
+        "Log in to use /remote-control" => "登录后使用 /remote-control",
+        "Warp plugin installed. Please restart the session to activate." => {
+            "Warp 插件已安装。请重启会话以激活。"
+        }
+        "Warp plugin updated. Please restart the session to activate." => {
+            "Warp 插件已更新。请重启会话以激活。"
+        }
+        "Installing Warp plugin..." => "正在安装 Warp 插件...",
+        "Failed to install Warp plugin" => "Warp 插件安装失败",
+        "Updating Warp plugin..." => "正在更新 Warp 插件...",
+        "Failed to update Warp plugin" => "Warp 插件更新失败",
+        "See logs for details" => "查看日志了解详情",
+        "Voice input limit reached" => "已达到语音输入限制",
+        "Failed to transcribe voice input" => "语音输入转录失败",
+        "Voice input is enabled. You can also press and hold the `{key}` key to activate voice input (configure in Settings > AI > Voice)" => {
+            "语音输入已启用。你也可以按住 `{key}` 键来激活语音输入（可在 设置 > AI > 语音 中配置）"
+        }
+        "\nThe " => "\n该 ",
+        "You have 1 free credit to use on Oz cloud agents." => {
+            "你有 1 个免费点数可用于 Oz 云端智能体。"
+        }
+        "You have {credits} free credits to use on Oz cloud agents." => {
+            "你有 {credits} 个免费点数可用于 Oz 云端智能体。"
+        }
+        "Your active and past conversations with local and ambient agents will appear here." => {
+            "你与本地和环境智能体的当前及历史对话会显示在这里。"
+        }
+        "Orchestrate any agent, anywhere" => "在任意位置编排任意智能体",
+        "We've made major improvements to Warp's cloud agent orchestration platform, Oz." => {
+            "我们对 Warp 的云端智能体编排平台 Oz 做了重大改进。"
+        }
+        "Run any agent harness in the cloud" => "在云端运行任意智能体运行框架",
+        "Use Oz to spin up Claude Code or Codex agents in the cloud; Oz will help you track and steer the agents." => {
+            "使用 Oz 在云端启动 Claude Code 或 Codex 智能体；Oz 会帮助你跟踪和引导这些智能体。"
+        }
+        "Multi-agent orchestration" => "多智能体编排",
+        "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks." => {
+            "Warp 智能体现在可以编排多个子智能体，帮助你并行处理任务。"
+        }
+        "Agent Memory" => "智能体记忆",
+        "Agents will now store and access long-term memories, enabling self-improvement over time." => {
+            "智能体现在会存储和访问长期记忆，从而随着时间自我改进。"
+        }
+        "Research preview" => "研究预览",
+        "Warp is now open-source" => "Warp 现已开源",
+        "You, our community, can participate in building Warp using an agent-first workflow." => {
+            "你和我们的社区可以通过智能体优先的工作流参与构建 Warp。"
+        }
+        "Contribute" => "参与贡献",
+        "Warp's client code is now open source. Get started by using the /feedback skill to open an issue, and follow the contribution guidelines here." => {
+            "Warp 客户端代码现已开源。你可以使用 /feedback 技能提交 issue，并在此处查看贡献指南。"
+        }
+        "here" => "此处",
+        "Open Automated Development" => "开放自动化开发",
+        "The Warp repo is managed by an agent-first workflow powered by Oz, our cloud agent orchestration platform." => {
+            "Warp 仓库采用由 Oz（我们的云端智能体编排平台）驱动的智能体优先工作流进行管理。"
+        }
+        "Introducing 'auto (open-weights)'" => "介绍“auto (open-weights)”",
+        "We've added a new auto model that picks the best open weight model for a task, like Kimi or MiniMax." => {
+            "我们新增了一个 auto 模型，它会为任务选择最合适的开源权重模型，例如 Kimi 或 MiniMax。"
+        }
+        "Introducing universal agent support: level up any coding agent with Warp" => {
+            "介绍通用智能体支持：用 Warp 升级任何编码智能体"
+        }
+        "Vertical tabs" => "垂直标签页",
+        "Rich tab titles and metadata like git branch, worktree, and PR. Fully customizable." => {
+            "丰富的标签标题和元数据，例如 Git 分支、工作树和 PR。完全可自定义。"
+        }
+        "Tab-level schema to set your directory, startup commands, theme, and worktree with one click" => {
+            "使用标签级 schema 一键设置目录、启动命令、主题和工作树。"
+        }
+        "Agent inbox" => "智能体收件箱",
+        "Notifications when any agent needs your attention, also accessible in a central inbox" => {
+            "当任何智能体需要你关注时发出通知，也可在中央收件箱中访问。"
+        }
+        "Native code review" => "原生代码审查",
+        "Send inline comments from Warp's code review directly to Claude Code, Codex, or OpenCode" => {
+            "将 Warp 代码审查中的行内评论直接发送给 Claude Code、Codex 或 OpenCode。"
+        }
+        "Use your custom prompt" => "使用自定义提示符",
+        "Set up Warp to honor your PS1 setting" => "设置 Warp 以遵循你的 PS1 设置",
+        "View documentation" => "查看文档",
+        "Integrate Warp with your IDE" => "将 Warp 与 IDE 集成",
+        "Configure Warp to launch from your most used development tools" => {
+            "配置 Warp 从你最常用的开发工具启动"
+        }
+        "How Warp uses Warp" => "Warp 如何使用 Warp",
+        "Learn how Warp's engineering team uses their favorite features" => {
+            "了解 Warp 工程团队如何使用他们最喜欢的功能"
+        }
+        "Learn more on our " => "在我们的 ",
+        "Read article" => "阅读文章",
+        "Create your first block" => "创建第一个块",
+        "Run a command to see your command and output grouped." => {
+            "运行命令，查看命令和输出如何组合显示。"
+        }
+        "Navigate blocks" => "导航块",
+        "Click to select a block and navigate with arrow keys." => {
+            "点击选择块，并使用方向键导航。"
+        }
+        "Take an action on block" => "对块执行操作",
+        "Right click on a block to copy/paste, share, more." => {
+            "右键点击块以复制/粘贴、共享或查看更多操作。"
+        }
+        "Open command palette" => "打开命令面板",
+        "Access all of Warp via the keyboard." => "通过键盘访问 Warp 的全部功能。",
+        "Set your theme" => "设置主题",
+        "Make Warp your own by choosing a theme." => "选择主题，让 Warp 更符合你的偏好。",
+        "Command search" => "命令搜索",
+        "Find and run previously executed commands, workflows, and more." => {
+            "查找并运行之前执行过的命令、工作流等。"
+        }
+        "AI command search" => "AI 命令搜索",
+        "Generate shell commands with natural language." => "使用自然语言生成 Shell 命令。",
+        "Split panes" => "拆分窗格",
+        "Split tabs into multiple panes to make your ideal layout." => {
+            "将标签页拆分为多个窗格，构建理想布局。"
+        }
+        "Launch configuration" => "启动配置",
+        "Save your current configuration of windows, tabs, and panes." => {
+            "保存当前窗口、标签页和窗格配置。"
+        }
+        "Start a new conversation" => "开始新对话",
+        "Start a new cloud agent conversation" => "开始新的云端智能体对话",
+        "Add a new MCP server via the MCP settings page" => {
+            "通过 MCP 设置页面添加新的 MCP 服务器"
+        }
+        "Pull GitHub PR review comments" => "拉取 GitHub PR 审查评论",
+        "Create an Oz environment (Docker image + repos) via guided setup" => {
+            "通过引导式设置创建 Oz 环境（Docker 镜像 + 仓库）"
+        }
+        "Create a new docker sandbox terminal session" => "创建新的 Docker 沙箱终端会话",
+        "Have Oz walk you through creating a new coding project" => {
+            "让 Oz 引导你创建新的编码项目"
+        }
+        "Open a skill's markdown file in Warp's built-in editor" => {
+            "在 Warp 内置编辑器中打开技能的 Markdown 文件"
+        }
+        "Invoke a skill" => "调用技能",
+        "Add new Agent prompt" => "添加新的智能体提示词",
+        "Add a new global rule for the agent" => "为智能体添加新的全局规则",
+        "Open a file in Warp's code editor" => "在 Warp 代码编辑器中打开文件",
+        "Set the color of the current tab" => "设置当前标签页颜色",
+        "Fork the current conversation in a new pane or a new tab" => {
+            "在新窗格或新标签页中派生当前对话"
+        }
+        "Hand off this conversation to a cloud agent" => "将此对话移交给云端智能体",
+        "Open code review" => "打开代码审查",
+        "Index this codebase" => "索引此代码库",
+        "Index this codebase and generate an AGENTS.md file" => {
+            "索引此代码库并生成 AGENTS.md 文件"
+        }
+        "Open the project rules file (AGENTS.md)" => "打开项目规则文件（AGENTS.md）",
+        "Open MCP servers" => "打开 MCP 服务器",
+        "Open settings file (TOML)" => "打开设置文件（TOML）",
+        "Open the latest changelog" => "打开最新更新日志",
+        "Send feedback" => "发送反馈",
+        "Switch to another indexed repository" => "切换到另一个已索引仓库",
+        "View all of your global and project rules" => "查看所有全局和项目规则",
+        "Start a new conversation (alias for /agent)" => "开始新对话（/agent 的别名）",
+        "Switch the base agent model" => "切换基础智能体模型",
+        "Switch the cloud agent execution host" => "切换云端智能体执行主机",
+        "Switch the cloud agent harness" => "切换云端智能体运行框架",
+        "Switch the cloud agent environment" => "切换云端智能体环境",
+        "Switch the active execution profile" => "切换当前执行配置",
+        "Prompt the agent to do some research and create a plan for a task" => {
+            "提示智能体进行研究并为任务创建计划"
+        }
+        "Break a task into subtasks and run them in parallel with multiple agents" => {
+            "将任务拆分为子任务，并用多个智能体并行运行"
+        }
+        "Free up context by summarizing convo history" => "通过总结对话历史释放上下文",
+        "Compact conversation and then send a follow-up prompt" => {
+            "压缩对话后发送后续提示"
+        }
+        "Queue a prompt to send after the agent finishes responding" => {
+            "将提示加入队列，在智能体完成响应后发送"
+        }
+        "Fork current conversation and compact it in the forked copy" => {
+            "派生当前对话，并在派生副本中压缩它"
+        }
+        "Fork conversation from a specific query" => "从指定查询派生对话",
+        "Continue this cloud conversation locally" => "在本地继续此云端对话",
+        "Open billing and usage settings" => "打开账单与用量设置",
+        "Start remote control for this session" => "为此会话启动远程控制",
+        "Toggle credit usage details" => "切换点数用量详情",
+        "Open conversation history" => "打开对话历史",
+        "Search saved prompts" => "搜索已保存提示词",
+        "Rewind to a previous point in the conversation" => "回退到对话中的先前位置",
+        "Export current conversation to clipboard in markdown format" => {
+            "以 Markdown 格式将当前对话导出到剪贴板"
+        }
+        "Export current conversation to a markdown file" => {
+            "将当前对话导出为 Markdown 文件"
+        }
         _ => return None,
     })
 }

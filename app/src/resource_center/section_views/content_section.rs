@@ -77,6 +77,7 @@ impl ContentSectionView {
         item: &ContentItem,
         appearance: &Appearance,
         mouse_state_handle: MouseStateHandle,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let default_link_styles = UiComponentStyles {
@@ -100,7 +101,7 @@ impl ContentSectionView {
                 appearance
                     .ui_builder()
                     .link(
-                        item.button_label.to_string(),
+                        crate::i18n::tr_static(app, item.button_label).to_string(),
                         Some(item.url.into()),
                         None,
                         mouse_state_handle,
@@ -120,18 +121,19 @@ impl ContentSectionView {
         &self,
         item: &ContentItem,
         appearance: &Appearance,
+        app: &AppContext,
         index: usize,
     ) -> Box<dyn Element> {
         let mut element = Flex::column();
         let mouse_state = self.content_button_mouse_states.item_handles[index].clone();
-        let link_button = self.render_link_button(item, appearance, mouse_state);
+        let link_button = self.render_link_button(item, appearance, mouse_state, app);
 
         // title
         element.add_child(
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.title.to_string(), true)
+                    .wrappable_text(crate::i18n::tr_static(app, item.title).to_string(), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         ..Default::default()
@@ -148,7 +150,10 @@ impl ContentSectionView {
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.description.to_string(), true)
+                    .wrappable_text(
+                        crate::i18n::tr_static(app, item.description).to_string(),
+                        true,
+                    )
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         font_color: Some(ColorU::from(
@@ -217,18 +222,15 @@ impl View for ContentSectionView {
 
         let mut section = Flex::column().with_child(header);
         if self.is_expanded {
-            let content_section =
-                Container::new(
-                    Flex::column()
-                        .with_children(
-                            self.content_section_data.items.iter().enumerate().map(
-                                |(index, item)| self.render_content_item(item, appearance, index),
-                            ),
-                        )
-                        .finish(),
-                )
-                .with_uniform_margin(SECTION_SPACING)
-                .with_margin_left(SECTION_SPACING + CHEVRON_ICON_SIZE + ICON_PADDING);
+            let content_section = Container::new(
+                Flex::column()
+                    .with_children(self.content_section_data.items.iter().enumerate().map(
+                        |(index, item)| self.render_content_item(item, appearance, app, index),
+                    ))
+                    .finish(),
+            )
+            .with_uniform_margin(SECTION_SPACING)
+            .with_margin_left(SECTION_SPACING + CHEVRON_ICON_SIZE + ICON_PADDING);
 
             section.add_child(content_section.finish());
         }

@@ -10,7 +10,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspace::view::launch_modal::cta_button::{CTAButton, CTAButtonAction};
-use markdown_parser::{parse_markdown, FormattedText, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use pathfinder_color::ColorU;
 use std::collections::HashMap;
 use warp_core::ui::appearance::Appearance;
@@ -107,6 +107,32 @@ where
     /// Called when the modal is closed via the X button or esc or close CTA.
     /// Not called if closed via another CTA.
     fn on_close(&self, _ctx: &mut ViewContext<LaunchModal<Self>>) {}
+}
+
+fn localize_formatted_text_line(app: &AppContext, line: &FormattedTextLine) -> FormattedTextLine {
+    fn localize_fragments(app: &AppContext, fragments: &mut [FormattedTextFragment]) {
+        for fragment in fragments {
+            fragment.text = crate::i18n::tr_text(app, &fragment.text).into_owned();
+        }
+    }
+
+    let mut localized = line.clone();
+    match &mut localized {
+        FormattedTextLine::Heading(header) => localize_fragments(app, &mut header.text),
+        FormattedTextLine::Line(line) => localize_fragments(app, line),
+        FormattedTextLine::OrderedList(list) => {
+            localize_fragments(app, &mut list.indented_text.text);
+        }
+        FormattedTextLine::UnorderedList(list) => localize_fragments(app, &mut list.text),
+        FormattedTextLine::TaskList(list) => localize_fragments(app, &mut list.text),
+        FormattedTextLine::CodeBlock(_)
+        | FormattedTextLine::LineBreak
+        | FormattedTextLine::HorizontalRule
+        | FormattedTextLine::Embedded(_)
+        | FormattedTextLine::Image(_)
+        | FormattedTextLine::Table(_) => {}
+    }
+    localized
 }
 
 pub struct StateHandles<S: Slide> {
@@ -585,16 +611,22 @@ impl<S: Slide> View for LaunchModal<S> {
                     .with_margin_bottom(12.)
                     .finish(),
                 )
-                .with_children(
-                    self.slide
+                .with_children({
+                    let modal_subtext_paragraphs = self
+                        .slide
                         .modal_subtext_paragraphs()
                         .iter()
+                        .map(|line| localize_formatted_text_line(app, line))
+                        .collect::<Vec<_>>();
+                    let last_index = modal_subtext_paragraphs.len().saturating_sub(1);
+                    modal_subtext_paragraphs
+                        .into_iter()
                         .enumerate()
-                        .map(|(index, line)| {
-                            let is_last = index == self.slide.modal_subtext_paragraphs().len() - 1;
+                        .map(move |(index, line)| {
+                            let is_last = index == last_index;
 
                             let text_element = FormattedTextElement::new(
-                                FormattedText::new([line.clone()]),
+                                FormattedText::new([line]),
                                 14.,
                                 appearance.ui_font_family(),
                                 appearance.ui_font_family(),
@@ -607,8 +639,8 @@ impl<S: Slide> View for LaunchModal<S> {
                             Container::new(text_element)
                                 .with_margin_bottom(if is_last { 40. } else { 8. })
                                 .finish()
-                        }),
-                )
+                        })
+                })
                 .with_child(Expanded::new(1., self.render_slide_controls(app)).finish())
                 .with_children(self.render_checkbox(app))
                 .finish(),

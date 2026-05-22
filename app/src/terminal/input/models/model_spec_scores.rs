@@ -193,7 +193,7 @@ fn render_score_row(
                 .with_child(
                     Container::new(
                         Text::new(
-                            "Billed to API".to_string(),
+                            crate::i18n::tr_static(app, "Billed to API").to_string(),
                             appearance.ui_font_family(),
                             14.,
                         )

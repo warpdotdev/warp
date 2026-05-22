@@ -66,7 +66,7 @@ impl ConversationSearchItem {
         Flex::row()
             .with_child(
                 Text::new_inline(
-                    "New conversation",
+                    crate::i18n::tr_static(app, "New conversation"),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -87,7 +87,7 @@ impl ConversationSearchItem {
         let appearance = Appearance::as_ref(app);
 
         let action_title = Text::new_inline(
-            "Fork current conversation",
+            crate::i18n::tr_static(app, "Fork current conversation"),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )

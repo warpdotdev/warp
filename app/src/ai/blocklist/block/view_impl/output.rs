@@ -1033,7 +1033,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 }
                                 None => {
                                     fragments.push(FormattedTextFragment::plain_text(
-                                        "this conversation",
+                                        crate::i18n::tr_static(app, "this conversation"),
                                     ));
                                 }
                             };
@@ -1381,7 +1381,11 @@ fn render_search_codebase(
                                 appearance
                                     .ui_builder()
                                     .link(
-                                        "Manage AI Autonomy permissions".into(),
+                                        crate::i18n::tr_static(
+                                            app,
+                                            "Manage AI Autonomy permissions",
+                                        )
+                                        .into(),
                                         None,
                                         Some(Box::new(move |ctx| {
                                             ctx.dispatch_typed_action(
@@ -2156,7 +2160,7 @@ fn render_requested_edits_output_message(
         match requested_edit.view.as_ref(app).display_mode() {
             DisplayMode::FullPane => Align::new(
                 Text::new_inline(
-                    "This suggestion is being edited in another tab.",
+                    crate::i18n::tr_static(app, "This suggestion is being edited in another tab."),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -2300,9 +2304,10 @@ fn render_suggest_new_conversation(
     }
 
     if props.shared_session_status.is_viewer() {
-        let header_element = HeaderConfig::new("Start a new conversation", app)
-            .with_icon(gray_stop_icon(appearance))
-            .render(app);
+        let header_element =
+            HeaderConfig::new(crate::i18n::tr_static(app, "Start a new conversation"), app)
+                .with_icon(gray_stop_icon(appearance))
+                .render(app);
 
         return Some(
             header_element
@@ -2374,12 +2379,12 @@ fn create_formatted_text_for_grep(
             .expect("Queries slice should have an element");
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Grep for "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(app, "Grep for ")),
                 FormattedTextFragment::inline_code(query),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Grepping for "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(app, "Grepping for ")),
                 FormattedTextFragment::inline_code(query),
             ]
         };
@@ -2471,12 +2476,18 @@ fn create_formatted_text_for_file_glob(
 
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Search for files that match "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    app,
+                    "Search for files that match ",
+                )),
                 FormattedTextFragment::inline_code(pattern),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Finding files that match "),
+                FormattedTextFragment::plain_text(crate::i18n::tr_static(
+                    app,
+                    "Finding files that match ",
+                )),
                 FormattedTextFragment::inline_code(pattern),
             ]
         };
@@ -2911,7 +2922,7 @@ fn render_references_footer(
     )?;
 
     let title = Text::new_inline(
-        "References",
+        crate::i18n::tr_static(app, "References"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -2996,7 +3007,7 @@ fn render_suggested_rules_and_prompts_footer(
     let theme = appearance.theme();
     let title_row_color = theme.sub_text_color(theme.background());
     let title_text = Text::new_inline(
-        "Suggestions:",
+        crate::i18n::tr_static(app, "Suggestions:"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3736,7 +3747,7 @@ fn render_collapsible_debug_output(
         // "Debug output" label
         row.add_child(
             Text::new(
-                "Debug output".to_string(),
+                crate::i18n::tr_static(app, "Debug output").to_string(),
                 appearance.ai_font_family(),
                 appearance.monospace_font_size(),
             )

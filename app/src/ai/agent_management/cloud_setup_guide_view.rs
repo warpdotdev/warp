@@ -136,7 +136,7 @@ impl CloudSetupGuideView {
     }
 
     /// Render the main header for the setup guide.
-    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let title_font_size = 24.;
         let subtitle_font_size = 16.;
@@ -144,7 +144,7 @@ impl CloudSetupGuideView {
         let mut header_container = Flex::column().with_spacing(8.);
 
         let title = Text::new(
-            "Getting started with Oz cloud agents",
+            crate::i18n::tr_static(app, "Getting started with Oz cloud agents"),
             appearance.ui_font_family(),
             title_font_size,
         )
@@ -154,7 +154,7 @@ impl CloudSetupGuideView {
         header_container.add_child(title);
 
         let subtitle = Text::new(
-            "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            crate::i18n::tr_static(app, "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI."),
             appearance.ui_font_family(),
             subtitle_font_size,
         )
@@ -166,7 +166,7 @@ impl CloudSetupGuideView {
         let docs_line = Flex::row()
             .with_child(
                 Text::new_inline(
-                    "Check out the ",
+                    crate::i18n::tr_static(app, "Check out the "),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -177,7 +177,7 @@ impl CloudSetupGuideView {
                 appearance
                     .ui_builder()
                     .link(
-                        "Oz documentation".to_string(),
+                        crate::i18n::tr_static(app, "Oz documentation").to_string(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -195,7 +195,7 @@ impl CloudSetupGuideView {
             )
             .with_child(
                 Text::new_inline(
-                    " to learn more.",
+                    crate::i18n::tr_static(app, " to learn more."),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -208,12 +208,19 @@ impl CloudSetupGuideView {
     }
 
     /// Render the quick start banner with link to oz.warp.dev.
-    fn render_quick_start_banner(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_quick_start_banner(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = 16.;
 
         let text = Text::new_inline(
-            "Quick start: Visit oz.warp.dev for a UI-based setup experience.",
+            crate::i18n::tr_static(
+                app,
+                "Quick start: Visit oz.warp.dev for a UI-based setup experience.",
+            ),
             appearance.ui_font_family(),
             font_size,
         )
@@ -242,12 +249,19 @@ impl CloudSetupGuideView {
     }
 
     /// Render the manual setup section header.
-    fn render_manual_setup_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_manual_setup_header(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = 16.;
 
         Text::new(
-            "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            crate::i18n::tr_static(
+                app,
+                "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            ),
             appearance.ui_font_family(),
             font_size,
         )
@@ -296,12 +310,13 @@ impl CloudSetupGuideView {
         link_mouse_state: MouseStateHandle,
         telemetry_url: SetupGuideDocs,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let step_desc_font_size = 14.;
         let link = appearance
             .ui_builder()
             .link(
-                link_text.to_string(),
+                crate::i18n::tr_static(app, link_text).to_string(),
                 None,
                 Some(Box::new(move |ctx| {
                     ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -319,9 +334,13 @@ impl CloudSetupGuideView {
 
         Flex::row()
             .with_child(
-                Text::new_inline(prefix, appearance.ui_font_family(), step_desc_font_size)
-                    .with_color(appearance.theme().nonactive_ui_text_color().into_solid())
-                    .finish(),
+                Text::new_inline(
+                    crate::i18n::tr_static(app, prefix),
+                    appearance.ui_font_family(),
+                    step_desc_font_size,
+                )
+                .with_color(appearance.theme().nonactive_ui_text_color().into_solid())
+                .finish(),
             )
             .with_child(link)
             .finish()
@@ -345,39 +364,69 @@ impl CloudSetupGuideView {
         let Some((workflow, setup_step)) = (match code {
             CREATE_ENV_SLASH_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Environment", CREATE_ENV_SLASH_CMD).with_arguments(vec![
-                        Argument::new("github link or local filepath", ArgumentType::Text)
-                            .with_description("GitHub link or local filepath to the repository"),
-                    ]),
+                    Workflow::new(
+                        crate::i18n::tr_static(app, "Create Environment"),
+                        CREATE_ENV_SLASH_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        "github link or local filepath",
+                        ArgumentType::Text,
+                    )
+                    .with_description(crate::i18n::tr_static(
+                        app,
+                        "GitHub link or local filepath to the repository",
+                    ))]),
                 ),
                 SetupGuideStep::CreateEnvironment,
             )),
             CREATE_ENV_CLI_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Environment (CLI)", CREATE_ENV_CLI_CMD).with_arguments(
-                        vec![
-                            Argument::new("NAME", ArgumentType::Text)
-                                .with_description("Name for the environment"),
-                            Argument::new("DOCKER_IMAGE", ArgumentType::Text)
-                                .with_description("Docker image to use for the environment"),
-                        ],
-                    ),
+                    Workflow::new(
+                        crate::i18n::tr_static(app, "Create Environment (CLI)"),
+                        CREATE_ENV_CLI_CMD,
+                    )
+                    .with_arguments(vec![
+                        Argument::new("NAME", ArgumentType::Text).with_description(
+                            crate::i18n::tr_static(app, "Name for the environment"),
+                        ),
+                        Argument::new("DOCKER_IMAGE", ArgumentType::Text).with_description(
+                            crate::i18n::tr_static(app, "Docker image to use for the environment"),
+                        ),
+                    ]),
                 ),
                 SetupGuideStep::CreateEnvironmentCli,
             )),
             CREATE_SLACK_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Slack Integration", CREATE_SLACK_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                    Workflow::new(
+                        crate::i18n::tr_static(app, "Create Slack Integration"),
+                        CREATE_SLACK_INTEGRATION_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        "environment_id",
+                        ArgumentType::Text,
+                    )
+                    .with_description(crate::i18n::tr_static(
+                        app,
+                        "ID of the environment to integrate with",
+                    ))]),
                 ),
                 SetupGuideStep::CreateSlackIntegration,
             )),
             CREATE_LINEAR_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Linear Integration", CREATE_LINEAR_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                    Workflow::new(
+                        crate::i18n::tr_static(app, "Create Linear Integration"),
+                        CREATE_LINEAR_INTEGRATION_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        "environment_id",
+                        ArgumentType::Text,
+                    )
+                    .with_description(crate::i18n::tr_static(
+                        app,
+                        "ID of the environment to integrate with",
+                    ))]),
                 ),
                 SetupGuideStep::CreateLinearIntegration,
             )),
@@ -430,7 +479,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(1, appearance))
             .with_child(
                 Text::new(
-                    "Create an environment",
+                    crate::i18n::tr_static(app, "Create an environment"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -442,7 +491,10 @@ impl CloudSetupGuideView {
 
         let description = Container::new(
             Text::new(
-                "First, set up an environment to create an integration.",
+                crate::i18n::tr_static(
+                    app,
+                    "First, set up an environment to create an integration.",
+                ),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -458,6 +510,7 @@ impl CloudSetupGuideView {
             self.env_docs_link_mouse_state.clone(),
             SetupGuideDocs::Environment,
             appearance,
+            app,
         ))
         .with_padding_left(46.)
         .with_padding_bottom(8.)
@@ -473,7 +526,7 @@ impl CloudSetupGuideView {
 
         let or_text = Container::new(
             Text::new(
-                "Or, supply your own existing docker image.",
+                crate::i18n::tr_static(app, "Or, supply your own existing docker image."),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -515,7 +568,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(2, appearance))
             .with_child(
                 Text::new(
-                    "Create an integration",
+                    crate::i18n::tr_static(app, "Create an integration"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -531,6 +584,7 @@ impl CloudSetupGuideView {
             self.integration_docs_link_mouse_state.clone(),
             SetupGuideDocs::Integration,
             appearance,
+            app,
         ))
         .with_padding_left(46.)
         .with_padding_bottom(8.)
@@ -585,9 +639,9 @@ impl View for CloudSetupGuideView {
             .with_spacing(24.)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        content.add_child(self.render_header(appearance));
-        content.add_child(self.render_quick_start_banner(appearance));
-        content.add_child(self.render_manual_setup_header(appearance));
+        content.add_child(self.render_header(appearance, app));
+        content.add_child(self.render_quick_start_banner(appearance, app));
+        content.add_child(self.render_manual_setup_header(appearance, app));
         content.add_child(steps);
 
         let content = content.finish();

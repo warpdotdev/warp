@@ -647,7 +647,7 @@ fn render_reference_entry(
             } else {
                 // Show loading indicator when line_content is None
                 Text::new_inline(
-                    "Loading...",
+                    crate::i18n::tr_static(app, "Loading..."),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )

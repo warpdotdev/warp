@@ -314,7 +314,7 @@ impl RunAgentsCardView {
         let accept_keystroke = ENTER_KEYSTROKE.clone();
 
         let reject_button = CompactibleActionButton::new(
-            "Reject".to_string(),
+            crate::i18n::tr_static(ctx, "Reject").to_string(),
             Some(KeystrokeSource::Fixed(reject_keystroke)),
             ButtonSize::Small,
             RunAgentsCardViewAction::Reject,
@@ -324,7 +324,7 @@ impl RunAgentsCardView {
         );
         let position_id_prefix = format!("{action_id:?}");
         let accept_button = CompactibleSplitActionButton::new(
-            "Accept".to_string(),
+            crate::i18n::tr_static(ctx, "Accept").to_string(),
             Some(KeystrokeSource::Fixed(accept_keystroke)),
             ButtonSize::Small,
             RunAgentsCardViewAction::Accept,
@@ -896,9 +896,12 @@ impl RunAgentsCardView {
     fn toggle_accept_menu(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_accept_menu_open = !self.is_accept_menu_open;
         if self.is_accept_menu_open {
-            let item = MenuItemFields::new_with_label("Accept w/o orchestration", "")
-                .with_on_select_action(RunAgentsCardViewAction::AcceptWithoutOrchestration)
-                .into_item();
+            let item = MenuItemFields::new_with_label(
+                crate::i18n::tr_static(ctx, "Accept w/o orchestration"),
+                "",
+            )
+            .with_on_select_action(RunAgentsCardViewAction::AcceptWithoutOrchestration)
+            .into_item();
             self.accept_menu.update(ctx, |menu, ctx| {
                 menu.set_items(vec![item], ctx);
             });
@@ -1456,6 +1459,7 @@ fn render_editor(
             appearance,
             None,
             false,
+            app,
         ))
         .with_margin_top(12.)
         .finish(),

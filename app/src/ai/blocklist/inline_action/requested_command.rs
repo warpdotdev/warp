@@ -770,7 +770,10 @@ impl RequestedCommandView {
                 )
                 .with_child(
                     Text::new(
-                        "Your profile is set to always ask for permission to execute commands.",
+                        crate::i18n::tr_static(
+                            app,
+                            "Your profile is set to always ask for permission to execute commands.",
+                        ),
                         appearance.ui_font_family(),
                         font_size,
                     )
@@ -785,7 +788,11 @@ impl RequestedCommandView {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    "Manage command execution setting".into(),
+                                    crate::i18n::tr_static(
+                                        app,
+                                        "Manage command execution setting",
+                                    )
+                                    .into(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(

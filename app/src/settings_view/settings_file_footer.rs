@@ -21,7 +21,7 @@ use warpui::elements::{
     Wrap,
 };
 use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::platform::Cursor;
+use warpui::{platform::Cursor, AppContext};
 
 /// Horizontal + vertical padding applied to the footer inside the sidebar.
 const FOOTER_PADDING: f32 = 12.;
@@ -99,6 +99,7 @@ pub struct SettingsFooterMouseStates {
 pub fn render_open_settings_file_button(
     appearance: &Appearance,
     mouse_state: MouseStateHandle,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_fill = theme.nonactive_ui_text_color();
@@ -112,13 +113,17 @@ pub fn render_open_settings_file_button(
             .with_height(FOOTER_ICON_SIZE)
             .finish();
 
-        let label = Text::new_inline("Open settings file", ui_font_family, FOOTER_FONT_SIZE)
-            .with_color(text_color)
-            .with_style(Properties {
-                weight: Weight::Semibold,
-                ..Default::default()
-            })
-            .finish();
+        let label = Text::new_inline(
+            crate::i18n::tr_static(app, "Open settings file"),
+            ui_font_family,
+            FOOTER_FONT_SIZE,
+        )
+        .with_color(text_color)
+        .with_style(Properties {
+            weight: Weight::Semibold,
+            ..Default::default()
+        })
+        .finish();
 
         // Use `MainAxisSize::Max` so the row (and its surrounding bordered
         // container) expands to fill the full sidebar width. The icon + text
@@ -158,6 +163,7 @@ pub fn render_settings_error_alert(
     error: &SettingsFileError,
     ai_enabled: bool,
     mouse_states: &SettingsFooterMouseStates,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     // Warning banner colors: yellow background, contrast-safe text on top of
@@ -231,6 +237,7 @@ pub fn render_settings_error_alert(
         /*icon=*/ None,
         /*bordered=*/ true,
         WorkspaceAction::OpenSettingsFile,
+        app,
     );
 
     // Use a `Wrap` flex as a graceful fallback: if the sidebar is narrower
@@ -253,6 +260,7 @@ pub fn render_settings_error_alert(
             Some(Icon::Oz),
             /*bordered=*/ false,
             WorkspaceAction::FixSettingsWithOz { error_description },
+            app,
         );
         buttons_row.add_child(fix_with_oz_button);
     }
@@ -288,21 +296,26 @@ pub fn render_footer(
     error: Option<&SettingsFileError>,
     ai_enabled: bool,
     mouse_states: &SettingsFooterMouseStates,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let inner: Box<dyn Element> = match kind {
         SettingsFooterKind::Hidden => return Empty::new().finish(),
         SettingsFooterKind::OpenButton => render_open_settings_file_button(
             appearance,
             mouse_states.open_settings_file_button.clone(),
+            app,
         ),
         SettingsFooterKind::ErrorAlert => match error {
-            Some(error) => render_settings_error_alert(appearance, error, ai_enabled, mouse_states),
+            Some(error) => {
+                render_settings_error_alert(appearance, error, ai_enabled, mouse_states, app)
+            }
             // Defensive fallback: if the error disappears between `choose` and
             // `render_footer`, fall back to the plain button rather than
             // rendering an empty alert shell.
             None => render_open_settings_file_button(
                 appearance,
                 mouse_states.open_settings_file_button.clone(),
+                app,
             ),
         },
     };
@@ -323,6 +336,7 @@ fn render_alert_action_button(
     icon: Option<Icon>,
     bordered: bool,
     action: WorkspaceAction,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     Hoverable::new(mouse_state, move |state| {
         let mut row = Flex::row()
@@ -342,13 +356,17 @@ fn render_alert_action_button(
             );
         }
         row.add_child(
-            Text::new_inline(text.to_owned(), ui_font_family, FOOTER_FONT_SIZE)
-                .with_color(text_color)
-                .with_style(Properties {
-                    weight: Weight::Semibold,
-                    ..Default::default()
-                })
-                .finish(),
+            Text::new_inline(
+                crate::i18n::tr_static(app, text).to_owned(),
+                ui_font_family,
+                FOOTER_FONT_SIZE,
+            )
+            .with_color(text_color)
+            .with_style(Properties {
+                weight: Weight::Semibold,
+                ..Default::default()
+            })
+            .finish(),
         );
 
         let mut container = Container::new(row.finish())

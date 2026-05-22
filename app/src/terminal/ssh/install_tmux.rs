@@ -377,14 +377,23 @@ impl View for SshInstallTmuxBlock {
         );
 
         let explanation = if self.outdated_version {
-            "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. "
+            crate::i18n::tr_static(
+                app,
+                "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. ",
+            )
         } else {
-            "In order to Warpify your SSH session, tmux must be installed. "
+            crate::i18n::tr_static(
+                app,
+                "In order to Warpify your SSH session, tmux must be installed. ",
+            )
         };
 
         let warpify_description = vec![
             FormattedTextFragment::plain_text(explanation),
-            FormattedTextFragment::hyperlink("Why do I need tmux?", WHY_INSTALL_TMUX_URL),
+            FormattedTextFragment::hyperlink(
+                crate::i18n::tr_static(app, "Why do I need tmux?"),
+                WHY_INSTALL_TMUX_URL,
+            ),
         ];
 
         let text_color =

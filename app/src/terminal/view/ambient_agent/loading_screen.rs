@@ -50,7 +50,10 @@ pub fn render_cloud_mode_loading_screen(
         // Add link at the end if it exists
         if let Some(link_target) = tip.link() {
             fragments.push(FormattedTextFragment::plain_text(" "));
-            fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+            fragments.push(FormattedTextFragment::hyperlink(
+                crate::i18n::tr_static(app, "Learn more"),
+                link_target,
+            ));
         }
 
         let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
@@ -164,10 +167,14 @@ fn render_tier_limits_footer(
         .current_team()
         .map(|team| UserWorkspaces::upgrade_link_for_team(team.uid))?;
 
-    fragments.push(FormattedTextFragment::hyperlink("Upgrade", upgrade_url));
-    fragments.push(FormattedTextFragment::plain_text(
-        " for more powerful cloud agents.",
+    fragments.push(FormattedTextFragment::hyperlink(
+        crate::i18n::tr_static(app, "Upgrade"),
+        upgrade_url,
     ));
+    fragments.push(FormattedTextFragment::plain_text(crate::i18n::tr_static(
+        app,
+        " for more powerful cloud agents.",
+    )));
 
     let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
 
@@ -217,7 +224,7 @@ pub fn render_cloud_mode_error_screen(
     appearance: &Appearance,
     selection_handle: &SelectionHandle,
     selected_text: &std::rc::Rc<parking_lot::RwLock<Option<String>>>,
-    _app: &AppContext,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let error_color = AnsiColorIdentifier::Red.to_ansi_color(&theme.terminal_colors().normal);
@@ -234,7 +241,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error title text
     let title_text = Text::new(
-        "Failed to start environment",
+        crate::i18n::tr_static(app, "Failed to start environment"),
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -324,7 +331,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Title text - "GitHub Authentication Required"
     let title_text = Text::new(
-        "GitHub Authentication Required",
+        crate::i18n::tr_static(app, "GitHub Authentication Required"),
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -334,7 +341,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Message text - "Please authenticate with GitHub to continue"
     let message_text = Text::new(
-        "Please authenticate with GitHub to continue",
+        crate::i18n::tr_static(app, "Please authenticate with GitHub to continue"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -391,7 +398,10 @@ pub fn render_cloud_mode_github_auth_required_screen(
 }
 
 /// Renders the cloud mode cancelled screen.
-pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn Element> {
+pub fn render_cloud_mode_cancelled_screen(
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
 
     // Use main text color for the icon and title
@@ -413,7 +423,7 @@ pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn El
 
     // Title text - "Cloud Agent Run Cancelled"
     let title_text = Text::new(
-        "Cloud Agent Run Cancelled",
+        crate::i18n::tr_static(app, "Cloud Agent Run Cancelled"),
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -423,7 +433,7 @@ pub fn render_cloud_mode_cancelled_screen(appearance: &Appearance) -> Box<dyn El
 
     // Subtitle text - "No cloud environment was started"
     let subtitle_text = Text::new(
-        "No cloud environment was started",
+        crate::i18n::tr_static(app, "No cloud environment was started"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )

@@ -154,7 +154,12 @@ impl WarpifySuccessBlock {
             .finish()
     }
 
-    pub fn render_title_ui(&self, theme: &WarpTheme, appearance: &Appearance) -> Box<dyn Element> {
+    pub fn render_title_ui(
+        &self,
+        theme: &WarpTheme,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
             "Session Warpified",
             Icon::new(UiIcon::Warp.into(), theme.active_ui_detail()),
@@ -165,7 +170,10 @@ impl WarpifySuccessBlock {
         .finish();
         let header_contents = Container::new(
             Flex::row()
-                .with_children([header_contents, self.render_learn_more_link(appearance)])
+                .with_children([
+                    header_contents,
+                    self.render_learn_more_link(appearance, app),
+                ])
                 .finish(),
         )
         .finish();
@@ -183,7 +191,11 @@ impl WarpifySuccessBlock {
         .finish()
     }
 
-    fn render_learn_more_link(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_learn_more_link(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let url = match self.source {
             WarpificationSource::Ssh => SSH_DOCS_URL,
             WarpificationSource::Subshell => SUBSHELL_DOCS_URL,
@@ -194,7 +206,7 @@ impl WarpifySuccessBlock {
         appearance
             .ui_builder()
             .link(
-                "Learn more".into(),
+                crate::i18n::tr_static(app, "Learn more").into(),
                 None,
                 Some(Box::new({
                     move |ctx| {
@@ -326,7 +338,7 @@ impl View for WarpifySuccessBlock {
         let mut content = Flex::column();
 
         content.add_children([
-            self.render_title_ui(theme, appearance),
+            self.render_title_ui(theme, appearance, app),
             self.render_spawning_command(theme, appearance),
         ]);
 

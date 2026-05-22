@@ -231,7 +231,7 @@ impl View for InactivityModalBody {
 
         let header = Container::new(
             Text::new_inline(
-                "Are you still there?",
+                crate::i18n::tr_static(app, "Are you still there?"),
                 appearance.ui_font_family(),
                 HEADER_FONT_SIZE,
             )

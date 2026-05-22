@@ -190,7 +190,7 @@ impl<T: Action + Clone> SearchResultsMenuView<T> {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                crate::i18n::tr_static(app, "No results found"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

@@ -3749,7 +3749,12 @@ impl CodeReviewView {
         .finish()
     }
 
-    fn render_error_state(&self, error: &str, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_error_state(
+        &self,
+        error: &str,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let main_column = Flex::column()
@@ -3774,7 +3779,7 @@ impl CodeReviewView {
             )
             .with_child(
                 Text::new(
-                    "Error loading diffs",
+                    crate::i18n::tr_static(app, "Error loading diffs"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -3817,7 +3822,7 @@ impl CodeReviewView {
                         )
                         .with_text_and_icon_label(TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
-                            " Retry".to_string(),
+                            crate::i18n::tr_static(app, " Retry").to_string(),
                             Icon::Refresh.to_warpui_icon(warp_core::ui::theme::Fill::Solid(
                                 theme.main_text_color(theme.background()).into(),
                             )),
@@ -4027,15 +4032,22 @@ impl CodeReviewView {
                 .finish(),
             )
             .with_child(
-                Text::new("No open changes", appearance.ui_font_family(), 16.)
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .with_color(theme.main_text_color(theme.surface_2()).into())
-                    .finish(),
+                Text::new(
+                    crate::i18n::tr_static(app, "No open changes"),
+                    appearance.ui_font_family(),
+                    16.,
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
             )
             .with_child(
                 Container::new(
                     Text::new(
-                        "As you or the Agent make changes, you'll be able to track them here.",
+                        crate::i18n::tr_static(
+                            app,
+                            "As you or the Agent make changes, you'll be able to track them here.",
+                        ),
                         appearance.ui_font_family(),
                         14.,
                     )
@@ -4766,7 +4778,7 @@ impl CodeReviewView {
         if file.is_expanded {
             stack.add_child(
                 SavePosition::new(
-                    Container::new(self.render_file_content(file, appearance))
+                    Container::new(self.render_file_content(file, appearance, app))
                         .with_margin_top(
                             if is_item_being_scrolled && !is_first_item_with_no_scroll {
                                 // This is the height of the header bar needs to be present. Otherwise,
@@ -4899,8 +4911,11 @@ impl CodeReviewView {
             if editor_state.has_unsaved_changes(app) {
                 let save_keystroke = Keystroke::parse("cmdorctrl-s").unwrap_or_default();
                 let save_shortcut = save_keystroke.displayed();
-                let tooltip_text =
-                    format!("This file has unsaved changes. {save_shortcut} to save");
+                let tooltip_text = crate::i18n::tr_static(
+                    app,
+                    "This file has unsaved changes. {shortcut} to save",
+                )
+                .replace("{shortcut}", &save_shortcut);
                 render_unsaved_circle_with_tooltip(
                     editor_state.unsaved_changes_mouse_state(),
                     tooltip_text,
@@ -5129,14 +5144,19 @@ impl CodeReviewView {
     }
 
     /// Renders the file content (hunks for text files using LocalCodeEditorView, placeholder for binary)
-    fn render_file_content(&self, file: &FileState, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_file_content(
+        &self,
+        file: &FileState,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let diff_size = file.file_diff.size;
         if diff_size == DiffSize::Unrenderable {
             return Self::styled_file_content_container(
                 Text::new(
-                    "Diff is too large to render",
+                    crate::i18n::tr_static(app, "Diff is too large to render"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5149,7 +5169,7 @@ impl CodeReviewView {
         if file.file_diff.is_binary {
             Self::styled_file_content_container(
                 Text::new(
-                    "Binary file - no diff available",
+                    crate::i18n::tr_static(app, "Binary file - no diff available"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5160,7 +5180,7 @@ impl CodeReviewView {
         } else if file.file_diff.status.is_renamed() && file.file_diff.is_empty() {
             Self::styled_file_content_container(
                 Text::new(
-                    "File renamed without changes",
+                    crate::i18n::tr_static(app, "File renamed without changes"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5171,7 +5191,7 @@ impl CodeReviewView {
         } else if file.file_diff.status.is_new_file() && file.file_diff.is_empty() {
             Self::styled_file_content_container(
                 Text::new(
-                    "New empty file",
+                    crate::i18n::tr_static(app, "New empty file"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5201,7 +5221,7 @@ impl CodeReviewView {
         } else {
             Self::styled_file_content_container(
                 Text::new(
-                    "Unable to load file content",
+                    crate::i18n::tr_static(app, "Unable to load file content"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -5293,7 +5313,7 @@ impl CodeReviewView {
 
         if self.discard_dialog_state.discard_file_paths.is_empty() {
             return Text::new(
-                "No file selected",
+                crate::i18n::tr_static(app, "No file selected"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -5308,7 +5328,7 @@ impl CodeReviewView {
 
         let CodeReviewViewState::Loaded(loaded) = self.state() else {
             return Text::new(
-                "No files to discard",
+                crate::i18n::tr_static(app, "No files to discard"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -6871,7 +6891,7 @@ impl View for CodeReviewView {
                     self.render_loaded_state(loaded_state, appearance, is_in_split_pane, ctx)
                 }
             }
-            CodeReviewViewState::Error(err) => self.render_error_state(err, appearance),
+            CodeReviewViewState::Error(err) => self.render_error_state(err, appearance, ctx),
             CodeReviewViewState::NoRepoFound => self.render_no_repo_for_env(ctx, appearance),
         };
 

@@ -1014,7 +1014,11 @@ impl ConversationDetailsPanel {
         )
     }
 
-    fn render_executor_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_executor_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         let executor = self.data.executor.as_ref()?;
         if !executor.is_service_account {
             return None;
@@ -1035,7 +1039,7 @@ impl ConversationDetailsPanel {
         let ui_font_size = appearance.ui_font_size();
 
         let label_text = Text::new(
-            "Agent".to_string(),
+            crate::i18n::tr_static(app, "Agent").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1092,7 +1096,7 @@ impl ConversationDetailsPanel {
         let ui_font_size = appearance.ui_font_size();
 
         let label_text = Text::new(
-            "Error".to_string(),
+            crate::i18n::tr_static(app, "Error").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1126,13 +1130,17 @@ impl ConversationDetailsPanel {
         )
     }
 
-    fn render_status_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_status_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
 
         // Section header
         let header = Text::new(
-            "Status".to_string(),
+            crate::i18n::tr_static(app, "Status").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1202,7 +1210,7 @@ impl ConversationDetailsPanel {
         let ui_font_size = appearance.ui_font_size();
 
         let label_text = Text::new(
-            "Harness".to_string(),
+            crate::i18n::tr_static(app, "Harness").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1257,7 +1265,11 @@ impl ConversationDetailsPanel {
     }
 
     /// Renders the primary skill that this conversation ran.
-    fn render_skill_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_skill_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         let skill_spec = self.data.skill_spec.as_ref()?;
         let skill_name = skill_spec.skill_name();
         let theme = appearance.theme();
@@ -1285,7 +1297,7 @@ impl ConversationDetailsPanel {
         let oz_link = appearance
             .ui_builder()
             .link(
-                "Open in Oz".to_string(),
+                crate::i18n::tr_static(app, "Open in Oz").to_string(),
                 Some(skill_url),
                 None,
                 self.mouse_states.skill_link.clone(),
@@ -1321,7 +1333,7 @@ impl ConversationDetailsPanel {
                 let source_link = appearance
                     .ui_builder()
                     .link(
-                        "Open in GitHub".to_string(),
+                        crate::i18n::tr_static(app, "Open in GitHub").to_string(),
                         Some(github_url),
                         None,
                         self.mouse_states.skill_source_link.clone(),
@@ -1336,16 +1348,24 @@ impl ConversationDetailsPanel {
         Some(row.finish())
     }
 
-    fn render_source_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_source_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         let source_prompt = self.data.source_prompt.as_ref()?;
         let trimmed = source_prompt.trim();
         if trimmed.is_empty() {
             return None;
         }
-        Some(self.render_simple_field("Initial query", trimmed, appearance))
+        Some(self.render_simple_field("Initial query", trimmed, appearance, app))
     }
 
-    fn render_artifacts_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_artifacts_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         if self.data.artifacts.is_empty() {
             return None;
         }
@@ -1353,7 +1373,7 @@ impl ConversationDetailsPanel {
         let ui_font_size = appearance.ui_font_size();
 
         let label_text = Text::new(
-            "Artifacts".to_string(),
+            crate::i18n::tr_static(app, "Artifacts").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1392,7 +1412,7 @@ impl ConversationDetailsPanel {
         let ui_font_size = appearance.ui_font_size();
 
         let header_text = Text::new(
-            "Environment setup commands".to_string(),
+            crate::i18n::tr_static(app, "Environment setup commands").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1457,7 +1477,7 @@ impl ConversationDetailsPanel {
 
         // Section header
         let header = Text::new(
-            "Environment details".to_string(),
+            crate::i18n::tr_static(app, "Environment details").to_string(),
             appearance.ui_font_family(),
             ui_font_size,
         )
@@ -1576,16 +1596,21 @@ impl ConversationDetailsPanel {
 
     fn render_simple_field(
         &self,
-        label: &str,
+        label: &'static str,
         value: &str,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
 
-        let label_text = Text::new(label.to_string(), appearance.ui_font_family(), ui_font_size)
-            .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-            .finish();
+        let label_text = Text::new(
+            crate::i18n::tr_static(app, label).to_string(),
+            appearance.ui_font_family(),
+            ui_font_size,
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
 
         let value_text = Text::new(value.to_string(), appearance.ui_font_family(), ui_font_size)
             .with_color(theme.foreground().into())
@@ -1726,7 +1751,7 @@ impl View for ConversationDetailsPanel {
         // Title
         let ui_font_size = appearance.ui_font_size();
         let title_font_size = ui_font_size + 2.;
-        let skill_section = self.render_skill_section(appearance);
+        let skill_section = self.render_skill_section(appearance, app);
         let title_margin = if skill_section.is_some() {
             LABEL_VALUE_GAP
         } else {
@@ -1817,7 +1842,7 @@ impl View for ConversationDetailsPanel {
         }
 
         // Status section
-        if let Some(status_section) = self.render_status_section(appearance) {
+        if let Some(status_section) = self.render_status_section(appearance, app) {
             content.add_child(
                 Container::new(status_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -1826,7 +1851,7 @@ impl View for ConversationDetailsPanel {
         }
 
         // Executor section
-        if let Some(executor_section) = self.render_executor_section(appearance) {
+        if let Some(executor_section) = self.render_executor_section(appearance, app) {
             content.add_child(
                 Container::new(executor_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -1842,7 +1867,7 @@ impl View for ConversationDetailsPanel {
             );
         }
 
-        if let Some(artifacts_section) = self.render_artifacts_section(appearance) {
+        if let Some(artifacts_section) = self.render_artifacts_section(appearance, app) {
             content.add_child(
                 Container::new(artifacts_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -1925,16 +1950,21 @@ impl View for ConversationDetailsPanel {
         if let Some(credits) = self.data.credits {
             let formatted = format!("{credits:.1}");
             content.add_child(
-                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
-                    .with_margin_bottom(FIELD_SPACING)
-                    .finish(),
+                Container::new(self.render_simple_field(
+                    "Credits used",
+                    &formatted,
+                    appearance,
+                    app,
+                ))
+                .with_margin_bottom(FIELD_SPACING)
+                .finish(),
             );
         }
 
         if let Some(duration) = self.data.run_time {
             let formatted = human_readable_precise_duration(duration);
             content.add_child(
-                Container::new(self.render_simple_field("Run time", &formatted, appearance))
+                Container::new(self.render_simple_field("Run time", &formatted, appearance, app))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
@@ -1943,7 +1973,7 @@ impl View for ConversationDetailsPanel {
         if let Some(created_at) = self.data.created_at {
             let formatted = created_at.format("%I:%M %p on %-m/%-d/%Y").to_string();
             content.add_child(
-                Container::new(self.render_simple_field("Created on", &formatted, appearance))
+                Container::new(self.render_simple_field("Created on", &formatted, appearance, app))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
@@ -1976,7 +2006,7 @@ impl View for ConversationDetailsPanel {
             }
         }
 
-        if let Some(source_section) = self.render_source_section(appearance) {
+        if let Some(source_section) = self.render_source_section(appearance, app) {
             content.add_child(
                 Container::new(source_section)
                     .with_margin_bottom(FIELD_SPACING)

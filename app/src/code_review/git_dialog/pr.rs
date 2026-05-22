@@ -11,7 +11,7 @@ use warpui::{
     elements::{
         ClippedScrollStateHandle, Container, Element, Flex, MouseStateHandle, ParentElement, Text,
     },
-    SingletonEntity, ViewContext,
+    AppContext, SingletonEntity, ViewContext,
 };
 
 use crate::{
@@ -249,8 +249,9 @@ pub(super) fn show_pr_created_toast(pr_info: &PrInfo, ctx: &mut ViewContext<GitD
 pub(super) fn render_body(
     state: &PrState,
     branch_name: &str,
-    appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
     let base_branch = state
         .base_branch_name
         .as_deref()
@@ -258,20 +259,24 @@ pub(super) fn render_body(
     let branch_name = format!("{branch_name} \u{2192} {base_branch}");
     Flex::column()
         .with_child(
-            Container::new(render_branch_section(branch_name, appearance))
+            Container::new(render_branch_section(branch_name, appearance, app))
                 .with_margin_bottom(16.)
                 .finish(),
         )
-        .with_child(render_changes_section(state, appearance))
+        .with_child(render_changes_section(state, appearance, app))
         .finish()
 }
 
-fn render_changes_section(state: &PrState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_changes_section(
+    state: &PrState,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Changes",
+        crate::i18n::tr_static(app, "Changes"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

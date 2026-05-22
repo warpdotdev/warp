@@ -192,10 +192,14 @@ impl OpenWarpLaunchModal {
         hero_stack.finish()
     }
 
-    fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
-        let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-            .with_color(PhenomenonStyle::modal_badge_text())
-            .finish();
+    fn render_badge(app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
+        let text = Text::new_inline(
+            crate::i18n::tr_static(app, "New").to_string(),
+            appearance.ui_font_family(),
+            14.,
+        )
+        .with_color(PhenomenonStyle::modal_badge_text())
+        .finish();
         ConstrainedBox::new(
             Container::new(
                 Flex::row()
@@ -213,16 +217,23 @@ impl OpenWarpLaunchModal {
         .finish()
     }
 
-    fn render_title(appearance: &Appearance) -> Box<dyn Element> {
-        Text::new("Warp is now open-source", appearance.ui_font_family(), 20.)
-            .with_color(PhenomenonStyle::modal_title_text())
-            .with_style(Properties::default().weight(Weight::Semibold))
-            .finish()
+    fn render_title(app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
+        Text::new(
+            crate::i18n::tr_static(app, "Warp is now open-source"),
+            appearance.ui_font_family(),
+            20.,
+        )
+        .with_color(PhenomenonStyle::modal_title_text())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish()
     }
 
-    fn render_description(appearance: &Appearance) -> Box<dyn Element> {
+    fn render_description(app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "You, our community, can participate in building Warp using an agent-first workflow.",
+            crate::i18n::tr_static(
+                app,
+                "You, our community, can participate in building Warp using an agent-first workflow.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -255,21 +266,26 @@ impl OpenWarpLaunchModal {
         fragments
     }
 
-    fn render_feature_description(item: &FeatureItem, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_feature_description(
+        item: &FeatureItem,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let description = crate::i18n::tr_static(app, item.description);
         let Some(link) = &item.inline_link else {
-            return Text::new(item.description, appearance.ui_font_family(), 14.)
+            return Text::new(description, appearance.ui_font_family(), 14.)
                 .with_color(PhenomenonStyle::modal_feature_description_text())
                 .finish();
         };
 
         // Build a formatted description with an inline hyperlink and inline code.
-        let (before, after) = item
-            .description
-            .split_once(link.text)
-            .unwrap_or((item.description, ""));
+        let link_text = crate::i18n::tr_static(app, link.text);
+        let (before, after) = description
+            .split_once(link_text)
+            .unwrap_or((description, ""));
 
         let link_fragment = FormattedTextFragment {
-            text: link.text.into(),
+            text: link_text.into(),
             styles: FormattedTextStyles {
                 underline: true,
                 hyperlink: Some(Hyperlink::Url(link.url.into())),
@@ -303,7 +319,11 @@ impl OpenWarpLaunchModal {
         .finish()
     }
 
-    fn render_feature_row(item: &FeatureItem, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_feature_row(
+        item: &FeatureItem,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let icon_el = ConstrainedBox::new(
             item.icon
                 .to_warpui_icon(Fill::Solid(
@@ -319,11 +339,15 @@ impl OpenWarpLaunchModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(2.)
             .with_child(
-                Text::new_inline(item.title.to_string(), appearance.ui_font_family(), 14.)
-                    .with_color(PhenomenonStyle::modal_feature_title_text())
-                    .finish(),
+                Text::new_inline(
+                    crate::i18n::tr_static(app, item.title).to_string(),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(PhenomenonStyle::modal_feature_title_text())
+                .finish(),
             )
-            .with_child(Self::render_feature_description(item, appearance))
+            .with_child(Self::render_feature_description(item, app, appearance))
             .finish();
 
         Flex::row()
@@ -334,12 +358,12 @@ impl OpenWarpLaunchModal {
             .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_body(&self, app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         let mut features_col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(12.);
         for item in FEATURE_ITEMS {
-            features_col.add_child(Self::render_feature_row(item, appearance));
+            features_col.add_child(Self::render_feature_row(item, app, appearance));
         }
 
         let cta = ChildView::new(&self.cta_button).finish();
@@ -351,9 +375,9 @@ impl OpenWarpLaunchModal {
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Start)
                         .with_spacing(8.)
-                        .with_child(Self::render_badge(appearance))
-                        .with_child(Self::render_title(appearance))
-                        .with_child(Self::render_description(appearance))
+                        .with_child(Self::render_badge(app, appearance))
+                        .with_child(Self::render_title(app, appearance))
+                        .with_child(Self::render_description(app, appearance))
                         .finish(),
                 )
                 .with_child(
@@ -394,7 +418,7 @@ impl View for OpenWarpLaunchModal {
                     .with_main_axis_size(MainAxisSize::Min)
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_child(self.render_hero())
-                    .with_child(self.render_body(appearance))
+                    .with_child(self.render_body(app, appearance))
                     .finish(),
             )
             .with_background(Fill::Solid(PhenomenonStyle::modal_background()))

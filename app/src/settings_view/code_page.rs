@@ -1477,7 +1477,10 @@ impl CodePageWidget {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph("No folders have been initialized yet.")
+                        .paragraph(crate::i18n::tr_static(
+                            app,
+                            "No folders have been initialized yet.",
+                        ))
                         .build()
                         .finish(),
                 )

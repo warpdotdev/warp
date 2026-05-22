@@ -1930,7 +1930,7 @@ impl AgentManagementView {
 
         let build_header = |use_expanded: bool| {
             let title = Text::new_inline(
-                "Runs",
+                crate::i18n::tr_static(app, "Runs"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size() + 4.,
             )
@@ -1962,7 +1962,7 @@ impl AgentManagementView {
             }
 
             if is_loading {
-                header_top.add_child(self.render_cloud_loading_icon(appearance));
+                header_top.add_child(self.render_cloud_loading_icon(appearance, app));
             }
 
             header_top.add_child(Expanded::new(1., Empty::new().finish()).finish());
@@ -2022,10 +2022,15 @@ impl AgentManagementView {
         .finish()
     }
 
-    fn render_cloud_loading_icon(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_cloud_loading_icon(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder().clone();
         let icon_size = appearance.ui_font_size();
+        let tooltip_text = crate::i18n::tr_static(app, "Loading cloud agent runs").to_string();
 
         let loading_icon = ConstrainedBox::new(
             Icon::Refresh
@@ -2039,10 +2044,7 @@ impl AgentManagementView {
         Hoverable::new(self.loading_icon_mouse_state.clone(), move |mouse_state| {
             let mut stack = Stack::new().with_child(loading_icon);
             if mouse_state.is_hovered() {
-                let tooltip = ui_builder
-                    .tool_tip(String::from("Loading cloud agent runs"))
-                    .build()
-                    .finish();
+                let tooltip = ui_builder.tool_tip(tooltip_text.clone()).build().finish();
                 stack.add_positioned_overlay_child(
                     tooltip,
                     OffsetPositioning::offset_from_parent(
@@ -2063,7 +2065,7 @@ impl AgentManagementView {
         let theme = appearance.theme();
 
         let title = Text::new_inline(
-            "Runs",
+            crate::i18n::tr_static(app, "Runs"),
             appearance.ui_font_family(),
             appearance.ui_font_size() + 4.,
         )
@@ -2085,7 +2087,7 @@ impl AgentManagementView {
             .with_child(Container::new(loading_icon).with_margin_right(10.).finish())
             .with_child(
                 Text::new_inline(
-                    "Loading agents...",
+                    crate::i18n::tr_static(app, "Loading agents..."),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -2141,7 +2143,7 @@ impl AgentManagementView {
         .finish();
 
         let text = Text::new_inline(
-            "No results matched your filters",
+            crate::i18n::tr_static(app, "No results matched your filters"),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )

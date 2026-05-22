@@ -48,9 +48,10 @@ impl MatchedBinding {
     pub fn render(
         &self,
         highlight_state: ItemHighlightState,
-        appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let label = self.render_label(highlight_state, appearance);
+        let appearance = Appearance::as_ref(app);
+        let label = self.render_label(highlight_state, appearance, app);
         let mut binding = Flex::row();
 
         binding.add_child(Shrinkable::new(1., Align::new(label).left().finish()).finish());
@@ -72,26 +73,32 @@ impl MatchedBinding {
         &self,
         item_highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        Text::new_inline(
-            self.binding
-                .description
-                .in_context(DescriptionContext::Default)
-                .to_owned(),
+        let label = self
+            .binding
+            .description
+            .in_context(DescriptionContext::Default);
+        let localized_label = crate::i18n::tr_text(app, label);
+        let mut text = Text::new_inline(
+            localized_label.to_string(),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
         .with_color(item_highlight_state.sub_text_fill(appearance).into_solid())
-        .with_style(Properties::default().weight(Weight::Bold))
-        .with_single_highlight(
-            Highlight::new()
-                .with_properties(Properties::default().weight(Weight::Bold))
-                .with_foreground_color(
-                    item_highlight_state.main_text_fill(appearance).into_solid(),
-                ),
-            self.fuzzy_match_result.matched_indices.clone(),
-        )
-        .finish()
+        .with_style(Properties::default().weight(Weight::Bold));
+        let localized_label_ref: &str = localized_label.as_ref();
+        if localized_label_ref == label {
+            text = text.with_single_highlight(
+                Highlight::new()
+                    .with_properties(Properties::default().weight(Weight::Bold))
+                    .with_foreground_color(
+                        item_highlight_state.main_text_fill(appearance).into_solid(),
+                    ),
+                self.fuzzy_match_result.matched_indices.clone(),
+            );
+        }
+        text.finish()
     }
 }
 
@@ -119,8 +126,7 @@ impl SearchItem for MatchedBinding {
         highlight_state: ItemHighlightState,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        self.render(highlight_state, appearance)
+        self.render(highlight_state, app)
     }
 
     fn render_details(&self, _: &AppContext) -> Option<Box<dyn Element>> {

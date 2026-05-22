@@ -3091,7 +3091,7 @@ fn render_invalid_api_key_error(
     .finish();
 
     let alert_text = Text::new(
-        "Provided API key is not valid",
+        crate::i18n::tr_static(app, "Provided API key is not valid"),
         appearance.ui_font_family(),
         14.,
     )
