@@ -288,9 +288,9 @@ impl BillingCycleUsageSectionView {
                 .unwrap_or_default(),
         );
 
-        let is_source_filter_shown =
-            visibility.granularity == UsageVisibilityGranularity::FullBreakdown
-                && has_cloud_usage(&entries);
+        let is_source_filter_shown = visibility.granularity
+            == UsageVisibilityGranularity::FullBreakdown
+            && has_cloud_usage(&entries);
         let source_filter = if is_source_filter_shown {
             self.source_filter
         } else {
@@ -319,7 +319,6 @@ impl BillingCycleUsageSectionView {
                 workspace,
                 &entries,
                 &visibility,
-                /* shows_team_section */ true,
                 source_filter,
                 &self.row_mouse_states,
                 appearance,
@@ -366,11 +365,7 @@ impl BillingCycleUsageSectionView {
 
     // Here when you're not on a team, there's no workspace to pull billing_cycle_usage data from.
     // So we "fake" a row and source data from the AIRequestUsageModel instead
-    fn render_own_usage_solo(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_own_usage_solo(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(None, &UsageVisibility::default(), appearance, app));
         column.add_child(

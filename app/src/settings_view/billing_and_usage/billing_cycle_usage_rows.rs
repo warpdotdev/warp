@@ -317,7 +317,6 @@ fn build_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
-    shows_team_section: bool,
     source_filter: SourceFilter,
     app: &AppContext,
 ) -> Vec<MemberUsageRow> {
@@ -344,15 +343,7 @@ fn build_rows(
                 base_limit,
                 SourceFilter::All,
             )];
-            if shows_team_section {
-                let other_row = MemberUsageRow::for_other_members(entries);
-                // only show the other users' usage if there's something useful to show in it...
-                // i.e. for an admin of a 1-user-only team, it doesn't make sense for use to show
-                // "other users: 0" all the time
-                if other_row.total_credits > 0 || workspace.members.len() > 1 {
-                    rows.push(other_row);
-                }
-            }
+            rows.push(MemberUsageRow::for_other_members(entries));
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
@@ -814,28 +805,19 @@ pub fn render_rows(
     workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
-    shows_team_section: bool,
     source_filter: SourceFilter,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(
-        workspace,
-        entries,
-        visibility,
-        shows_team_section,
-        source_filter,
-        app,
-    );
+    let rows = build_rows(workspace, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(8.);
     if let Some(header) = render_member_header(
         visibility,
-        shows_team_section,
         entries,
         source_filter,
         mouse_states,
@@ -850,17 +832,12 @@ pub fn render_rows(
 
 fn render_member_header(
     visibility: &UsageVisibility,
-    shows_team_section: bool,
     entries: &[BillingCycleUsageEntry],
     source_filter: SourceFilter,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     on_filter_change: FilterChangeFn,
 ) -> Option<Box<dyn Element>> {
-    if !shows_team_section {
-        return None;
-    }
-
     let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
         && has_cloud_usage(entries);
 
