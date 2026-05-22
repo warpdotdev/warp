@@ -2149,41 +2149,44 @@ impl View for LocalCodeEditorView {
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
         // Rendering the remote disconnection banner or version conflict banner.
-        let base: Box<dyn Element> = if self.is_remote_disconnected(app) {
-            let appearance = Appearance::as_ref(app);
-            let banner = render_remote_disconnected_banner(appearance);
-            let mut col = Flex::column().with_child(banner);
+        // Only show the disconnection banner if the file was successfully loaded;
+        // if it never loaded, the error/loading state handles that.
+        let base: Box<dyn Element> =
+            if self.base_content_version.is_some() && self.is_remote_disconnected(app) {
+                let appearance = Appearance::as_ref(app);
+                let banner = render_remote_disconnected_banner(appearance);
+                let mut col = Flex::column().with_child(banner);
 
-            let editor_view = ChildView::new(&self.editor).finish();
-            if self.editor.as_ref(app).needs_vertical_constraint() {
-                col.add_child(Shrinkable::new(1., editor_view).finish());
-            } else {
-                col.add_child(editor_view);
-            }
-            col.finish()
-        } else if self.has_version_conflicts(app) {
-            let appearance = Appearance::as_ref(app);
-            let banner = render_unsaved_changes_banner(
-                appearance,
-                self.conflict_banner_mouse_states
-                    .discard_mouse_state
-                    .clone(),
-                self.conflict_banner_mouse_states
-                    .overwrite_mouse_state
-                    .clone(),
-            );
-            let mut col = Flex::column().with_child(banner);
+                let editor_view = ChildView::new(&self.editor).finish();
+                if self.editor.as_ref(app).needs_vertical_constraint() {
+                    col.add_child(Shrinkable::new(1., editor_view).finish());
+                } else {
+                    col.add_child(editor_view);
+                }
+                col.finish()
+            } else if self.has_version_conflicts(app) {
+                let appearance = Appearance::as_ref(app);
+                let banner = render_unsaved_changes_banner(
+                    appearance,
+                    self.conflict_banner_mouse_states
+                        .discard_mouse_state
+                        .clone(),
+                    self.conflict_banner_mouse_states
+                        .overwrite_mouse_state
+                        .clone(),
+                );
+                let mut col = Flex::column().with_child(banner);
 
-            let editor_view = ChildView::new(&self.editor).finish();
-            if self.editor.as_ref(app).needs_vertical_constraint() {
-                col.add_child(Shrinkable::new(1., editor_view).finish());
+                let editor_view = ChildView::new(&self.editor).finish();
+                if self.editor.as_ref(app).needs_vertical_constraint() {
+                    col.add_child(Shrinkable::new(1., editor_view).finish());
+                } else {
+                    col.add_child(editor_view);
+                }
+                col.finish()
             } else {
-                col.add_child(editor_view);
-            }
-            col.finish()
-        } else {
-            ChildView::new(&self.editor).finish()
-        };
+                ChildView::new(&self.editor).finish()
+            };
 
         let base_with_handler =
             Hoverable::new(self.context_menu_state.mouse_state.clone(), |_| base)

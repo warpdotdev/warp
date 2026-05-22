@@ -936,7 +936,7 @@ impl FileNotebookView {
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
         };
 
-        if self.is_remote_disconnected(app) {
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(app) {
             let banner =
                 crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
             let mut col = Flex::column();
