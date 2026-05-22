@@ -935,15 +935,11 @@ impl CodeView {
         });
     }
 
-    fn display_remote_disconnected_save_failure(
-        window_id: WindowId,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn display_remote_disconnected_save_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
-                "Cannot save — remote session disconnected.",
-            ))
-            .with_object_id("failed_to_save_file_remote_disconnected".to_string());
+            let toast =
+                DismissibleToast::error(String::from("Cannot save — remote session disconnected."))
+                    .with_object_id("failed_to_save_file_remote_disconnected".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }

@@ -2456,9 +2456,10 @@ pub fn render_unsaved_changes_banner(
 
 /// Renders a banner indicating that the remote SSH session is disconnected
 /// and save / auto-reload are unavailable.
-fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Element> {
+pub fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Element> {
     let row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
         .with_child(
             Container::new(
                 ConstrainedBox::new(
@@ -2477,7 +2478,7 @@ fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Element
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "Remote session disconnected. Save and auto-reload are unavailable.",
+                    "Remote host disconnected. You will not be able to see updates and save changes.",
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -2491,8 +2492,8 @@ fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Element
 
     Container::new(row)
         .with_background(appearance.theme().text_selection_as_context_color())
-        .with_padding_top(4.)
-        .with_padding_bottom(4.)
+        .with_padding_top(8.)
+        .with_padding_bottom(8.)
         .with_padding_left(12.)
         .with_padding_right(12.)
         .finish()

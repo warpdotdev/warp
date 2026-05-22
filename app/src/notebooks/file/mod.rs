@@ -29,6 +29,8 @@ use warpui::{
     ViewHandle,
 };
 
+use remote_server::manager::RemoteServerManager;
+
 use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
 use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::link::{NotebookLinks, SessionSource};
@@ -915,14 +917,35 @@ impl FileNotebookView {
         .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Returns `true` when this notebook is backed by a remote file whose
+    /// host no longer has any connected session.
+    fn is_remote_disconnected(&self, app: &AppContext) -> bool {
+        let Some(LocalOrRemotePath::Remote(remote_path)) = self.file_state.path() else {
+            return false;
+        };
+        RemoteServerManager::as_ref(app)
+            .client_for_host(&remote_path.host_id)
+            .is_none()
+    }
+
+    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
             FileState::NoFile => self.render_no_file(appearance),
             FileState::Loading(source) => self.render_loading(source, appearance),
             FileState::Error(source) => self.render_error(source, appearance),
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
         };
-        styles::wrap_body(body)
+
+        if self.is_remote_disconnected(app) {
+            let banner =
+                crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
+            let mut col = Flex::column();
+            col.add_child(banner);
+            col.add_child(Shrinkable::new(1., styles::wrap_body(body)).finish());
+            col.finish()
+        } else {
+            styles::wrap_body(body)
+        }
     }
 }
 
@@ -948,7 +971,7 @@ impl View for FileNotebookView {
 
         let column = Flex::column().with_children([
             self.render_title(appearance, font_settings),
-            Shrinkable::new(1., self.render_body(appearance)).finish(),
+            Shrinkable::new(1., self.render_body(appearance, app)).finish(),
         ]);
 
         let mut stack = Stack::new().with_child(column.finish());
