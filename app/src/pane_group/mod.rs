@@ -5168,8 +5168,17 @@ impl PaneGroup {
             .or(split_off_child_pane)
             .or_else(|| self.pane_id_for_conversation_owner(conversation_id, ctx));
         let Some(child_pane_id) = owner_child_pane else {
+            log::info!(
+                "[orch-viewer-loading] discard_child_agent_pane_for_conversation: no owner pane \
+                 found for conversation_id={conversation_id:?}"
+            );
             return false;
         };
+        log::info!(
+            "[orch-viewer-loading] discard_child_agent_pane_for_conversation: discarding \
+             conversation_id={conversation_id:?} child_pane_id={child_pane_id:?} \
+             tracked={tracked_child_pane:?} split_off={split_off_child_pane:?}"
+        );
 
         if self
             .child_agent_origin
@@ -7442,6 +7451,12 @@ impl PaneGroup {
             .map(PaneId::from);
         let from_owner_lookup = self.pane_id_for_conversation_owner(conversation_id, ctx);
         let target_pane_id = from_child_panes.or(from_visible_pane).or(from_owner_lookup);
+        log::info!(
+            "[orch-viewer-loading] swap_active_pane_to_conversation: entering for \
+             focused_pane_id={focused_pane_id:?} conversation_id={conversation_id:?} \
+             from_child_panes={from_child_panes:?} from_visible_pane={from_visible_pane:?} \
+             from_owner_lookup={from_owner_lookup:?} chosen_target={target_pane_id:?}"
+        );
 
         let Some(target_pane_id) = target_pane_id else {
             // No owning pane in this group (e.g. the conversation lives
@@ -7449,17 +7464,28 @@ impl PaneGroup {
             if let Some(owner_view_id) = BlocklistAIHistoryModel::as_ref(ctx)
                 .terminal_view_id_for_conversation(&conversation_id)
             {
+                log::info!(
+                    "[orch-viewer-loading] swap_active_pane_to_conversation: no in-group pane; \
+                     dispatching FocusTerminalViewInWorkspace owner_view_id={owner_view_id:?}"
+                );
                 ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
                     terminal_view_id: owner_view_id,
                 });
                 return;
             }
+            log::info!(
+                "[orch-viewer-loading] swap_active_pane_to_conversation: no target pane and no \
+                 workspace owner; falling through to log_swap_resolution_failure"
+            );
             self.log_swap_resolution_failure(focused_pane_id, conversation_id, ctx);
             return;
         };
 
         // No-op when the active pill is clicked.
         if target_pane_id == focused_pane_id {
+            log::info!(
+                "[orch-viewer-loading] swap_active_pane_to_conversation: target == focused; no-op"
+            );
             return;
         }
 
@@ -7531,6 +7557,10 @@ impl PaneGroup {
             );
             return;
         }
+        log::info!(
+            "[orch-viewer-loading] swap_active_pane_to_conversation: replace_pane succeeded \
+             anchor={anchor:?} target={target_pane_id:?} conversation_id={conversation_id:?}"
+        );
 
         self.handle_pane_count_change(ctx);
         self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
