@@ -58,6 +58,19 @@ fn test_keystroke_to_c0_control_code() {
 }
 
 #[test]
+fn test_shift_backspace_emits_del_sequence() {
+    // Regression test: Shift+Backspace must emit DEL (0x7f), not BS (0x08).
+    // 0x08 is Ctrl+H, which readline-style TUIs interpret as backward-kill-word.
+    let test_cases: &[(Keystroke, Vec<u8>)] = &[
+        (Keystroke::parse("backspace").unwrap(), vec![C0::DEL]),
+        (Keystroke::parse("shift-backspace").unwrap(), vec![C0::DEL]),
+    ];
+
+    let terminal_model_mock = TerminalModelMock::new();
+    validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
 fn test_mouse_actions_to_escape_sequence() {
     // Validating we produce the correct escape sequences.
     let test_cases: &[(MouseState, Vec<u8>)] = &[
