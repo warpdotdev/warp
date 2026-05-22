@@ -844,11 +844,11 @@ impl BlocklistAIInputModel {
                         current_input_type,
                         is_agent_follow_up,
                     };
-                    let (input_type, input_classifier_decision_source) =
+                    let classification =
                         classifier.detect_input_type(input.clone(), &context).await;
 
                     futures_lite::future::yield_now().await;
-                    (input_type, input_classifier_decision_source.into())
+                    (classification.input_type, classification.source.into())
                 },
                 move |me, (new_input_type, decision_source), ctx| {
                     // In theory, we shouldn't need to check this, as we only run autodetection if the input

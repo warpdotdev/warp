@@ -6,7 +6,8 @@ use natural_language_detection::natural_language_words_score;
 use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
-    ClassificationResult, Context, InputClassifier, InputType, InputClassifierDecisionSource,
+    ClassificationResult, Context, InputClassificationResult, InputClassifier,
+    InputClassifierDecisionSource, InputType,
     parser::parse_query_into_tokens,
     util::{
         is_installed_binary, is_likely_shell_command, is_one_off_natural_language_word_or_prefix,
@@ -43,27 +44,30 @@ impl InputClassifier for HeuristicClassifier {
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
-    ) -> (InputType, InputClassifierDecisionSource) {
+    ) -> InputClassificationResult {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
         let total_word_token_count = word_tokens.len();
 
         if total_word_token_count == 1
             && is_one_off_natural_language_word_or_prefix(&word_tokens[0].to_lowercase())
         {
-            return (
+            return InputClassificationResult::new(
                 InputType::AI,
                 InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
             );
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
-            return (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic);
+            return InputClassificationResult::new(
+                InputType::Shell,
+                InputClassifierDecisionSource::ShellHeuristic,
+            );
         }
 
         self.classify_input(input, context)
             .await
-            .map(|result| (result.to_input_type(), result.source))
-            .unwrap_or((
+            .map(|result| InputClassificationResult::new(result.to_input_type(), result.source))
+            .unwrap_or(InputClassificationResult::new(
                 context.current_input_type,
                 InputClassifierDecisionSource::InputClassifierFallbackHeuristic,
             ))

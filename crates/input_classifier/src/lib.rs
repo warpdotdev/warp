@@ -31,6 +31,21 @@ pub enum InputClassifierDecisionSource {
     ShellHeuristic,
 }
 
+/// The detected input type along with the decision source that produced it.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputClassificationResult {
+    /// The detected input type.
+    pub input_type: InputType,
+    /// The classifier source that produced this classification.
+    pub source: InputClassifierDecisionSource,
+}
+
+impl InputClassificationResult {
+    pub fn new(input_type: InputType, source: InputClassifierDecisionSource) -> Self {
+        Self { input_type, source }
+    }
+}
+
 /// An input classifier, which can take some parsed user input and determine
 /// what type of input it is.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -40,7 +55,7 @@ pub trait InputClassifier: 'static + Send + Sync {
         &self,
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
-    ) -> (InputType, InputClassifierDecisionSource);
+    ) -> InputClassificationResult;
 
     async fn classify_input(
         &self,

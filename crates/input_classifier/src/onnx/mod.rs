@@ -11,7 +11,8 @@ use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
-    ClassificationResult, Context, InputClassifier, InputType, InputClassifierDecisionSource,
+    ClassificationResult, Context, InputClassificationResult, InputClassifier,
+    InputClassifierDecisionSource, InputType,
     parser::parse_query_into_tokens,
     util::{
         is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
@@ -94,7 +95,7 @@ impl InputClassifier for OnnxClassifier {
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
-    ) -> (InputType, InputClassifierDecisionSource) {
+    ) -> InputClassificationResult {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
 
         let total_word_token_count = word_tokens.len();
@@ -105,7 +106,7 @@ impl InputClassifier for OnnxClassifier {
 
             // If the input is a single word and the word is one of a specific set of words, classify it as AI
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
-                return (
+                return InputClassificationResult::new(
                     InputType::AI,
                     InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
                 );
@@ -114,19 +115,27 @@ impl InputClassifier for OnnxClassifier {
             // If the first token is one of a specific set of shell command keywords (e.g.: echo or sudo),
             // we should classify it as shell.
             if is_one_off_shell_command_keyword(&first_word) {
-                return (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic);
+                return InputClassificationResult::new(
+                    InputType::Shell,
+                    InputClassifierDecisionSource::ShellHeuristic,
+                );
             }
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
-            return (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic);
+            return InputClassificationResult::new(
+                InputType::Shell,
+                InputClassifierDecisionSource::ShellHeuristic,
+            );
         }
 
         // Otherwise, defer all decision-making to the model.
         self.classify_input(input, context)
             .await
-            .map(|classification| (classification.to_input_type(), classification.source))
-            .unwrap_or((
+            .map(|classification| {
+                InputClassificationResult::new(classification.to_input_type(), classification.source)
+            })
+            .unwrap_or(InputClassificationResult::new(
                 context.current_input_type,
                 InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
             ))
@@ -270,9 +279,9 @@ mod tests {
 
             assert_eq!(
                 decision,
-                (
+                InputClassificationResult::new(
                     InputType::AI,
-                    InputClassifierDecisionSource::InputClassifierFallbackCurrentInput
+                    InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
                 )
             );
         });

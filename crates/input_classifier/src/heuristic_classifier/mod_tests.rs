@@ -42,8 +42,7 @@ async fn detected_input_type(
     input: ParsedTokensSnapshot,
     context: &Context,
 ) -> InputType {
-    let (input_type, _) = classifier.detect_input_type(input, context).await;
-    input_type
+    classifier.detect_input_type(input, context).await.input_type
 }
 
 #[test]
@@ -142,21 +141,30 @@ fn test_input_detection_sources() {
 
         let token = mock_parsed_input_token_without_descriptions("echo hello");
         let decision = classifier.detect_input_type(token, &context).await;
-        assert_eq!(decision, (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic));
+        assert_eq!(
+            decision,
+            InputClassificationResult::new(
+                InputType::Shell,
+                InputClassifierDecisionSource::ShellHeuristic,
+            )
+        );
         let token = mock_parsed_input_token_without_descriptions("explain");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(
             decision,
-            (
+            InputClassificationResult::new(
                 InputType::AI,
-                InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist
+                InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
             )
         );
         let token = mock_parsed_input_token_without_descriptions("fix this");
         let decision = classifier.detect_input_type(token, &context).await;
         assert_eq!(
             decision,
-            (InputType::AI, InputClassifierDecisionSource::InputClassifierFallbackHeuristic)
+            InputClassificationResult::new(
+                InputType::AI,
+                InputClassifierDecisionSource::InputClassifierFallbackHeuristic,
+            )
         );
     });
 }
