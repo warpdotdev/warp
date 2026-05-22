@@ -25,9 +25,11 @@ use crate::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
 use crate::ids::{FolderId, ServerId, SyncId};
 
 mod creation;
+mod server_object;
 mod update;
 
 pub use creation::*;
+pub use server_object::*;
 pub use update::*;
 /// The type of object id each ObjectType corresponds to.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

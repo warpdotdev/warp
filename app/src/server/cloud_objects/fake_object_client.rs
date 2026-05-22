@@ -144,12 +144,12 @@ impl FakeObjectClient {
                     anyone_link_sharing: None,
                     permissions_last_updated_ts: stored.metadata_ts.into(),
                 };
-                let server_pref = ServerPreference {
-                    id: SyncId::ServerId(ServerId::from(*id)),
-                    model: stored.model.clone(),
+                let server_pref = ServerPreference::new(
+                    SyncId::ServerId(ServerId::from(*id)),
+                    stored.model.clone(),
                     metadata,
                     permissions,
-                };
+                );
                 Box::new(server_pref) as Box<dyn ServerObject>
             })
             .collect();

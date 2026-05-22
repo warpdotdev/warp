@@ -159,18 +159,18 @@ fn initial_load_response_with_cloud_settings(
                 current_editor_uid: None,
             };
 
-            let cloud_setting = ServerPreference {
-                id: SyncId::ServerId(id.into()),
+            let cloud_setting = ServerPreference::new(
+                SyncId::ServerId(id.into()),
+                CloudPreferenceModel::deserialize_owned(&setting.serialized_preference)
+                    .expect("error creating preference"),
                 metadata,
-                permissions: ServerPermissions {
+                ServerPermissions {
                     space: Owner::mock_current_user(),
                     guests: Vec::new(),
                     anyone_link_sharing: None,
                     permissions_last_updated_ts: Utc::now().into(),
                 },
-                model: CloudPreferenceModel::deserialize_owned(&setting.serialized_preference)
-                    .expect("error creating preference"),
-            };
+            );
             Box::new(cloud_setting) as Box<dyn ServerObject>
         })
         .collect::<Vec<Box<dyn ServerObject>>>();
