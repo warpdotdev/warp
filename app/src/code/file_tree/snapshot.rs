@@ -6,7 +6,10 @@
 #[path = "snapshot/iterator.rs"]
 mod iterator;
 
-use std::{cmp::Ordering, ops::AddAssign, path::Path, sync::Arc};
+use std::cmp::Ordering;
+use std::ops::AddAssign;
+use std::path::Path;
+use std::sync::Arc;
 
 use sum_tree::{Edit, KeyedItem, SeekBias, SumTree};
 

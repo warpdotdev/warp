@@ -1,14 +1,11 @@
 use settings::Setting as _;
-use warpui::{
-    async_assert, async_assert_eq, integration::AssertionCallback, App, SingletonEntity,
-    ViewHandle, WindowId,
-};
+use warp_editor::content::buffer::ToBufferPoint;
+use warpui::integration::AssertionCallback;
+use warpui::{async_assert, async_assert_eq, App, SingletonEntity, ViewHandle, WindowId};
 
 use crate::code::editor::goto_line::view::GoToLineView;
 use crate::code::editor::view::CodeEditorView;
 use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode};
-
-use warp_editor::content::buffer::ToBufferPoint;
 
 fn file_code_editor_view(app: &App, window_id: WindowId) -> ViewHandle<CodeEditorView> {
     let views = app

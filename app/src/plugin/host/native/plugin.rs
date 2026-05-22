@@ -1,8 +1,6 @@
-use std::{
-    cell::{RefCell, RefMut},
-    rc::Rc,
-    sync::Arc,
-};
+use std::cell::{RefCell, RefMut};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use rquickjs::Context;

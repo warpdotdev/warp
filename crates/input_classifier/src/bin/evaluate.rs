@@ -2,9 +2,9 @@ use std::{fs, process};
 
 use clap::{Parser, Subcommand};
 use futures::executor::block_on;
+use input_classifier::test_utils::CompletionContext;
 use input_classifier::{
     ClassificationResult, Context, HeuristicClassifier, InputClassifier, InputType,
-    test_utils::CompletionContext,
 };
 
 /// Convert HSL to RGB values (0-255 range)
@@ -66,10 +66,10 @@ fn get_binary_confidence_color(is_correct: bool, is_low_confidence: bool) -> Str
         "\x1b[31m".to_string() // Red for incorrect
     }
 }
-use warp_completer::{ParsedTokensSnapshot, util::parse_current_commands_and_tokens};
-
 #[cfg(feature = "onnx")]
 use input_classifier::{OnnxClassifier, OnnxModel};
+use warp_completer::ParsedTokensSnapshot;
+use warp_completer::util::parse_current_commands_and_tokens;
 #[cfg(feature = "onnx")]
 fn default_onnx_model() -> Option<OnnxModel> {
     cfg_if::cfg_if! {

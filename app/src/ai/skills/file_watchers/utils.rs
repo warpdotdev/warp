@@ -1,15 +1,14 @@
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-    sync::LazyLock,
-};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use ai::skills::{
     home_skills_path, read_skills, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
 use regex::Regex;
-use repo_metadata::{local_model::GetContentsArgs, RepoContent, RepoMetadataModel};
+use repo_metadata::local_model::GetContentsArgs;
+use repo_metadata::{RepoContent, RepoMetadataModel};
 use warpui::AppContext;
 
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;

@@ -1,66 +1,63 @@
-use crate::{
-    appearance::Appearance,
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
-    send_telemetry_from_ctx,
-    server::{
-        block::{Block as ServerBlock, DisplaySetting},
-        server_api::block::BlockClient,
-        telemetry::TelemetryEvent,
-    },
-    settings::{EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent, PrivacySettings},
-    settings_view::SettingsSection,
-    terminal::{
-        grid_renderer::{self},
-        ligature_settings::{should_use_ligature_rendering, LigatureSettings},
-        model::{terminal_model::BlockIndex, ObfuscateSecrets},
-        safe_mode_settings::get_secret_obfuscation_mode,
-        TerminalModel,
-    },
-    themes::theme::WarpTheme,
-    ui_components::icons::Icon,
-    util::bindings::CustomAction,
-    view_components::ToastFlavor,
-    workspace::WorkspaceAction,
+use std::ops::RangeInclusive;
+use std::sync::Arc;
+
+use anyhow::Result;
+use parking_lot::FairMutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use serde::Serialize;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::Fill;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Point, Radius, SavePosition, ScrollData, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
+};
+use warpui::event::{DispatchedEvent, ModifiersState};
+use warpui::fonts::{FamilyId, Properties, Style, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{
+    RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
+};
+use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
+use warpui::{
+    AfterLayoutContext, AppContext, ClipBounds, Entity, Event, EventContext, FocusContext,
+    LayoutContext, PaintContext, SingletonEntity, SizeConstraint, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
 use super::grid_renderer::CellGlyphCache;
 use super::model::grid::RespectDisplayedOutput;
 use crate::ai::generate_block_title::api::GenerateBlockTitleRequest;
-use crate::editor::EditOrigin;
-use crate::settings::AISettings;
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditOrigin, EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
+};
+use crate::send_telemetry_from_ctx;
+use crate::server::block::{Block as ServerBlock, DisplaySetting};
+use crate::server::server_api::block::BlockClient;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::{
+    AISettings, EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent, PrivacySettings,
+};
+use crate::settings_view::SettingsSection;
+use crate::terminal::grid_renderer::{self};
+use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::TerminalModel;
+use crate::themes::theme::WarpTheme;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::CustomAction;
+use crate::view_components::ToastFlavor;
+use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use anyhow::Result;
-use parking_lot::FairMutex;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use serde::Serialize;
-use std::{ops::RangeInclusive, sync::Arc};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, Empty, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Point, Radius, SavePosition, ScrollData,
-        ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    event::{DispatchedEvent, ModifiersState},
-    fonts::{FamilyId, Properties, Style, Weight},
-    keymap::FixedBinding,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-        radio_buttons::{RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle},
-    },
-    units::{IntoLines, IntoPixels, Lines, Pixels},
-    AfterLayoutContext, AppContext, ClipBounds, Entity, Event, EventContext, FocusContext,
-    LayoutContext, PaintContext, SingletonEntity, SizeConstraint, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
 
 const PADDING: f32 = 30.;
 const INNER_MARGIN: f32 = 20.;

@@ -3,13 +3,14 @@ pub mod autosuggestion_ignore_view;
 mod soft_wrap;
 mod view;
 
+use std::cmp;
+use std::ops::Range;
+
 /// Consumers of the editor should only interface with the view.
 /// They should _not_ be able to interface with the internal
 /// details of the editor (e.g. the [`Buffer`]).
 pub use view::*;
 pub use warpui::text::point::Point;
-
-use std::{cmp, ops::Range};
 use warpui::AppContext;
 
 pub fn init(app: &mut AppContext) {

@@ -1,8 +1,10 @@
-use crate::{
-    experiment::Experiment, mutations::create_anonymous_user::AnonymousUserType,
-    object_permissions::OwnerType, request_context::RequestContext, scalars::Time, schema,
-    workspace::FeatureModelChoice,
-};
+use crate::experiment::Experiment;
+use crate::mutations::create_anonymous_user::AnonymousUserType;
+use crate::object_permissions::OwnerType;
+use crate::request_context::RequestContext;
+use crate::scalars::Time;
+use crate::schema;
+use crate::workspace::FeatureModelChoice;
 
 /*
 query GetUser($requestContext: RequestContext!) {

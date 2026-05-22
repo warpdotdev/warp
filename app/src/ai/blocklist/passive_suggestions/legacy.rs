@@ -1,16 +1,24 @@
-#[cfg(not(target_family = "wasm"))]
-use command::r#async::Command;
+use std::path::PathBuf;
 #[cfg(not(target_family = "wasm"))]
 use std::process::Stdio;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
+#[cfg(not(target_family = "wasm"))]
+use command::r#async::Command;
+use parking_lot::FairMutex;
+use serde_json::json;
+use warp_core::features::FeatureFlag;
+use warpui::r#async::{FutureExt as AsyncFutureExt, SpawnedFutureHandle, Timer};
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::static_prompt_suggestions::static_suggested_query;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::PassiveSuggestionTrigger;
 use crate::ai::agent::{AIAgentExchangeId, CancellationReason};
-use crate::ai::blocklist::controller::{
-    response_stream::ResponseStreamId, BlocklistAIController, BlocklistAIControllerEvent,
-};
+use crate::ai::blocklist::controller::response_stream::ResponseStreamId;
+use crate::ai::blocklist::controller::{BlocklistAIController, BlocklistAIControllerEvent};
 use crate::ai::blocklist::{
     read_local_file_context, BlocklistAIHistoryModel, BlocklistAIPermissions,
 };
@@ -26,17 +34,12 @@ use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::BlockId;
-use crate::terminal::model::session::{active_session::ActiveSession, SessionType};
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::SessionType;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::{AgentModePromptSuggestion, PromptSuggestion};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use chrono::Utc;
-use parking_lot::FairMutex;
-use serde_json::json;
-use warp_core::features::FeatureFlag;
-use warpui::r#async::{FutureExt as AsyncFutureExt, SpawnedFutureHandle, Timer};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 const NUM_TOP_BLOCK_LINES: usize = 100;
 const NUM_BOTTOM_BLOCK_LINES: usize = 200;

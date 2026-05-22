@@ -1,4 +1,5 @@
-use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(ScrollSettings, settings: [
     mouse_scroll_multiplier: MouseScrollMultiplier {

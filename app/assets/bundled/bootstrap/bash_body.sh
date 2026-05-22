@@ -12,8 +12,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Appended to $DCS_START to signal that the following message is JSON-encoded.
     DCS_JSON_MARKER="d"
 
-    # Byte used to signal the end of a DCS.
-    DCS_END="$(printf '\x9c')"
+    # Byte sequence used to signal the end of a DCS (7-bit ST: ESC \).
+    DCS_END="$(printf '\x1b\x5c')"
 
     OSC_START="$(printf '\e]9278;')"
 

@@ -1,10 +1,5 @@
-use super::{
-    count_chars_up_to_byte,
-    point::Point,
-    {char_slice, BufferIndex, TextBuffer},
-};
-
-use super::str_to_byte_vec;
+use super::point::Point;
+use super::{char_slice, count_chars_up_to_byte, str_to_byte_vec, BufferIndex, TextBuffer};
 
 #[test]
 fn test_str_to_byte_vec() {

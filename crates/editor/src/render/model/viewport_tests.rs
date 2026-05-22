@@ -1,18 +1,12 @@
 use itertools::Itertools;
 use sum_tree::SumTree;
-
-use warpui::{
-    SizeConstraint,
-    geometry::vector::vec2f,
-    units::{IntoPixels, Pixels},
-};
-
-use crate::render::model::{
-    RenderState,
-    test_utils::{TEST_STYLES, mock_paragraph},
-};
+use warpui::SizeConstraint;
+use warpui::geometry::vector::vec2f;
+use warpui::units::{IntoPixels, Pixels};
 
 use super::ViewportState;
+use crate::render::model::RenderState;
+use crate::render::model::test_utils::{TEST_STYLES, mock_paragraph};
 
 #[test]
 fn test_viewport_offsets() {

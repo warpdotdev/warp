@@ -24,9 +24,8 @@ use serde_json::Value;
 use uuid::Uuid;
 use warp_core::safe_warn;
 
-use crate::ai::agent::conversation::AIConversationId;
-
 use super::json_utils::entries_to_jsonl;
+use crate::ai::agent::conversation::AIConversationId;
 
 /// JSON envelope sent to the server representing a complete Claude Code session.
 ///

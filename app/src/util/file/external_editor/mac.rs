@@ -1,16 +1,17 @@
 #![allow(deprecated)]
 
-use instant::Instant;
+use std::fmt::Write;
+use std::path::Path;
 use std::slice;
-use std::{fmt::Write, path::Path};
 
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSString},
-};
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSAutoreleasePool, NSString};
 use command::r#async::Command;
-use warp_core::{channel::ChannelState, AppId};
-use warpui::{platform::mac::make_nsstring, ApplicationBundleInfo};
+use instant::Instant;
+use warp_core::channel::ChannelState;
+use warp_core::AppId;
+use warpui::platform::mac::make_nsstring;
+use warpui::ApplicationBundleInfo;
 
 use super::*;
 

@@ -1,5 +1,15 @@
+use std::sync::Arc;
+
+use chrono::{DateTime, Local};
+use vec1::vec1;
+use warp_core::command::ExitCode;
+use warp_terminal::model::ansi::ClearMode;
+use warpui::r#async::executor::Background;
+use warpui::text::{str_to_byte_vec, SelectionType};
+
 use super::*;
 use crate::terminal::color;
+use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{Handler, Processor};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
@@ -8,15 +18,7 @@ use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::{event_listener::ChannelEventListener, shared_session::SharedSessionStatus};
-use chrono::{DateTime, Local};
-use std::sync::Arc;
-use vec1::vec1;
-use warp_core::command::ExitCode;
-use warp_terminal::model::ansi::ClearMode;
-use warpui::r#async::executor::Background;
-use warpui::text::str_to_byte_vec;
-use warpui::text::SelectionType;
+use crate::terminal::shared_session::SharedSessionStatus;
 
 /// Helper function to create a SerializedBlock with default values,
 /// including the new is_local field.

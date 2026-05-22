@@ -1,69 +1,63 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
 use warp_core::features::FeatureFlag;
-use warp_graphql::{object_permissions::AccessLevel, scalars::time::ServerTimestamp};
+use warp_graphql::object_permissions::AccessLevel;
+use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{App, ModelHandle, SingletonEntity};
 
+use super::{GetCloudObjectResponse, InitialLoadResponse, UpdateManager};
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+};
+use crate::auth::user::TEST_USER_UID;
+use crate::auth::UserUid;
+use crate::cloud_object::model::actions::{
+    ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType, ObjectActions,
+};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::json_model::JsonSerializer;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent, UpdateSource};
+use crate::cloud_object::{
+    BulkCreateCloudObjectResult, CloudModelType, CloudObjectEventEntrypoint, CloudObjectGuest,
+    CloudObjectLocation, ConflictStatus, CreateCloudObjectResult, CreatedCloudObject,
+    GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectDeleteResult,
+    ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, Owner,
+    Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerGuestSubject,
+    ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow, ServerWorkflowEnum, Space,
+    UpdateCloudObjectResult,
+};
+use crate::drive::folders::{CloudFolder, CloudFolderModel, FolderId};
+use crate::drive::sharing::{SharingAccessLevel, Subject, UserKind};
+use crate::drive::CloudObjectTypeAndId;
+use crate::notebooks::{CloudNotebook, CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::listener::ObjectUpdateMessage;
+use crate::server::cloud_objects::test_utils::{
+    create_update_manager_struct, initialize_app, mock_server_api, UpdateManagerStruct,
+};
+use crate::server::cloud_objects::update_manager::{
+    get_duplicate_object_name, FetchSingleObjectOption, GenericStringObjectInput, InitiatedBy,
+    ServerMetadata, ServerNotebook, ServerPermissions,
+};
+use crate::server::ids::{
+    ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId,
+};
 #[cfg(test)]
 use crate::server::server_api::object::MockObjectClient;
-use crate::{
-    ai::cloud_environments::{
-        AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
-    },
-    auth::{user::TEST_USER_UID, UserUid},
-    cloud_object::{
-        model::{
-            actions::{
-                ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
-                ObjectActions,
-            },
-            generic_string_model::GenericStringObjectId,
-            json_model::JsonSerializer,
-            persistence::{CloudModel, CloudModelEvent, UpdateSource},
-        },
-        BulkCreateCloudObjectResult, CloudModelType, CloudObjectEventEntrypoint, CloudObjectGuest,
-        CloudObjectLocation, ConflictStatus, CreateCloudObjectResult, CreatedCloudObject,
-        GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectDeleteResult,
-        ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, Owner,
-        Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerGuestSubject,
-        ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow, ServerWorkflowEnum,
-        Space, UpdateCloudObjectResult,
-    },
-    drive::{
-        folders::{CloudFolder, CloudFolderModel, FolderId},
-        sharing::{SharingAccessLevel, Subject, UserKind},
-        CloudObjectTypeAndId,
-    },
-    notebooks::{CloudNotebook, CloudNotebookModel, NotebookId},
-    persistence::ModelEvent,
-    server::{
-        cloud_objects::{
-            listener::ObjectUpdateMessage,
-            test_utils::{
-                create_update_manager_struct, initialize_app, mock_server_api, UpdateManagerStruct,
-            },
-            update_manager::{
-                get_duplicate_object_name, FetchSingleObjectOption, GenericStringObjectInput,
-                InitiatedBy, ServerMetadata, ServerNotebook, ServerPermissions,
-            },
-        },
-        ids::{ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId},
-        sync_queue::SyncQueue,
-    },
-    settings::{CloudPreferenceModel, Preference},
-    workflows::{
-        workflow::{Argument, ArgumentType, Workflow},
-        workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, EnumVariants, WorkflowEnum},
-        CloudWorkflow, CloudWorkflowModel, WorkflowId,
-    },
-    workspaces::user_profiles::{UserProfileWithUID, UserProfiles},
-    Assets,
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::{CloudPreferenceModel, Preference};
+use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
+use crate::workflows::workflow_enum::{
+    CloudWorkflowEnum, CloudWorkflowEnumModel, EnumVariants, WorkflowEnum,
 };
-
-use super::{GetCloudObjectResponse, InitialLoadResponse, UpdateManager};
+use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::ASSETS;
 
 fn create_object<K, M>(
     app: &mut App,
@@ -637,7 +631,7 @@ fn mock_fetch_single_cloud_object(
 
 #[test]
 fn test_sync_state_after_creation_item_not_in_sync_queue_folder() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         let client_id = ClientId::new();
         initialize_app(&mut app);
         let object_id: FolderId = 123.into();
@@ -665,7 +659,7 @@ fn test_sync_state_after_creation_item_not_in_sync_queue_folder() {
 
 #[test]
 fn test_sync_state_after_creation_item_not_in_sync_queue_workflow() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         let client_id = ClientId::new();
         initialize_app(&mut app);
         let object_id: WorkflowId = 123.into();
@@ -693,7 +687,7 @@ fn test_sync_state_after_creation_item_not_in_sync_queue_workflow() {
 
 #[test]
 fn test_sync_state_after_creation_item_not_in_sync_queue_notebook() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         let client_id = ClientId::new();
         initialize_app(&mut app);
 
@@ -722,7 +716,7 @@ fn test_sync_state_after_creation_item_not_in_sync_queue_notebook() {
 
 #[test]
 fn test_sync_state_after_creation_item_not_in_sync_queue_generic_object() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         let client_id = ClientId::new();
         initialize_app(&mut app);
         let object_id: GenericStringObjectId = 123.into();
@@ -834,7 +828,7 @@ async fn run_sync_state_after_creation_item_not_in_sync_queue<K, M>(
 
 #[test]
 fn test_sync_state_after_creation_item_in_flight() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -921,7 +915,7 @@ fn test_sync_state_after_creation_item_in_flight() {
 
 #[test]
 fn test_sync_state_after_creation_fails_due_to_limit() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let client_id = ClientId::new();
@@ -1046,7 +1040,7 @@ fn test_sync_state_after_creation_fails_due_to_limit() {
 
 #[test]
 fn test_sync_state_after_update_item_not_in_sync_queue() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -1191,7 +1185,7 @@ fn test_sync_state_after_update_item_not_in_sync_queue() {
 
 #[test]
 fn test_create_sets_editor() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -1235,7 +1229,7 @@ fn test_create_sets_editor() {
 
 #[test]
 fn test_bulk_create_generic_string_objects() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let client_id_1 = ClientId::new();
@@ -1393,7 +1387,7 @@ fn test_bulk_create_generic_string_objects() {
 
 #[test]
 fn test_sync_state_after_update_item_not_in_sync_queue_generic_string_object() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let client_id = ClientId::new();
@@ -1524,7 +1518,7 @@ fn test_sync_state_after_update_item_not_in_sync_queue_generic_string_object() {
 
 #[test]
 fn test_sync_state_after_update_item_in_sync_queue() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -1641,7 +1635,7 @@ fn test_sync_state_after_update_item_in_sync_queue() {
 
 #[test]
 fn test_sync_state_after_creation_failure_item_not_in_sync_queue() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -1687,7 +1681,7 @@ fn test_sync_state_after_creation_failure_item_not_in_sync_queue() {
 
 #[test]
 fn test_sync_state_after_update_failure_item_in_sync_queue() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -1808,7 +1802,7 @@ fn test_sync_state_after_update_failure_item_in_sync_queue() {
 
 #[test]
 fn test_sync_state_after_object_with_dependencies_created() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -1958,7 +1952,7 @@ fn test_sync_state_after_object_with_dependencies_created() {
 
 #[test]
 fn test_fetch_single_cloud_object_not_pending_no_overwrite() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let client_id = ClientId::new();
@@ -2054,7 +2048,7 @@ fn test_fetch_single_cloud_object_not_pending_no_overwrite() {
 
 #[test]
 fn test_fetch_single_cloud_object_pending_no_overwrite() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -2154,7 +2148,7 @@ fn test_fetch_single_cloud_object_pending_no_overwrite() {
 
 #[test]
 fn test_fetch_single_cloud_object_pending_with_overwrite() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -2260,7 +2254,7 @@ fn test_fetch_single_cloud_object_pending_with_overwrite() {
 
 #[test]
 fn test_metadata_after_trash_item_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -2330,7 +2324,7 @@ fn test_metadata_after_trash_item_success() {
 
 #[test]
 fn test_pending_metadata_update_with_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -2437,7 +2431,7 @@ fn test_pending_metadata_update_with_rtc() {
 
 #[test]
 fn test_metadata_update_with_rtc_no_pending() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -2535,7 +2529,7 @@ fn test_metadata_update_with_rtc_no_pending() {
 
 #[test]
 fn test_metadata_after_trash_item_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -2604,7 +2598,7 @@ fn test_metadata_after_trash_item_failure() {
 
 #[test]
 fn test_pending_metadata_update_with_polling() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -2757,7 +2751,7 @@ fn test_pending_metadata_update_with_polling() {
 
 #[test]
 fn test_metadata_update_with_polling_no_pending() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -2874,7 +2868,7 @@ fn test_metadata_update_with_polling_no_pending() {
 
 #[test]
 fn test_metadata_after_untrash_item_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -2944,7 +2938,7 @@ fn test_metadata_after_untrash_item_success() {
 
 #[test]
 fn test_metadata_after_untrash_item_and_move_to_root() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3017,7 +3011,7 @@ fn test_metadata_after_untrash_item_and_move_to_root() {
 
 #[test]
 fn test_metadata_after_untrash_item_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3071,7 +3065,7 @@ fn test_metadata_after_untrash_item_failure() {
 
 #[test]
 fn test_metadata_after_optimistic_grab_baton_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3143,7 +3137,7 @@ fn test_metadata_after_optimistic_grab_baton_success() {
 
 #[test]
 fn test_metadata_after_optimistic_grab_baton_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3202,7 +3196,7 @@ fn test_metadata_after_optimistic_grab_baton_failure() {
 
 #[test]
 fn test_metadata_after_non_optimistic_grab_baton_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3274,7 +3268,7 @@ fn test_metadata_after_non_optimistic_grab_baton_success() {
 
 #[test]
 fn test_metadata_after_non_optimistic_grab_baton_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -3332,7 +3326,7 @@ fn test_metadata_after_non_optimistic_grab_baton_failure() {
 
 #[test]
 fn test_report_initial_load() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let update_manager_struct = create_update_manager_struct(&mut app, Arc::new(server_api));
@@ -3417,7 +3411,7 @@ fn test_get_duplicate_object_name() {
 
 #[test]
 fn test_duplicate_workflow_not_pending_no_overwrite() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -3497,7 +3491,7 @@ fn test_duplicate_workflow_not_pending_no_overwrite() {
 
 #[test]
 fn test_replace_object_with_conflicts() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -3614,7 +3608,7 @@ fn test_replace_object_with_conflicts() {
 
 #[test]
 fn test_pending_conflict_correctly_clears_after_edits() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -3746,7 +3740,7 @@ fn test_pending_conflict_correctly_clears_after_edits() {
 
 #[test]
 fn test_pending_conflict_correctly_stays_after_edits() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -3877,7 +3871,7 @@ fn test_pending_self_conflict_clears_out_of_order() {
     // This tests the case where the client makes an edit and receives the RTC update for it
     // _before_ the server response to their edit.
 
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = MockObjectClient::new();
@@ -3972,7 +3966,7 @@ fn test_pending_self_conflict_clears_out_of_order() {
 fn test_pending_newer_conflict_remains_out_of_order() {
     // This tests the case where the client makes an edit which is eventually accepted by the
     // server, but receives an RTC update about a _newer_ edit in the meantime.
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = MockObjectClient::new();
@@ -4067,7 +4061,7 @@ fn test_pending_newer_conflict_remains_out_of_order() {
 
 #[test]
 fn test_accepts_new_metadata_with_force_refresh() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let server_id: ServerId = 123.into();
@@ -4160,7 +4154,7 @@ fn test_accepts_new_metadata_with_force_refresh() {
 
 #[test]
 fn test_delete_single_object() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4232,7 +4226,7 @@ fn test_delete_single_object() {
 
 #[test]
 fn test_empty_trash() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let ts = Utc::now();
@@ -4344,7 +4338,7 @@ fn test_empty_trash() {
 
 #[test]
 fn test_leave_shared_object() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4451,7 +4445,7 @@ fn test_leave_shared_object() {
 
 #[test]
 fn test_create_object_online_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4551,7 +4545,7 @@ fn test_create_object_online_success() {
 
 #[test]
 fn test_create_object_online_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4610,7 +4604,7 @@ fn test_create_object_online_failure() {
 
 #[test]
 fn test_create_object_online_user_facing_error() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4673,7 +4667,7 @@ fn test_create_object_online_user_facing_error() {
 
 #[test]
 fn test_create_object_online_with_folder_id() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4756,7 +4750,7 @@ fn test_create_object_online_with_folder_id() {
 
 #[test]
 fn test_create_object_online_with_client_folder_id_fails() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4808,7 +4802,7 @@ fn test_create_object_online_with_client_folder_id_fails() {
 
 #[test]
 fn test_record_object_action() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -4895,7 +4889,7 @@ fn test_record_object_action() {
 
 #[test]
 fn test_overwrite_object_action_history_no_actions_on_client() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -4963,7 +4957,7 @@ fn test_overwrite_object_action_history_no_actions_on_client() {
 
 #[test]
 fn test_overwrite_object_action_history_reject() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -5117,7 +5111,7 @@ fn test_overwrite_object_action_history_reject() {
 
 #[test]
 fn test_overwrite_object_action_history_ignores_pending_local_actions() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -5271,7 +5265,7 @@ fn test_overwrite_object_action_history_ignores_pending_local_actions() {
 
 #[test]
 fn test_object_action_histories_with_initial_load() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
 
@@ -5457,7 +5451,7 @@ fn test_object_action_histories_with_initial_load() {
 
 #[test]
 fn test_delete_single_object_with_actions() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -5581,7 +5575,7 @@ fn test_delete_single_object_with_actions() {
 /// changing the owner of an object, which implicitly also clears its parent folder.
 #[test]
 fn test_move_object_personal_to_team_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -5681,7 +5675,7 @@ fn test_move_object_personal_to_team_success() {
 /// optimistically update the model, and then roll those updates back on failure.
 #[test]
 fn test_move_object_personal_to_team_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -5787,7 +5781,7 @@ fn test_move_object_personal_to_team_failure() {
 /// space to a team drive.
 #[test]
 fn test_move_cloud_environment_personal_to_team_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -5886,7 +5880,7 @@ fn test_move_cloud_environment_personal_to_team_success() {
 /// and change the reference stored within the workflow to point to that enum.
 #[test]
 fn test_move_workflow_with_enums_personal_to_team_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let team = Space::Team {
@@ -6023,7 +6017,7 @@ fn test_move_workflow_with_enums_personal_to_team_success() {
 
 #[test]
 fn test_move_workflow_with_enums_personal_to_team_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
         let team = Space::Team {
@@ -6174,7 +6168,7 @@ fn test_move_workflow_with_enums_personal_to_team_failure() {
 /// `Some`.
 #[test]
 fn test_move_object_root_to_folder_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6267,7 +6261,7 @@ fn test_move_object_root_to_folder_success() {
 /// optimistically update the model, and then roll back the updates on failure.
 #[test]
 fn test_move_object_root_to_folder_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6366,7 +6360,7 @@ fn test_move_object_root_to_folder_failure() {
 /// during, and after a move where the object's parent folder changes from `Some` to `None`.
 #[test]
 fn test_move_object_folder_to_root_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6459,7 +6453,7 @@ fn test_move_object_folder_to_root_success() {
 /// we optimistically clear its parent folder, and then restore it on failure.
 #[test]
 fn test_move_object_folder_to_root_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6558,7 +6552,7 @@ fn test_move_object_folder_to_root_failure() {
 /// checks that we update the object's metadata and emit events correctly.
 #[test]
 fn test_move_object_folder_to_folder_success() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6653,7 +6647,7 @@ fn test_move_object_folder_to_folder_success() {
 /// we optimistically apply the move in-memory and then undo it on failure.
 #[test]
 fn test_move_object_folder_to_folder_failure() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -6754,7 +6748,7 @@ fn test_move_object_folder_to_folder_failure() {
 /// object was trashed by another client.
 #[test]
 fn test_trash_object_over_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let workflow_id: WorkflowId = 123.into();
@@ -6831,7 +6825,7 @@ fn test_trash_object_over_rtc() {
 /// object was un-trashed by another client.
 #[test]
 fn test_untrash_object_over_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let workflow_id: WorkflowId = 123.into();
@@ -6908,7 +6902,7 @@ fn test_untrash_object_over_rtc() {
 /// object was moved from one folder to another in the same space by another client.
 #[test]
 fn test_move_object_from_folder_to_folder_over_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let workflow_id: WorkflowId = 123.into();
@@ -6989,7 +6983,7 @@ fn test_move_object_from_folder_to_folder_over_rtc() {
 /// object was moved from a folder to the root of its space by another client.
 #[test]
 fn test_move_object_from_folder_to_root_over_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let workflow_id: WorkflowId = 123.into();
@@ -7069,7 +7063,7 @@ fn test_move_object_from_folder_to_root_over_rtc() {
 /// an object was moved from the root of its space into a folder by another client.
 #[test]
 fn test_move_object_from_root_to_folder_over_rtc() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let server_api = mock_server_api();
         let workflow_id: WorkflowId = 123.into();
@@ -7147,7 +7141,7 @@ fn test_move_object_from_root_to_folder_over_rtc() {
 
 #[test]
 fn test_permissions_update_grants_access() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let mut server_api = mock_server_api();
@@ -7261,7 +7255,7 @@ fn test_permissions_update_grants_access() {
 fn test_permissions_update_existing_object() {
     let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
 
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         let server_api = mock_server_api();
@@ -7322,7 +7316,7 @@ fn test_permissions_update_existing_object() {
 #[test]
 fn test_add_guest_success() {
     let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 
@@ -7436,7 +7430,7 @@ fn test_add_guest_success() {
 #[test]
 fn test_add_guest_failure() {
     let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let mut server_api = mock_server_api();
 

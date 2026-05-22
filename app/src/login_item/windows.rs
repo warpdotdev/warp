@@ -6,14 +6,16 @@
 //! Windows 10/11. It doesn't require admin elevation and is scoped to the
 //! current user, matching the UX of macOS's `SMAppService`.
 
-use crate::report_if_error;
-use crate::terminal::general_settings::GeneralSettings;
-use ::settings::Setting;
 use std::path::{Path, PathBuf};
+
+use ::settings::Setting;
 use warp_core::channel::ChannelState;
 use warpui::{AppContext, SingletonEntity};
 use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 use winreg::RegKey;
+
+use crate::report_if_error;
+use crate::terminal::general_settings::GeneralSettings;
 
 /// The registry subkey Windows scans on sign-in to launch per-user startup apps.
 const RUN_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -128,9 +130,11 @@ fn unregister_in(hive: winreg::HKEY, subkey: &str, value_name: &str) -> std::io:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+
+    use super::*;
 
     /// A scratch subkey under HKCU that tests create/destroy to avoid touching
     /// the real `Software\Microsoft\Windows\CurrentVersion\Run` hive.

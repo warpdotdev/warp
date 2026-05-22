@@ -1,10 +1,12 @@
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
+use std::ops::Range;
+
+use itertools::Itertools;
+use regex::RegexBuilder;
 
 use super::{AIBlock, TextLocation};
 use crate::ai::agent::{AIAgentTextSection, MessageId};
 use crate::terminal::find::{FindOptions, FindableRichContentView, RichContentMatchId};
-use itertools::Itertools;
-use regex::RegexBuilder;
 
 /// Represents the location of a find match in an AI block.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -3,10 +3,8 @@
 use std::ffi::CStr;
 
 use cocoa::base::{id, nil};
-use core_foundation::{
-    base::TCFType,
-    string::{CFString, CFStringRef},
-};
+use core_foundation::base::TCFType;
+use core_foundation::string::{CFString, CFStringRef};
 use objc::{class, msg_send, sel, sel_impl};
 use warp_core::channel::{Channel, ChannelState};
 

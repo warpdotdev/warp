@@ -1,39 +1,34 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use lazy_static::lazy_static;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
+use warp_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, DocumentContentAttachmentSource, DriveObjectPayload,
+};
+use crate::ai::block_context::BlockContext;
+use crate::ai::blocklist::{BlocklistAIContextModel, SessionContext};
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::facts::CloudAIFactModel;
+use crate::ai::skills::list_skills_if_changed;
+use crate::cloud_object::model::generic_string_model::{CloudStringObject, GenericStringObjectId};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentAttachment, AIAgentContext,
-            DocumentContentAttachmentSource, DriveObjectPayload,
-        },
-        block_context::BlockContext,
-        blocklist::{BlocklistAIContextModel, SessionContext},
-        document::ai_document_model::{AIDocumentId, AIDocumentModel},
-        facts::CloudAIFactModel,
-        skills::list_skills_if_changed,
-    },
-    cloud_object::{
-        model::{
-            generic_string_model::{CloudStringObject, GenericStringObjectId},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType,
-    },
-    terminal::{
-        model::{block::BlockId, session::active_session::ActiveSession},
-        TerminalView,
-    },
-};
-use warp_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::TerminalView;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns

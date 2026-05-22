@@ -1,12 +1,9 @@
-use warpui::elements::ClippedScrollStateHandle;
-use warpui::elements::ClippedScrollable;
-
-use warpui::{
-    elements::{ConstrainedBox, Container, Flex, ParentElement, Rect, ScrollbarWidth, Stack},
-    AppContext, Element, Entity, TypedActionView, View, ViewContext,
-};
-
 use warpui::color::ColorU;
+use warpui::elements::{
+    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, Flex, ParentElement,
+    Rect, ScrollbarWidth, Stack,
+};
+use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext};
 
 #[derive(Default)]
 pub struct RootView {

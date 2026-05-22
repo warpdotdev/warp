@@ -1,6 +1,7 @@
-use super::*;
 use anyhow::Result;
 use warp_graphql::queries::get_user::FirebaseProfile;
+
+use super::*;
 
 #[test]
 fn test_parse_user_profile() -> Result<()> {

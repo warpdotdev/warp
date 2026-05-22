@@ -1,30 +1,22 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
+
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+pub use ai::LLMId;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, OnceLock},
-};
+use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use crate::{
-    auth::{
-        auth_manager::{AuthManager, AuthManagerEvent},
-        AuthStateProvider,
-    },
-    network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind},
-    report_error,
-    server::server_api::ServerApiProvider,
-    workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-};
-
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
-use warp_core::features::FeatureFlag;
-
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
-
-pub use ai::LLMId;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::AuthStateProvider;
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::report_error;
+use crate::server::server_api::ServerApiProvider;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.

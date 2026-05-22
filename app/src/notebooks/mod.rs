@@ -10,33 +10,26 @@ pub mod telemetry;
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use anyhow::Result;
+use async_trait::async_trait;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use warpui::AppContext;
 
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    ai::document::ai_document_model::AIDocumentId,
-    appearance::Appearance,
-    cloud_object::{
-        CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Owner, Revision, ServerCloudObject,
-        UpdateCloudObjectResult,
-    },
-    drive::{
-        items::{notebook::WarpDriveNotebook, WarpDriveItem},
-        CloudObjectTypeAndId,
-    },
-    persistence::ModelEvent,
-    server::{
-        ids::{ServerId, SyncId},
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::appearance::Appearance;
+use crate::cloud_object::{
+    CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
+    GenericCloudObject, GenericServerObject, ObjectType, Owner, Revision, UpdateCloudObjectResult,
 };
+use crate::drive::items::notebook::WarpDriveNotebook;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::CloudObjectTypeAndId;
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
 
 /// Serialized representation of a notebook for sync queue
 /// The AIDocumentID and ConversationID are stored here to avoid polluting the
@@ -143,18 +136,6 @@ impl CloudModelType for CloudNotebookModel {
 
     fn should_update_after_server_conflict(&self) -> bool {
         true
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Notebook(server_notebook) = server_cloud_object {
-            return Some(CloudNotebookModel {
-                title: server_notebook.model.title.clone(),
-                data: server_notebook.model.data.clone(),
-                ai_document_id: server_notebook.model.ai_document_id,
-                conversation_id: None, // conversation_id is not returned from server, just used for initial plan artifact creation
-            });
-        }
-        None
     }
 
     fn serialized(&self) -> SerializedModel {
@@ -269,7 +250,8 @@ pub fn post_process_notebook(data: &str) -> String {
 /// * Includes extra context for embedded objects.
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub fn export_notebook(data: &str, ctx: &AppContext) -> anyhow::Result<String> {
-    use warp_editor::content::{buffer::Buffer, markdown::MarkdownStyle};
+    use warp_editor::content::buffer::Buffer;
+    use warp_editor::content::markdown::MarkdownStyle;
 
     // Parse the Markdown directly rather than using [`Buffer::from_markdown`] so that we can
     // report errors to the exporter.

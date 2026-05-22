@@ -1,12 +1,9 @@
 use itertools::Itertools;
 use testing::{assert_rows_equal, ToRows as _};
 
-use crate::model::{
-    char_or_str::CharOrStr,
-    grid::cell::{Cell, Flags},
-};
-
 use super::*;
+use crate::model::char_or_str::CharOrStr;
+use crate::model::grid::cell::{Cell, Flags};
 
 #[test]
 fn test_row_iteration() {

@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::{Vector2F, vec2f};
-use warp_core::ui::{Icon, appearance::Appearance};
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{CacheOption, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable},
-    keymap::Keystroke,
-    prelude::{stack::*, *},
+use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    CacheOption, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
 };
+use warpui::keymap::Keystroke;
+use warpui::prelude::stack::*;
+use warpui::prelude::*;
 
 use crate::{Component, Options as _, button};
 

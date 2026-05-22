@@ -3,9 +3,8 @@ use super::{
     CreateGitBranch, GitBranch, GitLineChanges,
 };
 use crate::context_chips::display_menu::GenericMenuItem;
-use crate::context_chips::{
-    git_branch_on_click::GitBranchOnClickValue, github_pr_display_text_from_url, ContextChipKind,
-};
+use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
+use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
 use crate::ui_components::icons::Icon;
 
 #[test]

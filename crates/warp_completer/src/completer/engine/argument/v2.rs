@@ -15,26 +15,23 @@ use itertools::Itertools;
 use smol_str::SmolStr;
 
 use super::add_extra_positional;
-use crate::completer::GeneratorContext;
-use crate::{
-    completer::{
-        context::call_js_function,
-        engine::path::{
-            sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to,
-        },
-        CommandExitStatus, CompleterOptions, CompletionContext, CompletionsFallbackStrategy,
-        LocationType, MatchStrategy, MatchedSuggestion, Suggestion, SuggestionType,
-    },
-    meta::{Span, Spanned},
-    parsers::{
-        hir::{self, ShellCommand},
-        ArgumentError::{MissingMandatoryPositional, MissingValueForName, UnexpectedArgument},
-        ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken,
-    },
-    signatures::{
-        self, Argument, ArgumentValue, Command, GeneratorCompletionContext, GeneratorFn,
-        GeneratorResults, GeneratorScript, TemplateType,
-    },
+use crate::completer::context::call_js_function;
+use crate::completer::engine::path::{
+    sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to,
+};
+use crate::completer::{
+    CommandExitStatus, CompleterOptions, CompletionContext, CompletionsFallbackStrategy,
+    GeneratorContext, LocationType, MatchStrategy, MatchedSuggestion, Suggestion, SuggestionType,
+};
+use crate::meta::{Span, Spanned};
+use crate::parsers::hir::{self, ShellCommand};
+use crate::parsers::ArgumentError::{
+    MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
+};
+use crate::parsers::{ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken};
+use crate::signatures::{
+    self, Argument, ArgumentValue, Command, GeneratorCompletionContext, GeneratorFn,
+    GeneratorResults, GeneratorScript, TemplateType,
 };
 
 /// Returns completion suggestions for argument values based on the given `input`.

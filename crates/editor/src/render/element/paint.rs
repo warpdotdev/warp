@@ -2,29 +2,21 @@
 
 use std::ops::Range;
 
-use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
-use warpui::{
-    PaintContext,
-    elements::{CornerRadius, Point, Radius},
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    text_layout::{Line, PaintStyleOverride, TextFrame},
-};
-
-use crate::{
-    editor::TextDecoration,
-    render::{
-        layout::line_height,
-        model::{
-            Decoration, Paragraph, ParagraphStyles, Positioned, RenderState, RichTextStyles,
-            saved_positions::SavedPositions,
-        },
-    },
-};
 use string_offset::CharOffset;
 use vim::vim::VimMode;
+use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
+use warpui::PaintContext;
+use warpui::elements::{CornerRadius, Point, Radius};
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::text_layout::{Line, PaintStyleOverride, TextFrame};
+
+use crate::editor::TextDecoration;
+use crate::render::layout::line_height;
+use crate::render::model::saved_positions::SavedPositions;
+use crate::render::model::{
+    Decoration, Paragraph, ParagraphStyles, Positioned, RenderState, RichTextStyles,
+};
 
 const DEFAULT_BLOCK_CURSOR_WIDTH: f32 = 8.;
 

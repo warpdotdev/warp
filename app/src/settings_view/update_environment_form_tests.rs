@@ -1,3 +1,12 @@
+use url::Url;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{Empty, MouseStateHandle};
+use warpui::platform::WindowStyle;
+use warpui::{
+    AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
+    WindowId,
+};
+
 use super::{
     EnvironmentFormCopy, EnvironmentFormInitArgs, EnvironmentFormValues, SuggestImageState,
     UpdateEnvironmentForm, UpdateEnvironmentFormAction,
@@ -8,9 +17,10 @@ use crate::ai::cloud_environments::GithubRepo;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ServerApiProvider;
-use crate::server::{cloud_objects::update_manager::UpdateManager, sync_queue::SyncQueue};
+use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -18,14 +28,6 @@ use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
-use url::Url;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{Empty, MouseStateHandle};
-use warpui::platform::WindowStyle;
-use warpui::{
-    AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    WindowId,
-};
 
 #[test]
 fn test_parse_repo_input_owner_repo() {

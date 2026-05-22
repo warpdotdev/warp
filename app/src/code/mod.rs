@@ -1,7 +1,8 @@
-use pathfinder_geometry::rect::RectF;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::AddAssign;
+
+use pathfinder_geometry::rect::RectF;
 use warp_util::file::FileSaveError;
 use warpui::elements::DropTargetData;
 use warpui::AppContext;
