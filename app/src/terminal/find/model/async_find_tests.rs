@@ -19,8 +19,8 @@ use crate::terminal::model::grid::grid_handler::AbsolutePoint;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
 use crate::terminal::model::TerminalModel;
-use crate::view_components::find::FindDirection;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::view_components::find::FindDirection;
 
 /// Helper to create an AbsoluteMatch at a given row with default column span.
 fn make_match(row: u64) -> AbsoluteMatch {
