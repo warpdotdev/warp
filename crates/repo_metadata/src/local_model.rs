@@ -22,7 +22,7 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::entry::{BuildTreeError, Entry, FileId, IgnoredPathStrategy};
+use crate::entry::{BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy};
 use crate::repository::Repository;
 use crate::telemetry::RepoMetadataTelemetryEvent;
 use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
@@ -642,10 +642,12 @@ impl LocalRepoMetadataModel {
                     &mut files,
                     &mut gitignores,
                     Some(&mut file_limit),
-                    MAX_TREE_DEPTH,
-                    0,
-                    &IgnoredPathStrategy::IncludeLazy,
-                    ignored_path_interests,
+                    BuildTreeOptions {
+                        max_depth: MAX_TREE_DEPTH,
+                        current_depth: 0,
+                        ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                        ignored_path_interests,
+                    },
                     is_ignored,
                 ) {
                     Ok(subtree) => {
@@ -947,10 +949,12 @@ impl LocalRepoMetadataModel {
                     &mut files,
                     &mut gitignores_for_build,
                     Some(&mut file_limit),
-                    MAX_TREE_DEPTH,        // max_depth
-                    0,                 // current_depth
-                    &IgnoredPathStrategy::IncludeLazy,
-                    &ignored_path_interests,
+                    BuildTreeOptions {
+                        max_depth: MAX_TREE_DEPTH,
+                        current_depth: 0,
+                        ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                        ignored_path_interests: &ignored_path_interests,
+                    },
                 );
 
                 // Repos with more than MAX_FILES_PER_REPO tracked files can't
@@ -970,10 +974,12 @@ impl LocalRepoMetadataModel {
                         &mut files,
                         &mut gitignores_for_build,
                         None,
-                        1, // max_depth — only first level
-                        0,
-                        &IgnoredPathStrategy::IncludeLazy,
-                        &ignored_path_interests,
+                        BuildTreeOptions {
+                            max_depth: 1, // Only first level.
+                            current_depth: 0,
+                            ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                            ignored_path_interests: &ignored_path_interests,
+                        },
                     );
                     if build_result.is_ok() {
                         indexed_with_limit = true;

@@ -197,10 +197,12 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
         &mut files,
         &mut gitignores,
         Some(&mut file_limit),
-        200,
-        0,
-        &super::IgnoredPathStrategy::IncludeLazy,
-        &[std::path::PathBuf::from(".agents/skills")],
+        super::BuildTreeOptions {
+            max_depth: 200,
+            current_depth: 0,
+            ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
+            ignored_path_interests: &[std::path::PathBuf::from(".agents/skills")],
+        },
     )
     .unwrap()
 }
