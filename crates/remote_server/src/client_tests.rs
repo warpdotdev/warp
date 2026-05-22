@@ -406,6 +406,24 @@ async fn disconnected_on_closed_stream() {
     // The reader task should detect EOF and emit a Disconnected event.
     let event = disconnect_rx.recv().await.unwrap();
     assert!(matches!(event, ClientEvent::Disconnected));
+
+    // After the Disconnected event has been observed, the reader task has
+    // already stored `true` into the atomic flag (it does the store before
+    // sending the event), so callers can rely on `is_disconnected()` to
+    // short-circuit further requests.
+    assert!(client.is_disconnected());
+}
+
+#[tokio::test]
+async fn is_disconnected_starts_false() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::InitializeResponse(InitializeResponse {
+            server_version: "test-0.1.0".to_string(),
+            host_id: "test-host-id".to_string(),
+        })
+    });
+
+    assert!(!client.is_disconnected());
 }
 
 #[tokio::test]

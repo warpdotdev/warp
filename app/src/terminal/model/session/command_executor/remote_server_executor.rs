@@ -23,13 +23,13 @@ use crate::terminal::shell::Shell;
 /// the same underlying channels and transitively keeps them alive as long
 /// as the `Session` is alive.
 ///
-/// If the underlying SSH connection is torn down mid-session,
-/// [`RemoteServerClient::run_command`] will fail naturally and
-/// [`execute_command`] surfaces that as an `Err`. We deliberately do *not*
-/// silently synthesize an empty `Ok(CommandOutput)` for the disconnected
-/// case, because callers (notably the completions/syntax-highlighting
-/// pipeline) treat `Ok(empty)` as "there are zero top-level commands" and
-/// produce incorrect results.
+/// If the underlying SSH connection is torn down mid-session, we short-circuit
+/// so we don't send a `RunCommand` request that is guaranteed to fail.
+///
+/// We deliberately do *not* silently synthesize an empty `Ok(CommandOutput)`
+/// for the disconnected case, because callers (notably the completions /
+/// syntax-highlighting pipeline) treat `Ok(empty)` as "there are zero
+/// top-level commands" and produce incorrect results.
 pub struct RemoteServerCommandExecutor {
     session_id: SessionId,
     client: Arc<RemoteServerClient>,
@@ -61,6 +61,14 @@ impl CommandExecutor for RemoteServerCommandExecutor {
         environment_variables: Option<HashMap<String, String>>,
         _execute_command_options: ExecuteCommandOptions,
     ) -> Result<CommandOutput> {
+        // Short-circuit if client is disconnected.
+        if self.client.is_disconnected() {
+            return Err(anyhow!(
+                "Remote command skipped: client is disconnected (session={:?})",
+                self.session_id
+            ));
+        }
+
         let response = self
             .client
             .run_command(
