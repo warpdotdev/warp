@@ -1,33 +1,29 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Rect, Shrinkable, Stack,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{UiComponent, UiComponentStyles},
-    },
-    Element, ViewContext,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Rect, Shrinkable, Stack,
 };
+use warpui::fonts::Weight;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{Element, ViewContext};
 
-use crate::{
-    drive::sharing::{ContentEditability, SharingAccessLevel},
-    env_vars::{
-        active_env_var_collection_data::TrashStatus,
-        view::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView},
-    },
-    i18n::{self, I18nKey},
-    ui_components::{breadcrumb::BreadcrumbState, buttons::icon_button, icons::Icon},
-    AppContext, Appearance, SingletonEntity,
-};
+use crate::drive::sharing::{ContentEditability, SharingAccessLevel};
+use crate::env_vars::active_env_var_collection_data::TrashStatus;
+use crate::env_vars::view::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView};
+use crate::ui_components::breadcrumb::BreadcrumbState;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::{AppContext, Appearance, SingletonEntity};
 
 const VARIABLE_DIVIDER_HEIGHT: f32 = 2.;
 const SECTION_FONT_SIZE: f32 = 16.;
 const BUTTON_HEIGHT: f32 = 32.;
+
+const SAVE_BUTTON_TEXT: &str = "Save";
+const VARIABLES_LABEL_TEXT: &str = "Variables";
 
 /// This file contains components that fixed in the view,
 /// i.e. the trash banner, breadcrumbs, and variables section header
@@ -61,9 +57,9 @@ impl EnvVarCollectionView {
         let mut stack = Stack::new();
 
         let text = if deleted {
-            i18n::tr(app, I18nKey::EnvVarsNoAccess)
+            "You no longer have access to these environment variables"
         } else {
-            i18n::tr(app, I18nKey::EnvVarsMovedToTrash)
+            "Environment variables were moved to trash"
         };
         stack.add_child(
             Align::new(
@@ -106,7 +102,6 @@ impl EnvVarCollectionView {
 
             if !FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash() {
                 let ui_builder = appearance.ui_builder().clone();
-                let tooltip = i18n::tr(app, I18nKey::EnvVarsRestoreTooltip).to_string();
                 action_row.add_child(
                     Align::new(
                         appearance
@@ -116,9 +111,14 @@ impl EnvVarCollectionView {
                                 self.button_mouse_states.restore_from_trash_button.clone(),
                             )
                             .with_tooltip(move || {
-                                ui_builder.tool_tip(tooltip.clone()).build().finish()
+                                ui_builder
+                                    .tool_tip(
+                                        "Restore environment variables from trash".to_string(),
+                                    )
+                                    .build()
+                                    .finish()
                             })
-                            .with_text_label(i18n::tr(app, I18nKey::CommonRestore).to_string())
+                            .with_text_label("Restore".to_string())
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(EnvVarCollectionAction::Untrash)
@@ -162,7 +162,7 @@ impl EnvVarCollectionView {
                 2.,
                 appearance
                     .ui_builder()
-                    .span(i18n::tr(app, I18nKey::CommonVariables).to_string())
+                    .span(crate::i18n::tr_static(app, VARIABLES_LABEL_TEXT).to_string())
                     .with_style(UiComponentStyles {
                         font_size: Some(SECTION_FONT_SIZE),
                         ..Default::default()
@@ -294,7 +294,7 @@ impl EnvVarCollectionView {
                 font_size: Some(14.),
                 ..Default::default()
             })
-            .with_centered_text_label(i18n::tr(app, I18nKey::CommonSave).to_owned());
+            .with_centered_text_label(SAVE_BUTTON_TEXT.to_owned());
 
         if is_save_disabled {
             button = button.disabled();

@@ -1,24 +1,24 @@
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
+use std::path::Path;
 
 use itertools::Itertools;
 use markdown_parser::{
     FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
 };
 use warp_core::command::ExitCode;
-use warp_core::ui::{appearance::Appearance, color::blend::Blend as _};
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    },
-    ui_components::{button::ButtonVariant, components::UiComponent as _},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend as _;
+use warpui::elements::{
+    Border, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius,
 };
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::UiComponent as _;
+use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{
-    terminal::ssh::util::InteractiveSshCommand, ui_components::buttons::icon_button,
-    ui_components::icons::Icon,
-};
+use crate::terminal::ssh::util::InteractiveSshCommand;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 pub type FileUploadId = usize;
 
@@ -103,7 +103,7 @@ impl View for FileUpload {
 
     fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
         let appearance = Appearance::as_ref(app);
-        self.render_file_upload_element(&self.uploads, appearance, app)
+        self.render_file_upload_element(&self.uploads, appearance)
     }
 }
 
@@ -290,7 +290,6 @@ impl FileUpload {
         &self,
         file: &FileUploadInfo,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
@@ -320,7 +319,7 @@ impl FileUpload {
         if let FileUploadStatus::Completed { successful: _ } = file.status {
             file_info_and_status = Flex::row()
                 .with_child(file_info_and_status.finish())
-                .with_child(self.render_clear_upload_button(file, appearance, app))
+                .with_child(self.render_clear_upload_button(file, appearance))
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
         }
 
@@ -412,14 +411,12 @@ impl FileUpload {
         &self,
         file: &FileUploadInfo,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let upload_id = file.upload_id;
         let ui_builder = appearance.ui_builder().clone();
-        let tooltip = crate::i18n::tr_static(app, "Clear upload").to_string();
         Container::new(
             icon_button(appearance, Icon::X, true, file.clear_button.clone())
-                .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
+                .with_tooltip(move || ui_builder.tool_tip("Clear upload".into()).build().finish())
                 .build()
                 .on_click(move |event_ctx, _, _| {
                     event_ctx
@@ -458,19 +455,12 @@ impl FileUpload {
         .finish()
     }
 
-    fn render_file_upload_header(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_file_upload_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         Container::new(
             FormattedTextElement::new(
                 FormattedText::new(vec![FormattedTextLine::Heading(FormattedTextHeader {
                     heading_size: 3,
-                    text: vec![FormattedTextFragment::plain_text(crate::i18n::tr_static(
-                        app,
-                        "File Uploads",
-                    ))],
+                    text: vec![FormattedTextFragment::plain_text("File Uploads")],
                 })]),
                 appearance.ui_font_size(),
                 appearance.ui_font_family(),
@@ -488,19 +478,18 @@ impl FileUpload {
         &self,
         uploads: &HashMap<FileUploadId, FileUploadInfo>,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut upload_element = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_child(self.render_file_upload_header(appearance, app));
+            .with_child(self.render_file_upload_header(appearance));
 
         // Sort by ID.
         uploads
             .iter()
             .sorted_by(|upload_a, upload_b| Ord::cmp(upload_a.0, upload_b.0))
             .for_each(|(_upload_id, upload)| {
-                let file_upload = self.render_single_file_upload_info(upload, appearance, app);
+                let file_upload = self.render_single_file_upload_info(upload, appearance);
                 upload_element.add_child(file_upload);
             });
 

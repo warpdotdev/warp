@@ -4,20 +4,18 @@ pub mod content_section;
 pub use content_section::ContentSectionView;
 use warp_core::features::FeatureFlag;
 pub mod changelog_section;
-use crate::{
-    appearance::Appearance,
-    resource_center::{section_views::feature_section::FeatureSection, TipAction},
-};
 pub use changelog_section::ChangelogSectionView;
-use warpui::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable,
-        Icon, MouseStateHandle, ParentElement, ScrollbarWidth, Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable, Icon,
+    MouseStateHandle, ParentElement, ScrollbarWidth, Shrinkable,
 };
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, ViewContext, ViewHandle};
+
+use crate::appearance::Appearance;
+use crate::resource_center::section_views::feature_section::FeatureSection;
+use crate::resource_center::TipAction;
 
 pub const HEADER_FONT_SIZE: f32 = 16.;
 pub const SECTION_HEADER_FONT_SIZE: f32 = 16.;

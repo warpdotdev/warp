@@ -6,34 +6,31 @@
 
 use std::path::Path;
 
-use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ClippedScrollStateHandle, Container, Element, Flex, MouseStateHandle, ParentElement, Text,
-    },
-    AppContext, SingletonEntity, ViewContext,
-};
-
-use crate::{
-    ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType},
-    code_review::{
-        git_dialog::{
-            interactive_path_future, render_branch_section, render_file_changes_box,
-            should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog,
-            GitDialogAction, GitDialogEvent, GitDialogMode,
-        },
-        telemetry_event::{CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind},
-    },
-    server::server_api::{ai::AIClient, ServerApiProvider},
-    ui_components::icons::Icon,
-    util::git::{
-        create_pr, get_branch_commit_messages, get_branch_diff_entries, get_diff_for_pr,
-        FileChangeEntry, PrInfo,
-    },
-    view_components::{DismissibleToast, ToastLink},
-    workspace::ToastStack,
-};
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    ClippedScrollStateHandle, Container, Element, Flex, MouseStateHandle, ParentElement, Text,
+};
+use warpui::{AppContext, SingletonEntity, ViewContext};
+
+use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
+use crate::code_review::git_dialog::{
+    interactive_path_future, render_branch_section, render_file_changes_box,
+    should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog, GitDialogAction,
+    GitDialogEvent, GitDialogMode,
+};
+use crate::code_review::telemetry_event::{
+    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
+};
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::ui_components::icons::Icon;
+use crate::util::git::{
+    create_pr, get_branch_commit_messages, get_branch_diff_entries, get_diff_for_pr,
+    FileChangeEntry, PrInfo,
+};
+use crate::view_components::{DismissibleToast, ToastLink};
+use crate::workspace::ToastStack;
 
 /// PR-mode sub-actions, dispatched wrapped in `GitDialogAction::Pr`.
 #[derive(Clone, Debug, PartialEq)]
@@ -164,6 +161,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             }
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::GitDialogCompleted {
+                    is_local: Some(true),
                     operation: GitOperationKind::CreatePr,
                     status,
                     error,
@@ -236,12 +234,9 @@ pub(super) fn show_pr_created_toast(pr_info: &PrInfo, ctx: &mut ViewContext<GitD
     let window_id = ctx.window_id();
     let url = pr_info.url.clone();
     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let link =
-            ToastLink::new(crate::i18n::tr_static(ctx, "Open PR").to_string()).with_href(url);
-        let toast = DismissibleToast::default(
-            crate::i18n::tr_static(ctx, "PR successfully created.").to_string(),
-        )
-        .with_link(link);
+        let link = ToastLink::new("Open PR".to_string()).with_href(url);
+        let toast =
+            DismissibleToast::default("PR successfully created.".to_string()).with_link(link);
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -263,20 +258,16 @@ pub(super) fn render_body(
                 .with_margin_bottom(16.)
                 .finish(),
         )
-        .with_child(render_changes_section(state, appearance, app))
+        .with_child(render_changes_section(state, appearance))
         .finish()
 }
 
-fn render_changes_section(
-    state: &PrState,
-    appearance: &Appearance,
-    app: &AppContext,
-) -> Box<dyn Element> {
+fn render_changes_section(state: &PrState, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        crate::i18n::tr_static(app, "Changes"),
+        "Changes",
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

@@ -3,19 +3,18 @@ use std::sync::Arc;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
+use super::notebook_pane::subscribe_to_link_model;
+use super::view::PaneView;
+use super::{
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    ShareableLinkError,
+};
+use crate::app_state::{LeafContents, NotebookPaneSnapshot};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::{
-    app_state::{LeafContents, NotebookPaneSnapshot},
-    notebooks::file::{FileNotebookEvent, FileNotebookView},
-    terminal::model::session::Session,
-    workflows::WorkflowSelectionSource,
-};
-
-use super::{
-    notebook_pane::subscribe_to_link_model, view::PaneView, DetachType, PaneConfiguration,
-    PaneContent, PaneGroup, PaneId, ShareableLink, ShareableLinkError,
-};
+use crate::notebooks::file::{FileNotebookEvent, FileNotebookView};
+use crate::terminal::model::session::Session;
+use crate::workflows::WorkflowSelectionSource;
 
 pub struct FilePane {
     view: ViewHandle<PaneView<FileNotebookView>>,

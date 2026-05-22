@@ -1,13 +1,11 @@
 use itertools::Itertools;
-
-use crate::content::{
-    buffer::Buffer,
-    outline::BlockOutline,
-    selection_model::BufferSelectionModel,
-    text::{BlockType, BufferBlockStyle, IndentBehavior, TextStyles},
-};
 use string_offset::CharOffset;
 use warpui::App;
+
+use crate::content::buffer::Buffer;
+use crate::content::outline::BlockOutline;
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::{BlockType, BufferBlockStyle, IndentBehavior, TextStyles};
 
 #[test]
 fn test_no_blocks() {

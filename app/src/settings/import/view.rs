@@ -1,46 +1,36 @@
 use itertools::Itertools;
-use warp_core::{settings::Setting, ui::appearance::Appearance};
-
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::Keystroke,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        radio_buttons::{self, RadioButtonItem},
-    },
-    Element, Entity, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext,
+use warp_core::settings::Setting;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Border, Container, CornerRadius, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
-
-use warpui::ui_components::radio_buttons::RadioButtonStateHandle;
-
-use crate::{
-    report_if_error, send_telemetry_from_ctx,
-    settings::{
-        import::{
-            config::{Config, ParsedTerminalSetting, SettingType},
-            model::{ImportedConfigModel, TerminalTypeAndProfile},
-        },
-        AppEditorSettings, CursorBlink, FontSettings, GlobalHotkeyMode, SelectionSettings,
-        ThemeSettings,
-    },
-    terminal::{
-        alt_screen_reporting::AltScreenReporting, keys_settings::KeysSettings,
-        session_settings::SessionSettings,
-    },
-    themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind},
-    ui_components::blended_colors,
-    user_config::{self, WarpConfig},
-    window_settings::WindowSettings,
-    GlobalResourceHandlesProvider, TelemetryEvent,
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{self, RadioButtonItem, RadioButtonStateHandle};
+use warpui::{
+    Element, Entity, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
 use super::config::{QuakeModeWindow, ThemeType};
+use crate::settings::import::config::{Config, ParsedTerminalSetting, SettingType};
+use crate::settings::import::model::{ImportedConfigModel, TerminalTypeAndProfile};
+use crate::settings::{
+    AppEditorSettings, CursorBlink, FontSettings, GlobalHotkeyMode, SelectionSettings,
+    ThemeSettings,
+};
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::session_settings::SessionSettings;
+use crate::themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind};
+use crate::ui_components::blended_colors;
+use crate::user_config::{self, WarpConfig};
+use crate::window_settings::WindowSettings;
+use crate::{
+    report_if_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+};
 
 // UI does not scale, so we set a fixed size for all text.
 const FONT_SIZE: f32 = 14.;

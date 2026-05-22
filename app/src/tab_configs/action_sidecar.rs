@@ -1,21 +1,18 @@
 use warp_util::path::user_friendly_path;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Text,
-    },
-    platform::Cursor,
-    ui_components::{
-        button::{ButtonTooltipPosition, ButtonVariant},
-        components::{UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Text,
 };
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonTooltipPosition, ButtonVariant};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
-use crate::{
-    appearance::Appearance, settings::ai::DefaultSessionMode, tab_configs::TabConfig,
-    terminal::available_shells::AvailableShell, workspace::WorkspaceAction,
-};
+use crate::appearance::Appearance;
+use crate::settings::ai::DefaultSessionMode;
+use crate::tab_configs::TabConfig;
+use crate::terminal::available_shells::AvailableShell;
+use crate::workspace::WorkspaceAction;
 
 pub(crate) const SIDECAR_WIDTH: f32 = 260.;
 const SIDECAR_PADDING: f32 = 12.;

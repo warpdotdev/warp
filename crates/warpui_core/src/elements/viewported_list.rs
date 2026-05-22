@@ -1,30 +1,22 @@
 //! Module containing the definition of [`List`], an element that holds elements of various sizes
 //! and only lays out the elements that are visible in the viewport.
 
-use std::{
-    ops::{AddAssign, Range},
-    sync::Arc,
-};
+use std::cell::RefCell;
+use std::ops::{AddAssign, Range};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use derivative::Derivative;
 use derive_more::AddAssign;
 use ordered_float::OrderedFloat;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use sum_tree::SumTree;
 
-use crate::{
-    units::{IntoPixels, Pixels},
-    ClipBounds,
-};
-
-use super::{
-    new_scrollable::{NewScrollableElement, ScrollableAxis},
-    AppContext, Axis, Element, ScrollData, ScrollableElement, SizeConstraint,
-};
-use std::{cell::RefCell, rc::Rc};
+use super::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use super::{AppContext, Axis, Element, ScrollData, ScrollableElement, SizeConstraint};
+use crate::units::{IntoPixels, Pixels};
+use crate::ClipBounds;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd)]
 pub struct ScrollOffset {

@@ -1,36 +1,14 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
 use parking_lot::Mutex;
 use persistence::model::{AgentConversationData, ConversationUsageMetadata};
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
-    ServerAIConversationMetadata,
-};
-use crate::ai::ambient_agents::task::{TaskPrincipalInfo, TaskStatusMessage};
-use crate::ai::ambient_agents::AgentConfigSnapshot;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-};
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
-use crate::server::ids::ServerId;
-use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 
 use super::entry::{
     AgentConversationEntryId, AgentConversationNavigationSubject, AgentConversationProvenance,
@@ -41,9 +19,26 @@ use super::{
     ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
     RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
 };
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
+};
+use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
+use crate::ai::ambient_agents::{
+    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+use crate::server::ids::ServerId;
+use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::workspace::WorkspaceAction;
-use warp_cli::agent::Harness;
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -586,6 +581,7 @@ fn create_test_model() -> AgentConversationsModel {
         has_finished_initial_load: false,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+        dirty_since: None,
     }
 }
 

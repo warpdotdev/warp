@@ -1,9 +1,10 @@
+use uuid::Uuid;
+use warpui::{App, SingletonEntity};
+
 use crate::ai::agent::PassiveSuggestionTrigger;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-use uuid::Uuid;
-use warpui::{App, SingletonEntity};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()

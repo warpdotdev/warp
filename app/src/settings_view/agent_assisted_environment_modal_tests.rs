@@ -1,14 +1,15 @@
-use super::*;
-
-use crate::server::server_api::ServerApiProvider;
-use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workspace::ToastStack;
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use std::path::PathBuf;
+
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{ChildView, Empty};
 use warpui::platform::WindowStyle;
 use warpui::{App, AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::*;
+use crate::server::server_api::ServerApiProvider;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspace::ToastStack;
 
 fn init_modal_test_models(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -119,7 +120,7 @@ fn test_modal_show_renders_expected_copy_with_empty_repos_message() {
             let modal = harness.modal();
             let modal = modal.as_ref(ctx);
 
-            let selected_section = modal.render_selected_section(appearance);
+            let selected_section = modal.render_selected_section(appearance, ctx);
             let selected_text = selected_section.debug_text_content().unwrap_or_default();
             assert!(
                 selected_text.contains("Selected repos"),
@@ -132,7 +133,7 @@ fn test_modal_show_renders_expected_copy_with_empty_repos_message() {
                 selected_text
             );
 
-            let available_section = modal.render_available_section(appearance);
+            let available_section = modal.render_available_section(appearance, ctx);
             let available_text = available_section.debug_text_content().unwrap_or_default();
             assert!(
                 available_text.contains("Available indexed repos"),

@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use futures::{future::LocalBoxFuture, Future, FutureExt};
+use futures::future::LocalBoxFuture;
+use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{platform, r#async::executor::Error};
+use crate::platform;
+use crate::r#async::executor::Error;
 
 /// A handle to a task that will run on the main thread.
 pub struct ForegroundTask;

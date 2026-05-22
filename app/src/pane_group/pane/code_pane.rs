@@ -1,18 +1,13 @@
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
 
-use crate::{
-    app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents},
-    code::{
-        editor_management::{CodeEditorStatus, CodeManager, CodeSource},
-        view::{CodeView, CodeViewEvent},
-    },
-    pane_group::PaneGroup,
-};
-
 use super::{
     DetachType, PaneConfiguration, PaneContent, PaneId, PaneView, ShareableLink, ShareableLinkError,
 };
+use crate::app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents};
+use crate::code::editor_management::{CodeEditorStatus, CodeManager, CodeSource};
+use crate::code::view::{CodeView, CodeViewEvent};
+use crate::pane_group::PaneGroup;
 
 pub struct CodePane {
     view: ViewHandle<PaneView<CodeView>>,
@@ -137,8 +132,9 @@ impl PaneContent for CodePane {
                     // Track the opened file in the OpenedFilesModel
                     #[cfg(feature = "local_fs")]
                     {
-                        use crate::code::opened_files::OpenedFilesModel;
                         use repo_metadata::repositories::DetectedRepositories;
+
+                        use crate::code::opened_files::OpenedFilesModel;
 
                         if let Some(repo_root) =
                             DetectedRepositories::as_ref(ctx).get_root_for_path(location)

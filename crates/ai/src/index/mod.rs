@@ -7,7 +7,6 @@ pub mod full_source_code_embedding;
 
 #[cfg(feature = "local_fs")]
 pub use file_outline::build_outline;
-
 pub use file_outline::{Outline, Symbol};
 pub use repo_metadata::{BuildTreeError, DirectoryEntry, Entry, FileId, FileMetadata};
 

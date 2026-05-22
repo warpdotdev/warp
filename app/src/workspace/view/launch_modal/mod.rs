@@ -2,17 +2,12 @@
 pub mod cta_button;
 pub mod oz_launch;
 
+use std::collections::HashMap;
+
+use markdown_parser::{parse_markdown, FormattedText, FormattedTextLine};
 // Re-export slide types for convenience
 pub use oz_launch::OzLaunchSlide;
-
-use crate::settings::PrivacySettings;
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
-use crate::workspace::view::launch_modal::cta_button::{CTAButton, CTAButtonAction};
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use pathfinder_color::ColorU;
-use std::collections::HashMap;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
@@ -31,6 +26,12 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use crate::settings::PrivacySettings;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::workspace::view::launch_modal::cta_button::{CTAButton, CTAButtonAction};
 
 pub fn init<S: Slide>(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -109,32 +110,6 @@ where
     fn on_close(&self, _ctx: &mut ViewContext<LaunchModal<Self>>) {}
 }
 
-fn localize_formatted_text_line(app: &AppContext, line: &FormattedTextLine) -> FormattedTextLine {
-    fn localize_fragments(app: &AppContext, fragments: &mut [FormattedTextFragment]) {
-        for fragment in fragments {
-            fragment.text = crate::i18n::tr_text(app, &fragment.text).into_owned();
-        }
-    }
-
-    let mut localized = line.clone();
-    match &mut localized {
-        FormattedTextLine::Heading(header) => localize_fragments(app, &mut header.text),
-        FormattedTextLine::Line(line) => localize_fragments(app, line),
-        FormattedTextLine::OrderedList(list) => {
-            localize_fragments(app, &mut list.indented_text.text);
-        }
-        FormattedTextLine::UnorderedList(list) => localize_fragments(app, &mut list.text),
-        FormattedTextLine::TaskList(list) => localize_fragments(app, &mut list.text),
-        FormattedTextLine::CodeBlock(_)
-        | FormattedTextLine::LineBreak
-        | FormattedTextLine::HorizontalRule
-        | FormattedTextLine::Embedded(_)
-        | FormattedTextLine::Image(_)
-        | FormattedTextLine::Table(_) => {}
-    }
-    localized
-}
-
 pub struct StateHandles<S: Slide> {
     pub close_button: MouseStateHandle,
     pub slides: HashMap<S, SlideStateHandles>,
@@ -191,14 +166,14 @@ impl<S: Slide> LaunchModal<S> {
                     action: CTAButtonAction::NextSlide(next),
                     ..
                 } => {
-                    next_button.set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
+                    next_button.set_label(label, ctx);
                     next_button.set_on_click(
                         move |ctx| ctx.dispatch_typed_action(LaunchModalAction::SelectSlide(next)),
                         ctx,
                     );
                 }
                 CTAButton { label, .. } => {
-                    next_button.set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
+                    next_button.set_label(label, ctx);
                     next_button.set_on_click(
                         move |ctx| ctx.dispatch_typed_action(LaunchModalAction::<S>::Finish),
                         ctx,
@@ -215,8 +190,7 @@ impl<S: Slide> LaunchModal<S> {
                         action: CTAButtonAction::NextSlide(next),
                         ..
                     } => {
-                        secondary_button
-                            .set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
+                        secondary_button.set_label(label, ctx);
                         secondary_button.set_on_click(
                             move |ctx| {
                                 ctx.dispatch_typed_action(LaunchModalAction::SelectSlide(next))
@@ -225,8 +199,7 @@ impl<S: Slide> LaunchModal<S> {
                         );
                     }
                     CTAButton { label, .. } => {
-                        secondary_button
-                            .set_label(crate::i18n::tr_text(ctx, &label).into_owned(), ctx);
+                        secondary_button.set_label(label, ctx);
                         secondary_button.set_on_click(
                             move |ctx| {
                                 ctx.dispatch_typed_action(LaunchModalAction::<S>::FinishSecondary)
@@ -260,19 +233,16 @@ impl<S: Slide> LaunchModal<S> {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(LaunchModalAction::<S>::ToggleCheckbox))
             .finish();
 
-        let label = FormattedTextElement::from_str(
-            crate::i18n::tr_static(app, checkbox_config.label),
-            appearance.ui_font_family(),
-            12.,
-        )
-        .with_color(blended_colors::text_sub(
-            theme,
-            blended_colors::neutral_1(theme),
-        ))
-        .finish();
+        let label =
+            FormattedTextElement::from_str(checkbox_config.label, appearance.ui_font_family(), 12.)
+                .with_color(blended_colors::text_sub(
+                    theme,
+                    blended_colors::neutral_1(theme),
+                ))
+                .finish();
 
         let description = FormattedTextElement::from_str(
-            crate::i18n::tr_static(app, checkbox_config.description),
+            checkbox_config.description,
             appearance.ui_font_family(),
             12.,
         )
@@ -319,15 +289,12 @@ impl<S: Slide> LaunchModal<S> {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         for (i, (slide, display_text)) in slides_with_display_text.into_iter().enumerate() {
-            let mut label = FormattedTextElement::from_str(
-                crate::i18n::tr_static(app, display_text),
-                appearance.ui_font_family(),
-                14.,
-            )
-            .with_color(blended_colors::text_main(
-                theme,
-                blended_colors::neutral_1(theme),
-            ));
+            let mut label =
+                FormattedTextElement::from_str(display_text, appearance.ui_font_family(), 14.)
+                    .with_color(blended_colors::text_main(
+                        theme,
+                        blended_colors::neutral_1(theme),
+                    ));
             if slide == self.slide {
                 label = label.with_weight(Weight::Bold);
             }
@@ -388,7 +355,7 @@ impl<S: Slide> LaunchModal<S> {
                         .with_child(
                             Container::new({
                                 let text = FormattedTextElement::from_str(
-                                    crate::i18n::tr_static(app, self.slide.title()),
+                                    self.slide.title(),
                                     appearance.ui_font_family(),
                                     16.,
                                 )
@@ -436,11 +403,7 @@ impl<S: Slide> LaunchModal<S> {
                                 Shrinkable::new(
                                     1.,
                                     FormattedTextElement::new(
-                                        parse_markdown(crate::i18n::tr_static(
-                                            app,
-                                            self.slide.content(),
-                                        ))
-                                        .unwrap(),
+                                        parse_markdown(self.slide.content()).unwrap(),
                                         14.,
                                         appearance.ui_font_family(),
                                         appearance.ui_font_family(),
@@ -592,15 +555,11 @@ impl<S: Slide> View for LaunchModal<S> {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_child(
                     Container::new(
-                        {
-                            let modal_title = self.slide.modal_title();
-                            let modal_title = crate::i18n::tr_text(app, &modal_title).into_owned();
-                            FormattedTextElement::from_str(
-                                modal_title,
-                                appearance.ui_font_family(),
-                                24.,
-                            )
-                        }
+                        FormattedTextElement::from_str(
+                            self.slide.modal_title(),
+                            appearance.ui_font_family(),
+                            24.,
+                        )
                         .with_color(blended_colors::text_main(
                             theme,
                             blended_colors::neutral_1(theme),
@@ -611,22 +570,16 @@ impl<S: Slide> View for LaunchModal<S> {
                     .with_margin_bottom(12.)
                     .finish(),
                 )
-                .with_children({
-                    let modal_subtext_paragraphs = self
-                        .slide
+                .with_children(
+                    self.slide
                         .modal_subtext_paragraphs()
                         .iter()
-                        .map(|line| localize_formatted_text_line(app, line))
-                        .collect::<Vec<_>>();
-                    let last_index = modal_subtext_paragraphs.len().saturating_sub(1);
-                    modal_subtext_paragraphs
-                        .into_iter()
                         .enumerate()
-                        .map(move |(index, line)| {
-                            let is_last = index == last_index;
+                        .map(|(index, line)| {
+                            let is_last = index == self.slide.modal_subtext_paragraphs().len() - 1;
 
                             let text_element = FormattedTextElement::new(
-                                FormattedText::new([line]),
+                                FormattedText::new([line.clone()]),
                                 14.,
                                 appearance.ui_font_family(),
                                 appearance.ui_font_family(),
@@ -639,8 +592,8 @@ impl<S: Slide> View for LaunchModal<S> {
                             Container::new(text_element)
                                 .with_margin_bottom(if is_last { 40. } else { 8. })
                                 .finish()
-                        })
-                })
+                        }),
+                )
                 .with_child(Expanded::new(1., self.render_slide_controls(app)).finish())
                 .with_children(self.render_checkbox(app))
                 .finish(),

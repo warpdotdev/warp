@@ -1,6 +1,10 @@
-use crate::Event;
+use std::io::Write;
+use std::path::Path;
+use std::time::Duration;
+
 use instant::Instant;
-use std::{io::Write, path::Path, time::Duration};
+
+use crate::Event;
 
 /// Well-known key used to store the `ActionLog` inside `StepDataMap`.
 pub const ACTION_LOG_KEY: &str = "action_log";

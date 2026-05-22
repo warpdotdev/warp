@@ -18,29 +18,28 @@
 //! deregistered) is the parent's responsibility.
 use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    ai::blocklist::{
-        block::keyboard_navigable_buttons::{rich_navigation_button, KeyboardNavigableButtons},
-        inline_action::inline_action_header::{HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING},
-    },
-    send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    terminal::model::session::SessionId,
-    terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings},
-    ui_components::blended_colors,
-    Appearance,
+use crate::ai::blocklist::block::keyboard_navigable_buttons::{
+    rich_navigation_button, KeyboardNavigableButtons,
 };
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
+use crate::ui_components::blended_colors;
+use crate::{send_telemetry_from_ctx, Appearance};
 
 const PROMPT_BORDER_RADIUS: f32 = 8.;
 

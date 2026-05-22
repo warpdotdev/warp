@@ -1,11 +1,12 @@
-use warpui::{elements::MouseStateHandle, AppContext, Element};
-
-use crate::{appearance::Appearance, terminal::view::TerminalAction};
+use warpui::elements::MouseStateHandle;
+use warpui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerContent,
     InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::view::TerminalAction;
 
 #[derive(Clone, Copy, Debug)]
 pub enum SSHBannerAction {
@@ -32,24 +33,23 @@ pub struct SSHBannerState {
 pub fn render_inline_ssh_wrapper_banner(
     state: &SSHBannerState,
     appearance: &Appearance,
-    app: &AppContext,
 ) -> Box<dyn Element> {
     let label_text_color = appearance.theme().active_ui_text_color().into_solid();
 
     let (style, title) = if state.wrapper_enabled {
         (
             InlineBannerStyle::LowPriority,
-            crate::i18n::tr_static(app, "Warp SSH wrapper enabled").to_string(),
+            "Warp SSH wrapper enabled".to_string(),
         )
     } else {
         (
             InlineBannerStyle::VeryLowPriority,
-            crate::i18n::tr_static(app, "Warp SSH wrapper disabled").to_string(),
+            "Warp SSH wrapper disabled".to_string(),
         )
     };
     let buttons = vec![
         InlineBannerTextButton {
-            text: crate::i18n::tr_static(app, "Learn more").to_string(),
+            text: "Learn more".to_string(),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::LearnMore),
@@ -60,7 +60,7 @@ pub fn render_inline_ssh_wrapper_banner(
             variant: InlineBannerTextButtonVariant::Secondary,
         },
         InlineBannerTextButton {
-            text: crate::i18n::tr_static(app, "Settings").to_string(),
+            text: "Settings".to_string(),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::Settings),

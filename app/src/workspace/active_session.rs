@@ -1,10 +1,8 @@
+use std::collections::HashMap;
+use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WindowId};

@@ -10,8 +10,7 @@ use warpui::elements::{
     FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     SelectableArea, SelectionHandle, Text,
 };
-use warpui::fonts::Properties;
-use warpui::fonts::Weight;
+use warpui::fonts::{Properties, Weight};
 use warpui::prelude::{CornerRadius, Radius};
 use warpui::text_layout::TextAlignment;
 use warpui::ui_components::button::ButtonVariant;

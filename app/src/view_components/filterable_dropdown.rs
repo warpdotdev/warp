@@ -1,32 +1,29 @@
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+};
+use warpui::geometry::vector::vec2f;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
 use super::dropdown::{
     DropdownAction, DropdownItem, MenuHeaderTextFormatter, DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT,
     TOP_MENU_BAR_MAX_WIDTH,
 };
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant},
-    ui_components::icons,
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
 };
-use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
-    },
-    geometry::vector::vec2f,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant};
+use crate::ui_components::icons;
 
 const EMPTY_DROPDOWN_HEIGHT: f32 = 50.0;
 

@@ -1,25 +1,23 @@
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::context_flag::ContextFlag;
-use warpui::{keymap::Trigger, SingletonEntity, ViewContext, ViewHandle};
-
-use crate::{
-    cloud_object::{CloudObject, GenericStringObjectFormat, Space},
-    drive::{
-        drive_helpers::has_feature_gated_anonymous_user_reached_env_var_limit,
-        export::ExportManager, CloudObjectTypeAndId,
-    },
-    env_vars::active_env_var_collection_data::TrashStatus,
-    external_secrets::SecretManager,
-    i18n::{self, I18nKey},
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields},
-    pane_group::PaneEvent,
-    server::cloud_objects::update_manager::UpdateManager,
-    ui_components::icons::Icon,
-    util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke, CustomAction},
-    AppContext, CloudModel, FeatureFlag,
-};
+use warpui::keymap::Trigger;
+use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use super::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView, VariableRowIndex};
+use crate::cloud_object::{CloudObject, GenericStringObjectFormat, Space};
+use crate::drive::drive_helpers::has_feature_gated_anonymous_user_reached_env_var_limit;
+use crate::drive::export::ExportManager;
+use crate::drive::CloudObjectTypeAndId;
+use crate::env_vars::active_env_var_collection_data::TrashStatus;
+use crate::external_secrets::SecretManager;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::PaneEvent;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::{
+    keybinding_name_to_display_string, trigger_to_keystroke, CustomAction,
+};
+use crate::{AppContext, CloudModel, FeatureFlag};
 
 const PANE_MENU_WIDTH: f32 = 200.;
 
@@ -33,7 +31,7 @@ pub struct Menus {
 impl EnvVarCollectionView {
     pub(super) fn initialize_menus(ctx: &mut ViewContext<Self>) -> Menus {
         let command_item = Self::item(
-            i18n::tr(ctx, I18nKey::EnvVarsCommand),
+            "Command",
             EnvVarCollectionAction::DisplayCommandDialog,
             None,
             Some(Icon::Terminal),
@@ -54,14 +52,14 @@ impl EnvVarCollectionView {
         );
 
         let edit_item = Self::item(
-            i18n::tr(ctx, I18nKey::CommonEdit),
+            "Edit",
             EnvVarCollectionAction::EditCommand,
             None,
             Some(Icon::Terminal),
         );
 
         let clear_secret_item = Self::item(
-            i18n::tr(ctx, I18nKey::EnvVarsClearSecret),
+            "Clear secret",
             EnvVarCollectionAction::ClearSecret,
             None,
             Some(Icon::Trash),
@@ -374,7 +372,7 @@ impl EnvVarCollectionView {
         // Add "Copy Link" to menu
         if let Some(link) = self.env_var_collection_link(ctx) {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCopyLink))
+                MenuItemFields::new("Copy link")
                     .with_on_select_action(EnvVarCollectionAction::CopyLink(link))
                     .with_icon(Icon::Link)
                     .into_item(),
@@ -384,7 +382,7 @@ impl EnvVarCollectionView {
         // Add "Duplicate" to menu
         if space != Some(Space::Shared) {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonDuplicate))
+                MenuItemFields::new("Duplicate")
                     .with_on_select_action(EnvVarCollectionAction::Duplicate)
                     .with_icon(Icon::Duplicate)
                     .into_item(),
@@ -396,7 +394,7 @@ impl EnvVarCollectionView {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonTrash))
+                MenuItemFields::new("Trash")
                     .with_on_select_action(EnvVarCollectionAction::Trash)
                     .with_icon(Icon::Trash)
                     .into_item(),
@@ -405,7 +403,7 @@ impl EnvVarCollectionView {
 
         #[cfg(feature = "local_fs")]
         menu_items.push(
-            MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonExport))
+            MenuItemFields::new("Export")
                 .with_on_select_action(EnvVarCollectionAction::Export)
                 .with_icon(Icon::Download)
                 .into_item(),

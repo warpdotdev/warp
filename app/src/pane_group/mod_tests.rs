@@ -1,97 +1,23 @@
-use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::server::ids::ServerId;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::{
-    ai::{
-        active_agent_views_model::ActiveAgentViewsModel,
-        agent::{
-            api::ServerConversationToken,
-            conversation::{
-                AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
-            },
-        },
-        agent_conversations_model::AgentConversationsModel,
-        ambient_agents::github_auth_notifier::GitHubAuthNotifier,
-        ambient_agents::{
-            task::TaskPrincipalInfo, AgentSource, AmbientAgentTask, AmbientAgentTaskId,
-            AmbientAgentTaskState,
-        },
-        blocklist::{
-            agent_view::AgentViewEntryOrigin,
-            orchestration_event_streamer::OrchestrationEventStreamer,
-            orchestration_events::OrchestrationEventService,
-            task_status_sync_model::TaskStatusSyncModel, BlocklistAIHistoryModel,
-        },
-        document::ai_document_model::AIDocumentModel,
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        harness_availability::HarnessAvailabilityModel,
-        llms::LLMPreferences,
-        mcp::{
-            templatable_manager::TemplatableMCPServerManager, FileBasedMCPManager, FileMCPWatcher,
-        },
-        outline::RepoOutlines,
-        persisted_workspace::PersistedWorkspace,
-        restored_conversations::RestoredAgentConversations,
-        skills::SkillManager,
-        AIRequestUsageModel,
-    },
-    auth::{auth_manager::AuthManager, user::TEST_USER_UID},
-    changelog_model::ChangelogModel,
-    cloud_object::model::persistence::CloudModel,
-    cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions},
-    context_chips::prompt::Prompt,
-    experiments,
-    network::NetworkStatus,
-    notebooks::{
-        editor::keys::NotebookKeybindings, manager::NotebookManager, notebook::NotebookView,
-    },
-    pricing::PricingInfoModel,
-    resource_center::TipsCompleted,
-    search::files::model::FileSearchModel,
-    server::{
-        cloud_objects::{listener::Listener, update_manager::UpdateManager},
-        server_api::ServerApiProvider,
-        sync_queue::SyncQueue,
-        telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings::PrivacySettings,
-    settings_view::keybindings::KeybindingChangedNotifier,
-    suggestions::ignored_suggestions_model::IgnoredSuggestionsModel,
-    system::SystemStats,
-    terminal::history::History,
-    terminal::model::terminal_model::ConversationTranscriptViewerStatus,
-    terminal::{
-        alt_screen_reporting::AltScreenReporting,
-        keys::TerminalKeybindings,
-        local_tty::{spawner::PtySpawner, TerminalManager},
-        shared_session::{
-            IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
-            SharedSessionStatus,
-        },
-    },
-    test_util::settings::initialize_settings_for_tests,
-    undo_close::UndoCloseStack,
-    warp_managed_paths_watcher::WarpManagedPathsWatcher,
-    workflows::local_workflows::LocalWorkflows,
-    workspace::{
-        sync_inputs::SyncedInputState, ActiveSession, OneTimeModalModel, WorkspaceRegistry,
-    },
-    workspaces::{
-        team_tester::TeamTesterStatus, update_manager::TeamUpdateManager,
-        user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
-    },
-    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
+use std::collections::HashMap;
+
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
+use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
 };
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
-use repo_metadata::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
-use std::collections::HashMap;
+use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
+use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::windowing::state::ApplicationStage;
+use warpui::windowing::WindowManager;
+use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::{
@@ -99,17 +25,81 @@ use super::child_agent::{
     HiddenChildAgentTaskContext,
 };
 use super::*;
-use crate::terminal::resizable_data::ResizableData;
-use ai::{
-    index::full_source_code_embedding::manager::CodebaseIndexManager,
-    project_context::model::ProjectContextModel,
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
-use pathfinder_geometry::rect::RectF;
-use shared_session::permissions_manager::SessionPermissionsManager;
-use warpui::windowing::{state::ApplicationStage, WindowManager};
-use warpui::{
-    platform::{WindowBounds, WindowStyle},
-    App, ModelHandle,
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::ai::ambient_agents::task::TaskPrincipalInfo;
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::llms::LLMPreferences;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
+use crate::ai::outline::RepoOutlines;
+use crate::ai::persisted_workspace::PersistedWorkspace;
+use crate::ai::restored_conversations::RestoredAgentConversations;
+use crate::ai::skills::SkillManager;
+use crate::ai::AIRequestUsageModel;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::user::TEST_USER_UID;
+use crate::changelog_model::ChangelogModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+use crate::context_chips::prompt::Prompt;
+use crate::network::NetworkStatus;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::manager::NotebookManager;
+use crate::notebooks::notebook::NotebookView;
+use crate::pricing::PricingInfoModel;
+use crate::resource_center::TipsCompleted;
+use crate::search::files::model::FileSearchModel;
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ServerId;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::PrivacySettings;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
+use crate::system::SystemStats;
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::history::History;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::local_tty::TerminalManager;
+use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::{
+    IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
+    SharedSessionSource, SharedSessionStatus,
+};
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::undo_close::UndoCloseStack;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+use crate::workflows::local_workflows::LocalWorkflows;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::{ActiveSession, OneTimeModalModel, WorkspaceRegistry};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{
+    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
 };
 
 fn initialize_app(app: &mut App) {
@@ -2287,7 +2277,7 @@ fn test_stop_shared_session() {
                         terminal_view.attempt_to_share_session(
                             SharedSessionScrollbackType::None,
                             None,
-                            SessionSourceType::default(),
+                            SharedSessionSource::user(None),
                             false,
                             ctx,
                         );
@@ -2386,6 +2376,59 @@ fn test_navigation_skips_hidden_closed_panes() {
 
             // And next from A should skip B and go to C
             assert_eq!(panes.next_pane_id(a), Some(c));
+        })
+    });
+}
+
+/// Regression test: closing a host pane on the non-undo `close_pane` branch
+/// must clear its entry from `transitively_shared_child_panes`. The undo
+/// branch relies on `cleanup_closed_pane` to call
+/// `forget_transitively_shared_pane`, but the non-undo branch destroys the
+/// pane directly and previously skipped that cleanup, leaking stale entries.
+#[test]
+fn test_close_pane_clears_transitively_shared_child_entry_on_non_undo_branch() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let host_pane_id = get_newly_created_pane_id(panes, &[]);
+
+            // Add a sibling terminal so the host close does not trip the
+            // `pane_count() == 1` early return in `close_pane`'s non-undo
+            // branch.
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+
+            // Cascade an off-tree transitively-shared child onto the host
+            // pane id; this populates `transitively_shared_child_panes`.
+            let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
+                host_pane_id,
+                HashMap::new(),
+                IsSharedSessionCreator::Yes {
+                    source: SharedSessionSource::user(Some("host-task".to_string())),
+                },
+                ctx,
+            );
+
+            assert!(
+                panes
+                    .transitively_shared_child_panes
+                    .get(&host_pane_id)
+                    .is_some_and(|children| children.contains(&child_pane_id.into())),
+                "setup precondition: host should track its transitively-shared child"
+            );
+
+            // Close the host via the non-undo branch.
+            panes.close_pane(host_pane_id, ctx);
+
+            assert!(
+                !panes
+                    .transitively_shared_child_panes
+                    .contains_key(&host_pane_id),
+                "host entry must be cleared after close_pane on the non-undo branch"
+            );
         })
     });
 }

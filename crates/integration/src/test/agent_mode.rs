@@ -1,29 +1,31 @@
 //! Integration tests for text selection and copying functionality in AI blocks.
 //! This module tests AI blocks with markdown **enabled**.
 //! There are no tests with markdown disabled because Agent Mode Markdown has been fully rolled out.
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use super::new_builder;
-use crate::{util::skip_if_powershell_core_2303, Builder};
 use lazy_static::lazy_static;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::ToggleableSetting;
-use warp::{
-    cmd_or_ctrl_shift,
-    features::FeatureFlag,
-    integration_testing::{
-        clipboard::assert_clipboard_contains_string,
-        step::new_step_with_default_assertions,
-        terminal::{
-            assert_view_has_text_selection, clear_blocklist_to_remove_bootstrapped_blocks,
-            execute_echo_str, wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::single_terminal_view_for_tab,
-    },
-    settings::SelectionSettings,
+use warp::cmd_or_ctrl_shift;
+use warp::features::FeatureFlag;
+use warp::integration_testing::clipboard::assert_clipboard_contains_string;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::{
+    assert_view_has_text_selection, clear_blocklist_to_remove_bootstrapped_blocks,
+    execute_echo_str, wait_until_bootstrapped_single_pane_for_tab,
 };
+use warp::integration_testing::view_getters::single_terminal_view_for_tab;
+use warp::settings::SelectionSettings;
 use warp_multi_agent_api as api;
-use warpui::{async_assert, integration::TestStep, text::SelectionType, Event, SingletonEntity};
+use warpui::integration::TestStep;
+use warpui::text::SelectionType;
+use warpui::{async_assert, Event, SingletonEntity};
+
+use super::new_builder;
+use crate::util::skip_if_powershell_core_2303;
+use crate::Builder;
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {

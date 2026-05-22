@@ -1,41 +1,37 @@
-use super::{
-    settings_page::{
-        render_page_title, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-        SettingsWidget, HEADER_FONT_SIZE, PAGE_PADDING,
-    },
-    SettingsSection,
-};
-use crate::auth::AuthStateProvider;
-use crate::{
-    appearance::Appearance,
-    channel::{Channel, ChannelState},
-    i18n::{self, I18nKey},
-    menu::{Event as MenuEvent, Event, Menu, MenuItem, MenuItemFields},
-    server::{block::Block, server_api::block::BlockClient},
-    view_components::ToastFlavor,
-};
+use std::sync::Arc;
+
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 use pathfinder_geometry::vector::vec2f;
-use std::sync::Arc;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::clipboard::ClipboardContent;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Expanded, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, UniformList, UniformListState,
+};
+use warpui::fonts::Weight;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Dismiss, Expanded, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-        PositionedElementOffsetBounds, SavePosition, ScrollStateHandle, Scrollable,
-        ScrollableElement, Shrinkable, Stack, UniformList, UniformListState,
-    },
-};
-use warpui::{color::ColorU, elements::Radius};
-use warpui::{elements::ScrollbarWidth, fonts::Weight};
-use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use super::settings_page::{
+    render_page_title, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, HEADER_FONT_SIZE, PAGE_PADDING,
+};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::channel::{Channel, ChannelState};
+use crate::menu::{Event as MenuEvent, Event, Menu, MenuItem, MenuItemFields};
+use crate::server::block::Block;
+use crate::server::server_api::block::BlockClient;
+use crate::view_components::ToastFlavor;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
@@ -145,19 +141,14 @@ impl UserOwnedBlock {
         .finish()
     }
 
-    fn copy_link_button(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-        block_url: String,
-    ) -> Box<dyn Element> {
+    fn copy_link_button(&self, appearance: &Appearance, block_url: String) -> Box<dyn Element> {
         let button = appearance
             .ui_builder()
             .button(
                 ButtonVariant::Basic,
                 self.copy_button_mouse_state_handle.clone(),
             )
-            .with_text_label(crate::i18n::tr_static(app, "Copy link").into());
+            .with_text_label("Copy link".into());
 
         let button = if self.unshare_request_status == UnshareBlockRequestState::InFlight {
             button.disabled().build()
@@ -170,16 +161,11 @@ impl UserOwnedBlock {
         button.finish()
     }
 
-    fn link_text(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-        block_url: String,
-    ) -> Box<dyn Element> {
+    fn link_text(&self, appearance: &Appearance, block_url: String) -> Box<dyn Element> {
         if self.unshare_request_status == UnshareBlockRequestState::InFlight {
             appearance
                 .ui_builder()
-                .label(crate::i18n::tr_static(app, "Deleting..."))
+                .label("Deleting...")
                 .with_style(
                     UiComponentStyles::default()
                         .set_font_family_id(appearance.monospace_font_family())
@@ -203,7 +189,7 @@ impl UserOwnedBlock {
         }
     }
 
-    fn render(&self, appearance: &Appearance, app: &AppContext, index: usize) -> Box<dyn Element> {
+    fn render(&self, appearance: &Appearance, index: usize) -> Box<dyn Element> {
         let block_url = self.block_url();
         let command = appearance
             .ui_builder()
@@ -232,7 +218,7 @@ impl UserOwnedBlock {
                 .with_child(
                     Shrinkable::new(
                         1.,
-                        Container::new(self.link_text(appearance, app, block_url.clone())).finish(),
+                        Container::new(self.link_text(appearance, block_url.clone())).finish(),
                     )
                     .finish(),
                 )
@@ -240,7 +226,7 @@ impl UserOwnedBlock {
                     Shrinkable::new(
                         0.3,
                         Container::new(
-                            Align::new(self.copy_link_button(appearance, app, block_url))
+                            Align::new(self.copy_link_button(appearance, block_url))
                                 .right()
                                 .finish(),
                         )
@@ -311,28 +297,20 @@ impl GetBlocksForUserRequestState {
     fn render(
         &self,
         appearance: &Appearance,
-        app: &AppContext,
         list_state: UniformListState,
         scroll_state_handle: ScrollStateHandle,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         match self {
             GetBlocksForUserRequestState::NotStarted => pad(ui_builder
-                .label(crate::i18n::tr_static(
-                    app,
-                    "You don't have any shared blocks yet.",
-                ))
+                .label("You don't have any shared blocks yet.")
                 .build()
                 .finish()),
-            GetBlocksForUserRequestState::InFlight => pad(ui_builder
-                .label(crate::i18n::tr_static(app, "Getting blocks..."))
-                .build()
-                .finish()),
+            GetBlocksForUserRequestState::InFlight => {
+                pad(ui_builder.label("Getting blocks...").build().finish())
+            }
             GetBlocksForUserRequestState::Failed => pad(ui_builder
-                .label(crate::i18n::tr_static(
-                    app,
-                    "Failed to load blocks. Please try again.",
-                ))
+                .label("Failed to load blocks. Please try again.")
                 .build()
                 .finish()),
             GetBlocksForUserRequestState::Done(user_blocks) => {
@@ -355,7 +333,7 @@ impl GetBlocksForUserRequestState {
                                 .enumerate()
                                 .map(|(visible_index, (index, user_block))| {
                                     let user_block_element =
-                                        Container::new(user_block.render(appearance, app, index))
+                                        Container::new(user_block.render(appearance, index))
                                             .with_uniform_padding(10.);
 
                                     // Add a background on alternating blocks.
@@ -385,10 +363,7 @@ impl GetBlocksForUserRequestState {
                     .finish()
                 } else {
                     pad(ui_builder
-                        .label(crate::i18n::tr_static(
-                            app,
-                            "You don't have any shared blocks yet.",
-                        ))
+                        .label("You don't have any shared blocks yet.")
                         .build()
                         .finish())
                 }
@@ -449,8 +424,7 @@ impl ShowBlocksView {
 
             menu.set_items(
                 vec![MenuItem::Item(
-                    MenuItemFields::new(crate::i18n::tr_static(ctx, "Unshare"))
-                        .with_on_select_action(ShowBlocksAction::Unshare),
+                    MenuItemFields::new("Unshare").with_on_select_action(ShowBlocksAction::Unshare),
                 )],
                 ctx,
             );
@@ -675,7 +649,6 @@ impl ShowBlocksWidget {
         &self,
         view: &ShowBlocksView,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         ConstrainedBox::new(
@@ -684,7 +657,7 @@ impl ShowBlocksWidget {
                     .with_child(
                         Align::new(
                             ui_builder
-                                .label(crate::i18n::tr_static(app, "Unshare block"))
+                                .label("Unshare block")
                                 .with_style(UiComponentStyles {
                                     font_size: Some(appearance.header_font_size()),
                                     ..Default::default()
@@ -698,10 +671,7 @@ impl ShowBlocksWidget {
                     .with_child(
                         Container::new(
                             ui_builder
-                                .paragraph(crate::i18n::tr_static(
-                                    app,
-                                    UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT,
-                                ))
+                                .paragraph(UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT)
                                 .with_style(UiComponentStyles {
                                     font_size: Some(appearance.ui_font_size() * 1.16),
                                     ..Default::default()
@@ -722,9 +692,7 @@ impl ShowBlocksWidget {
                                                 ButtonVariant::Basic,
                                                 view.state_handles.cancel_dialog_handle.clone(),
                                             )
-                                            .with_text_label(
-                                                crate::i18n::tr_static(app, "Cancel").into(),
-                                            )
+                                            .with_text_label("Cancel".into())
                                             .build()
                                             .on_click(|ctx, _, _| {
                                                 ctx.dispatch_typed_action(
@@ -742,9 +710,7 @@ impl ShowBlocksWidget {
                                                         .confirm_dialog_handle
                                                         .clone(),
                                                 )
-                                                .with_text_label(
-                                                    crate::i18n::tr_static(app, "Unshare").into(),
-                                                )
+                                                .with_text_label("Unshare".into())
                                                 .build()
                                                 .on_click(|ctx, _, _| {
                                                     ctx.dispatch_typed_action(
@@ -788,11 +754,10 @@ impl SettingsWidget for ShowBlocksWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let element_for_state = view.get_blocks_for_user_status.render(
             appearance,
-            app,
             view.list_state.clone(),
             view.state_handles.scroll_state_handle.clone(),
         );
@@ -821,8 +786,7 @@ impl SettingsWidget for ShowBlocksWidget {
         if view.pending_unshared_block_index.is_some() {
             stack.add_positioned_child(
                 Dismiss::new(
-                    Align::new(self.render_confirm_delete_block_dialog(view, appearance, app))
-                        .finish(),
+                    Align::new(self.render_confirm_delete_block_dialog(view, appearance)).finish(),
                 )
                 .on_dismiss(|ctx, _app| ctx.dispatch_typed_action(ShowBlocksAction::CancelUnshare))
                 .finish(),
@@ -835,11 +799,7 @@ impl SettingsWidget for ShowBlocksWidget {
             );
         }
 
-        let header = render_page_title(
-            i18n::tr(app, I18nKey::SettingsNavSharedBlocks),
-            HEADER_FONT_SIZE,
-            appearance,
-        );
+        let header = render_page_title("Shared blocks", HEADER_FONT_SIZE, appearance);
         let col = Flex::column()
             .with_child(Container::new(header).with_margin_bottom(24.).finish())
             .with_child(Expanded::new(1., stack.finish()).finish());

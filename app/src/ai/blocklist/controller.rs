@@ -8,28 +8,47 @@ mod pending_response_streams;
 pub mod response_stream;
 pub(super) mod shared_session;
 mod slash_command;
+use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::anyhow;
+use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
+use itertools::Itertools;
+use parking_lot::FairMutex;
+use pending_response_streams::PendingResponseStreams;
+use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
+use warp_core::assertions::safe_assert;
+use warp_multi_agent_api::{message, Task, ToolType};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::response_stream::{ResponseStream, ResponseStreamEvent};
-use super::agent_view::AgentViewEntryOrigin;
-use super::ResponseStreamId;
-use super::{
-    action_model::{BlocklistAIActionEvent, BlocklistAIActionModel},
-    agent_view::{AgentViewController, AgentViewControllerEvent},
-    context_model::BlocklistAIContextModel,
-    history_model::BlocklistAIHistoryModel,
-    input_model::InputConfig,
-    BlocklistAIInputModel, InputType,
+use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
+use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
+use super::context_model::BlocklistAIContextModel;
+use super::history_model::BlocklistAIHistoryModel;
+use super::input_model::InputConfig;
+use super::orchestration_event_streamer::{
+    OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
+use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
+use super::{BlocklistAIInputModel, InputType, ResponseStreamId};
 use crate::ai::agent::api::{self, ServerConversationToken};
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, CancellationReason, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    PassiveSuggestionTriggerType, RunningCommand,
+    extract_user_query_mode, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
+    AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
+    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
+    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
+    StaticQueryType, UserQueryMode,
 };
-use crate::ai::agent::{DocumentContentAttachmentSource, FileContext};
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::ClaudeHarness;
@@ -37,58 +56,29 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
-use crate::ai::llms::LLMId;
-use crate::ai::{
-    agent::{
-        conversation::AIConversationId, extract_user_query_mode, AIAgentActionResultType,
-        AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-        AIIdentifiers, EntrypointType, FinishedAIAgentOutput, RenderableAIError, RequestCost,
-        RequestMetadata, StaticQueryType, UserQueryMode,
-    },
-    llms::LLMPreferences,
-    AIRequestUsageModel,
-};
+use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::model::block::{
     formatted_terminal_contents_for_input, BlockId, CURSOR_MARKER,
 };
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::SessionType;
+use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::{
-    model::session::{active_session::ActiveSession, SessionType},
-    model::terminal_model::TerminalModel,
-    ShellLaunchData,
-};
+use crate::terminal::ShellLaunchData;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
-use anyhow::anyhow;
-use chrono::{DateTime, Local};
-use itertools::Itertools;
-use parking_lot::FairMutex;
-use pending_response_streams::PendingResponseStreams;
-use session_sharing_protocol::common::ParticipantId;
-use std::collections::{HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use warp_core::assertions::safe_assert;
-use warp_multi_agent_api::{message, Task, ToolType};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-
-use super::orchestration_event_streamer::{
-    OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
-};
-use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {

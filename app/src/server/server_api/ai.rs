@@ -1,3 +1,10 @@
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
+use ai::index::full_source_code_embedding::{
+    self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
@@ -7,154 +14,142 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use prost::Message;
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
 use warp_core::channel::ChannelState;
-use warp_core::{features::FeatureFlag, report_error};
+use warp_core::features::FeatureFlag;
+use warp_core::report_error;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::client::Operation;
+use warp_graphql::mutations::confirm_file_artifact_upload::{
+    ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
+    ConfirmFileArtifactUploadVariables,
+};
+use warp_graphql::mutations::create_agent_task::{
+    CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
+};
+use warp_graphql::mutations::create_file_artifact_upload_target::{
+    CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
+    CreateFileArtifactUploadTargetResult, CreateFileArtifactUploadTargetVariables,
+};
+use warp_graphql::mutations::delete_ai_conversation::{
+    DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
+    DeleteConversationResult,
+};
+use warp_graphql::mutations::generate_code_embeddings::{
+    GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
+    GenerateCodeEmbeddingsVariables,
+};
+use warp_graphql::mutations::generate_commands::{
+    GenerateCommands, GenerateCommandsInput, GenerateCommandsResult, GenerateCommandsStatus,
+    GenerateCommandsVariables,
+};
+use warp_graphql::mutations::generate_dialogue::{
+    GenerateDialogue, GenerateDialogueInput,
+    GenerateDialogueResult as GenerateDialogueResultGraphql, GenerateDialogueStatus,
+    GenerateDialogueVariables, TranscriptPart as TranscriptPartGraphql,
+};
+use warp_graphql::mutations::generate_metadata_for_command::{
+    GenerateMetadataForCommand, GenerateMetadataForCommandInput, GenerateMetadataForCommandResult,
+    GenerateMetadataForCommandStatus, GenerateMetadataForCommandVariables,
+};
+use warp_graphql::mutations::populate_merkle_tree_cache::{
+    PopulateMerkleTreeCache, PopulateMerkleTreeCacheResult, PopulateMerkleTreeCacheVariables,
+};
+use warp_graphql::mutations::request_bonus::{
+    ProvideNegativeFeedbackResponseForAiConversation,
+    ProvideNegativeFeedbackResponseForAiConversationInput,
+    ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
+};
+use warp_graphql::mutations::update_agent_task::{
+    AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskResult,
+    UpdateAgentTaskVariables,
+};
+use warp_graphql::mutations::update_merkle_tree::{
+    MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
+    UpdateMerkleTreeVariables,
+};
+use warp_graphql::queries::codebase_context_config::{
+    CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
+};
+use warp_graphql::queries::free_available_models::{
+    FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
+    FreeAvailableModelsVariables,
+};
+use warp_graphql::queries::get_available_harnesses::{
+    GetAvailableHarnesses, GetAvailableHarnessesVariables,
+};
+use warp_graphql::queries::get_feature_model_choices::{
+    GetFeatureModelChoices, GetFeatureModelChoicesVariables,
+};
+use warp_graphql::queries::get_relevant_fragments::{
+    GetRelevantFragmentsQuery, GetRelevantFragmentsResult, GetRelevantFragmentsVariables,
+};
+#[cfg(not(feature = "agent_mode_evals"))]
+use warp_graphql::queries::get_request_limit_info::{
+    GetRequestLimitInfo, GetRequestLimitInfoVariables,
+};
+use warp_graphql::queries::get_scheduled_agent_history::{
+    GetScheduledAgentHistory, GetScheduledAgentHistoryVariables, ScheduledAgentHistory,
+    ScheduledAgentHistoryInput, ScheduledAgentHistoryResult,
+};
+use warp_graphql::queries::rerank_fragments::{
+    RerankFragments, RerankFragmentsResult, RerankFragmentsVariables,
+};
+use warp_graphql::queries::sync_merkle_tree::{
+    SyncMerkleTree, SyncMerkleTreeInput, SyncMerkleTreeResult, SyncMerkleTreeVariables,
+};
+use warp_graphql::queries::task_attachments::{
+    Task as TaskAttachmentsQuery, TaskInput, TaskResult, TaskVariables,
+};
+use warp_graphql::queries::task_git_credentials::{
+    TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
+    TaskGitCredentialsVariables,
+};
 use warp_multi_agent_api::ConversationData;
 
 use super::auth::AuthClient;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentConversationFormat, AIAgentHarness, AIAgentSerializedBlockFormat,
     ServerAIConversationMetadata,
 };
+pub use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+// Re-export ambient agent types for backwards compatibility
+pub use crate::ai::ambient_agents::{
+    task::{AttachmentInput, TaskAttachment},
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+};
 use crate::ai::artifacts::Artifact;
 use crate::ai::generate_code_review_content::api::{
     GenerateCodeReviewContentRequest, GenerateCodeReviewContentResponse,
+};
+use crate::ai::harness_availability::HarnessAvailability;
+use crate::ai::llms::{
+    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMSpec,
+    LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::ai::BonusGrant;
-use crate::ai::{agent::api::ServerConversationToken, harness_availability::HarnessAvailability};
+use crate::ai::RequestUsageInfo;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::requests::GenerateDialogueResult;
+use crate::ai_assistant::utils::TranscriptPart;
+use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError};
+use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
+use crate::server::graphql::{
+    default_request_options, get_request_context, get_user_facing_error_message,
+};
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
     ai::request_usage_model::BonusGrantScope,
     server::ids::ServerId,
     workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
-};
-use crate::{
-    ai::{
-        llms::{
-            AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider,
-            LLMSpec, LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
-        },
-        RequestUsageInfo,
-    },
-    ai_assistant::{
-        execution_context::WarpAiExecutionContext, requests::GenerateDialogueResult,
-        utils::TranscriptPart, AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError,
-    },
-    drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError},
-    server::graphql::{
-        default_request_options, get_request_context, get_user_facing_error_message,
-    },
-};
-use ai::index::full_source_code_embedding::{
-    self,
-    store_client::{IntermediateNode, StoreClient},
-    CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
-};
-use warp_graphql::client::Operation;
-#[cfg(not(feature = "agent_mode_evals"))]
-use warp_graphql::queries::get_request_limit_info::{
-    GetRequestLimitInfo, GetRequestLimitInfoVariables,
-};
-use warp_graphql::{
-    ai::{AgentTaskState, PlatformErrorCode},
-    mutations::{
-        confirm_file_artifact_upload::{
-            ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput,
-            ConfirmFileArtifactUploadResult, ConfirmFileArtifactUploadVariables,
-        },
-        create_agent_task::{
-            CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
-        },
-        create_file_artifact_upload_target::{
-            CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
-            CreateFileArtifactUploadTargetResult, CreateFileArtifactUploadTargetVariables,
-        },
-        delete_ai_conversation::{
-            DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
-            DeleteConversationResult,
-        },
-        generate_code_embeddings::{
-            GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
-            GenerateCodeEmbeddingsVariables,
-        },
-        generate_commands::{
-            GenerateCommands, GenerateCommandsInput, GenerateCommandsResult,
-            GenerateCommandsStatus, GenerateCommandsVariables,
-        },
-        generate_dialogue::{
-            GenerateDialogue, GenerateDialogueInput,
-            GenerateDialogueResult as GenerateDialogueResultGraphql, GenerateDialogueStatus,
-            GenerateDialogueVariables, TranscriptPart as TranscriptPartGraphql,
-        },
-        generate_metadata_for_command::{
-            GenerateMetadataForCommand, GenerateMetadataForCommandInput,
-            GenerateMetadataForCommandResult, GenerateMetadataForCommandStatus,
-            GenerateMetadataForCommandVariables,
-        },
-        populate_merkle_tree_cache::{
-            PopulateMerkleTreeCache, PopulateMerkleTreeCacheResult,
-            PopulateMerkleTreeCacheVariables,
-        },
-        request_bonus::{
-            ProvideNegativeFeedbackResponseForAiConversation,
-            ProvideNegativeFeedbackResponseForAiConversationInput,
-            ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
-        },
-        update_agent_task::{
-            AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput,
-            UpdateAgentTaskResult, UpdateAgentTaskVariables,
-        },
-        update_merkle_tree::{
-            MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
-            UpdateMerkleTreeVariables,
-        },
-    },
-    queries::task_git_credentials::{
-        TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
-        TaskGitCredentialsVariables,
-    },
-    queries::{
-        codebase_context_config::{
-            CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
-        },
-        free_available_models::{
-            FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
-            FreeAvailableModelsVariables,
-        },
-        get_available_harnesses::{GetAvailableHarnesses, GetAvailableHarnessesVariables},
-        get_feature_model_choices::{GetFeatureModelChoices, GetFeatureModelChoicesVariables},
-        get_relevant_fragments::{
-            GetRelevantFragmentsQuery, GetRelevantFragmentsResult, GetRelevantFragmentsVariables,
-        },
-        get_scheduled_agent_history::{
-            GetScheduledAgentHistory, GetScheduledAgentHistoryVariables, ScheduledAgentHistory,
-            ScheduledAgentHistoryInput, ScheduledAgentHistoryResult,
-        },
-        rerank_fragments::{RerankFragments, RerankFragmentsResult, RerankFragmentsVariables},
-        sync_merkle_tree::{
-            SyncMerkleTree, SyncMerkleTreeInput, SyncMerkleTreeResult, SyncMerkleTreeVariables,
-        },
-        task_attachments::{Task as TaskAttachmentsQuery, TaskInput, TaskResult, TaskVariables},
-    },
-};
-
-pub use crate::ai::agent::UserQueryMode;
-// Re-export ambient agent types for backwards compatibility
-pub use crate::ai::ambient_agents::{
-    task::{AttachmentInput, TaskAttachment},
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
 };
 
 const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;

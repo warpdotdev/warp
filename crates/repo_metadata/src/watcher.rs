@@ -1,18 +1,17 @@
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
-    future::Future,
-    hash::{Hash, Hasher},
-    path::{Path, PathBuf},
-    pin::Pin,
-};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
 use futures::{future::OptionFuture, FutureExt as _};
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
-use warp_util::standardized_path::StandardizedPath;
-
-use crate::{repository::SubscriberId, RepoMetadataError, Repository};
+use crate::repository::SubscriberId;
+use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -323,8 +322,9 @@ impl DirectoryWatcher {
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
                 watcher.update(ctx, |watcher, _ctx| {
-                    use crate::entry::repo_watch_filter;
                     use notify_debouncer_full::notify::RecursiveMode;
+
+                    use crate::entry::repo_watch_filter;
 
                     Some(watcher.register_path(
                         &local_path,

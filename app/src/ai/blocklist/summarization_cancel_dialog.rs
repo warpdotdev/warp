@@ -1,23 +1,16 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
-use warpui::{
-    elements::{Align, Container, CrossAxisAlignment, Dismiss, Flex, ParentElement, Stack},
-    keymap::FixedBinding,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{BorderStyle, Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::elements::{Align, Container, CrossAxisAlignment, Dismiss, Flex, ParentElement, Stack};
+use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{BorderStyle, Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
-use crate::ui_components::{
-    buttons,
-    dialog::{dialog_styles, Dialog},
-};
-
-use warpui::fonts::Weight;
+use crate::ui_components::buttons;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

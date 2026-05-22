@@ -2,13 +2,10 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use pathfinder_geometry::vector::vec2f;
 
-use crate::{
-    elements::{ChildView, ConstrainedBox, Rect},
-    platform::WindowStyle,
-    App, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
-};
-
 use super::*;
+use crate::elements::{ChildView, ConstrainedBox, Rect};
+use crate::platform::WindowStyle;
+use crate::{App, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId};
 
 lazy_static! {
     static ref PARENT_SIZE_FOR_DEFAULT_CHILD: Vector2F = vec2f(600., 600.);

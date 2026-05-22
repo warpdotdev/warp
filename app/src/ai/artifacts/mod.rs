@@ -19,8 +19,7 @@ use crate::notebooks::NotebookId;
 use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::server::server_api::ServerApiProvider;
 use crate::view_components::DismissibleToast;
-use crate::workspace::ToastStack;
-use crate::workspace::WorkspaceAction;
+use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub mod buttons;
 pub use buttons::{ArtifactButtonsRow, ArtifactButtonsRowEvent};

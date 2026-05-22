@@ -1,27 +1,23 @@
-use super::{
-    settings_page::{
-        render_body_item, AdditionalInfo, MatchData, PageType, SettingsPageMeta,
-        SettingsPageViewHandle, SettingsWidget,
-    },
-    LocalOnlyIconState, SettingsSection, ToggleState,
+use warp_core::features::FeatureFlag;
+use warp_core::report_if_error;
+use warp_core::settings::ToggleableSetting as _;
+use warpui::elements::{
+    Container, Element, Flex, MouseStateHandle, ParentElement, Shrinkable, Text,
 };
-use crate::{
-    appearance::Appearance,
-    auth::AuthStateProvider,
-    drive::settings::WarpDriveSettings,
-    i18n::{self, I18nKey},
+use warpui::fonts::Weight;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::settings_page::{
+    render_body_item, AdditionalInfo, MatchData, PageType, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
-use warp_core::{features::FeatureFlag, report_if_error, settings::ToggleableSetting as _};
-use warpui::{
-    elements::{Container, Element, Flex, MouseStateHandle, ParentElement, Shrinkable, Text},
-    fonts::Weight,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use super::{LocalOnlyIconState, SettingsSection, ToggleState};
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::drive::settings::WarpDriveSettings;
 
 #[derive(Debug, Clone)]
 pub enum WarpDriveSettingsPageAction {
@@ -138,13 +134,13 @@ impl SettingsWidget for WarpDriveHeaderWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
 
         let message = Container::new(
             Text::new_inline(
-                i18n::tr(app, I18nKey::WarpDriveSignUpPrompt).to_string(),
+                "To use Warp Drive, please create an account.".to_string(),
                 appearance.ui_font_family(),
                 14.,
             )
@@ -176,7 +172,7 @@ impl SettingsWidget for WarpDriveHeaderWidget {
                     }),
                     ..Default::default()
                 })
-                .with_text_label(i18n::tr(app, I18nKey::WarpDriveSignUpButton).to_owned())
+                .with_text_label("Sign up".to_owned())
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(WarpDriveSettingsPageAction::SignUp);
@@ -223,7 +219,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 .is_anonymous_or_logged_out();
 
         render_body_item::<WarpDriveSettingsPageAction>(
-            i18n::tr(app, I18nKey::WarpDriveLabel).into(),
+            "Warp Drive".into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),
                 on_click_action: Some(WarpDriveSettingsPageAction::OpenUrl(
@@ -247,11 +243,13 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     if !is_anonymous_or_logged_out {
-                        ctx.dispatch_typed_action(WarpDriveSettingsPageAction::ToggleShowWarpDrive);
+                        ctx.dispatch_typed_action(
+                            WarpDriveSettingsPageAction::ToggleShowWarpDrive,
+                        );
                     }
                 })
                 .finish(),
-            Some(i18n::tr(app, I18nKey::WarpDriveDescription).into()),
+            Some("Warp Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),
         )
     }
 }

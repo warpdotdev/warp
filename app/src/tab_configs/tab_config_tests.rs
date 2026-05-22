@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::launch_configs::launch_config::{PaneTemplateType, SplitDirection};
-
 use super::*;
+use crate::launch_configs::launch_config::{PaneTemplateType, SplitDirection};
 
 const WORKTREE_TOML: &str = r#"
 name = "New Worktree"

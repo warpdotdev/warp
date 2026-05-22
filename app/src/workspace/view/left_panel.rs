@@ -1,34 +1,47 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{send_telemetry_from_ctx, ui::Icon};
+use warp_core::ui::Icon;
 use warp_util::path::LineAndColumnArg;
+use warpui::elements::{
+    resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
+    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Resizable, ResizableStateHandle, Shrinkable,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment,
-        DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Resizable, ResizableStateHandle, Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::appearance::Appearance;
 use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
+use crate::code::file_tree::FileTreeView;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::drive::panel::{DrivePanel, DrivePanelEvent};
+use crate::drive::panel::{
+    DrivePanel, DrivePanelEvent, MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH,
+};
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
+use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
 use crate::pane_group::working_directories::WorkingDirectory;
-use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel};
+use crate::pane_group::{
+    PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel, {self},
+};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::terminal::resizable_data::{ModalType, ResizableData};
+use crate::ui_components::buttons::{icon_button, icon_button_with_color};
+use crate::ui_components::icons;
+use crate::util::bindings::keybinding_name_to_display_string;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
@@ -46,21 +59,8 @@ use crate::workspace::view::{
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
-use crate::{
-    appearance::Appearance,
-    code::file_tree::FileTreeView,
-    drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH},
-    pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT},
-    pane_group::{self},
-    terminal::resizable_data::{ModalType, ResizableData},
-    ui_components::{
-        buttons::{icon_button, icon_button_with_color},
-        icons,
-    },
-    util::bindings::keybinding_name_to_display_string,
-    workspace::WorkspaceAction,
-    TelemetryEvent,
-};
+use crate::workspace::WorkspaceAction;
+use crate::TelemetryEvent;
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -108,8 +108,9 @@ pub enum ToolPanelView {
 /// Encapsulates the active view state to enforce that all mutations go through
 /// `active_view_state::set`, which handles necessary side effects.
 mod active_view_state {
-    use super::ToolPanelView;
     use warpui::ViewContext;
+
+    use super::ToolPanelView;
 
     pub struct ActiveViewState(ToolPanelView);
 

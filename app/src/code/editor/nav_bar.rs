@@ -1,32 +1,27 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
-use warp_core::ui::{appearance::Appearance, theme::Fill};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
 use warp_editor::model::CoreEditorModel;
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
+    ParentElement, Shrinkable,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::units::IntoPixels;
 use warpui::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
-        ParentElement, Shrinkable,
-    },
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
-    units::IntoPixels,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    editor::InteractionState,
-    i18n::{self, I18nKey},
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, ButtonSize, NakedTheme},
-    view_components::find::FIND_BAR_PADDING,
-};
-
 use super::model::{CodeEditorModel, CodeEditorModelEvent};
+use crate::editor::InteractionState;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::view_components::find::FIND_BAR_PADDING;
 
 const NAV_BAR_HEIGHT: f32 = 40.;
 const NAV_BAR_ICON_SIZE: f32 = 16.;
@@ -76,15 +71,15 @@ impl NavBar {
             }
         });
 
-        let up_label_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new(i18n::tr(ctx, I18nKey::CommonPrevious), NakedTheme)
+        let up_label_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Previous", NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowUp)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateUp))
         });
 
-        let down_label_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new(i18n::tr(ctx, I18nKey::CommonNext), NakedTheme)
+        let down_label_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Next", NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowDown)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateDown))
@@ -153,7 +148,7 @@ impl NavBar {
     ) -> Box<dyn Element> {
         let diff_text = appearance
             .ui_builder()
-            .span(i18n::tr(app, I18nKey::CodeHunk))
+            .span("Hunk:")
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background).into()),
                 ..Default::default()
@@ -197,7 +192,7 @@ impl NavBar {
         .finish()
     }
 
-    fn render_revert_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_revert_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         Container::new(
             appearance
                 .ui_builder()
@@ -205,7 +200,7 @@ impl NavBar {
                     ButtonVariant::Outlined,
                     self.mouse_state_handles.revert_mouse_state.clone(),
                 )
-                .with_text_label(i18n::tr(app, I18nKey::CommonReject).to_string())
+                .with_text_label("Reject".to_string())
                 .build()
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(NavBarAction::Revert))
                 .finish(),
@@ -298,7 +293,7 @@ impl View for NavBar {
         // Do not render the revert button if there is nothing to revert or the editor is
         // not in an editable interaction state.
         if editable && total > 0 {
-            row.add_child(self.render_revert_button(appearance, app));
+            row.add_child(self.render_revert_button(appearance));
         }
 
         if matches!(self.behavior, NavBarBehavior::Closable) {

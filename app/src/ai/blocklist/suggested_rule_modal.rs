@@ -1,5 +1,21 @@
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, Flex, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, ScrollbarWidth,
+};
+use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::ai::agent::SuggestedRule;
-use crate::ai::facts::CloudAIFactModel;
+use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::Owner;
@@ -12,38 +28,13 @@ use crate::modal::{Modal, ModalEvent};
 use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
 use crate::server::cloud_objects::update_manager::{
-    ObjectOperation, OperationSuccessType, UpdateManagerEvent,
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::SyncId;
 use crate::server::telemetry::TelemetryEvent;
+use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    ai::facts::{AIFact, AIMemory},
-    server::cloud_objects::update_manager::UpdateManager,
-    ui_components::blended_colors,
-};
-use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
-    ChildAnchor, OffsetPositioning, PositionedElementAnchor, PositionedElementOffsetBounds,
-};
-use warpui::fonts::Weight;
-use warpui::keymap::FixedBinding;
-use warpui::{
-    elements::ClippedScrollStateHandle,
-    ui_components::components::{Coords, UiComponentStyles},
-};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ClippedScrollable, ConstrainedBox, Container, CornerRadius, Flex,
-        ParentElement, Radius, ScrollbarWidth,
-    },
-    ui_components::components::UiComponent,
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
 
 const HEADER_TEXT: &str = "Suggested rule";
 const MAX_EDITOR_HEIGHT: f32 = 240.;

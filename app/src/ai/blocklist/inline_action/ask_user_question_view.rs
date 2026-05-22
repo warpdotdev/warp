@@ -1,69 +1,63 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
-use ai::agent::{
-    action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType},
-    action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult},
-};
+use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
+use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
 use itertools::Itertools;
-use warp_core::ui::theme::{color::internal_colors, WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
+use warpui::elements::new_scrollable::SingleAxisConfig;
+use warpui::elements::{
+    Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Expanded, Fill, Flex, FormattedTextElement, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::Coords;
+use warpui::units::Pixels;
 use warpui::{
-    elements::{
-        new_scrollable::SingleAxisConfig, Border, ChildView, Clipped, ClippedScrollStateHandle,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
-        FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    keymap::{FixedBinding, Keystroke},
-    r#async::{SpawnedFutureHandle, Timer},
-    ui_components::components::Coords,
-    units::Pixels,
     AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, icons::yellow_stop_icon, task::TaskId, AIAgentActionId,
-            AIAgentActionResult, AIAgentActionResultType,
-        },
-        blocklist::{
-            action_model::{AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel},
-            block::{
-                compact_agent_input,
-                number_shortcut_buttons::{
-                    self, NumberShortcutButtonBuilder, NumberShortcutButtons,
-                    NumberShortcutButtonsConfig,
-                },
-                view_impl::{
-                    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
-                    CONTENT_ITEM_VERTICAL_MARGIN,
-                },
-            },
-            inline_action::{
-                inline_action_header::{
-                    ExpandedConfig, HeaderConfig, InteractionMode,
-                    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::{self, icon_size},
-                requested_action::CTRL_C_KEYSTROKE,
-            },
-            BlocklistAIHistoryModel,
-        },
-        execution_profiles::{profiles::AIExecutionProfilesModel, AskUserQuestionPermission},
-    },
-    terminal::input::message_bar::{
-        common::{render_standard_message, standard_message_bar_height, styles},
-        Message, MessageItem,
-    },
-    ui_components::{blended_colors, icons::Icon},
-    view_components::dropdown::{Dropdown, DropdownItem},
-    view_components::{
-        action_button::{ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme},
-        compactible_action_button::CompactibleActionButton,
-    },
-    Appearance,
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::icons::yellow_stop_icon;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentActionId, AIAgentActionResult, AIAgentActionResultType};
+use crate::ai::blocklist::action_model::{
+    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
+use crate::ai::blocklist::block::compact_agent_input;
+use crate::ai::blocklist::block::number_shortcut_buttons::{
+    self, NumberShortcutButtonBuilder, NumberShortcutButtons, NumberShortcutButtonsConfig,
+};
+use crate::ai::blocklist::block::view_impl::{
+    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
+    CONTENT_ITEM_VERTICAL_MARGIN,
+};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
+use crate::ai::blocklist::inline_action::requested_action::CTRL_C_KEYSTROKE;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::AskUserQuestionPermission;
+use crate::terminal::input::message_bar::common::{
+    render_standard_message, standard_message_bar_height, styles,
+};
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::CompactibleActionButton;
+use crate::view_components::dropdown::{Dropdown, DropdownItem};
+use crate::Appearance;
 
 const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 

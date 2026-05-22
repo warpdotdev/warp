@@ -1,79 +1,62 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::Local;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::Arc;
+use settings::Setting;
 use thousands::Separable;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_graphql::billing::AddonCreditsOption;
+use warpui::elements::{
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
 use warpui::prelude::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-        Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
     ViewContext, ViewHandle,
 };
 
-use settings::Setting;
-
-use crate::{
-    ai::{
-        request_usage_model::{
-            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
-        },
-        AIRequestUsageModel,
-    },
-    auth::{
-        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
-    },
-    modal::{Modal, ModalEvent, ModalViewState},
-    pricing::PricingInfoModel,
-    send_telemetry_from_ctx,
-    server::{ids::ServerId, telemetry::TelemetryEvent},
-    settings::ai::AISettings,
-    ui_components::{
-        blended_colors,
-        buttons::icon_button,
-        icons::Icon,
-        tab_selector::{self, SettingsTab},
-    },
-    view_components::{
-        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
-        ToastFlavor,
-    },
-    workspaces::{
-        update_manager::TeamUpdateManager,
-        user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-        workspace::{CustomerType, Workspace, WorkspaceUid},
-    },
-    WorkspaceAction,
-};
-
-use super::{
-    billing_and_usage::{
-        billing_cycle_usage_section::BillingCycleUsageSectionView,
-        overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
-        usage_history_entry::UsageHistoryEntry,
-        usage_history_model::UsageHistoryModel,
-    },
-    billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
-    SettingsSection,
-};
-
+use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSectionView;
+use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
+use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
+use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
+use super::billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab};
+use super::settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo};
+use super::SettingsSection;
+use crate::ai::request_usage_model::{
+    BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
+};
+use crate::ai::AIRequestUsageModel;
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pricing::PricingInfoModel;
+use crate::server::ids::ServerId;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::ai::AISettings;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::ui_components::tab_selector::{self, SettingsTab};
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::view_components::ToastFlavor;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
+use crate::{send_telemetry_from_ctx, WorkspaceAction};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =

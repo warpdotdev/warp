@@ -1,33 +1,26 @@
 //! Components for the notebook header.
 
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::{
-        Container, CrossAxisAlignment, Flex, Highlight, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Container, CrossAxisAlignment, Flex, Highlight, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Shrinkable,
 };
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
-use crate::{
-    appearance::Appearance,
-    cloud_object::{
-        breadcrumbs::ContainingObject,
-        model::view::{Editor, EditorState},
-    },
-    drive::sharing::ContentEditability,
-    notebooks::{active_notebook_data::Mode, styles},
-    ui_components::{
-        breadcrumb::{render_breadcrumbs, BreadcrumbState},
-        buttons::{accent_icon_button, icon_button},
-        icons::Icon,
-    },
-    workspaces::user_profiles::UserProfiles,
-};
-
-use super::{super::active_notebook_data::ActiveNotebookData, NotebookAction, EDIT_BUTTON_MARGIN};
+use super::super::active_notebook_data::ActiveNotebookData;
+use super::{NotebookAction, EDIT_BUTTON_MARGIN};
+use crate::appearance::Appearance;
+use crate::cloud_object::breadcrumbs::ContainingObject;
+use crate::cloud_object::model::view::{Editor, EditorState};
+use crate::drive::sharing::ContentEditability;
+use crate::notebooks::active_notebook_data::Mode;
+use crate::notebooks::styles;
+use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::buttons::{accent_icon_button, icon_button};
+use crate::ui_components::icons::Icon;
+use crate::workspaces::user_profiles::UserProfiles;
 
 /// Component to show details about a notebook:
 /// * Interactive breadcrumbs for its location within Warp Drive

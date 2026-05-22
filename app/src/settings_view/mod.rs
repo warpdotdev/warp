@@ -1,37 +1,13 @@
-use self::telemetry::SettingsTelemetryEvent;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::TelemetryEvent;
-use crate::{
-    ai::execution_profiles::profiles::ClientProfileId,
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextColors, TextOptions,
-    },
-    i18n::{self, I18nKey},
-    menu::{self, Menu, MenuItem, MenuItemFields},
-    pane_group::{
-        pane::view, BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState,
-    },
-    server::server_api::ServerApiProvider,
-    settings::{AISettings, BlockVisibilitySettings, LanguageSettings, SettingsFileError},
-    settings_view::mcp_servers_page::MCPServersSettingsPageEvent,
-    terminal::{model::blockgrid::BlockGrid, SizeInfo},
-    ui_components::icons,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
-    view_components::ToastFlavor,
-    workspace::WorkspaceAction,
-    GlobalResourceHandlesProvider,
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
-use code_page::CodeSubpage;
-use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
+use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;
@@ -48,32 +24,51 @@ use settings_page::{
     HEADER_PADDING,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::{
-    channel::ChannelState, context_flag::ContextFlag, features::FeatureFlag,
-    settings::ToggleableSetting as _, ui::theme::color::internal_colors,
-};
+use warp_core::settings::ToggleableSetting as _;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpify_page::{WarpifyPageAction, WarpifyPageView};
-use warpui::Element;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::{ContextPredicate, EnabledPredicate, FixedBinding},
-    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
-    View, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
+    EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
+use warpui::{
+    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateView as _, View, ViewContext, ViewHandle,
+};
+
+use self::telemetry::SettingsTelemetryEvent;
+use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextColors, TextOptions,
+};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
+use crate::settings::{AISettings, BlockVisibilitySettings, SettingsFileError};
+use crate::settings_view::mcp_servers_page::{MCPServersSettingsPage, MCPServersSettingsPageEvent};
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::SizeInfo;
+use crate::ui_components::icons;
+use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::view_components::ToastFlavor;
+use crate::workspace::WorkspaceAction;
+use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
 mod admin_actions;
@@ -174,10 +169,8 @@ pub(super) fn render_model_chips(
     appearance: &Appearance,
     text_color: warp_core::ui::theme::Fill,
 ) -> Box<dyn Element> {
-    use warpui::ui_components::{
-        chip::Chip,
-        components::{UiComponent, UiComponentStyles},
-    };
+    use warpui::ui_components::chip::Chip;
+    use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 
     let theme = appearance.theme();
     let chip_border = internal_colors::neutral_4(theme).into();
@@ -263,8 +256,9 @@ pub enum SettingsSection {
     OzCloudAPIKeys,
 }
 
-use crate::util::bindings::custom_tag_to_keystroke;
 use std::fmt::{self, Display};
+
+use crate::util::bindings::custom_tag_to_keystroke;
 
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -289,38 +283,6 @@ impl Display for SettingsSection {
 }
 
 impl SettingsSection {
-    pub fn localized_label(self, app: &AppContext) -> &'static str {
-        use crate::i18n::{self, I18nKey};
-
-        let key = match self {
-            Self::About => I18nKey::SettingsNavAbout,
-            Self::Account => I18nKey::SettingsNavAccount,
-            Self::MCPServers => I18nKey::SettingsNavMcpServers,
-            Self::BillingAndUsage => I18nKey::SettingsNavBillingAndUsage,
-            Self::Appearance => I18nKey::SettingsNavAppearance,
-            Self::Features => I18nKey::SettingsNavFeatures,
-            Self::Keybindings => I18nKey::SettingsNavKeybindings,
-            Self::Privacy => I18nKey::SettingsNavPrivacy,
-            Self::Referrals => I18nKey::SettingsNavReferrals,
-            Self::SharedBlocks => I18nKey::SettingsNavSharedBlocks,
-            Self::Teams => I18nKey::SettingsNavTeams,
-            Self::WarpDrive => I18nKey::SettingsNavWarpDrive,
-            Self::Warpify => I18nKey::SettingsNavWarpify,
-            Self::AI | Self::WarpAgent => I18nKey::SettingsNavWarpAgent,
-            Self::AgentProfiles => I18nKey::SettingsNavAgentProfiles,
-            Self::AgentMCPServers => I18nKey::SettingsNavAgentMcpServers,
-            Self::Knowledge => I18nKey::SettingsNavKnowledge,
-            Self::ThirdPartyCLIAgents => I18nKey::SettingsNavThirdPartyCliAgents,
-            Self::Code => I18nKey::SettingsNavCode,
-            Self::CodeIndexing => I18nKey::SettingsNavCodeIndexing,
-            Self::EditorAndCodeReview => I18nKey::SettingsNavEditorAndCodeReview,
-            Self::CloudEnvironments => I18nKey::SettingsNavCloudEnvironments,
-            Self::OzCloudAPIKeys => I18nKey::SettingsNavOzCloudApiKeys,
-        };
-
-        i18n::tr(app, key)
-    }
-
     /// Returns true if this section is a subpage under any umbrella.
     pub fn is_subpage(&self) -> bool {
         self.is_ai_subpage() || self.is_code_subpage() || self.is_cloud_platform_subpage()
@@ -1084,8 +1046,7 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration =
-            ctx.add_model(|ctx| PaneConfiguration::new(crate::i18n::tr_static(ctx, "Settings")));
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1219,23 +1180,11 @@ impl SettingsView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(
-                crate::i18n::tr(ctx, crate::i18n::I18nKey::SettingsSearchPlaceholder),
-                ctx,
-            );
+            editor.set_placeholder_text("Search", ctx);
             editor
         });
 
         ctx.subscribe_to_view(&search_editor, Self::handle_search_editor_event);
-        ctx.subscribe_to_model(&LanguageSettings::handle(ctx), |me, _, _, ctx| {
-            me.search_editor.update(ctx, |editor, ctx| {
-                editor.set_placeholder_text(
-                    crate::i18n::tr(ctx, crate::i18n::I18nKey::SettingsSearchPlaceholder),
-                    ctx,
-                );
-            });
-            ctx.notify();
-        });
 
         let context_menu = ctx.add_typed_action_view(|_| {
             Menu::new()
@@ -1274,19 +1223,19 @@ impl SettingsView {
         let mut nav_items = vec![
             SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                crate::i18n::I18nKey::SettingsNavAgents,
+                "Agents",
                 SettingsSection::ai_subpages().to_vec(),
             )),
             SettingsNavItem::Page(SettingsSection::BillingAndUsage),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                crate::i18n::I18nKey::SettingsNavCode,
+                "Code",
                 vec![
                     SettingsSection::CodeIndexing,
                     SettingsSection::EditorAndCodeReview,
                 ],
             )),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                crate::i18n::I18nKey::SettingsNavCloudPlatform,
+                "Cloud platform",
                 vec![
                     SettingsSection::CloudEnvironments,
                     SettingsSection::OzCloudAPIKeys,
@@ -1590,28 +1539,28 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneRight))
+                MenuItemFields::new("Split pane right")
                     .with_on_select_action(SettingsAction::Split(Direction::Right))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_right",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneLeft))
+                MenuItemFields::new("Split pane left")
                     .with_on_select_action(SettingsAction::Split(Direction::Left))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_left",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneDown))
+                MenuItemFields::new("Split pane down")
                     .with_on_select_action(SettingsAction::Split(Direction::Down))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_down",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonSplitPaneUp))
+                MenuItemFields::new("Split pane up")
                     .with_on_select_action(SettingsAction::Split(Direction::Up))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_up",
@@ -1640,7 +1589,7 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonClosePane))
+                MenuItemFields::new("Close pane")
                     .with_on_select_action(SettingsAction::Close)
                     .with_key_shortcut_label(
                         custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
@@ -2315,22 +2264,15 @@ impl SettingsView {
         .finish()
     }
 
-    fn render_search_zero_state(
-        &self,
-        app: &AppContext,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
+    fn render_search_zero_state(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         Container::new(
             Align::new(
                 Flex::column()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_children([
                         Text::new(
-                            crate::i18n::tr(
-                                app,
-                                crate::i18n::I18nKey::SettingsSearchNoResultsTitle,
-                            ),
+                            "No settings match your search.",
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2338,10 +2280,7 @@ impl SettingsView {
                         .with_color(theme.sub_text_color(theme.background()).into_solid())
                         .finish(),
                         Text::new(
-                            crate::i18n::tr(
-                                app,
-                                crate::i18n::I18nKey::SettingsSearchNoResultsDescription,
-                            ),
+                            "You may want to try using different keywords or checking for any possible typos.",
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2352,7 +2291,7 @@ impl SettingsView {
             )
             .finish(),
         )
-        .with_uniform_margin(16.)
+            .with_uniform_margin(16.)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
         .finish()
@@ -2376,7 +2315,7 @@ impl View for SettingsView {
         // (e.g. Oz -> AI, AgentMCPServers -> MCPServers).
         let content_page_section = self.current_settings_page.parent_page_section();
         let (page, current_page_handle) = if settings_pages.is_empty() {
-            (self.render_search_zero_state(app, appearance), None)
+            (self.render_search_zero_state(appearance), None)
         } else {
             match settings_pages
                 .iter()
@@ -2404,7 +2343,7 @@ impl View for SettingsView {
                     {
                         let page_active = section == self.current_settings_page;
                         buttons.add_child(
-                            page.render_page_button(app, appearance, *match_data, page_active)
+                            page.render_page_button(appearance, *match_data, page_active)
                                 .on_click(move |ctx, _, _| {
                                     ctx.dispatch_typed_action(SettingsAction::SelectAndRefresh(
                                         section,
@@ -2437,7 +2376,7 @@ impl View for SettingsView {
                     // across the full clickable area, not just the text.
                     buttons.add_child(
                         umbrella
-                            .render_umbrella_row(app, appearance)
+                            .render_umbrella_row(appearance)
                             .on_click(move |ctx, _, _| {
                                 ctx.dispatch_typed_action(SettingsAction::ToggleUmbrella(
                                     nav_index,
@@ -2468,9 +2407,9 @@ impl View for SettingsView {
                             }
 
                             let is_active = subpage_section == self.current_settings_page;
-                            if let Some(hoverable) = umbrella.render_subpage_button(
-                                sub_idx, app, appearance, match_data, is_active,
-                            ) {
+                            if let Some(hoverable) = umbrella
+                                .render_subpage_button(sub_idx, appearance, match_data, is_active)
+                            {
                                 buttons.add_child(
                                     hoverable
                                         .on_click(move |ctx, _, _| {
@@ -2759,9 +2698,9 @@ impl BackingView for SettingsView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple(crate::i18n::tr_static(app, "Settings"))
+        view::HeaderContent::simple("Settings")
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

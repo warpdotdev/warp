@@ -2,13 +2,15 @@
 //! an active `OrchestrationConfigSnapshot`. Shows a "Use orchestration"
 //! toggle, Cloud/Local picker, and run-wide config dropdowns.
 
+use std::collections::HashMap;
+
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
 use warp_cli::agent::Harness;
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
@@ -19,8 +21,6 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use crate::workspace::WorkspaceAction;
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
@@ -46,8 +46,8 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
+use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
-use warp_core::ui::theme::WarpTheme;
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {

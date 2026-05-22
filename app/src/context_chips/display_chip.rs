@@ -1,15 +1,45 @@
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{Cache, FamilyId, Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, EntityId, Gradient, ModelHandle, SingletonEntity, TypedActionView,
+    View, ViewContext, ViewHandle,
+};
+
+use super::directory_fetcher::{
+    DirectoryFetcher, DirectoryFetcherEvent, DirectoryItem, DirectoryType,
+};
+use super::display_menu::{
+    ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
+};
+use super::{
+    agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
+    ContextChipKind,
+};
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
-use crate::ai::{
-    blocklist::{BlocklistAIContextModel, BlocklistAIInputModel},
-    document::ai_document_model::{AIDocumentId, AIDocumentVersion},
-};
+use crate::ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputModel};
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::code_review::code_review_view::CODE_REVIEW_TOOLTIP_TEXT;
 use crate::code_review::diff_state::DiffStats;
+use crate::completer::SessionContext;
 use crate::context_chips::git_branch_on_click::{
     is_plausible_new_branch_name, GitBranchOnClickValue,
 };
@@ -28,40 +58,8 @@ use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::truncation::truncate_from_beginning;
 use crate::view_components::action_button::{ActionButtonTheme, NakedTheme};
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::path::PathBuf;
-use warp_core::ui::theme::Fill;
-use warp_core::{features::FeatureFlag, ui::theme::color::internal_colors};
-use warpui::elements::Empty;
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::ui_components::components::{Coords, UiComponent};
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    fonts::{Cache, FamilyId, Properties, Weight},
-    AppContext, Element, Entity, EntityId, Gradient, ModelHandle, SingletonEntity, TypedActionView,
-    View, ViewContext, ViewHandle,
-};
-
-use crate::appearance::Appearance;
-use crate::completer::SessionContext;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
-
-use super::{
-    agent_view_chip_color,
-    directory_fetcher::{DirectoryFetcher, DirectoryFetcherEvent, DirectoryItem, DirectoryType},
-    display_menu::{
-        ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
-    },
-    github_pr_display_text_from_url, render_text_from_kind, ChipResult, ContextChipKind,
-};
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Helper function to render git diff stats content (file icon or +- icons, file count, bullet, +/- counts)
 /// Used by both the context chips and the AI control panel

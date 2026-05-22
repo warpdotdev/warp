@@ -1,4 +1,16 @@
-use super::{EditorAction, EditorView, VoiceTranscriptionOptions};
+use settings::Setting as _;
+use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::elements::{Container, CornerRadius, Icon, Radius};
+use warpui::platform::Cursor;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::ui_components::button::ButtonTooltipPosition;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{elements, AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
+
+use super::{EditorAction, EditorView, VoiceTranscriber, VoiceTranscriptionOptions};
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::editor::EditorElement;
@@ -11,21 +23,6 @@ use crate::ui_components::icons;
 use crate::view_components::{FeaturePopup, NewFeaturePopupLabel};
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use settings::Setting as _;
-use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements;
-use warpui::elements::{Container, CornerRadius, Icon, Radius};
-use warpui::platform::Cursor;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ViewHandle;
-use warpui::{AppContext, Element, SingletonEntity, ViewContext};
-
-use super::VoiceTranscriber;
 
 const MICROPHONE_ACCESS_ERROR_ID: &str = "MICROPHONE_ACCESS_ERROR";
 const NUM_TIMES_TO_SHOW_VOICE_NEW_FEATURE_POPUP: usize = 4;

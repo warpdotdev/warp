@@ -1,49 +1,38 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use itertools::Itertools;
-use std::{collections::HashMap, rc::Rc};
 use strum::IntoEnumIterator;
-use warp_core::ui::{appearance::Appearance, theme::Fill};
+use strum_macros::{EnumIter, IntoStaticStr};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, EventHandler,
+    Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::geometry::vector::vec2f;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::text::Span;
+use warpui::ui_components::toggle_menu::{ToggleMenuItem, ToggleMenuStateHandle};
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, EventHandler,
-        Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
-        ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    geometry::vector::vec2f,
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        text::Span,
-        toggle_menu::{ToggleMenuItem, ToggleMenuStateHandle},
-    },
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    editor::{
-        EditorOptions, EditorView, EnterSettings, Event as EditorEvent, InteractionState,
-        PropagateAndNoOpNavigationKeys, TextOptions,
-    },
-    server::ids::SyncId,
-    ui_components::{
-        buttons::{highlight, icon_button},
-        icons::{self, Icon},
-    },
-    workflows::workflow::ArgumentType,
-};
-
-use warpui::platform::Cursor;
-
-use warpui::{
-    elements::{ParentAnchor, ParentOffsetBounds},
-    fonts::FamilyId,
-};
-
-use crate::editor::EnterAction;
-use strum_macros::{EnumIter, IntoStaticStr};
-
 use super::enum_creation_dialog::WorkflowEnumData;
+use crate::editor::{
+    EditorOptions, EditorView, EnterAction, EnterSettings, Event as EditorEvent, InteractionState,
+    PropagateAndNoOpNavigationKeys, TextOptions,
+};
+use crate::server::ids::SyncId;
+use crate::ui_components::buttons::{highlight, icon_button};
+use crate::ui_components::icons::{self, Icon};
+use crate::workflows::workflow::ArgumentType;
 
 const ARGUMENT_DEFAULT_VALUE_PLACEHOLDER_TEXT: &str = "Default value (optional)";
 const ARGUMENT_EDITOR_FONT_SIZE: f32 = 14.;

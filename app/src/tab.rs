@@ -1,40 +1,10 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
-use crate::appearance::Appearance;
-/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
-/// the rendering and management of tabs in general.
-use crate::editor::EditorView;
-use crate::features::FeatureFlag;
-use crate::i18n::{self, I18nKey};
-use crate::launch_configs::launch_config::LaunchConfig;
-use crate::menu::{MenuAction, MenuItem, MenuItemFields};
-use crate::pane_group::{PaneGroup, PaneId};
-use settings::Setting as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::view::TerminalViewState;
-use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::util::color::{coloru_with_opacity, Opacity};
-use crate::util::truncation::truncate_from_end;
-
-use crate::window_settings::WindowSettings;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_settings::{
-    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
-};
-use crate::BlocklistAIHistoryModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
@@ -52,6 +22,35 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, SingletonEntity, ViewHandle};
+
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::appearance::Appearance;
+/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
+/// the rendering and management of tabs in general.
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::menu::{MenuAction, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::render_util::shared_session_indicator_color;
+use crate::terminal::view::TerminalViewState;
+use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::util::color::{coloru_with_opacity, Opacity};
+use crate::util::truncation::truncate_from_end;
+use crate::window_settings::WindowSettings;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_settings::{
+    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
+};
+use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
@@ -197,7 +196,7 @@ impl TabData {
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
             self.close_tab_menu_items(index, tabs_len, ctx),
-            Self::save_config_menu_items(index, ctx),
+            Self::save_config_menu_items(index),
             self.color_option_menu_items(index, terminal_colors),
         ] {
             if menu_items
@@ -235,7 +234,7 @@ impl TabData {
                     .is_active_sharer()
                 {
                     menu_items.push(
-                        MenuItemFields::new(i18n::tr(ctx, I18nKey::TabStopSharing))
+                        MenuItemFields::new("Stop sharing")
                             .with_on_select_action(WorkspaceAction::StopSharingSessionFromTabMenu {
                                 terminal_view_id: focused_session_view.id(),
                             })
@@ -243,7 +242,7 @@ impl TabData {
                     );
                 } else {
                     menu_items.push(
-                        MenuItemFields::new(i18n::tr(ctx, I18nKey::TabShareSession))
+                        MenuItemFields::new("Share session")
                             .with_on_select_action(WorkspaceAction::OpenShareSessionModal(index))
                             .into_item(),
                     );
@@ -253,7 +252,7 @@ impl TabData {
             // Always show an option to stop sharing all when there's at least 1 shared session in the tab.
             if !shared_session_view_ids.is_empty() {
                 menu_items.push(
-                    MenuItemFields::new(i18n::tr(ctx, I18nKey::TabStopSharingAll))
+                    MenuItemFields::new("Stop sharing all")
                         .with_on_select_action(WorkspaceAction::StopSharingAllSessionsInTab {
                             pane_group: self.pane_group.downgrade(),
                         })
@@ -278,7 +277,7 @@ impl TabData {
 
         if is_shared_or_viewed {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::CommonCopyLink))
+                MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {
                         tab_index: index,
                     })
@@ -406,18 +405,15 @@ impl TabData {
 
         // TODO add option to show the keybinding once we figure out a nice API to retrieve
         // the actual keybinding (based on the user's preferences etc.)
-        menu_items.append(&mut vec![MenuItemFields::new(i18n::tr(
-            ctx,
-            I18nKey::TabRenameTab,
-        ))
-        .with_on_select_action(WorkspaceAction::RenameTab(index))
-        .into_item()]);
+        menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
+            .with_on_select_action(WorkspaceAction::RenameTab(index))
+            .into_item()]);
         // Group together with rename option (note, resetting doesn't make
         // sense unless you're able to rename a tab).
         let title = self.pane_group.as_ref(ctx).custom_title(ctx);
         if title.is_some() {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::TabResetTabName))
+                MenuItemFields::new("Reset tab name")
                     .with_on_select_action(WorkspaceAction::ResetTabName(index))
                     .into_item(),
             );
@@ -431,9 +427,9 @@ impl TabData {
         if not_last_tab {
             menu_items.push(
                 MenuItemFields::new(if uses_vertical_tabs {
-                    i18n::tr(ctx, I18nKey::TabMoveTabDown)
+                    "Move Tab Down"
                 } else {
-                    i18n::tr(ctx, I18nKey::TabMoveTabRight)
+                    "Move Tab Right"
                 })
                 .with_on_select_action(WorkspaceAction::MoveTabRight(index))
                 .into_item(),
@@ -442,9 +438,9 @@ impl TabData {
         if index != 0 {
             menu_items.push(
                 MenuItemFields::new(if uses_vertical_tabs {
-                    i18n::tr(ctx, I18nKey::TabMoveTabUp)
+                    "Move Tab Up"
                 } else {
-                    i18n::tr(ctx, I18nKey::TabMoveTabLeft)
+                    "Move Tab Left"
                 })
                 .with_on_select_action(WorkspaceAction::MoveTabLeft(index))
                 .into_item(),
@@ -495,14 +491,14 @@ impl TabData {
 
         if ContextFlag::CloseWindow.is_enabled() || tabs_len != 1 {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::TabCloseTab))
+                MenuItemFields::new("Close tab")
                     .with_on_select_action(WorkspaceAction::CloseTab(index))
                     .into_item(),
             );
         }
         if tabs_len > 1 {
             menu_items.push(
-                MenuItemFields::new(i18n::tr(ctx, I18nKey::TabCloseOtherTabs))
+                MenuItemFields::new("Close other tabs")
                     .with_on_select_action(WorkspaceAction::CloseOtherTabs(index))
                     .into_item(),
             );
@@ -511,9 +507,9 @@ impl TabData {
         if not_last_tab {
             menu_items.push(
                 MenuItemFields::new(if uses_vertical_tabs {
-                    i18n::tr(ctx, I18nKey::TabCloseTabsBelow)
+                    "Close Tabs Below"
                 } else {
-                    i18n::tr(ctx, I18nKey::TabCloseTabsRight)
+                    "Close Tabs to the Right"
                 })
                 .with_on_select_action(WorkspaceAction::CloseTabsRight(index))
                 .into_item(),
@@ -522,15 +518,13 @@ impl TabData {
         menu_items
     }
 
-    fn save_config_menu_items(index: usize, ctx: &AppContext) -> Vec<MenuItem<WorkspaceAction>> {
+    fn save_config_menu_items(index: usize) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::TabConfigs.is_enabled() {
             return vec![];
         }
-        vec![
-            MenuItemFields::new(i18n::tr(ctx, I18nKey::TabSaveAsNewConfig))
-                .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
-                .into_item(),
-        ]
+        vec![MenuItemFields::new("Save as new config")
+            .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
+            .into_item()]
     }
 
     fn color_option_menu_items(
@@ -712,7 +706,6 @@ pub struct TabComponent<'a> {
     tooltip_message: Option<String>,
     tooltip_directory: Option<String>,
     tooltip_git_branch: Option<String>,
-    ambient_agent_tooltip: String,
     is_drag_target: bool,
     background_opacity: u8,
     /// Set to `true` when this `TabComponent` is being rendered inside the
@@ -882,7 +875,6 @@ impl<'a> TabComponent<'a> {
             tooltip_message,
             tooltip_directory,
             tooltip_git_branch,
-            ambient_agent_tooltip: crate::i18n::tr_static(ctx, "Cloud agent run").to_string(),
             is_drag_target,
             background_opacity,
             for_drag_ghost: false,
@@ -1274,15 +1266,16 @@ impl<'a> TabComponent<'a> {
 
                 let ui_builder = self.ui_builder.clone();
                 let mouse_state = self.tab.indicator_hover_state.clone();
-                let tooltip_text = self.ambient_agent_tooltip.clone();
                 Some(
                     Hoverable::new(mouse_state, move |state| {
                         let mut stack = Stack::new()
                             .with_child(Icon::OzCloud.to_warpui_icon(icon_color.into()).finish());
 
                         if state.is_hovered() {
-                            let tooltip =
-                                ui_builder.tool_tip(tooltip_text.clone()).build().finish();
+                            let tooltip = ui_builder
+                                .tool_tip("Cloud agent run".to_string())
+                                .build()
+                                .finish();
                             stack.add_positioned_overlay_child(
                                 tooltip,
                                 OffsetPositioning::offset_from_parent(

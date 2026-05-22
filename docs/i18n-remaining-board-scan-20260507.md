@@ -216,4 +216,3 @@ The keyboard shortcuts board required two separate fixes:
 
 Other boards may have the same two-layer problem: string exists in source, but
 the render path never passes through translation.
-

@@ -1,45 +1,40 @@
-use crate::ai::blocklist::BlocklistAIInputModel;
-use crate::context_chips::display::PromptDisplay;
-use crate::context_chips::spacing;
-use crate::features::FeatureFlag;
-use crate::settings::InputSettings;
-use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
-use crate::terminal::ligature_settings::should_use_ligature_rendering;
-use crate::terminal::view::TerminalAction;
-use crate::themes::theme::PromptColors;
-use crate::{appearance::Appearance, terminal::model::blockgrid::BlockGrid};
-use settings::Setting as _;
-
 use std::fmt;
 use std::num::NonZeroUsize;
+
+use settings::Setting as _;
 use warp_core::semantic_selection::SemanticSelection;
-use warpui::elements::{DispatchEventResult, SelectionHandle};
-use warpui::ModelAsRef;
-use warpui::{
-    elements::{Container, Element, EventHandler, SavePosition, SelectableArea, Text},
-    fonts::{Properties, Weight},
-    presenter::ChildView,
-    AppContext, EntityId, ModelHandle, SingletonEntity, ViewHandle,
+use warpui::elements::{
+    Container, DispatchEventResult, Element, EventHandler, SavePosition, SelectableArea,
+    SelectionHandle, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::presenter::ChildView;
+use warpui::units::Pixels;
+use warpui::{AppContext, EntityId, ModelAsRef, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::input::InputRenderStateModel;
 use super::model::block::Block;
-use super::shell::ShellType;
-use crate::settings::FontSettings;
-use crate::terminal::input::get_input_box_top_border_width;
-
 use super::model::blocks::CachedPromptData;
 use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
+use super::shell::ShellType;
 use super::{prompt, SizeInfo, TerminalModel};
-
+use crate::ai::blocklist::BlocklistAIInputModel;
+use crate::appearance::Appearance;
+use crate::context_chips::display::PromptDisplay;
+use crate::context_chips::spacing;
+use crate::features::FeatureFlag;
+use crate::settings::{FontSettings, InputSettings};
 use crate::terminal::blockgrid_element::BlockGridElement;
+use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
+use crate::terminal::input::get_input_box_top_border_width;
+use crate::terminal::ligature_settings::should_use_ligature_rendering;
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Sessions;
-use crate::terminal::view::PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT;
-
 use crate::terminal::model::ObfuscateSecrets;
-use warpui::units::Pixels;
+use crate::terminal::view::{TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT};
+use crate::themes::theme::PromptColors;
 
 /// How long we're willing to wait after precmd for a marker-based prompt to appear before we
 /// display an empty prompt grid in the input.

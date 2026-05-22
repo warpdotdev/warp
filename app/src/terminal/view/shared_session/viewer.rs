@@ -1,14 +1,12 @@
-use crate::menu::{Menu, MenuItem, MenuItemFields};
-use crate::pane_group::PaneHeaderAction;
-use crate::pane_group::PaneHeaderCustomAction;
-
-use crate::terminal::view::{TerminalAction, TerminalView};
-use crate::ui_components::icons::Icon;
-
 use session_sharing_protocol::common::{Role, WindowSize};
-use warpui::{elements::MouseStateHandle, AppContext, ViewContext, ViewHandle};
+use warpui::elements::MouseStateHandle;
+use warpui::{ViewContext, ViewHandle};
 
 use super::adapter::Participant;
+use crate::menu::{Menu, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneHeaderAction, PaneHeaderCustomAction};
+use crate::terminal::view::{TerminalAction, TerminalView};
+use crate::ui_components::icons::Icon;
 
 pub struct Viewer {
     pub sharer: Option<Participant>,
@@ -58,17 +56,16 @@ impl Viewer {
     pub fn role_change_menu_items(
         current_role: Role,
         is_reconnecting: bool,
-        app: &AppContext,
     ) -> Vec<MenuItem<PaneHeaderAction<TerminalAction, TerminalAction>>> {
         let mut items = Vec::new();
         match current_role {
             Role::Reader => items.extend([
                 // TODO: this should still dispatch an action that eventually no-ops
-                MenuItemFields::new(crate::i18n::tr_static(app, "View"))
+                MenuItemFields::new("View")
                     .with_icon(Icon::Check)
                     .with_disabled(is_reconnecting)
                     .into_item(),
-                MenuItemFields::new(crate::i18n::tr_static(app, "Edit"))
+                MenuItemFields::new("Edit")
                     .with_indent()
                     .with_disabled(is_reconnecting)
                     .with_on_select_action(
@@ -79,12 +76,12 @@ impl Viewer {
                     .into_item(),
             ]),
             Role::Executor | Role::Full => items.extend([
-                MenuItemFields::new(crate::i18n::tr_static(app, "View"))
+                MenuItemFields::new("View")
                     .with_indent()
                     .with_disabled(true)
                     .into_item(),
                 // TODO: this should still dispatch an action that eventually no-ops
-                MenuItemFields::new(crate::i18n::tr_static(app, "Edit"))
+                MenuItemFields::new("Edit")
                     .with_icon(Icon::Check)
                     .with_disabled(is_reconnecting)
                     .into_item(),
@@ -99,7 +96,7 @@ impl Viewer {
         ctx: &mut ViewContext<TerminalView>,
     ) {
         self.is_role_change_menu_open = true;
-        let items = Self::role_change_menu_items(current_role, self.is_reconnecting, ctx);
+        let items = Self::role_change_menu_items(current_role, self.is_reconnecting);
         self.role_change_menu.update(ctx, |menu, ctx| {
             menu.set_items(items, ctx);
         });

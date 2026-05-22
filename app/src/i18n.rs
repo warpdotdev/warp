@@ -980,14 +980,6 @@ pub fn tr_text<'a>(app: &AppContext, text: &'a str) -> Cow<'a, str> {
     }
 }
 
-pub fn display_language_label(app: &AppContext, language: DisplayLanguage) -> &'static str {
-    match language {
-        DisplayLanguage::System => tr(app, I18nKey::LanguagePreferenceSystem),
-        DisplayLanguage::English => tr(app, I18nKey::LanguagePreferenceEnglish),
-        DisplayLanguage::ChineseSimplified => tr(app, I18nKey::LanguagePreferenceChineseSimplified),
-    }
-}
-
 fn system_locale() -> Locale {
     let lang = std::env::var("LANG")
         .unwrap_or_default()

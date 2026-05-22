@@ -6,16 +6,13 @@ use itertools::Itertools;
 use typed_path::TypedPathBuf;
 #[cfg(windows)]
 use typed_path::{UnixComponent, WindowsComponent, WindowsPrefix};
-use warp_completer::completer::PathCompletionContext;
-use warp_completer::completer::{CompletionContext, EngineDirEntry};
+use warp_completer::completer::{CompletionContext, EngineDirEntry, PathCompletionContext};
 use warp_completer::signatures::CommandRegistry;
 use warpui::App;
 
 use crate::completer::SessionContext;
-use crate::terminal::model::session::Session;
-use crate::terminal::model::session::{
-    command_executor::testing::TestCommandExecutor, SessionInfo,
-};
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{Session, SessionInfo};
 use crate::test_util::{Stub, VirtualFS};
 
 fn test_session_context(session: Session, cwd: TypedPathBuf, app: &App) -> SessionContext {

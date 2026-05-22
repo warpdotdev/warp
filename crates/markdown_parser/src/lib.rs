@@ -1,7 +1,9 @@
 use std::any::Any;
+use std::collections::VecDeque;
+use std::fmt;
+use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use std::{collections::VecDeque, fmt, fmt::Debug};
 
 pub mod html_parser;
 pub mod markdown_parser;

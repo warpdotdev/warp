@@ -1,6 +1,5 @@
-use crate::schema;
-
 use super::billing::{BillingCycleUsageHistory, BillingMetadata, BonusGrantsInfo};
+use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Workspace {

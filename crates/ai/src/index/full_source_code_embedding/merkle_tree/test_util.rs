@@ -1,7 +1,8 @@
-use super::MerkleTree;
-use crate::index::full_source_code_embedding::fragment_metadata::LeafToFragmentMetadata;
 use repo_metadata::{DirectoryEntry, Entry};
 use virtual_fs::{Stub, VirtualFS};
+
+use super::MerkleTree;
+use crate::index::full_source_code_embedding::fragment_metadata::LeafToFragmentMetadata;
 
 /// Construct a test Merkle tree with the following structure:
 /// ```

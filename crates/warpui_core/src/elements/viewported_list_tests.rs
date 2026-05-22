@@ -6,12 +6,9 @@ use crate::elements::{ConstrainedBox, Rect, Scrollable, ScrollbarWidth};
 use crate::platform::WindowStyle;
 use crate::prelude::Fill;
 use crate::units::{IntoPixels, Pixels};
-use crate::Entity;
-use crate::Presenter;
-use crate::TypedActionView;
-use crate::WindowInvalidation;
-use crate::{App, ViewContext};
-use crate::{AppContext, Event};
+use crate::{
+    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
+};
 
 /// Test context that captures scroll position information.
 /// For this test, we use the context as a simple marker that scroll preservation is desired.

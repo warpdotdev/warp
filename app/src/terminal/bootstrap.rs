@@ -5,16 +5,14 @@ use lazy_static::lazy_static;
 use memo_map::MemoMap;
 use warpui::{AppContext, AssetProvider, SingletonEntity};
 
-use crate::{
-    env_vars::EnvVar,
-    terminal::{session_settings::SessionSettings, shell::ShellType},
-};
-
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
     warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
+use crate::env_vars::EnvVar;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::shell::ShellType;
 
 lazy_static! {
     /// A memoized cache of the fully-interpolated bootstrap script for each

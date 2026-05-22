@@ -1,60 +1,55 @@
-use super::{
-    editor_text_colors,
-    settings_page::{render_input_list, InputListItem},
-};
-use crate::server::server_api::ServerApiProvider;
-use crate::{
-    ai::ambient_agents::{
-        github_auth_url::{self, AuthSource, GithubAuthRedirectTarget},
-        telemetry::CloudAgentTelemetryEvent,
-    },
-    ai::{
-        ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier},
-        cloud_environments::{AmbientAgentEnvironment, GithubRepo},
-    },
-    appearance::Appearance,
-    editor::{
-        EditorOptions, EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    root_view::CreateEnvironmentArg,
-    server::ids::SyncId,
-    ui_components::{buttons::icon_button, icons::Icon},
-    view_components::{
-        action_button::{ActionButton, DangerSecondaryTheme, PrimaryTheme, SecondaryTheme},
-        render_warning_box, SubmittableTextInput, SubmittableTextInputEvent,
-        WarningBoxButtonConfig, WarningBoxConfig,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-    ChannelState,
-};
-use instant::{Duration, Instant};
-use log::debug;
 #[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
+
+use instant::{Duration, Instant};
+use log::debug;
 use url::Url;
 use warp_core::send_telemetry_from_ctx;
 use warp_editor::editor::NavigationKey;
 use warp_graphql::queries::user_github_info::UserGithubInfoResult;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded,
+    Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
+    ScrollbarWidth, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::geometry::vector::vec2f;
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::prelude::Coords;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty,
-        Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, SizeConstraintCondition, SizeConstraintSwitch, Stack,
-        Text,
-    },
-    fonts::{Properties, Weight},
-    geometry::vector::vec2f,
-    keymap::FixedBinding,
-    platform::Cursor,
-    prelude::Coords,
-    ui_components::components::{UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
+
+use super::editor_text_colors;
+use super::settings_page::{render_input_list, InputListItem};
+use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
+use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
+use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorOptions, EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
+};
+use crate::root_view::CreateEnvironmentArg;
+use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, DangerSecondaryTheme, PrimaryTheme, SecondaryTheme,
+};
+use crate::view_components::{
+    render_warning_box, SubmittableTextInput, SubmittableTextInputEvent, WarningBoxButtonConfig,
+    WarningBoxConfig,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::ChannelState;
 
 const SUBMIT_BUTTON_FOCUSED: &str = "SubmitButtonFocused";
 

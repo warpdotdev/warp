@@ -6,10 +6,9 @@ use similar::DiffableStr;
 use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
 use warpui::platform::Cursor;
 
+use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
 use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
-
-use super::{AIBlockAction, TextLocation};
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 

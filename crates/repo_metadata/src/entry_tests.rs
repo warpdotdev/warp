@@ -1,10 +1,11 @@
 #[test]
 fn test_git_path_filtering_allowlist() {
+    use std::path::Path;
+
     use super::{
         is_commit_related_git_file, is_common_git_config, is_index_lock_file,
         is_remote_tracking_ref, is_tracking_state_git_file, should_ignore_git_path,
     };
-    use std::path::Path;
 
     // Non-git paths should not be ignored
     assert!(!should_ignore_git_path(Path::new(
@@ -169,8 +170,9 @@ fn test_git_path_filtering_allowlist() {
 
 #[test]
 fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
-    use super::should_watch_directory_in_git_path;
     use std::path::Path;
+
+    use super::should_watch_directory_in_git_path;
     for path in [
         "/repo/.git",
         "/repo/.git/refs",
@@ -218,8 +220,9 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
 }
 #[test]
 fn test_is_shared_git_ref() {
-    use super::is_shared_git_ref;
     use std::path::Path;
+
+    use super::is_shared_git_ref;
 
     // Shared refs — broadcast to all repos
     assert!(is_shared_git_ref(Path::new("/repo/.git/refs/heads/main")));
@@ -252,8 +255,9 @@ fn test_is_shared_git_ref() {
 
 #[test]
 fn test_extract_worktree_git_dir() {
-    use super::extract_worktree_git_dir;
     use std::path::{Path, PathBuf};
+
+    use super::extract_worktree_git_dir;
 
     // Standard worktree path extracts the per-worktree gitdir
     assert_eq!(

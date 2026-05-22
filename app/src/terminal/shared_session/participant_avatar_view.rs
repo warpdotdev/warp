@@ -1,30 +1,29 @@
-use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::pane_group::{PaneHeaderAction, PaneHeaderCustomAction};
-use crate::terminal::view::TerminalAction;
-use crate::{
-    appearance::Appearance,
-    ui_components::{buttons::icon_button, icons::Icon},
-};
 use instant::Duration;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use session_sharing_protocol::common::{ParticipantId, ParticipantInfo, Role};
 use session_sharing_protocol::sharer::RoleUpdateReason;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{
-    accessibility::AccessibilityContent,
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::accessibility::AccessibilityContent;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Fill, Flex, Hoverable, MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Stack,
 };
-use warpui::{FocusContext, ViewHandle};
+use warpui::platform::Cursor;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 use super::render_util::non_hoverable_participant_avatar;
+use crate::appearance::Appearance;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneHeaderAction, PaneHeaderCustomAction};
+use crate::terminal::view::TerminalAction;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 #[derive(Debug, Clone)]
 pub enum HoveredElement {

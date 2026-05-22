@@ -1,20 +1,12 @@
-use crate::appearance::Appearance;
-use crate::i18n::{self, I18nKey};
-use crate::ui_components::icons::Icon;
 use pathfinder_geometry::vector::vec2f;
-use warpui::{
-    elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext,
-};
+use warpui::elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle};
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
-use super::{
-    settings_page::{MatchData, NAV_ITEM_LEFT_MARGIN},
-    SettingsSection,
-};
+use super::settings_page::{MatchData, NAV_ITEM_LEFT_MARGIN};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::ui_components::icons::Icon;
 
 /// The font size for subpage items inside an umbrella.
 const SUBPAGE_FONT_SIZE: f32 = 10.;
@@ -24,7 +16,7 @@ const SUBPAGE_LEFT_MARGIN: f32 = NAV_ITEM_LEFT_MARGIN + 12.;
 
 /// A collapsible group of settings subpages in the sidebar.
 pub struct SettingsUmbrella {
-    pub label_key: I18nKey,
+    pub label: &'static str,
     pub subpages: Vec<SettingsSection>,
     pub expanded: bool,
     /// Saved expanded state from before search began, restored when search is cleared.
@@ -34,10 +26,10 @@ pub struct SettingsUmbrella {
 }
 
 impl SettingsUmbrella {
-    pub fn new(label_key: I18nKey, subpages: Vec<SettingsSection>) -> Self {
+    pub fn new(label: &'static str, subpages: Vec<SettingsSection>) -> Self {
         let subpage_count = subpages.len();
         Self {
-            label_key,
+            label,
             subpages,
             expanded: false,
             pre_search_expanded: None,
@@ -61,7 +53,7 @@ impl SettingsUmbrella {
     /// Returns a `Hoverable` so the entire row shares a single hover/click
     /// target — i.e. the hover styling and pointing-hand cursor apply to the
     /// whole clickable area rather than just the text.
-    pub fn render_umbrella_row(&self, app: &AppContext, appearance: &Appearance) -> Hoverable {
+    pub fn render_umbrella_row(&self, appearance: &Appearance) -> Hoverable {
         let chevron_icon = if self.expanded {
             Icon::ChevronUp
         } else {
@@ -81,7 +73,7 @@ impl SettingsUmbrella {
             .button(ButtonVariant::Text, self.button_state_handle.clone())
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::TextFirst,
-                i18n::tr(app, self.label_key).to_string(),
+                self.label.to_string(),
                 chevron_icon.to_warpui_icon(text_color),
                 MainAxisSize::Max,
                 MainAxisAlignment::SpaceBetween,
@@ -100,7 +92,6 @@ impl SettingsUmbrella {
     pub fn render_subpage_button(
         &self,
         index: usize,
-        app: &AppContext,
         appearance: &Appearance,
         match_data: MatchData,
         is_active: bool,
@@ -108,7 +99,7 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.localized_label(app).to_owned() + &match_data.to_string();
+        let label = section.to_string() + &match_data.to_string();
 
         let hoverable = appearance
             .ui_builder()

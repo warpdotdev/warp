@@ -1,3 +1,8 @@
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use editing::sort_entries_for_file_tree;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
@@ -7,48 +12,44 @@ use repo_metadata::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntryState, FileTreeFileMetadata,
 };
 use repo_metadata::local_model::IndexedRepoState;
-use repo_metadata::FileTreeEntry;
-use repo_metadata::RepoMetadataModel;
-use std::collections::{HashMap, HashSet};
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{FileTreeEntry, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_core::{send_telemetry_from_ctx, HostId};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
-
-use repo_metadata::repositories::DetectedRepositories;
-use warp_core::send_telemetry_from_ctx;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    AcceptedByDropTarget, Align, Clipped, ConstrainedBox, Container, Dismiss, Draggable,
-    DraggableState, Empty, FormattedTextElement, MainAxisAlignment, Percentage, Rect, SavePosition,
-    Scrollable, Shrinkable,
+    AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
+    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
+    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
+    UniformListState,
 };
-use warpui::fonts::Style;
+use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
-use warpui::{clipboard::ClipboardContent, id, ViewContext, WeakViewHandle};
 use warpui::{
-    elements::{
-        ChildAnchor, ChildView, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        ScrollStateHandle, ScrollableElement, ScrollbarWidth, Stack, Text, UniformList,
-        UniformListState,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, EventContext, SingletonEntity as _, TypedActionView, View,
-    ViewHandle,
+    id, AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
-use warpui::{BlurContext, ModelHandle};
 
+use crate::appearance::Appearance;
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
+use crate::menu::{Menu, MenuItem, MenuItemFields};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
+use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
+use crate::ui_components::icons::Icon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
@@ -59,18 +60,8 @@ use crate::util::openable_file_type::{
 use crate::util::openable_file_type::{
     resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice,
 };
-use crate::{
-    appearance::Appearance,
-    i18n::{self, I18nKey},
-    menu::{Menu, MenuItem, MenuItemFields},
-    server::telemetry::TelemetryEvent,
-    ui_components::icons::Icon,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::{color::internal_colors, Fill};
-use warp_core::HostId;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 mod editing;
 mod render;
@@ -505,8 +496,7 @@ impl FileTreeView {
         event: &repo_metadata::RepoMetadataEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        use repo_metadata::RepoMetadataEvent;
-        use repo_metadata::RepositoryIdentifier;
+        use repo_metadata::{RepoMetadataEvent, RepositoryIdentifier};
         match event {
             RepoMetadataEvent::RepositoryUpdated {
                 id: RepositoryIdentifier::Local(std_path),
@@ -1607,10 +1597,9 @@ impl FileTreeView {
     fn show_exceeded_file_limit_toast(ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(crate::i18n::tr_static(
-                ctx,
+            let toast = DismissibleToast::error(String::from(
                 "Folder has too many files to display in the file explorer.",
-            )))
+            ))
             .with_object_id("file_tree_exceeded_file_limit".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
@@ -1980,12 +1969,7 @@ impl FileTreeView {
     }
 
     /// Renders a clickable tree item with mouse state handle
-    fn render_item(
-        &self,
-        id: &FileTreeIdentifier,
-        appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_item(&self, id: &FileTreeIdentifier, appearance: &Appearance) -> Box<dyn Element> {
         let Some(root_dir) = self.root_directories.get(&id.root) else {
             return Empty::new().finish();
         };
@@ -2332,7 +2316,6 @@ impl FileTreeView {
         &self,
         item: &FileTreeItem,
         id: &FileTreeIdentifier,
-        app: &AppContext,
     ) -> Vec<MenuItem<FileTreeAction>> {
         let is_remote = self.is_remote_item(id);
 
@@ -2349,12 +2332,12 @@ impl FileTreeView {
                     let path_local = item.path().to_local_path_lossy();
                     if !is_file_content_binary(&path_local) {
                         items.extend([
-                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewPane))
+                            MenuItemFields::new("Open in new pane")
                                 .with_on_select_action(FileTreeAction::OpenInNewPane {
                                     id: id.clone(),
                                 })
                                 .into_item(),
-                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewTab))
+                            MenuItemFields::new("Open in new tab")
                                 .with_on_select_action(FileTreeAction::OpenInNewTab {
                                     id: id.clone(),
                                 })
@@ -2362,7 +2345,7 @@ impl FileTreeView {
                         ]);
                     } else {
                         items.push(
-                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenFile))
+                            MenuItemFields::new("Open file")
                                 .with_on_select_action(FileTreeAction::ItemClicked {
                                     id: id.clone(),
                                 })
@@ -2372,7 +2355,7 @@ impl FileTreeView {
                 }
                 FileTreeItem::DirectoryHeader { .. } => {
                     items.push(
-                        MenuItemFields::new(i18n::tr(app, I18nKey::CodeNewFile))
+                        MenuItemFields::new("New file")
                             .with_on_select_action(FileTreeAction::NewFileBelowDirectory {
                                 id: id.clone(),
                             })
@@ -2381,7 +2364,7 @@ impl FileTreeView {
                     items.push(MenuItem::Separator);
                     if self.has_terminal_session {
                         items.push(
-                            MenuItemFields::new(i18n::tr(app, I18nKey::CodeCdToDirectory))
+                            MenuItemFields::new("cd to directory")
                                 .with_on_select_action(FileTreeAction::CDToDirectory {
                                     id: id.clone(),
                                 })
@@ -2389,7 +2372,7 @@ impl FileTreeView {
                         );
                     }
                     items.push(
-                        MenuItemFields::new(i18n::tr(app, I18nKey::CodeOpenInNewTab))
+                        MenuItemFields::new("Open in new tab")
                             .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
                             .into_item(),
                     );
@@ -2397,11 +2380,11 @@ impl FileTreeView {
             };
 
             let open_text = if cfg!(target_os = "macos") {
-                i18n::tr(app, I18nKey::CodeRevealInFinder)
+                "Reveal in Finder"
             } else if cfg!(target_os = "windows") {
-                i18n::tr(app, I18nKey::CodeRevealInExplorer)
+                "Reveal in Explorer"
             } else {
-                i18n::tr(app, I18nKey::CodeRevealInFileManager)
+                "Reveal in file manager"
             };
             items.push(
                 MenuItemFields::new(open_text)
@@ -2414,12 +2397,12 @@ impl FileTreeView {
             let is_repo_root_dir = id.index == 0;
             if !is_repo_root_dir {
                 items.push(
-                    MenuItemFields::new(i18n::tr(app, I18nKey::CommonRename))
+                    MenuItemFields::new("Rename")
                         .with_on_select_action(FileTreeAction::Rename { id: id.clone() })
                         .into_item(),
                 );
                 items.push(
-                    MenuItemFields::new(i18n::tr(app, I18nKey::CommonDelete))
+                    MenuItemFields::new("Delete")
                         .with_on_select_action(FileTreeAction::Delete { id: id.clone() })
                         .into_item(),
                 );
@@ -2431,7 +2414,7 @@ impl FileTreeView {
                 items.push(MenuItem::Separator);
             }
             items.push(
-                MenuItemFields::new(i18n::tr(app, I18nKey::CodeAttachAsContext))
+                MenuItemFields::new("Attach as context")
                     .with_on_select_action(FileTreeAction::AttachAsContext { id: id.clone() })
                     .into_item(),
             );
@@ -2441,10 +2424,10 @@ impl FileTreeView {
             items.push(MenuItem::Separator);
         }
         items.extend([
-            MenuItemFields::new(i18n::tr(app, I18nKey::CommonCopyPath))
+            MenuItemFields::new("Copy path")
                 .with_on_select_action(FileTreeAction::CopyPath { id: id.clone() })
                 .into_item(),
-            MenuItemFields::new(i18n::tr(app, I18nKey::CodeCopyRelativePath))
+            MenuItemFields::new("Copy relative path")
                 .with_on_select_action(FileTreeAction::CopyRelativePath { id: id.clone() })
                 .into_item(),
         ]);
@@ -2685,7 +2668,7 @@ impl FileTreeView {
                 range
                     .filter_map(|global_index| {
                         let item_id = view.identifier_from_global_index(global_index)?;
-                        Some(view.render_item(&item_id, appearance, app))
+                        Some(view.render_item(&item_id, appearance))
                     })
                     .collect::<Vec<_>>()
                     .into_iter()
@@ -2762,7 +2745,7 @@ impl FileTreeView {
             )
             .with_child(
                 Text::new(
-                    crate::i18n::tr_static(app, "Project explorer unavailable"),
+                    "Project explorer unavailable",
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -3085,7 +3068,7 @@ impl TypedActionView for FileTreeView {
                 self.context_menu_state = Some(ContextMenuState {
                     position: *position,
                 });
-                let menu_items = self.context_menu_items(item, id, ctx);
+                let menu_items = self.context_menu_items(item, id);
                 self.context_menu.update(ctx, move |menu, ctx| {
                     menu.set_items(menu_items, ctx);
                     ctx.notify();

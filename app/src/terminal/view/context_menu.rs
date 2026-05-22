@@ -1,3 +1,6 @@
+use warp_core::send_telemetry_from_ctx;
+use warpui::{SingletonEntity, UpdateView};
+
 use super::{
     fork_label_for_query, mark_feature_used_and_write_to_user_defaults, AIAgentExchangeId,
     AIConversationId, AgentModeRewindEntrypoint, AppContext, BlocklistAIHistoryModel, ChannelState,
@@ -7,8 +10,6 @@ use super::{
     ServerConversationToken, ServerOutputId, ShareableObject, TelemetryEvent, TerminalAction,
     TerminalModel, TerminalView, Tip, TipHint, Vector2F, ViewContext, CONTEXT_MENU_WIDTH,
 };
-use warp_core::send_telemetry_from_ctx;
-use warpui::{SingletonEntity, UpdateView};
 
 impl TerminalView {
     pub(super) fn ai_block_copying_menu_items(

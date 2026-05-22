@@ -1,17 +1,15 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use pathfinder_geometry::vector::vec2f;
-
-use warp_core::ui::theme::color::internal_colors;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-
 use regex::Regex;
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
     Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -19,62 +17,82 @@ use warpui::elements::{
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, Shrinkable,
     Stack, Text,
 };
+use warpui::fonts::Weight;
 use warpui::keymap::ContextPredicate;
 use warpui::platform::Cursor;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::{
-    components::{Coords, UiComponent, UiComponentStyles},
-    switch::{SwitchStateHandle, TooltipConfig},
-};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
     UpdateModel, View, ViewContext, ViewHandle,
 };
 
-use crate::settings::{CustomSecretRegex, RegexDisplayInfo};
+use super::privacy::{AddRegexModal, AddRegexModalEvent};
+use super::settings_page::{
+    render_body_item, render_sub_header, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget, ToggleState, HEADER_PADDING, PAGE_PADDING,
+    TOGGLE_BUTTON_RIGHT_PADDING,
+};
+use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::AuthManager;
+use crate::channel::ChannelState;
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::{AISettings, CustomSecretRegex, PrivacySettings, RegexDisplayInfo};
 use crate::settings_view::privacy::AddRegexModalViewState;
 use crate::settings_view::render_body_item_label;
 use crate::settings_view::settings_page::CONTENT_FONT_SIZE;
 use crate::terminal::safe_mode_settings::{
-    get_effective_secret_display_mode, SecretDisplayMode, SecretDisplayModeSetting,
+    get_effective_secret_display_mode, SafeModeEnabled, SafeModeSettings, SecretDisplayMode,
+    SecretDisplayModeSetting,
 };
 use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::links::PRIVACY_POLICY_URL;
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::{
-    appearance::Appearance,
-    auth::auth_manager::AuthManager,
-    channel::ChannelState,
-    i18n::{self, I18nKey},
-    report_if_error, send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings::{AISettings, LanguageSettings, PrivacySettings},
-    terminal::safe_mode_settings::{SafeModeEnabled, SafeModeSettings},
-    ui_components::icons::Icon,
-    util::links::PRIVACY_POLICY_URL,
-    workspaces::{
-        user_workspaces::UserWorkspaces,
-        workspace::{AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting},
-    },
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
 };
-
-use super::{
-    flags,
-    privacy::{AddRegexModal, AddRegexModalEvent},
-    settings_page::{
-        render_body_item, render_sub_header, SettingsPageMeta, SettingsPageViewHandle, ToggleState,
-        HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
-    },
-    settings_page::{LocalOnlyIconState, MatchData, PageType, SettingsWidget, PAGE_PADDING},
-    SettingsAction, SettingsSection, ToggleSettingActionPair,
-};
-
-use crate::modal::{Modal, ModalEvent, ModalViewState};
-use warpui::fonts::Weight;
+use crate::{report_if_error, send_telemetry_from_ctx};
 
 const FONT_SIZE: f32 = 12.;
 
+const SAFE_MODE_TITLE: &str = "Secret redaction";
+static SAFE_MODE_DESCRIPTION: LazyLock<&'static str> = LazyLock::new(|| {
+    "When this setting is enabled, Warp will scan blocks, the contents of \
+        Warp Drive objects, and Oz prompts for potential sensitive \
+        information and prevent saving or sending this data to any \
+        servers. You can customize this list via regexes."
+});
+const USER_SECRET_REGEX_TITLE: &str = "Custom secret redaction";
+const USER_SECRET_REGEX_DESCRIPTION: &str =
+    "Use regex to define additional secrets or data you'd like to redact. This will take effect \
+    when the next command runs. You can use the inline (?i) flag as a prefix to your regex \
+    to make it case-insensitive.";
+const TELEMETRY_DESCRIPTION_OLD: &str =
+    "App analytics help us make the product better for you. We only collect \
+    app usage metadata, never console input or output.";
+const TELEMETRY_TITLE: &str = "Help improve Warp";
+const TELEMETRY_DESCRIPTION: &str =
+    "App analytics help us make the product better for you. We may collect \
+    certain console interactions to improve Warp's AI capabilities.";
+const TELEMETRY_FREE_TIER_NOTE: &str =
+    "On the free tier, analytics must be enabled to use AI features.";
 const TELEMETRY_DOCS_URL: &str =
     "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
+
+const DATA_MANAGEMENT_TITLE: &str = "Manage your data";
+const DATA_MANAGEMENT_DESCRIPTION: &str =
+    "At any time, you may choose to delete your Warp account permanently. \
+    You will no longer be able to use Warp.";
+const DATA_MANAGEMENT_LINK_TEXT: &str = "Visit the data management page";
+
+const PRIVACY_POLICY_TITLE: &str = "Privacy policy";
+const PRIVACY_POLICY_LINK_TEXT: &str = "Read Warp's privacy policy";
 
 pub fn data_management_url(custom_token: Option<&str>) -> String {
     match custom_token {
@@ -138,38 +156,34 @@ impl PrivacyPageView {
         });
 
         let add_regex_modal_view = ctx.add_typed_action_view(|ctx| {
-            Modal::new(
-                Some(i18n::tr(ctx, I18nKey::PrivacyAddRegexPatternTitle).to_string()),
-                add_regex_body,
-                ctx,
-            )
-            .with_modal_style(UiComponentStyles {
-                width: Some(600.),
-                height: Some(400.),
-                ..Default::default()
-            })
-            .with_header_style(UiComponentStyles {
-                padding: Some(Coords {
-                    top: 24.,
-                    bottom: 0.,
-                    left: 24.,
-                    right: 24.,
-                }),
-                font_size: Some(16.),
-                font_weight: Some(Weight::Bold),
-                ..Default::default()
-            })
-            .with_body_style(UiComponentStyles {
-                padding: Some(Coords {
-                    top: 0.,
-                    bottom: 24.,
-                    left: 24.,
-                    right: 24.,
-                }),
-                ..Default::default()
-            })
-            .with_background_opacity(100)
-            .with_dismiss_on_click()
+            Modal::new(Some("Add regex pattern".to_string()), add_regex_body, ctx)
+                .with_modal_style(UiComponentStyles {
+                    width: Some(600.),
+                    height: Some(400.),
+                    ..Default::default()
+                })
+                .with_header_style(UiComponentStyles {
+                    padding: Some(Coords {
+                        top: 24.,
+                        bottom: 0.,
+                        left: 24.,
+                        right: 24.,
+                    }),
+                    font_size: Some(16.),
+                    font_weight: Some(Weight::Bold),
+                    ..Default::default()
+                })
+                .with_body_style(UiComponentStyles {
+                    padding: Some(Coords {
+                        top: 0.,
+                        bottom: 24.,
+                        left: 24.,
+                        right: 24.,
+                    }),
+                    ..Default::default()
+                })
+                .with_background_opacity(100)
+                .with_dismiss_on_click()
         });
         ctx.subscribe_to_view(&add_regex_modal_view, |me, _, event, ctx| {
             me.handle_modal_event(event, ctx);
@@ -177,13 +191,19 @@ impl PrivacyPageView {
 
         let secret_display_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
-            dropdown.set_items(Self::secret_display_mode_dropdown_items(ctx), ctx);
+            dropdown.set_items(
+                SecretDisplayMode::all_modes()
+                    .iter()
+                    .map(|mode| {
+                        DropdownItem::new(
+                            mode.display_name(),
+                            PrivacyPageAction::SetSecretDisplayMode(*mode),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
             dropdown
-        });
-
-        ctx.subscribe_to_model(&LanguageSettings::handle(ctx), |me, _, _, ctx| {
-            me.update_localized_controls(ctx);
-            ctx.notify();
         });
 
         let mut privacy_page_view = Self {
@@ -204,30 +224,6 @@ impl PrivacyPageView {
         privacy_page_view
     }
 
-    fn secret_display_mode_label(app: &AppContext, mode: SecretDisplayMode) -> &'static str {
-        match mode {
-            SecretDisplayMode::Asterisks => i18n::tr(app, I18nKey::PrivacySecretDisplayAsterisks),
-            SecretDisplayMode::Strikethrough => {
-                i18n::tr(app, I18nKey::PrivacySecretDisplayStrikethrough)
-            }
-            SecretDisplayMode::AlwaysShow => i18n::tr(app, I18nKey::PrivacySecretDisplayAlwaysShow),
-        }
-    }
-
-    fn secret_display_mode_dropdown_items(
-        app: &AppContext,
-    ) -> Vec<DropdownItem<PrivacyPageAction>> {
-        SecretDisplayMode::all_modes()
-            .iter()
-            .map(|mode| {
-                DropdownItem::new(
-                    Self::secret_display_mode_label(app, *mode),
-                    PrivacyPageAction::SetSecretDisplayMode(*mode),
-                )
-            })
-            .collect()
-    }
-
     fn build_page() -> PageType<Self> {
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(SecretRedactionWidget::default()),
@@ -240,7 +236,7 @@ impl PrivacyPageView {
         }
         widgets.push(Box::new(DataManagementWidget::default()));
         widgets.push(Box::new(PrivacyPolicyWidget::default()));
-        PageType::new_uncategorized_i18n_title(widgets, Some(I18nKey::SettingsPageTitlePrivacy))
+        PageType::new_uncategorized(widgets, Some("Privacy"))
     }
 
     fn update_button_states(
@@ -369,20 +365,11 @@ impl PrivacyPageView {
         let current_mode = get_effective_secret_display_mode(safe_mode_settings);
         self.secret_redaction_display_dropdown
             .update(ctx, |dropdown, ctx| {
-                dropdown.set_items(Self::secret_display_mode_dropdown_items(ctx), ctx);
                 dropdown.set_selected_by_action(
                     PrivacyPageAction::SetSecretDisplayMode(current_mode),
                     ctx,
                 );
             });
-    }
-
-    fn update_localized_controls(&mut self, ctx: &mut ViewContext<Self>) {
-        self.update_secret_display_dropdown(ctx);
-        self.add_regex_modal_state.set_title(
-            Some(i18n::tr(ctx, I18nKey::PrivacyAddRegexPatternTitle).to_string()),
-            ctx,
-        );
     }
 
     fn process_pending_removals(&mut self, ctx: &mut ViewContext<Self>) {
@@ -773,7 +760,7 @@ impl SecretRedactionWidget {
             .count();
 
         let personal_tab = self.render_tab(
-            i18n::tr(app, I18nKey::PrivacyTabPersonal).to_string(),
+            "Personal".to_string(),
             personal_count,
             SecretRedactionTab::Personal,
             active_tab == SecretRedactionTab::Personal,
@@ -784,7 +771,7 @@ impl SecretRedactionWidget {
         let is_enterprise_tab_active = active_tab == SecretRedactionTab::Enterprise;
 
         let enterprise_tab = self.render_tab(
-            i18n::tr(app, I18nKey::PrivacyTabEnterprise).to_string(),
+            "Enterprise".to_string(),
             enterprise_count,
             SecretRedactionTab::Enterprise,
             is_enterprise_tab_active,
@@ -800,7 +787,7 @@ impl SecretRedactionWidget {
         if is_enterprise_tab_active {
             row.add_child(Shrinkable::new(1., Empty::new().finish()).finish());
             row.add_child(self.render_info(
-                i18n::tr(app, I18nKey::PrivacyEnterpriseReadonly).to_string(),
+                "Enterprise secret redaction cannot be modified.".to_string(),
                 appearance,
             ));
         }
@@ -919,7 +906,7 @@ impl SecretRedactionWidget {
 
         if enterprise_regex_list.is_empty() {
             return ui_builder
-                .paragraph(i18n::tr(app, I18nKey::PrivacyNoEnterpriseRegexes))
+                .paragraph("No enterprise regexes have been configured by your organization.")
                 .with_style(UiComponentStyles {
                     font_color: Some(description_text_color),
                     ..Default::default()
@@ -1018,10 +1005,9 @@ impl SecretRedactionWidget {
                         .with_main_axis_size(MainAxisSize::Max)
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_child(self.render_section_title(
-                            i18n::tr(app, I18nKey::PrivacyRecommended).to_string(),
-                            appearance,
-                        ))
+                        .with_child(
+                            self.render_section_title("Recommended".to_string(), appearance),
+                        )
                         .with_child(
                             Container::new(
                                 ui_builder
@@ -1030,8 +1016,7 @@ impl SecretRedactionWidget {
                                         self.add_all_button_mouse_state.clone(),
                                     )
                                     .with_text_and_icon_label(Self::add_button(
-                                        i18n::tr(app, I18nKey::PrivacyAddAll),
-                                        appearance,
+                                        "Add all", appearance,
                                     ))
                                     .with_style(Self::add_button_style())
                                     .build()
@@ -1189,11 +1174,7 @@ impl SettingsWidget for SecretRedactionWidget {
                 .with_child(
                     Shrinkable::new(
                         1.0,
-                        render_sub_header(
-                            appearance,
-                            i18n::tr(app, I18nKey::PrivacySafeModeTitle),
-                            Some(local_only_icon_state),
-                        ),
+                        render_sub_header(appearance, SAFE_MODE_TITLE, Some(local_only_icon_state)),
                     )
                     .finish(),
                 )
@@ -1201,7 +1182,7 @@ impl SettingsWidget for SecretRedactionWidget {
                     Container::new({
                         if is_enterprise_enabled {
                             self.render_info(
-                                i18n::tr(app, I18nKey::PrivacyEnabledByOrganization).to_string(),
+                                "Enabled by your organization.".to_string(),
                                 appearance,
                             )
                         } else {
@@ -1228,7 +1209,7 @@ impl SettingsWidget for SecretRedactionWidget {
             .with_child(secret_redaction_title_row)
             .with_child(
                 ui_builder
-                    .paragraph(i18n::tr(app, I18nKey::PrivacySafeModeDescription))
+                    .paragraph((*SAFE_MODE_DESCRIPTION).to_owned())
                     .with_style(UiComponentStyles {
                         font_color: Some(description_text_color),
                         font_size: Some(FONT_SIZE + 1.), // One size up from current 12px to 13px
@@ -1254,7 +1235,7 @@ impl SettingsWidget for SecretRedactionWidget {
 
             // Create the label with local-only icon if needed
             let label_with_icon = super::settings_page::render_dropdown_item_label(
-                i18n::tr(app, I18nKey::PrivacySecretVisualMode).to_string(),
+                "Secret visual redaction mode".to_string(),
                 None,
                 local_only_icon_state,
                 None,
@@ -1267,16 +1248,22 @@ impl SettingsWidget for SecretRedactionWidget {
                 .with_child(
                     Container::new(
                         ui_builder
-                            .paragraph(i18n::tr(app, I18nKey::PrivacySecretVisualModeDescription))
+                            .paragraph(
+                                "Choose how secrets are visually presented in the block list while keeping them searchable. This setting only affects what you see in the block list.",
+                            )
                             .with_style(UiComponentStyles {
                                 font_color: Some(description_text_color),
-                                margin: Some(Coords::default().top(4.).bottom(0.)),
+                                margin: Some(
+                                    Coords::default()
+                                        .top(4.)
+                                        .bottom(0.),
+                                ),
                                 ..Default::default()
                             })
                             .build()
-                            .finish(),
+                            .finish()
                     )
-                    .finish(),
+                    .finish()
                 )
                 .finish();
 
@@ -1311,23 +1298,18 @@ impl SettingsWidget for SecretRedactionWidget {
                             1.,
                             Flex::column()
                                 .with_child(self.render_section_title(
-                                    i18n::tr(app, I18nKey::PrivacyCustomRedactionTitle).to_string(),
+                                    USER_SECRET_REGEX_TITLE.to_string(),
                                     appearance,
                                 ))
-                                .with_child(
-                                    self.render_description(
-                                        i18n::tr(app, I18nKey::PrivacyCustomRedactionDescription)
-                                            .to_owned(),
-                                        appearance,
-                                        if privacy_settings.user_secret_regex_list.iter().count()
-                                            > 0
-                                        {
-                                            10.
-                                        } else {
-                                            0.
-                                        },
-                                    ),
-                                )
+                                .with_child(self.render_description(
+                                    USER_SECRET_REGEX_DESCRIPTION.to_owned(),
+                                    appearance,
+                                    if privacy_settings.user_secret_regex_list.iter().count() > 0 {
+                                        10.
+                                    } else {
+                                        0.
+                                    },
+                                ))
                                 .finish(),
                         )
                         .finish(),
@@ -1338,10 +1320,7 @@ impl SettingsWidget for SecretRedactionWidget {
                                 ButtonVariant::Secondary,
                                 self.add_regex_button_mouse_state.clone(),
                             )
-                            .with_text_and_icon_label(Self::add_button(
-                                i18n::tr(app, I18nKey::PrivacyAddRegex),
-                                appearance,
-                            ))
+                            .with_text_and_icon_label(Self::add_button("Add regex", appearance))
                             .with_style(Self::add_button_style())
                             .build()
                             .on_click(move |ctx, _, _| {
@@ -1396,11 +1375,7 @@ struct AppAnalyticsWidget {
 }
 
 impl AppAnalyticsWidget {
-    fn render_zero_data_retention_badge(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_zero_data_retention_badge(&self, appearance: &Appearance) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
 
         Hoverable::new(self.zdr_badge_mouse_state.clone(), move |mouse_state| {
@@ -1422,8 +1397,10 @@ impl AppAnalyticsWidget {
 
             let mut stack = Stack::new().with_child(badge);
             if is_hovered {
-                let tooltip =
-                    ui_builder.tool_tip(i18n::tr(app, I18nKey::PrivacyZdrTooltip).to_string());
+                let tooltip = ui_builder.tool_tip(
+                    "Your administrator has enabled zero data retention for your team. User generated content will never be collected."
+                        .to_string(),
+                );
                 stack.add_positioned_child(
                     tooltip.build().finish(),
                     OffsetPositioning::offset_from_parent(
@@ -1478,9 +1455,9 @@ impl SettingsWidget for AppAnalyticsWidget {
             .is_some_and(|w| w.billing_metadata.customer_type == CustomerType::Enterprise);
         // Keep the old description for enterprise users because we do not collect block input/output for them.
         let description = if is_enterprise {
-            i18n::tr(app, I18nKey::PrivacyTelemetryDescriptionEnterprise)
+            TELEMETRY_DESCRIPTION_OLD
         } else {
-            i18n::tr(app, I18nKey::PrivacyTelemetryDescription)
+            TELEMETRY_DESCRIPTION
         };
 
         let org_setting = UserWorkspaces::handle(app)
@@ -1499,18 +1476,18 @@ impl SettingsWidget for AppAnalyticsWidget {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(render_body_item_label::<PrivacyPageAction>(
-                    i18n::tr(app, I18nKey::PrivacyTelemetryTitle).into(),
+                    TELEMETRY_TITLE.into(),
                     None,
                     None,
                     LocalOnlyIconState::Hidden,
                     is_toggleable.into(),
                     appearance,
                 ))
-                .with_child(self.render_zero_data_retention_badge(appearance, app))
+                .with_child(self.render_zero_data_retention_badge(appearance))
                 .finish()
         } else {
             render_body_item_label::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyTelemetryTitle).into(),
+                TELEMETRY_TITLE.into(),
                 None,
                 None,
                 LocalOnlyIconState::Hidden,
@@ -1532,7 +1509,7 @@ impl SettingsWidget for AppAnalyticsWidget {
         } else {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: i18n::tr(app, I18nKey::PrivacyManagedByOrganization).to_string(),
+                    text: "This setting is managed by your organization.".to_string(),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1574,7 +1551,7 @@ impl SettingsWidget for AppAnalyticsWidget {
         if !is_on_paid_plan {
             column.add_child(
                 ui_builder
-                    .paragraph(i18n::tr(app, I18nKey::PrivacyTelemetryFreeTierNote))
+                    .paragraph(TELEMETRY_FREE_TIER_NOTE)
                     .with_style(UiComponentStyles {
                         font_color: Some(description_text_color),
                         margin: Some(
@@ -1591,7 +1568,7 @@ impl SettingsWidget for AppAnalyticsWidget {
             Align::new(
                 ui_builder
                     .link(
-                        i18n::tr(app, I18nKey::PrivacyTelemetryDocsLink).into(),
+                        "Read more about Warp's use of data".into(),
                         Some(TELEMETRY_DOCS_URL.into()),
                         None,
                         self.docs_link_mouse_state.clone(),
@@ -1641,7 +1618,7 @@ impl SettingsWidget for CrashReportsWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyCrashReportsTitle).into(),
+                "Send crash reports".into(),
                 None,
                 // Crash report state is always synced to cloud, so no need to show local only icon.
                 LocalOnlyIconState::Hidden,
@@ -1659,7 +1636,10 @@ impl SettingsWidget for CrashReportsWidget {
             ))
             .with_child(
                 ui_builder
-                    .paragraph(i18n::tr(app, I18nKey::PrivacyCrashReportsDescription))
+                    .paragraph(
+                        "Crash reports assist with debugging and stability improvements."
+                            .to_owned(),
+                    )
                     .with_style(UiComponentStyles {
                         font_color: Some(
                             appearance
@@ -1742,7 +1722,7 @@ impl SettingsWidget for CloudConversationStorageWidget {
         } else {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: i18n::tr(app, I18nKey::PrivacyManagedByOrganization).to_string(),
+                    text: "This setting is managed by your organization.".to_string(),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1752,7 +1732,7 @@ impl SettingsWidget for CloudConversationStorageWidget {
 
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyCloudConversationStorageTitle).into(),
+                "Store AI conversations in the cloud".into(),
                 None,
                 LocalOnlyIconState::Hidden,
                 toggle_state,
@@ -1762,17 +1742,18 @@ impl SettingsWidget for CloudConversationStorageWidget {
             ))
             .with_child(
                 ui_builder
-                    .paragraph(if is_checked {
-                        i18n::tr(
-                            app,
-                            I18nKey::PrivacyCloudConversationStorageEnabledDescription,
-                        )
-                    } else {
-                        i18n::tr(
-                            app,
-                            I18nKey::PrivacyCloudConversationStorageDisabledDescription,
-                        )
-                    })
+                    .paragraph(
+                        if is_checked {
+                            "Agent conversations can be shared with others and are retained \
+                            when you log in on different devices. This data is only stored \
+                            for product functionality, and Warp will not use it for analytics."
+                        } else {
+                            "Agent conversations are only stored locally on your machine, are \
+                            lost upon logout, and cannot be shared. Note: conversation data \
+                            for ambient agents are still stored in the cloud."
+                        }
+                        .to_owned(),
+                    )
                     .with_style(UiComponentStyles {
                         font_color: Some(
                             appearance
@@ -1810,12 +1791,12 @@ impl SettingsWidget for NetworkLogWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyNetworkLogTitle).into(),
+                "Network log console".into(),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.
                 LocalOnlyIconState::Hidden,
@@ -1826,7 +1807,12 @@ impl SettingsWidget for NetworkLogWidget {
             ))
             .with_child(
                 ui_builder
-                    .paragraph(i18n::tr(app, I18nKey::PrivacyNetworkLogDescription))
+                    .paragraph(
+                        "We've built a native console that allows you to view all communications \
+                        from Warp to external servers to ensure you feel comfortable that your \
+                        work is always kept safe."
+                            .to_owned(),
+                    )
                     .with_style(UiComponentStyles {
                         font_color: Some(
                             appearance
@@ -1848,7 +1834,7 @@ impl SettingsWidget for NetworkLogWidget {
                 Align::new(
                     ui_builder
                         .link(
-                            i18n::tr(app, I18nKey::PrivacyNetworkLogLink).to_owned(),
+                            "View network logging".to_owned(),
                             None,
                             Some(Box::new(|ctx| {
                                 ctx.dispatch_typed_action(PrivacyPageAction::LaunchNetworkLogging);
@@ -1883,12 +1869,12 @@ impl SettingsWidget for DataManagementWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyDataManagementTitle).into(),
+                DATA_MANAGEMENT_TITLE.into(),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.
                 LocalOnlyIconState::Hidden,
@@ -1899,7 +1885,7 @@ impl SettingsWidget for DataManagementWidget {
             ))
             .with_child(
                 ui_builder
-                    .paragraph(i18n::tr(app, I18nKey::PrivacyDataManagementDescription))
+                    .paragraph(DATA_MANAGEMENT_DESCRIPTION)
                     .with_style(UiComponentStyles {
                         font_color: Some(
                             appearance
@@ -1922,7 +1908,7 @@ impl SettingsWidget for DataManagementWidget {
                     appearance
                         .ui_builder()
                         .link(
-                            i18n::tr(app, I18nKey::PrivacyDataManagementLink).into(),
+                            DATA_MANAGEMENT_LINK_TEXT.into(),
                             None,
                             Some(Box::new(|ctx| {
                                 ctx.dispatch_typed_action(
@@ -1959,11 +1945,11 @@ impl SettingsWidget for PrivacyPolicyWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                i18n::tr(app, I18nKey::PrivacyPolicyTitle).into(),
+                PRIVACY_POLICY_TITLE.into(),
                 None,
                 // Not rendering a setting, so no need to show local only icon state.
                 LocalOnlyIconState::Hidden,
@@ -1977,7 +1963,7 @@ impl SettingsWidget for PrivacyPolicyWidget {
                     appearance
                         .ui_builder()
                         .link(
-                            i18n::tr(app, I18nKey::PrivacyPolicyLink).into(),
+                            PRIVACY_POLICY_LINK_TEXT.into(),
                             Some(PRIVACY_POLICY_URL.into()),
                             None,
                             self.link_mouse_state.clone(),

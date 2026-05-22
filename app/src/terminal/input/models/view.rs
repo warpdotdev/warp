@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -32,7 +33,6 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 
 struct ManageDefaultsTheme;
 

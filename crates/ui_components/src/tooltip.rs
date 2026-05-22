@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors};
-use warpui::{keymap::Keystroke, prelude::*};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::keymap::Keystroke;
+use warpui::prelude::*;
 
 use crate::{Component, keyboard_shortcut};
 

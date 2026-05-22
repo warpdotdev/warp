@@ -1,67 +1,62 @@
-use lazy_static::lazy_static;
-use parking_lot::FairMutex;
-use pathfinder_geometry::vector::vec2f;
-use settings::Setting as _;
 use std::borrow::Cow;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use lazy_static::lazy_static;
+use parking_lot::FairMutex;
+use pathfinder_geometry::vector::vec2f;
+use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::{ConstrainedBox, ScrollbarWidth};
+use warpui::elements::{
+    Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Expanded, Flex, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
+    ScrollbarWidth, SelectableArea, SelectionHandle, Stack, Text,
+};
+use warpui::keymap::{Context, EditableBinding, FixedBinding, Keystroke};
 use warpui::ui_components::components::UiComponent as _;
 use warpui::{
-    elements::{
-        Align, Border, ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Expanded,
-        Flex, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
-        SelectableArea, SelectionHandle, Stack, Text,
-    },
-    keymap::{Context, EditableBinding, FixedBinding, Keystroke},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
+    AppContext, Element, Entity, EntityId, EventContext, ModelHandle, SingletonEntity,
+    TypedActionView, UpdateView, View, ViewContext, ViewHandle,
 };
 
+use super::inline_action_icons::{self, icon_size};
 use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{AIAgentActionResult, AIAgentActionType};
-use warpui::{EntityId, EventContext};
-
-use crate::ai::agent::RequestCommandOutputResult;
-use crate::ai::agent::{icons, AIAgentActionResultType};
+use crate::ai::agent::{
+    icons, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
+    AIAgentCitation, AIAgentOutputMessageType, CallMCPToolResult, RequestCommandOutputResult,
+};
+use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::cli_controller::{
     LongRunningCommandControlState, UserTakeOverReason,
 };
 use crate::ai::blocklist::block::view_impl::output::action_icon;
-use crate::ai::blocklist::inline_action::inline_action_header::RightClickConfig;
+use crate::ai::blocklist::block::view_impl::{
+    render_autonomy_checkbox_setting_speedbump_footer, render_citation, render_citation_chips,
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+};
+use crate::ai::blocklist::block::{AIBlockAction, AutonomySettingSpeedbump};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    ExpandedConfig, HeaderConfig, InteractionMode, RightClickConfig,
+    INLINE_ACTION_HORIZONTAL_PADDING,
+};
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::{
-    AIBlock, BlocklistAIActionEvent, BlocklistAIHistoryModel, ClientIdentifiers,
+    AIBlock, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel,
+    ClientIdentifiers,
 };
-use crate::ai::{
-    agent::{AIAgentActionId, AIAgentCitation, AIAgentOutputMessageType, CallMCPToolResult},
-    blocklist::{
-        action_model::AIActionStatus,
-        block::{
-            view_impl::{
-                render_autonomy_checkbox_setting_speedbump_footer, render_citation,
-                render_citation_chips, CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
-            },
-            AIBlockAction, AutonomySettingSpeedbump,
-        },
-        inline_action::{
-            inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING,
-            inline_action_header::{ExpandedConfig, HeaderConfig, InteractionMode},
-        },
-        BlocklistAIActionModel,
-    },
-};
+use crate::cmd_or_ctrl_shift;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::editor::InteractionState;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::model::block::Block;
 use crate::terminal::TerminalModel;
+use crate::ui_components::blended_colors;
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
@@ -69,9 +64,6 @@ use crate::view_components::compactible_action_button::{
     MEDIUM_SIZE_SWITCH_THRESHOLD, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
-use crate::{cmd_or_ctrl_shift, settings::InputModeSettings, ui_components::blended_colors};
-
-use super::inline_action_icons::{self, icon_size};
 
 /// The vertical padding applied to the requested command row's content body.
 /// For horizontal padding, use [`INLINE_ACTION_HORIZONTAL_PADDING`] for consistency.

@@ -1,31 +1,28 @@
+use std::collections::HashSet;
+use std::ops::Range;
+
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use std::{collections::HashSet, ops::Range};
-
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CornerRadius, Dismiss, Empty, Fill, Flex, ParentElement,
+    Radius, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, Shrinkable,
+    UniformList, UniformListState,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, Dismiss, Empty, Fill, Flex, ParentElement,
-        Radius, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, Shrinkable,
-        UniformList, UniformListState,
-    },
-    presenter::ChildView,
-    ui_components::components::{UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    external_secrets::ExternalSecret,
-    search::{
-        external_secrets::{
-            external_secret_data_source::ExternalSecretDataSource,
-            searcher::{ExternalSecretSearchItemAction, ExternalSecretSearchMixer},
-        },
-        result_renderer::{QueryResultRenderer, QueryResultRendererStyles},
-        search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering},
-    },
+use crate::appearance::Appearance;
+use crate::external_secrets::ExternalSecret;
+use crate::search::external_secrets::external_secret_data_source::ExternalSecretDataSource;
+use crate::search::external_secrets::searcher::{
+    ExternalSecretSearchItemAction, ExternalSecretSearchMixer,
 };
+use crate::search::result_renderer::{QueryResultRenderer, QueryResultRendererStyles};
+use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering};
 
 lazy_static! {
     static ref QUERY_RESULT_RENDERER_STYLES: QueryResultRendererStyles =
@@ -369,7 +366,8 @@ pub mod styles {
     use pathfinder_color::ColorU;
     use warpui::elements::{Border, DropShadow, ScrollbarWidth};
 
-    use crate::{appearance::Appearance, themes::theme::Fill};
+    use crate::appearance::Appearance;
+    use crate::themes::theme::Fill;
 
     pub const CORNER_RADIUS: f32 = 6.;
     pub const VIEW_WIDTH: f32 = 450.;

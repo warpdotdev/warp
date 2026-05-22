@@ -1,23 +1,17 @@
 use pathfinder_color::ColorU;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, Element, Empty, Flex, MouseStateHandle, ParentElement,
-        Shrinkable,
-    },
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    ConstrainedBox, Container, Element, Empty, Flex, MouseStateHandle, ParentElement, Shrinkable,
 };
-
-use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
-use crate::{
-    appearance::Appearance,
-    resource_center::{ContentItem, ContentSectionData},
-};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::{
     SectionAction, SectionView, CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ICON_PADDING,
     ITEM_PADDING_BOTTOM, SECTION_SPACING,
 };
+use crate::appearance::Appearance;
+use crate::resource_center::{ContentItem, ContentSectionData};
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 #[derive(Default)]
 struct ContentMouseStateHandles {

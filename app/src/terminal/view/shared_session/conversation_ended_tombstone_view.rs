@@ -1,19 +1,5 @@
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, ArtifactType};
-use crate::ai::ambient_agents::AmbientAgentTask;
-use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
-};
-use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
-use crate::appearance::Appearance;
-use crate::server::ids::SyncId;
-use crate::settings::ai::{AISettings, AISettingsChangedEvent};
-use crate::ui_components::blended_colors;
-use crate::util::time_format::human_readable_precise_duration;
-use crate::view_components::action_button::{ActionButton, PrimaryTheme};
-use crate::workspace::WorkspaceAction;
 use std::path::Path;
+
 use warp_core::paths::home_relative_path;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::icons::Icon;
@@ -29,7 +15,22 @@ use warpui::{
 };
 
 use super::cloud_conversation_continuation::TombstoneCta;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, ArtifactType};
+use crate::ai::ambient_agents::{
+    conversation_output_status_from_conversation, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientConversationStatus,
+};
+use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
+use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
+use crate::appearance::Appearance;
+use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
+use crate::ui_components::blended_colors;
+use crate::util::time_format::human_readable_precise_duration;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme};
+use crate::workspace::WorkspaceAction;
 
 /// Metadata collected for display in the tombstone.
 #[derive(Default)]

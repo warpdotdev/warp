@@ -1,16 +1,17 @@
 //! Rendering functions for orchestration-related output items (messaging & agent management).
 
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
+    Hoverable, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, SingletonEntity};
 
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warpui::elements::FormattedTextElement;
-
+use super::common::render_scrollable_collapsible_content;
+use super::output::{action_icon, Props};
+use super::WithContentItemSpacing;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
@@ -40,10 +41,6 @@ use crate::appearance::Appearance;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-
-use super::common::render_scrollable_collapsible_content;
-use super::output::{action_icon, Props};
-use super::WithContentItemSpacing;
 
 const GENERATING_TITLE_PLACEHOLDER: &str = "Generating title...";
 const ORCHESTRATION_COLLAPSED_MAX_HEIGHT: f32 = 200.;

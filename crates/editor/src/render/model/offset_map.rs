@@ -2,7 +2,6 @@ use std::ops::{Add, Sub};
 
 use itertools::Itertools;
 use num_traits::SaturatingSub;
-
 use string_offset::CharOffset;
 
 use super::FrameOffset;

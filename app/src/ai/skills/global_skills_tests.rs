@@ -1,7 +1,5 @@
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillScope};
 use warp_cli::skill::SkillSpec;

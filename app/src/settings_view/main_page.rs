@@ -1,64 +1,55 @@
-use super::{
-    flags,
-    settings_page::{
-        render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState,
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-        HEADER_PADDING,
-    },
-    SettingsAction, SettingsSection, ToggleSettingActionPair,
-};
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
-use crate::send_telemetry_from_ctx;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    appearance::Appearance,
-    auth::{auth_state::AuthState, auth_view_modal::AuthViewVariant},
-    i18n::{self, I18nKey},
-    report_if_error,
-    settings::cloud_preferences::CloudPreferencesSettings,
-    TelemetryEvent,
-};
-use crate::{auth::auth_manager::AuthManager, server::ids::ServerId};
-use crate::{auth::auth_manager::LoginGatedFeature, workspaces::workspace::CustomerType};
-use crate::{workspace::WorkspaceAction, workspaces::update_manager::TeamUpdateManager};
+use std::sync::{Arc, Mutex};
+
 use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::{Arc, Mutex};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::{channel::ChannelState, context_flag::ContextFlag};
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{Border, Empty, MainAxisAlignment, MainAxisSize},
-    id,
-    platform::Cursor,
-    ui_components::switch::SwitchStateHandle,
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Element, Empty, Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Shrinkable, Text,
 };
+use warpui::fonts::Weight;
+use warpui::keymap::ContextPredicate;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    Action, AppContext,
-};
-use warpui::{
-    elements::{CacheOption, Image},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-};
-use warpui::{fonts::Weight, keymap::ContextPredicate};
-use warpui::{
-    Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
+use super::settings_page::{
+    render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
+    HEADER_PADDING,
+};
+use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
+use crate::server::ids::ServerId;
+use crate::settings::cloud_preferences::CloudPreferencesSettings;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
+
 const PHOTO_SIZE: f32 = 40.;
+const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
 const REGULAR_TEXT_FONT_SIZE: f32 = 12.;
 const VERTICAL_MARGIN: f32 = 24.;
+const LOG_OUT_TEXT: &str = "Log out";
 lazy_static! {
     static ref SETTINGS_SYNC_BINDINGS_ADDED: Arc<Mutex<bool>> = Default::default();
 }
@@ -286,10 +277,7 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(LogoutWidget::default()));
 
-        let page = PageType::new_uncategorized_i18n_title(
-            widgets,
-            Some(I18nKey::SettingsPageTitleAccount),
-        );
+        let page = PageType::new_uncategorized(widgets, Some("Account"));
 
         MainSettingsPageView { page, auth_state }
     }
@@ -321,7 +309,6 @@ impl AccountWidget {
         &self,
         auth_state: &AuthState,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let button_styles = UiComponentStyles {
             font_size: Some(14.),
@@ -343,7 +330,7 @@ impl AccountWidget {
                 self.ui_state_handles.anonymous_user_sign_up_button.clone(),
             )
             .with_style(button_styles)
-            .with_text_label(i18n::tr(app, I18nKey::AccountSignUp).to_owned())
+            .with_text_label("Sign up".to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(MainPageAction::SignupAnonymousUser);
@@ -355,10 +342,7 @@ impl AccountWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
 
-        plan_info.add_child(render_customer_type_badge(
-            appearance,
-            i18n::tr(app, I18nKey::AccountFreePlan).into(),
-        ));
+        plan_info.add_child(render_customer_type_badge(appearance, "Free".into()));
         plan_info.add_child(
             Container::new(
                 appearance
@@ -370,7 +354,7 @@ impl AccountWidget {
                     .with_text_and_icon_label(
                         TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
-                            i18n::tr(app, I18nKey::AccountComparePlans),
+                            "Compare plans",
                             Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
                             MainAxisSize::Min,
                             MainAxisAlignment::Center,
@@ -506,7 +490,7 @@ impl AccountWidget {
                         appearance
                             .ui_builder()
                             .link(
-                                i18n::tr(app, I18nKey::AccountContactSupport).into(),
+                                "Contact support".into(),
                                 Some("mailto:support@warp.dev".into()),
                                 None,
                                 self.ui_state_handles.enterprise_contact_us_link.clone(),
@@ -523,7 +507,7 @@ impl AccountWidget {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    i18n::tr(app, I18nKey::AccountManageBilling).into(),
+                                    "Manage billing".into(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(
@@ -544,13 +528,9 @@ impl AccountWidget {
                     // If the team is upgradeable to self-serve tier, show them the upgrade link.
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let description = match team.billing_metadata.customer_type {
-                            CustomerType::Prosumer => {
-                                i18n::tr(app, I18nKey::AccountUpgradeTurboPlan)
-                            }
-                            CustomerType::Turbo => {
-                                i18n::tr(app, I18nKey::AccountUpgradeLightspeedPlan)
-                            }
-                            _ => i18n::tr(app, I18nKey::AccountComparePlans),
+                            CustomerType::Prosumer => "Upgrade to Turbo plan",
+                            CustomerType::Turbo => "Upgrade to Lightspeed plan",
+                            _ => "Compare plans",
                         };
                         let team_uid = team.uid;
                         plan_info.add_child(
@@ -576,17 +556,14 @@ impl AccountWidget {
                 }
             }
         } else {
-            let plan_badge_child = render_customer_type_badge(
-                appearance,
-                i18n::tr(app, I18nKey::AccountFreePlan).into(),
-            );
+            let plan_badge_child = render_customer_type_badge(appearance, "Free".into());
             plan_info.add_child(plan_badge_child);
 
             plan_info.add_child(
                 appearance
                     .ui_builder()
                     .link(
-                        i18n::tr(app, I18nKey::AccountComparePlans).into(),
+                        "Compare plans".into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(MainPageAction::Upgrade {
@@ -631,7 +608,7 @@ impl SettingsWidget for AccountWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let account_info = if view.auth_state.is_anonymous_or_logged_out() {
-            self.render_anonymous_account_info(view.auth_state.as_ref(), appearance, app)
+            self.render_anonymous_account_info(view.auth_state.as_ref(), appearance)
         } else {
             let profile_image_source = view.auth_state.user_photo_url().map(|url| {
                 asset_cache::url_source_with_persistence(url, &warp_core::paths::cache_dir())
@@ -716,7 +693,7 @@ impl SettingsWidget for SettingsSyncWidget {
         };
 
         Container::new(render_body_item::<MainPageAction>(
-            i18n::tr(app, I18nKey::AccountSettingsSync).to_string(),
+            "Settings sync".to_string(),
             Some(label_info),
             // Cloud prefs are always synced, so no need to show the local-only icon.
             LocalOnlyIconState::Hidden,
@@ -791,16 +768,16 @@ impl SettingsWidget for EarnRewardsWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             self.render_row(
                 appearance,
-                i18n::tr(app, I18nKey::AccountReferralCta),
+                REFERRAL_CTA,
                 appearance
                     .ui_builder()
                     .link(
-                        i18n::tr(app, I18nKey::AccountReferFriend).into(),
+                        "Refer a friend".into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(WorkspaceAction::ShowReferralSettingsPage);
@@ -850,73 +827,73 @@ impl VersionInfoWidget {
                 match autoupdate::get_update_state(app) {
                     AutoupdateStage::NoUpdateAvailable => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateUpToDate),
+                            text: "Up to date",
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateCheckForUpdates),
+                            text: "Check for updates",
                             action: MainPageAction::CheckForUpdate,
                         }),
                     ),
                     AutoupdateStage::CheckingForUpdate => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateChecking),
+                            text: "checking for update...",
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::DownloadingUpdate => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateDownloading),
+                            text: "downloading update...",
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdateReady { .. } => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateAvailable),
+                            text: "Update available",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateRelaunchWarp),
+                            text: "Relaunch Warp",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::Updating { .. } => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateUpdating),
+                            text: "Updating...",
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdatedPendingRestart { .. } => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateInstalled),
+                            text: "Installed update",
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateRelaunchWarp),
+                            text: "Relaunch Warp",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateUnableToInstall),
+                            text: "A new version of Warp is available but can't be installed",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateManual),
+                            text: "Update Warp manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
                     ),
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateUnableToLaunch),
+                            text: "A new version of Warp is installed but can't be launched.",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: i18n::tr(app, I18nKey::AccountUpdateManual),
+                            text: "Update Warp manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
@@ -933,7 +910,7 @@ impl VersionInfoWidget {
                     1.0,
                     Align::new(
                         Text::new_inline(
-                            i18n::tr(app, I18nKey::AccountVersion).to_string(),
+                            "Version".to_string(),
                             appearance.ui_font_family(),
                             REGULAR_TEXT_FONT_SIZE,
                         )
@@ -1057,11 +1034,11 @@ struct LogoutWidget {
 }
 
 impl LogoutWidget {
-    fn render_logout_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_logout_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         appearance
             .ui_builder()
             .button(ButtonVariant::Secondary, self.mouse_state.clone())
-            .with_text_label(i18n::tr(app, I18nKey::AccountLogOut).into())
+            .with_text_label(LOG_OUT_TEXT.into())
             .with_style(UiComponentStyles {
                 font_size: Some(14.),
                 padding: Some(Coords::uniform(8.).left(32.).right(32.)),
@@ -1092,10 +1069,10 @@ impl SettingsWidget for LogoutWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
-            Align::new(self.render_logout_button(appearance, app))
+            Align::new(self.render_logout_button(appearance))
                 .left()
                 .finish(),
         )

@@ -1,9 +1,9 @@
 //! Implementations of the [`SecureStorage`] service for the macOS platform.
 
 use anyhow::anyhow;
-use security_framework::os::macos::{
-    keychain::SecKeychain, keychain_item::SecKeychainItem, passwords::SecKeychainItemPassword,
-};
+use security_framework::os::macos::keychain::SecKeychain;
+use security_framework::os::macos::keychain_item::SecKeychainItem;
+use security_framework::os::macos::passwords::SecKeychainItemPassword;
 
 use super::Error;
 

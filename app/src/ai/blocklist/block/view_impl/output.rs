@@ -1,119 +1,43 @@
 //! Renders the AI output portion of the AI block.
 //!
 //! This includes text, code snippets, suggested commands, and interactive inline action UX.
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{
-    AIAgentInput, CreateDocumentsResult, EditDocumentsResult, ReadFilesResult, SubagentCall,
-    SubagentType, TodoOperation, UploadArtifactResult,
-};
-use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::util::truncation::truncate_from_end;
-use ai::agent::file_locations::group_file_contexts_for_display;
-
-use crate::ai::blocklist::block::view_impl::common::{
-    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
-};
-use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
-use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
-use crate::ai::blocklist::secret_redaction::SecretRedactionState;
-use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
-use crate::ai::blocklist::view_util::format_credits;
-use crate::ai::skills::SkillOpenOrigin;
-use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path,
-};
-
-use crate::code::editor_management::CodeSource;
-use crate::terminal::shared_session::SharedSessionStatus;
-use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
-};
-use crate::AIAgentTodoList;
-
+use std::cell::OnceCell;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::skills::SkillReference;
+use indexmap::IndexMap;
+use itertools::Itertools;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 #[allow(unused_imports)]
 use warp_util::path::{common_path, CleanPathResult};
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
-    ChildAnchor, NewScrollable, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack,
+    Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable,
+    MainAxisAlignment, MainAxisSize, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap,
 };
-use warpui::EntityId;
-
-use crate::ai::blocklist::block::{
-    CollapsibleElementState, CollapsibleExpansionState, FinishReason, ImportedCommentGroup,
+use warpui::keymap::Keystroke;
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{RadioButtonItem, RadioButtonLayout};
+use warpui::{
+    Action, AppContext, Element, EntityId, ModelHandle, SingletonEntity, View, ViewHandle,
 };
-use indexmap::IndexMap;
-use std::{cell::OnceCell, cmp::Ordering, collections::HashMap, rc::Rc, sync::Arc};
-
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
-use crate::{
-    ai::{
-        agent::{
-            icons::{self, gray_stop_icon, yellow_stop_icon},
-            AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-            AIAgentActionType, AIAgentCitation, AIAgentOutputMessage, AIAgentOutputMessageType,
-            AIAgentText, AIAgentTextSection, MessageId, ReadFilesRequest,
-            RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-            SuggestNewConversationResult, SummarizationType,
-        },
-        blocklist::{
-            action_model::AIActionStatus,
-            block::{
-                model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus},
-                AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons,
-                AutonomySettingSpeedbump, EmbeddedCodeEditorView, RequestedEdit, TextLocation,
-                TodoListElementState,
-            },
-            history_model::BlocklistAIHistoryModel,
-            inline_action::{
-                ask_user_question_view::AskUserQuestionView,
-                inline_action_header::{
-                    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-                    INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::{self, icon_size},
-                requested_action::{
-                    render_requested_action_body_text, render_requested_action_row_for_text,
-                    RenderableAction,
-                },
-                requested_command::RequestedCommand,
-                search_codebase::SearchCodebaseView,
-                suggested_unit_tests::SuggestedUnitTestsView,
-                web_fetch::WebFetchView,
-                web_search::WebSearchView,
-            },
-            keyboard_navigable_buttons::KeyboardNavigableButtons,
-            AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView,
-        },
-        paths::shell_native_absolute_path,
-        skills::SkillManager,
-    },
-    appearance::Appearance,
-    code::diff_viewer::DisplayMode,
-    settings_view::SettingsSection,
-    terminal::ShellLaunchData,
-    ui_components::{blended_colors, buttons::icon_button, icons::Icon},
-    view_components::action_button::ActionButton,
-    workspace::WorkspaceAction,
-    FeatureFlag,
-};
-use itertools::Itertools;
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::channel::ChannelState;
 
 use super::common::{
     format_elapsed_seconds, render_debug_footer, render_failed_output, render_informational_footer,
@@ -122,29 +46,82 @@ use super::common::{
     STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
 };
 use super::imported_comments::render_imported_comments;
-use super::orchestration;
-use super::todos::render_todos;
-use super::CONTENT_HORIZONTAL_PADDING;
+use super::todos::{render_completed_todo_items, render_todos};
 use super::{
-    add_highlights_to_rich_text, render_autonomy_checkbox_setting_speedbump_footer,
-    render_citation_chips, todos::render_completed_todo_items, WithContentItemSpacing,
+    add_highlights_to_rich_text, orchestration, render_autonomy_checkbox_setting_speedbump_footer,
+    render_citation_chips, WithContentItemSpacing, CONTENT_HORIZONTAL_PADDING,
     CONTENT_ITEM_VERTICAL_MARGIN,
 };
-use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
-        MainAxisSize, ParentElement, Radius, Shrinkable, Text, Wrap,
-    },
-    keymap::Keystroke,
-    platform::{Cursor, OperatingSystem},
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        radio_buttons::{RadioButtonItem, RadioButtonLayout},
-    },
-    Action, AppContext, Element, ModelHandle, SingletonEntity, View, ViewHandle,
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::comment::ReviewComment;
+use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CreateDocumentsResult,
+    EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::AIActionStatus;
+use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus};
+use crate::ai::blocklist::block::view_impl::common::{
+    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
+    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+};
+use crate::ai::blocklist::block::{
+    AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
+    CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView, FinishReason,
+    ImportedCommentGroup, RequestedEdit, TextLocation, TodoListElementState,
+};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestionView;
+use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
+use crate::ai::blocklist::inline_action::requested_action::{
+    render_requested_action_body_text, render_requested_action_row_for_text, RenderableAction,
+};
+use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
+use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
+use crate::ai::blocklist::inline_action::search_codebase::SearchCodebaseView;
+use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
+use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
+use crate::ai::blocklist::inline_action::web_search::WebSearchView;
+use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
+use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
+use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
+use crate::ai::paths::shell_native_absolute_path;
+use crate::ai::skills::{
+    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path, SkillManager,
+    SkillOpenOrigin,
+};
+use crate::appearance::Appearance;
+use crate::code::diff_viewer::DisplayMode;
+use crate::code::editor_management::CodeSource;
+use crate::settings_view::SettingsSection;
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::ShellLaunchData;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::action_button::ActionButton;
+use crate::view_components::compactible_action_button::{
+    CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
+};
+use crate::workspace::WorkspaceAction;
+use crate::{AIAgentTodoList, FeatureFlag};
 
 const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upload this artifact?";
 

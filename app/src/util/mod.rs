@@ -19,10 +19,11 @@ pub mod vm_detection;
 #[cfg(windows)]
 pub mod windows;
 
-use itertools::Itertools;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Range;
+
+use itertools::Itertools;
 
 pub fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     let mut i = 1;

@@ -2,24 +2,20 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    ChildView, ClippedScrollStateHandle, ClippedScrollable, Dismiss, ParentElement, ScrollbarWidth,
+    ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, DropShadow, Flex, MainAxisAlignment, MainAxisSize,
+    ParentElement, Radius, ScrollbarWidth, Text,
 };
-use warpui::fonts::FamilyId;
+use warpui::fonts::{FamilyId, Properties};
+use warpui::keymap::FixedBinding;
 use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex,
-        MainAxisAlignment, MainAxisSize, Radius, Text,
-    },
-    fonts::Properties,
-    keymap::FixedBinding,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
 use crate::menu::{self, Event as MenuEvent, Menu, MenuItemFields};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons;
+use crate::ui_components::{blended_colors, icons};
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 
 const MENU_WIDTH: f32 = 300.0;

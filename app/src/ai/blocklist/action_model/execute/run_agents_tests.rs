@@ -16,15 +16,17 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    auth::AuthStateProvider,
-    cloud_object::model::persistence::CloudModel,
-    network::NetworkStatus,
-    server::{cloud_objects::update_manager::UpdateManager, sync_queue::SyncQueue},
-    settings::PrivacySettings,
-    test_util::settings::initialize_settings_for_tests_with_mode,
-    workspaces::{team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces},
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
 

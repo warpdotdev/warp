@@ -1,3 +1,47 @@
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use markdown_parser::FormattedTextFragment;
+use parking_lot::FairMutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::{
+    ParticipantId, Role, RoleRequestId, RoleRequestRejectedReason, RoleRequestResponse, SessionId,
+};
+use settings::Setting as _;
+use tree::DEFAULT_FLEX_VALUE;
+use typed_path::TypedPath;
+use url::Url;
+use uuid::Uuid;
+use warp_cli::agent::Harness;
+use warp_core::command::ExitCode;
+use warp_core::context_flag::ContextFlag;
+use warp_terminal::shell::{ShellName, ShellType};
+use warp_util::path::convert_wsl_to_windows_host_path;
+#[cfg(feature = "local_fs")]
+use warp_util::path::LineAndColumnArg;
+use warp_util::remote_path::RemotePath;
+use warpui::elements::{
+    ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
+    MainAxisSize, ParentElement, Shrinkable, Stack,
+};
+use warpui::keymap::{Context, EditableBinding, FixedBinding};
+use warpui::notification::NotificationSendError;
+use warpui::windowing::WindowManager;
+use warpui::{
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle, WindowId,
+};
+
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversation, AIConversationId};
@@ -12,97 +56,13 @@ use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::ai::llms::LLMId;
 use crate::ai::restored_conversations::RestoredAgentConversations;
-use crate::auth::auth_manager::AuthManager;
-use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::Space;
-use crate::code::buffer_location::LocalOrRemotePath;
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
-use crate::code::view::CodeViewAction;
-use crate::code_review::comments::{AttachedReviewComment, PendingImportedReviewComment};
-use crate::code_review::diff_state::DiffMode;
-use crate::env_vars::EnvVarCollectionType;
-use crate::notebooks::file::FileNotebookView;
-use crate::pane_group::focus_state::PaneGroupFocusEvent;
-use crate::pane_group::pane::get_started_pane::GetStartedPane;
-use crate::pane_group::pane::welcome_pane::WelcomePane;
-use crate::pane_group::pane::ActionOrigin;
-use crate::quit_warning::UnsavedStateSummary;
-#[cfg(target_family = "wasm")]
-use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::server_api::ServerApiProvider;
-use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
-use crate::settings_view::SettingsSection;
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
-use crate::terminal::view::inline_banner::{
-    ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
-};
-use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
-use crate::undo_close::UndoCloseStack;
-use crate::undo_close::UndoCloseStackEvent;
-#[cfg(target_family = "wasm")]
-use crate::uri::browser_url_handler::update_browser_url;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::FileTarget;
-use crate::view_components::ToastFlavor;
-use crate::workflows::workflow::Workflow;
-use warp_terminal::shell::{ShellName, ShellType};
-
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ffi::OsString;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::{mpsc::SyncSender, Arc};
-
-use itertools::Itertools;
-use lazy_static::lazy_static;
-
-use markdown_parser::FormattedTextFragment;
-use parking_lot::FairMutex;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::{
-    ParticipantId, Role, RoleRequestId, RoleRequestRejectedReason, RoleRequestResponse, SessionId,
-};
-use tree::DEFAULT_FLEX_VALUE;
-use typed_path::TypedPath;
-use url::Url;
-use uuid::Uuid;
-use warp_cli::agent::Harness;
-use warp_core::command::ExitCode;
-use warp_core::context_flag::ContextFlag;
-use warp_util::path::convert_wsl_to_windows_host_path;
-#[cfg(feature = "local_fs")]
-use warp_util::path::LineAndColumnArg;
-use warp_util::remote_path::RemotePath;
-use warpui::elements::{
-    Clipped, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, MainAxisSize, Shrinkable,
-    Stack,
-};
-use warpui::keymap::{Context, EditableBinding, FixedBinding};
-use warpui::notification::NotificationSendError;
-
-use warpui::windowing::WindowManager;
-use warpui::{
-    elements::{ChildView, Element, ParentElement},
-    AppContext, Entity, EntityId, ModelHandle, TypedActionView, View, ViewHandle, WeakViewHandle,
-    WindowId,
-};
-use warpui::{SingletonEntity, ViewContext};
-
-use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
 use crate::app_state::CodePaneSnapShot;
@@ -112,36 +72,72 @@ use crate::app_state::{
     TerminalPaneSnapshot, WorkflowPaneSnapshot,
 };
 use crate::appearance::Appearance;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::AuthStateProvider;
 use crate::banner::{Banner, BannerEvent, BannerState, BannerTextContent, DismissalType};
 use crate::channel::{Channel, ChannelState};
-use crate::code::view::CodeView;
+use crate::cloud_object::Space;
+use crate::code::active_file::ActiveFileModel;
+use crate::code::buffer_location::LocalOrRemotePath;
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::code::view::{CodeView, CodeViewAction};
+use crate::code_review::comments::{AttachedReviewComment, PendingImportedReviewComment};
+use crate::code_review::diff_state::DiffMode;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs};
+use crate::env_vars::EnvVarCollectionType;
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
+use crate::notebooks::file::FileNotebookView;
+use crate::palette::PaletteMode;
+use crate::pane_group::focus_state::PaneGroupFocusEvent;
+use crate::pane_group::pane::get_started_pane::GetStartedPane;
+#[cfg(not(target_family = "wasm"))]
+use crate::pane_group::pane::terminal_pane::{
+    host_terminal_shared_session_source_type, inherit_share_for_local_child,
+};
+use crate::pane_group::pane::welcome_pane::WelcomePane;
+use crate::pane_group::pane::ActionOrigin;
 use crate::persistence::ModelEvent;
-use crate::report_if_error;
+use crate::quit_warning::UnsavedStateSummary;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
 };
+#[cfg(target_family = "wasm")]
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ObjectUid, SyncId};
+use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::{
     AnonymousUserSignupEntrypoint, PaletteSource, SharingDialogSource, TelemetryEvent,
 };
 use crate::session_management::SessionNavigationData;
+use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::settings_view::SettingsSection;
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::available_shells::{AvailableShell, AvailableShells};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty;
 use crate::terminal::model::session::Session;
-use crate::terminal::session_settings::NewSessionSource;
-use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
 use crate::terminal::shared_session::render_util::ParticipantAvatarParams;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeModal, RoleChangeModalEvent,
 };
 use crate::terminal::shared_session::share_modal::{ShareSessionModal, ShareSessionModalEvent};
-use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionActionSource};
+use crate::terminal::shared_session::{
+    self, IsSharedSessionCreator, SharedSessionActionSource, SharedSessionSource,
+};
+use crate::terminal::view::inline_banner::{
+    ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
+};
+use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
     BlockNotification, ConversationRestorationInNewPaneType, ExecuteCommandEvent,
@@ -149,24 +145,21 @@ use crate::terminal::view::{
 };
 use crate::terminal::{
     MockTerminalManager, ShareBlockModal, ShareBlockModalEvent, ShellLaunchData, ShellLaunchState,
+    TerminalManager, TerminalModel, TerminalView,
 };
-use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
-use session_sharing_protocol::sharer::SessionSourceType;
-use settings::Setting as _;
-
-use crate::code::active_file::ActiveFileModel;
+use crate::undo_close::{UndoCloseStack, UndoCloseStackEvent};
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_handler::update_browser_url;
 use crate::util::bindings::{is_binding_pty_compliant, CustomAction};
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::FileTarget;
+use crate::view_components::ToastFlavor;
+use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
-
-use crate::palette::PaletteMode;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
-use crate::{
-    server::server_api::ServerApi,
-    terminal::{TerminalManager, TerminalModel, TerminalView},
-};
+use crate::{cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx};
 
 mod child_agent;
 pub mod focus_state;
@@ -174,14 +167,12 @@ pub mod pane;
 pub mod tree;
 pub mod working_directories;
 use child_agent::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
-
 use focus_state::PaneGroupFocusState;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
 
-pub use crate::code_review::CodeReviewPanelArg;
 pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
@@ -195,16 +186,15 @@ pub use pane::notebook_pane::NotebookPane;
 pub use pane::settings_pane::SettingsPane;
 pub use pane::terminal_pane::TerminalPane;
 pub use pane::workflow_pane::WorkflowPane;
-pub use pane::PaneHeaderAction;
-pub use pane::PaneHeaderCustomAction;
 pub use pane::{
     AnyPaneContent, BackingView, PaneConfiguration, PaneConfigurationEvent, PaneContent, PaneEvent,
-    PaneId, PaneView, TerminalPaneId,
+    PaneHeaderAction, PaneHeaderCustomAction, PaneId, PaneView, TerminalPaneId,
 };
 pub use tree::{Direction, PaneData, PaneFlex, PaneNode, SplitDirection};
 pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
+pub use crate::code_review::CodeReviewPanelArg;
 
 lazy_static! {
     // The value to use as the initial window bounds if we are unable to
@@ -915,6 +905,12 @@ pub struct PaneGroup {
     /// Maps child agent conversation IDs to their hidden pane IDs, so they can
     /// be revealed from the parent's status card.
     child_agent_panes: HashMap<AIConversationId, PaneId>,
+
+    /// Host pane id → child pane ids whose share was auto-created by
+    /// `inherit_share_for_local_child`. Used by `StopSharingCurrentSession`
+    /// so transitively-shared children don't outlive the host's share.
+    /// Excludes cloud-SDK-managed shares (`AmbientAgent` host path).
+    transitively_shared_child_panes: HashMap<PaneId, HashSet<PaneId>>,
 
     /// Set when this pane group hosts a split-off child agent pane that
     /// should be re-adopted by its source group on tab close.
@@ -2621,10 +2617,13 @@ impl PaneGroup {
                 };
 
                 terminal_view.update(ctx, |view, ctx| {
+                    let share_source = SharedSessionSource::user(
+                        view.active_conversation_task_id(ctx).map(|t| t.to_string()),
+                    );
                     view.attempt_to_share_session(
                         *scrollback_type,
                         Some(*source),
-                        SessionSourceType::default(),
+                        share_source,
                         false,
                         ctx,
                     );
@@ -3055,6 +3054,23 @@ impl PaneGroup {
             me.discard_pane(*pane_id, ctx);
         });
 
+        // Catch-up share for children that existed before the parent
+        // started sharing — `inherit_share_for_local_child` only fires at
+        // child-pane creation time.
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                    conversation_id,
+                    ..
+                } = event
+                {
+                    me.transitively_share_existing_local_children(*conversation_id, ctx);
+                }
+            },
+        );
+
         let active_file_model = ctx.add_model(|_| ActiveFileModel::new());
 
         let mut pane_group = Self {
@@ -3083,6 +3099,7 @@ impl PaneGroup {
             is_right_panel_maximized: false,
             pending_ambient_agent_conversation_restorations: HashMap::new(),
             child_agent_panes: HashMap::new(),
+            transitively_shared_child_panes: HashMap::new(),
             child_agent_origin: None,
             custom_title: None,
         };
@@ -4421,6 +4438,10 @@ impl PaneGroup {
     /// `child_agent_panes`. The orchestration pill bar later inserts it into
     /// the tree on demand via `replace_pane` (in-place swap) or `panes.split`
     /// ("Open in new pane").
+    ///
+    /// When `is_shared_session_creator` is `Yes`, the new pane is recorded
+    /// in `transitively_shared_child_panes` keyed by `base_pane_id` so the
+    /// host's `StopSharingCurrentSession` cleans it up.
     fn insert_terminal_pane_hidden_for_child_agent(
         &mut self,
         base_pane_id: PaneId,
@@ -4432,6 +4453,10 @@ impl PaneGroup {
             .as_terminal_pane_id()
             .or(self.active_session_id(ctx));
         let startup_directory = self.startup_path_for_new_session(base_session_id, ctx);
+        let is_transitively_shared = matches!(
+            &is_shared_session_creator,
+            IsSharedSessionCreator::Yes { .. }
+        );
         let (pane_data, _view) = self.create_terminal_pane_data(
             startup_directory,
             env_vars,
@@ -4441,8 +4466,146 @@ impl PaneGroup {
             ctx,
         );
         let new_pane_id = pane_data.terminal_pane_id();
+        if is_transitively_shared {
+            self.transitively_shared_child_panes
+                .entry(base_pane_id)
+                .or_default()
+                .insert(new_pane_id.into());
+        }
         self.attach_child_pane_off_tree(Box::new(pane_data), ctx);
         new_pane_id
+    }
+
+    /// Dispatches a share on every direct child agent pane in this group
+    /// that isn't already sharing, mirroring
+    /// `terminal_pane::inherit_share_for_local_child` for children that
+    /// existed before the host started sharing.
+    #[cfg(not(target_family = "wasm"))]
+    fn transitively_share_existing_local_children(
+        &mut self,
+        host_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(host_pane_id) = self.pane_id_for_owned_conversation(host_conversation_id, ctx)
+        else {
+            return;
+        };
+        let Some(host_terminal_view) = self.terminal_view_from_pane_id(host_pane_id, ctx) else {
+            return;
+        };
+        let Some(host_source) = host_terminal_shared_session_source_type(&host_terminal_view, ctx)
+        else {
+            return;
+        };
+        if host_source.orchestrator_task_id().is_none() {
+            return;
+        }
+
+        let direct_child_ids: Vec<AIConversationId> = BlocklistAIHistoryModel::as_ref(ctx)
+            .child_conversation_ids_of(&host_conversation_id)
+            .to_vec();
+
+        let mut planned: Vec<(PaneId, AmbientAgentTaskId)> = Vec::new();
+        for child_conversation_id in direct_child_ids {
+            let Some(child_pane_id) = self
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .copied()
+                .filter(|pane_id| self.has_pane_id(*pane_id))
+            else {
+                continue;
+            };
+            let Some(child_task_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&child_conversation_id)
+                .and_then(|c| c.task_id())
+            else {
+                continue;
+            };
+            planned.push((child_pane_id, child_task_id));
+        }
+
+        for (child_pane_id, child_task_id) in planned {
+            let Some(child_terminal_view) = self.terminal_view_from_pane_id(child_pane_id, ctx)
+            else {
+                continue;
+            };
+            // Skip if the child is already sharing / pending / viewing.
+            let already_in_shared_state = child_terminal_view
+                .as_ref(ctx)
+                .model
+                .lock()
+                .shared_session_status()
+                .is_sharer_or_viewer();
+            if already_in_shared_state {
+                continue;
+            }
+
+            let creator = inherit_share_for_local_child(Some(&host_source), child_task_id);
+            let IsSharedSessionCreator::Yes { source } = creator else {
+                continue;
+            };
+
+            // Record in the host's transitive-share tracking set so the
+            // host's stop-share also stops this child.
+            self.transitively_shared_child_panes
+                .entry(host_pane_id)
+                .or_default()
+                .insert(child_pane_id);
+
+            child_terminal_view.update(ctx, |view, ctx| {
+                view.attempt_to_share_session(
+                    shared_session::SharedSessionScrollbackType::All,
+                    None,
+                    source,
+                    /* bypass_conversation_guard = */ false,
+                    ctx,
+                );
+            });
+        }
+    }
+
+    /// Stop the shared session on every child pane that was transitively
+    /// shared from `host_pane_id`. Only called from a non-wasm dispatch arm
+    /// (`Event::StopSharingCurrentSession`), so the definition mirrors that
+    /// cfg gate to keep wasm builds warning-clean.
+    #[cfg(not(target_family = "wasm"))]
+    fn stop_transitively_shared_child_shares(
+        &mut self,
+        host_pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(child_pane_ids) = self.transitively_shared_child_panes.remove(&host_pane_id)
+        else {
+            return;
+        };
+        for child_pane_id in child_pane_ids {
+            let Some(terminal_view) = self.terminal_view_from_pane_id(child_pane_id, ctx) else {
+                continue;
+            };
+            let is_sharing = terminal_view
+                .as_ref(ctx)
+                .model
+                .lock()
+                .shared_session_status()
+                .is_sharer();
+            if !is_sharing {
+                continue;
+            }
+            terminal_view.update(ctx, |view, ctx| {
+                view.stop_sharing_session(SharedSessionActionSource::NonUser, ctx);
+            });
+        }
+    }
+
+    /// Removes `pane_id` from the transitive-share tracking map.
+    fn forget_transitively_shared_pane(&mut self, pane_id: PaneId) {
+        // The pane may be a host (key) or a transitively-shared child (value).
+        self.transitively_shared_child_panes.remove(&pane_id);
+        self.transitively_shared_child_panes
+            .retain(|_host, children| {
+                children.remove(&pane_id);
+                !children.is_empty()
+            });
     }
 
     /// Creates a cloud-mode pane that lives off-tree as a child agent pane.
@@ -5171,6 +5334,10 @@ impl PaneGroup {
             if !self.panes.remove(pane_id) {
                 log::error!("Pane not found");
             }
+
+            // Mirror cleanup_closed_pane's transitive-share map cleanup so
+            // the non-undo close path doesn't leak stale entries.
+            self.forget_transitively_shared_pane(pane_id);
         }
 
         self.handle_pane_count_change(ctx);
@@ -5785,6 +5952,9 @@ impl PaneGroup {
             log::warn!("Attempted to cleanup pane {pane_id} but it was not found in the tree");
         }
         self.pane_contents.remove(&pane_id);
+        // Drop any transitive-share tracking entry for this pane so the
+        // map doesn't accumulate stale ids.
+        self.forget_transitively_shared_pane(pane_id);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);

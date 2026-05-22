@@ -1,13 +1,10 @@
 use warpui::App;
 
-use crate::{
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    server::{
-        server_api::ServerApiProvider, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-};
-
 use super::*;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 
 #[test]
 // Tests behavior based on which query parameters are required.

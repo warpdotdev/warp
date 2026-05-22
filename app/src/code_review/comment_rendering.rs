@@ -6,6 +6,21 @@
 use std::rc::Rc;
 
 use chrono::{Duration, Local};
+use pathfinder_color::ColorU;
+use warp_core::ui::theme::color::internal_colors::{neutral_1, neutral_2, text_sub};
+use warp_core::ui::theme::Fill;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::elements::new_scrollable::ScrollableAppearance;
+use warpui::elements::{
+    Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth,
+    Shrinkable, Text,
+};
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::units::Pixels;
+use warpui::{AppContext, Element, EventContext, SingletonEntity, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::code::buffer_location::LocalOrRemotePath;
@@ -17,21 +32,6 @@ use crate::code_review::comments::{
 use crate::editor::InteractionState;
 use crate::notebooks::editor::view::RichTextEditorView;
 use crate::util::time_format::human_readable_approx_duration;
-use pathfinder_color::ColorU;
-use warp_core::ui::theme::color::internal_colors::{neutral_1, neutral_2, text_sub};
-use warp_core::ui::theme::Fill;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::new_scrollable::ScrollableAppearance;
-use warpui::elements::ScrollbarWidth;
-use warpui::elements::{
-    Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::units::Pixels;
-use warpui::{AppContext, Element, EventContext, SingletonEntity, View, ViewContext, ViewHandle};
 
 /// Configuration for making the comment header clickable.
 pub(crate) struct HeaderClickHandler {

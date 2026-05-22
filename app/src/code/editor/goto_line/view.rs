@@ -1,19 +1,19 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, DropShadow, Flex,
+    ParentElement, Radius, Text,
+};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::appearance::Appearance;
 use crate::code::editor::find::view::{FIND_BAR_PADDING, FIND_EDITOR_BORDER_RADIUS};
 use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
-};
-use crate::i18n::{self, I18nKey};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, DropShadow, Flex,
-        ParentElement, Radius, Text,
-    },
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
 };
 
 const GOTO_LINE_WIDTH: f32 = 300.;
@@ -51,8 +51,7 @@ impl GoToLineView {
                 },
                 ctx,
             );
-            editor
-                .set_placeholder_text(i18n::tr(ctx, I18nKey::CodeLineNumberColumnPlaceholder), ctx);
+            editor.set_placeholder_text("Line number:Column", ctx);
             editor
         });
 
@@ -137,7 +136,7 @@ impl View for GoToLineView {
         let theme = appearance.theme();
 
         let label = Text::new_inline(
-            crate::i18n::tr_static(app, "Go to line"),
+            "Go to line",
             appearance.ui_font_family(),
             GOTO_LINE_LABEL_FONT_SIZE,
         )

@@ -3,46 +3,39 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkLens,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink,
-        Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::AIRequestUsageModel,
-    auth::{AuthManager, AuthStateProvider},
-    i18n,
-    menu::{self, Menu, MenuItem, MenuItemFields},
-    settings_view::{
-        admin_actions::AdminActions,
-        billing_and_usage::{
-            billing_cycle_usage_common::{
-                filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
-            },
-            billing_cycle_usage_rows::{has_cloud_usage, render_rows, SourceFilter},
-            billing_cycle_usage_team_totals::render_team_totals_block,
-        },
-        billing_and_usage_page_v2::{
-            AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
-            BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
-        },
-    },
-    ui_components::icons::Icon,
-    workspaces::{
-        update_manager::TeamUpdateManager,
-        user_workspaces::UserWorkspaces,
-        workspace::{
-            AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-            UsageVisibilityGranularity, Workspace,
-        },
-    },
+use crate::ai::AIRequestUsageModel;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::settings_view::admin_actions::AdminActions;
+use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
+    filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
+};
+use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
+    has_cloud_usage, render_rows, SourceFilter,
+};
+use crate::settings_view::billing_and_usage::billing_cycle_usage_team_totals::render_team_totals_block;
+use crate::settings_view::billing_and_usage_page_v2::{
+    AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
+    BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
+};
+use crate::ui_components::icons::Icon;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
+    UsageVisibilityGranularity, Workspace,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -282,7 +275,7 @@ impl View for BillingCycleUsageSectionView {
         }
 
         if is_admin {
-            if let Some(banner) = self.render_visibility_cta_banner(&workspace, appearance, app) {
+            if let Some(banner) = self.render_visibility_cta_banner(&workspace, appearance) {
                 column.add_child(Container::new(banner).with_margin_top(16.).finish());
             }
         }
@@ -324,14 +317,10 @@ impl BillingCycleUsageSectionView {
             .with_main_axis_size(MainAxisSize::Max);
 
         row.add_child(
-            Text::new_inline(
-                crate::i18n::tr_static(app, "Usage"),
-                appearance.ui_font_family(),
-                HEADER_FONT_SIZE,
-            )
-            .with_style(Properties::default().weight(Weight::Bold))
-            .with_color(theme.active_ui_text_color().into())
-            .finish(),
+            Text::new_inline("Usage", appearance.ui_font_family(), HEADER_FONT_SIZE)
+                .with_style(Properties::default().weight(Weight::Bold))
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
         );
 
         let mut right_side = Flex::row()
@@ -360,7 +349,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = self.render_legend(workspace, appearance, app);
+        let legend = self.render_legend(workspace, appearance);
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -492,7 +481,6 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let summary = self.current_summary(workspace)?;
         if summary.entries.is_empty() {
@@ -526,7 +514,7 @@ impl BillingCycleUsageSectionView {
                         .finish(),
                 );
             }
-            row.add_child(self.render_legend_entry(bucket.clone(), appearance, app));
+            row.add_child(self.render_legend_entry(bucket.clone(), appearance));
         }
         Some(row.finish())
     }
@@ -535,9 +523,8 @@ impl BillingCycleUsageSectionView {
         &self,
         cost_type: AiCreditsUsageAndCostType,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
-        let (color, label) = legend_style_for(cost_type.clone(), app);
+        let (color, label) = legend_style_for(cost_type.clone());
         let theme = appearance.theme();
         let entry = {
             let mut row = Flex::row()
@@ -585,7 +572,7 @@ impl BillingCycleUsageSectionView {
             stack.add_child(entry);
             if state.is_hovered() {
                 stack.add_positioned_overlay_child(
-                    render_aggregate_legend_tooltip(appearance, app),
+                    render_aggregate_legend_tooltip(appearance),
                     OffsetPositioning::offset_from_parent(
                         vec2f(0., 6.),
                         ParentOffsetBounds::WindowByPosition,
@@ -608,7 +595,6 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let admin_granularity = workspace
             .billing_metadata
@@ -621,7 +607,7 @@ impl BillingCycleUsageSectionView {
             return None;
         }
         let (link_text, trailing_copy, action, leading_icon) =
-            visibility_cta_for(admin_granularity, app)?;
+            visibility_cta_for(admin_granularity)?;
 
         // Only show when there are teammates -- a single-member workspace
         // doesn't benefit from any of the team-level visibility CTAs.
@@ -678,76 +664,53 @@ impl BillingCycleUsageSectionView {
 /// visibility CTA banner, or `None` to suppress the banner entirely.
 fn visibility_cta_for(
     granularity: UsageVisibilityGranularity,
-    app: &AppContext,
 ) -> Option<(&'static str, &'static str, BillingCycleUsageAction, Icon)> {
     match granularity {
         UsageVisibilityGranularity::OwnOnly => Some((
-            i18n::tr_static(app, "Upgrade to Build"),
-            i18n::tr_static(app, "to see team-level credit usage."),
+            "Upgrade to Build",
+            "to see team-level credit usage.",
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::TeamAggregate => Some((
-            i18n::tr_static(app, "Upgrade to Business"),
-            i18n::tr_static(app, "to see per-user credit attribution."),
+            "Upgrade to Business",
+            "to see per-user credit attribution.",
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::PerUserTotals => Some((
-            i18n::tr_static(app, "Upgrade to Enterprise"),
-            i18n::tr_static(
-                app,
-                "to see fine-grained credit attribution and set per-user spend limits.",
-            ),
+            "Upgrade to Enterprise",
+            "to see fine-grained credit attribution and set per-user spend limits.",
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         // FullBreakdown viewers already have full visibility; nudge them to
         // the admin panel where per-user spend limits actually get configured.
         UsageVisibilityGranularity::FullBreakdown => Some((
-            i18n::tr_static(app, "Open the admin panel"),
-            i18n::tr_static(app, "to set per-user spend limits."),
+            "Open the admin panel",
+            "to set per-user spend limits.",
             BillingCycleUsageAction::OpenAdminPanel,
             Icon::Users,
         )),
     }
 }
 
-fn legend_style_for(
-    cost_type: AiCreditsUsageAndCostType,
-    app: &AppContext,
-) -> (ColorU, &'static str) {
+fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static str) {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => {
-            (BASE_CREDITS_DOT_COLOR, i18n::tr_static(app, "Base"))
-        }
-        AiCreditsUsageAndCostType::BonusGrant => {
-            (BONUS_CREDITS_DOT_COLOR, i18n::tr_static(app, "Add-ons"))
-        }
-        AiCreditsUsageAndCostType::Payg => (
-            PAYG_CREDITS_DOT_COLOR,
-            i18n::tr_static(app, "Pay-as-you-go"),
-        ),
-        AiCreditsUsageAndCostType::AmbientBonusGrant => (
-            AMBIENT_CREDITS_DOT_COLOR,
-            i18n::tr_static(app, "Cloud-only"),
-        ),
-        AiCreditsUsageAndCostType::Aggregate => (
-            AGGREGATE_CREDITS_DOT_COLOR,
-            i18n::tr_static(app, "Combined"),
-        ),
+        AiCreditsUsageAndCostType::BaseLimit => (BASE_CREDITS_DOT_COLOR, "Base"),
+        AiCreditsUsageAndCostType::BonusGrant => (BONUS_CREDITS_DOT_COLOR, "Add-ons"),
+        AiCreditsUsageAndCostType::Payg => (PAYG_CREDITS_DOT_COLOR, "Pay-as-you-go"),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Cloud-only"),
+        AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "Combined"),
         AiCreditsUsageAndCostType::Other(_) => (BASE_CREDITS_DOT_COLOR, ""),
     }
 }
 
-fn render_aggregate_legend_tooltip(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        i18n::tr_static(
-            app,
-            "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits.",
-        )
-        .to_string(),
+        "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits."
+            .to_string(),
         appearance.ui_font_family(),
         12.,
     )

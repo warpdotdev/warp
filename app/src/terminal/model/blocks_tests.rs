@@ -1,25 +1,22 @@
 use float_cmp::{approx_eq, assert_approx_eq};
 use warp_core::features::FeatureFlag;
+use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::units::IntoLines;
-use warpui::{elements::DEFAULT_UI_LINE_HEIGHT_RATIO, App};
+use warpui::App;
 
 use super::*;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, AgentViewState,
 };
+use crate::settings::TerminalSpacing;
+use crate::terminal::event::Event;
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::model::test_utils;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
-use crate::terminal::BlockListSettings;
-use crate::{
-    settings::TerminalSpacing,
-    terminal::{
-        event::Event,
-        model::{ansi::Handler, test_utils::TestBlockListBuilder},
-        SizeUpdateReason,
-    },
-};
+use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
 pub fn input_string(block_list: &mut BlockList, input: &str) {
     for c in input.chars() {

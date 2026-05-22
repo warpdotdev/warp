@@ -39,6 +39,7 @@ message ClientMessage {
     GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
     GetBranches get_branches = 24;
     ResyncCodebase resync_codebase = 25;
+    UploadHandoffSnapshot upload_handoff_snapshot = 26;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -71,6 +72,7 @@ message ServerMessage {
     BufferConflictDetected buffer_conflict_detected = 23;
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
     GetBranchesResponse get_branches_response = 25;
+    UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
   }
 }
 
@@ -512,6 +514,21 @@ message BufferUpdatedPush {
   repeated TextEdit edits = 4;
 }
 
+// Client → server: request the daemon gather a handoff snapshot and upload it.
+// All paths must be absolute paths on the remote host's filesystem.
+message UploadHandoffSnapshot {
+  // Absolute paths the agent touched (file edits, working directories).
+  // Non-absolute or empty entries are rejected by the daemon.
+  repeated string paths = 1;
+}
+
+// Daemon → client: result of the handoff snapshot upload.
+message UploadHandoffSnapshotResponse {
+  optional string initial_snapshot_token = 1;
+  bool success = 2;
+  optional string error = 3;
+}
+
 // Client → server: close a buffer (stop watching).
 message CloseBuffer {
   string path = 1;
@@ -560,3 +577,4 @@ message ResolveConflictSuccess {}
 message BufferConflictDetected {
   string path = 1;
 }
+

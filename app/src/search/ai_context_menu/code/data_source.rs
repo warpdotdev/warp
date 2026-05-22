@@ -1,6 +1,32 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+use ai::index::Symbol;
+use fuzzy_match::FuzzyMatchResult;
+#[cfg(not(target_family = "wasm"))]
+use instant::Instant;
+#[cfg(not(target_family = "wasm"))]
+use itertools::Itertools;
+#[cfg(not(target_family = "wasm"))]
+use repo_metadata::repositories::DetectedRepositories;
+#[cfg(not(target_family = "wasm"))]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::AppContext;
+#[cfg(not(target_family = "wasm"))]
+use warpui::ModelSpawner;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity;
+
 #[cfg(not(target_family = "wasm"))]
 use super::search_item::CodeSearchItem;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::outline::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 #[cfg(not(target_family = "wasm"))]
@@ -11,34 +37,8 @@ use crate::search::files::model::FileSearchModel;
 use crate::search::mixer::{
     AsyncDataSource, BoxFuture, DataSourceRunError, DataSourceRunErrorWrapper,
 };
-use ai::index::Symbol;
-use fuzzy_match::FuzzyMatchResult;
-#[cfg(not(target_family = "wasm"))]
-use instant::Instant;
-#[cfg(not(target_family = "wasm"))]
-use itertools::Itertools;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
-use std::time::Duration;
-use warpui::AppContext;
-#[cfg(not(target_family = "wasm"))]
-use warpui::ModelSpawner;
-
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::outline::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::ActiveSession;
-#[cfg(not(target_family = "wasm"))]
-use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-#[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
 
 const MAX_RESULTS: usize = 200;
 

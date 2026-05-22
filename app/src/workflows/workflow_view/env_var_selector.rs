@@ -1,18 +1,15 @@
 use itertools::Itertools as _;
+use warpui::elements::ChildView;
 use warpui::{
-    elements::ChildView, Element as _, Entity, SingletonEntity as _, TypedActionView, View,
-    ViewAsRef, ViewContext, ViewHandle,
+    Element as _, Entity, SingletonEntity as _, TypedActionView, View, ViewAsRef, ViewContext,
+    ViewHandle,
 };
 
-use crate::{
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        CloudObject as _, GenericStringObjectFormat, JsonObjectType,
-    },
-    drive::CloudObjectTypeAndId,
-    server::ids::SyncId,
-    view_components::{DropdownItem, FilterableDropdown, FilterableDropdownOrientation},
-};
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{CloudObject as _, GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::ids::SyncId;
+use crate::view_components::{DropdownItem, FilterableDropdown, FilterableDropdownOrientation};
 
 /// A reusable [`View`] for choosing environment variable collections.
 pub struct EnvVarSelector {

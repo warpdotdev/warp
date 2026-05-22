@@ -8,22 +8,20 @@ use warpui::elements::{
 };
 use warpui::fonts::Weight;
 use warpui::keymap::macros::id;
-use warpui::keymap::FixedBinding;
-use warpui::keymap::Keystroke;
+use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::platform::file_picker::FilePickerConfiguration;
-use warpui::FocusContext;
 use warpui::{
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
+use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
+use super::session_config_rendering;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
-
-use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
-use super::session_config_rendering;
 
 pub fn init(app: &mut warpui::AppContext) {
     app.register_fixed_bindings([FixedBinding::new(
@@ -198,7 +196,7 @@ impl SessionConfigModal {
     fn render_session_type_section(
         &self,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         session_config_rendering::render_session_type_pills(
             &self.session_types,
@@ -208,14 +206,13 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::SelectSessionType(i));
             },
             appearance,
-            app,
         )
     }
 
     fn render_directory_section(
         &self,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         session_config_rendering::render_directory_picker(
             &self.selected_directory,
@@ -224,11 +221,10 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::OpenDirectoryPicker);
             },
             appearance,
-            app,
         )
     }
 
-    fn render_checkboxes(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_checkboxes(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         session_config_rendering::render_worktree_checkbox(
             self.enable_worktree,
             self.is_git_repo,
@@ -238,14 +234,13 @@ impl SessionConfigModal {
                 ctx.dispatch_typed_action(SessionConfigModalAction::ToggleWorktree);
             },
             appearance,
-            app,
         )
     }
 
     fn render_autogenerate_worktree_branch_name_checkbox(
         &self,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         session_config_rendering::render_autogenerate_worktree_branch_name_checkbox(
             self.autogenerate_worktree_branch_name,
@@ -259,7 +254,6 @@ impl SessionConfigModal {
                 );
             },
             appearance,
-            app,
         )
     }
 }

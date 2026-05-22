@@ -1,3 +1,13 @@
+use settings::Setting as _;
+use warpui::elements::{
+    Align, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle, ParentElement as _,
+};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
 use crate::appearance::Appearance;
 use crate::report_if_error;
 use crate::settings::app_installation_detection::{
@@ -6,18 +16,6 @@ use crate::settings::app_installation_detection::{
 use crate::settings::{NativePreferenceSettings, UserNativePreference};
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::uri::web_intent_parser::{self, WebIntent};
-use settings::Setting as _;
-use warpui::elements::{Align, CrossAxisAlignment, Flex};
-use warpui::ui_components::{
-    button::ButtonVariant,
-    components::{Coords, UiComponent, UiComponentStyles},
-};
-use warpui::{
-    elements::{MainAxisSize, MouseStateHandle, ParentElement as _},
-    fonts::Weight,
-    platform::Cursor,
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
 
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
 const DIALOG_WIDTH: f32 = 350.;

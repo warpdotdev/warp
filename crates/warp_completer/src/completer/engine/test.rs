@@ -1,16 +1,15 @@
 use itertools::Itertools;
+use string_offset::ByteOffset;
 use warp_util::path::EscapeChar;
 
 use super::LocationType;
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::CompletionContext;
 use crate::meta::{Span, SpannedItem};
-use crate::parsers::simple::command_at_cursor_position;
-use crate::parsers::ParsedToken;
-use crate::parsers::{classify_command, simple::parse_for_completions};
+use crate::parsers::simple::{command_at_cursor_position, parse_for_completions};
+use crate::parsers::{classify_command, ParsedToken};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
 use crate::signatures::CommandRegistry;
-use string_offset::ByteOffset;
 
 fn location(line: &str, registry: CommandRegistry, pos: usize) -> Vec<LocationType> {
     let ctx = FakeCompletionContext::new(registry);

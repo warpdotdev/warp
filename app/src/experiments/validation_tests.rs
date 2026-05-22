@@ -1,6 +1,7 @@
-use super::*;
 use std::cmp::max;
 use std::collections::HashSet;
+
+use super::*;
 
 #[test]
 fn test_all_layers_have_unique_seeds() {

@@ -1,12 +1,10 @@
-use crate::{
-    ai::AIConversation,
-    folder::{Folder, FolderWithDescendants},
-    generic_string_object::GenericStringObject,
-    notebook::Notebook,
-    scalars::Time,
-    schema,
-    workflow::Workflow,
-};
+use crate::ai::AIConversation;
+use crate::folder::{Folder, FolderWithDescendants};
+use crate::generic_string_object::GenericStringObject;
+use crate::notebook::Notebook;
+use crate::scalars::Time;
+use crate::schema;
+use crate::workflow::Workflow;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ObjectMetadata {

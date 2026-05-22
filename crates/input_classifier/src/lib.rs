@@ -7,7 +7,6 @@ pub mod test_utils;
 pub mod util;
 
 use async_trait::async_trait;
-
 pub use heuristic_classifier::HeuristicClassifier;
 pub use input_type::InputType;
 #[cfg(feature = "onnx")]

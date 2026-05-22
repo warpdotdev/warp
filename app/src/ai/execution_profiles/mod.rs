@@ -1,30 +1,25 @@
 use std::path::PathBuf;
 
-use crate::cloud_object::UniquePer;
-use crate::i18n::{self, I18nKey};
-use crate::server::sync_queue::QueueItem;
-use crate::settings::AISettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision,
-    },
-    settings::{
-        AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
-        DEFAULT_COMMAND_EXECUTION_DENYLIST,
-    },
-};
 use serde::{Deserialize, Serialize};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
 use super::llms::{LLMContextWindow, LLMId, LLMPreferences};
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision, UniquePer,
+};
+use crate::server::sync_queue::QueueItem;
+use crate::settings::{
+    AISettings, AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
+    DEFAULT_COMMAND_EXECUTION_DENYLIST,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const PROFILE_NAME_MAX_LENGTH: usize = 50;
 
@@ -192,16 +187,18 @@ pub enum RunAgentsPermission {
 }
 
 impl RunAgentsPermission {
-    pub fn description(&self, app: &AppContext) -> &'static str {
+    pub fn description(&self) -> &'static str {
         match self {
-            RunAgentsPermission::NeverAllow => i18n::tr(app, I18nKey::AiRunAgentsNeverDescription),
+            RunAgentsPermission::NeverAllow => {
+                "The Agent cannot run child agents and the run_agents tool will not be available."
+            }
             RunAgentsPermission::AlwaysAllow => {
-                i18n::tr(app, I18nKey::AiRunAgentsAlwaysAllowDescription)
+                "Give the Agent full autonomy to run child agents without approval."
             }
             RunAgentsPermission::AlwaysAsk => {
-                i18n::tr(app, I18nKey::AiRunAgentsAlwaysAskDescription)
+                "Require explicit approval before the Agent runs child agents."
             }
-            RunAgentsPermission::Unknown => i18n::tr(app, I18nKey::AiUnknownSettingDescription),
+            RunAgentsPermission::Unknown => "Unknown setting.",
         }
     }
 

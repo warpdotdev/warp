@@ -4,31 +4,19 @@ use std::sync::LazyLock;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-        text::Span,
-    },
-    AppContext, Element, EntityId, EventContext, SingletonEntity,
+use warpui::elements::{
+    ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Stack,
 };
+use warpui::fonts::Weight;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::text::Span;
+use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
-use crate::{
-    themes::theme::{AnsiColorIdentifier, Fill, WarpTheme},
-    ui_components::icons::Icon,
-};
-
-use warpui::elements::ChildAnchor;
-use warpui::elements::Hoverable;
-use warpui::elements::OffsetPositioning;
-use warpui::elements::ParentAnchor;
-use warpui::elements::ParentOffsetBounds;
-use warpui::elements::Stack;
+use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
+use crate::ui_components::icons::Icon;
 
 const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;

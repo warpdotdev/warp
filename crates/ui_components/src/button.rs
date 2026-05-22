@@ -1,17 +1,13 @@
 mod params;
 pub mod themes;
 
-use warp_core::ui::{
-    appearance::Appearance,
-    color::{ContrastingColor as _, contrast::MinimumAllowedContrast},
-};
-use warpui::{
-    elements::{MouseState, MouseStateHandle},
-    prelude::*,
-};
-
 pub use params::*;
 pub use themes::Theme;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::ContrastingColor as _;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warpui::elements::{MouseState, MouseStateHandle};
+use warpui::prelude::*;
 
 use crate::{keyboard_shortcut, tooltip};
 

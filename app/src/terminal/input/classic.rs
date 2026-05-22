@@ -1,38 +1,29 @@
-use crate::{
-    ai::blocklist::InputType,
-    appearance::Appearance,
-    context_chips::spacing,
-    features::FeatureFlag,
-    settings::{AppEditorSettings, InputModeSettings},
-    terminal::{
-        block_list_settings::BlockListSettings,
-        block_list_viewport::InputMode,
-        input::{
-            common::{
-                add_command_xray_overlay, add_input_suggestions_overlays, add_vim_status_to_stack,
-                add_voltron_overlay, add_workflow_info_overlay,
-                should_show_terminal_input_message_bar,
-                wrap_input_with_terminal_padding_and_focus_handler,
-            },
-            get_input_box_top_border_width, InputDropTargetData,
-        },
-        settings::{SpacingMode, TerminalSettings},
-        view::TerminalAction,
-        warpify::render::{render_subshell_flag, render_subshell_flag_pole},
-    },
-};
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Clipped, Container, DropTarget, Element, Empty, Flex,
-        Hoverable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        SavePosition, Stack,
-    },
-    AppContext, SingletonEntity,
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, Container, DropTarget, Element, Empty, Flex,
+    Hoverable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, SavePosition,
+    Stack,
 };
+use warpui::{AppContext, SingletonEntity};
 
 use super::{should_render_prompt_using_editor_decorator_elements, Input, SubshellRenderState};
+use crate::ai::blocklist::InputType;
+use crate::appearance::Appearance;
+use crate::context_chips::spacing;
+use crate::features::FeatureFlag;
+use crate::settings::{AppEditorSettings, InputModeSettings};
+use crate::terminal::block_list_settings::BlockListSettings;
+use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::input::common::{
+    add_command_xray_overlay, add_input_suggestions_overlays, add_vim_status_to_stack,
+    add_voltron_overlay, add_workflow_info_overlay, should_show_terminal_input_message_bar,
+    wrap_input_with_terminal_padding_and_focus_handler,
+};
+use crate::terminal::input::{get_input_box_top_border_width, InputDropTargetData};
+use crate::terminal::settings::{SpacingMode, TerminalSettings};
+use crate::terminal::view::TerminalAction;
+use crate::terminal::warpify::render::{render_subshell_flag, render_subshell_flag_pole};
 
 impl Input {
     /// Renders the classic input. This is used when the user has 'Honor PS1' enabled in settings,

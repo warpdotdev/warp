@@ -1,21 +1,13 @@
-use warpui::{
-    elements::{Container, CornerRadius, Dismiss, MouseStateHandle, Radius},
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::elements::{Container, CornerRadius, Dismiss, MouseStateHandle, Radius};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{
-    appearance::Appearance,
-    ui_components::{
-        blended_colors,
-        dialog::{dialog_styles, Dialog},
-    },
-};
+use crate::appearance::Appearance;
+use crate::ui_components::blended_colors;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
 
 const BUTTON_PADDING: f32 = 12.;
 const BUTTON_FONT_SIZE: f32 = 14.;

@@ -1,12 +1,13 @@
-use warpui::{elements::MouseStateHandle, AppContext, Element};
-
-use crate::{appearance::Appearance, terminal::view::TerminalAction};
+use warpui::elements::MouseStateHandle;
+use warpui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
     InlineBannerContent, InlineBannerIcon, InlineBannerStyle, InlineBannerTextButton,
     InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::view::TerminalAction;
 
 pub struct AwsBedrockLoginBannerState {
     pub id: usize,
@@ -25,12 +26,11 @@ pub enum AwsBedrockLoginBannerAction {
 pub fn render_aws_bedrock_login_banner(
     state: &AwsBedrockLoginBannerState,
     appearance: &Appearance,
-    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
     let buttons = vec![
         InlineBannerTextButton {
-            text: crate::i18n::tr_static(app, "Don't show again").to_owned(),
+            text: "Don't show again".to_owned(),
             text_color: active_ui_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::AwsBedrockLoginBanner(
@@ -43,7 +43,7 @@ pub fn render_aws_bedrock_login_banner(
             variant: InlineBannerTextButtonVariant::Secondary,
         },
         InlineBannerTextButton {
-            text: crate::i18n::tr_static(app, "Log into AWS").to_owned(),
+            text: "Log into AWS".to_owned(),
             text_color: active_ui_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::AwsBedrockLoginBanner(
@@ -64,10 +64,7 @@ pub fn render_aws_bedrock_login_banner(
 
     // Use sub_text_color for description to differentiate from title
     let description_text = warpui::elements::Text::new(
-        crate::i18n::tr_static(
-            app,
-            "Your Warp admin has enabled AWS Bedrock for your team.",
-        ),
+        "Your Warp admin has enabled AWS Bedrock for your team.",
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 2.,
     )
@@ -78,7 +75,7 @@ pub fn render_aws_bedrock_login_banner(
         InlineBannerStyle::Recommendation,
         appearance,
         InlineBannerContent {
-            title: crate::i18n::tr_static(app, "Use AWS Bedrock?").to_string(),
+            title: "Use AWS Bedrock?".to_string(),
             content: Some(vec![description_text]),
             buttons,
             close_button: Some(close_button),

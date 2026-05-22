@@ -1,16 +1,12 @@
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
-use crate::{
-    elements::{
-        project_scroll_delta_by_sensitivity, Axis, ClippedScrollStateHandle, RectFExt as _,
-        ScrollToPositionMode,
-    },
-    units::Pixels,
-    EventContext, SizeConstraint,
+use crate::elements::{
+    project_scroll_delta_by_sensitivity, Axis, ClippedScrollStateHandle, RectFExt as _,
+    ScrollToPositionMode,
 };
+use crate::units::Pixels;
+use crate::{EventContext, SizeConstraint};
 
 /// Calculate the child size constraint for a given axis.
 /// For a clipped element, lay it out unbounded on the main axis but apply constraint on the cross axis.

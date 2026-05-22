@@ -1,22 +1,17 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 
 use super::*;
-
-use crate::{
-    elements::{Clipped, DispatchEventResult},
-    platform::WindowStyle,
-    TypedActionView,
+use crate::elements::{
+    Clipped, ConstrainedBox, DispatchEventResult, EventHandler, ParentElement, Rect, ZIndex,
 };
+use crate::platform::WindowStyle;
 use crate::{
-    elements::{ConstrainedBox, EventHandler, ParentElement, Rect, ZIndex},
-    App, AppContext, Entity, Event, Presenter, ViewContext, ViewHandle, WindowId,
+    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, ViewHandle, WindowId,
     WindowInvalidation,
 };
 

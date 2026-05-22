@@ -3,13 +3,6 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
-use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::harness_support::ResolvePromptRequest;
-use crate::server::server_api::ServerApi;
-use crate::terminal::CLIAgent;
 use anyhow::{Context, Result};
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
@@ -24,6 +17,13 @@ use super::parent_bridge::{
     ensure_parent_bridge_state_dir, parent_bridge_root, prime_parent_bridge_for_wake,
 };
 use super::{claude_command, prepare_claude_environment_config, ClaudeHarness};
+use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::harness_support::ResolvePromptRequest;
+use crate::server::server_api::ServerApi;
+use crate::terminal::CLIAgent;
 
 const CLAUDE_WAKE_PROMPT: &str = "New lead-agent messages are available. Read the latest lead-agent updates and continue the task accordingly.";
 pub(super) const CLAUDE_WAKE_PROMPT_FILE_NAME: &str = "wake-turn-prompt.txt";

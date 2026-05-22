@@ -4,11 +4,9 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
@@ -24,13 +22,10 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{
-    entry::{BuildTreeError, Entry, FileId, IgnoredPathStrategy},
-    gitignores_for_directory, matches_gitignores,
-    repository::Repository,
-    telemetry::RepoMetadataTelemetryEvent,
-    RepoMetadataError,
-};
+use crate::entry::{BuildTreeError, Entry, FileId, IgnoredPathStrategy};
+use crate::repository::Repository;
+use crate::telemetry::RepoMetadataTelemetryEvent;
+use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
@@ -44,6 +39,9 @@ cfg_if::cfg_if! {
     }
 }
 
+use ignore::gitignore::Gitignore;
+use warpui::ModelContext;
+
 use crate::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState, FileTreeFileMetadata,
     FileTreeState,
@@ -52,8 +50,6 @@ use crate::file_tree_update::{
     flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
     RepoMetadataUpdate, RepoNodeMetadata,
 };
-use ignore::gitignore::Gitignore;
-use warpui::ModelContext;
 
 /// Maximum depth to traverse when building file trees
 const MAX_TREE_DEPTH: usize = 200;

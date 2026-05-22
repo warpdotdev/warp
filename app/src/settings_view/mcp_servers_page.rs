@@ -1,34 +1,36 @@
 use std::collections::HashMap;
+
 use uuid::Uuid;
+use warpui::elements::{ChildView, Container};
+use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::{
-    elements::{ChildView, Container},
-    ui_components::components::{Coords, UiComponentStyles},
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::mcp::{
-        gallery::MCPGalleryManager, templatable_installation::VariableValue, FileBasedMCPManager,
-        TemplatableMCPServer, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-    },
-    appearance::Appearance,
-    cloud_object::Space,
-    i18n::I18nKey,
-    modal::{Modal, ModalViewState},
-    server::cloud_objects::update_manager::InitiatedBy,
-    settings_view::{
-        mcp_servers::{
-            edit_page::{MCPServersEditPageView, MCPServersEditPageViewEvent},
-            installation_modal::{InstallationModalBody, InstallationModalBodyEvent},
-            list_page::{MCPServersListPageView, MCPServersListPageViewEvent},
-            style, ServerCardItemId,
-        },
-        settings_page::{MatchData, PageType, SettingsPageMeta, SettingsWidget},
-        SettingsSection,
-    },
-    view_components::DismissibleToast,
-    workspace::ToastStack,
+use crate::ai::mcp::gallery::MCPGalleryManager;
+use crate::ai::mcp::templatable_installation::VariableValue;
+use crate::ai::mcp::{
+    FileBasedMCPManager, TemplatableMCPServer, TemplatableMCPServerInstallation,
+    TemplatableMCPServerManager,
 };
+use crate::appearance::Appearance;
+use crate::cloud_object::Space;
+use crate::modal::{Modal, ModalViewState};
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::settings_view::mcp_servers::edit_page::{
+    MCPServersEditPageView, MCPServersEditPageViewEvent,
+};
+use crate::settings_view::mcp_servers::installation_modal::{
+    InstallationModalBody, InstallationModalBodyEvent,
+};
+use crate::settings_view::mcp_servers::list_page::{
+    MCPServersListPageView, MCPServersListPageViewEvent,
+};
+use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::settings_page::{MatchData, PageType, SettingsPageMeta, SettingsWidget};
+use crate::settings_view::SettingsSection;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 /// Describes where an MCP install request originated.
 ///
@@ -48,6 +50,7 @@ pub enum InstallOrigin {
     Deeplink,
 }
 
+const PAGE_TITLE_TEXT: &str = "MCP Servers";
 #[derive(Debug, Default, Copy, Clone)]
 pub enum MCPServersSettingsPage {
     #[default]
@@ -98,9 +101,9 @@ impl MCPServersSettingsPageView {
         let installation_modal_state = ModalViewState::new(installation_modal);
 
         Self {
-            page: PageType::new_monolith_i18n_title(
+            page: PageType::new_monolith(
                 MCPServersSettingsWidget::default(),
-                Some(I18nKey::SettingsPageTitleMcpServers),
+                Some(PAGE_TITLE_TEXT),
                 true,
             ),
             current_page: MCPServersSettingsPage::default(),

@@ -7,11 +7,10 @@ use warp_terminal::model::char_or_str::CharOrStr;
 use warp_util::path::LineAndColumnArg;
 use warpui::text::words::is_default_word_boundary;
 
-use crate::terminal::model::secrets::{ObfuscateSecrets, SecretLevel};
-use crate::terminal::model::{blockgrid::BlockGrid, secrets::IsObfuscated};
-use crate::test_util::mock_blockgrid;
-
 use super::*;
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::secrets::{IsObfuscated, ObfuscateSecrets, SecretLevel};
+use crate::test_util::mock_blockgrid;
 
 const MAX_SCROLL_LIMIT: usize = 1000;
 

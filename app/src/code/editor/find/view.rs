@@ -1,41 +1,41 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
+use pathfinder_color::ColorU;
+use warp_editor::editor::NavigationKey;
+use warp_editor::search::{SearchEvent, Searcher};
+pub use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DropShadow, Element, Flex, Hoverable, MainAxisAlignment, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius, Rect, SavePosition, Shrinkable,
+    Text,
+};
+pub use warpui::elements::{ParentElement as _, Stack};
+pub use warpui::geometry::vector::vec2f;
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::UiComponent;
+pub use warpui::AppContext;
+use warpui::{
+    Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::features::FeatureFlag;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{FindOption, TelemetryEvent};
+use crate::settings::AppEditorSettings;
 use crate::themes::theme::Fill;
-use crate::ui_components::{blended_colors, icons::Icon};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, DisabledSecondaryTheme, SecondaryTheme};
 use crate::view_components::find::FindDirection;
-use crate::{features::FeatureFlag, settings::AppEditorSettings};
-use pathfinder_color::ColorU;
-use warp_editor::editor::NavigationKey;
-use warp_editor::search::{SearchEvent, Searcher};
-use warpui::elements::MainAxisAlignment;
-use warpui::elements::{ChildAnchor, OffsetPositioning, Radius, SavePosition, Shrinkable};
-use warpui::keymap::EditableBinding;
-use warpui::ui_components::components::UiComponent;
-pub use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{ParentElement as _, Stack},
-    geometry::vector::vec2f,
-    AppContext,
-};
-use warpui::{
-    elements::{
-        Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DropShadow, Element, Flex, Hoverable, MouseStateHandle, ParentAnchor, ParentOffsetBounds,
-        Rect, Text,
-    },
-    Entity, SingletonEntity, TypedActionView, View,
-};
-use warpui::{presenter::ChildView, ViewContext, ViewHandle};
-use warpui::{FocusContext, ModelHandle};
 
 pub const FIND_BAR_WIDTH: f32 = 500.;
 const ICON_PADDING: f32 = 4.;

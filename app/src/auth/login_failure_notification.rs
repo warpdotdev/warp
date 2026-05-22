@@ -1,12 +1,10 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, Icon, MouseStateHandle, ParentElement, Shrinkable,
-    },
-    ui_components::components::UiComponent,
-    Action, AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, Icon, MouseStateHandle, ParentElement, Shrinkable,
 };
+use warpui::ui_components::components::UiComponent;
+use warpui::{Action, AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 

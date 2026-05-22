@@ -1,69 +1,56 @@
-use self::{
-    breadcrumbs::ContainingObject,
-    model::{
-        actions::ObjectActions,
-        generic_string_model::{
-            GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-        },
-        persistence::CloudModel,
-    },
-};
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    ai::cloud_agent_config::CloudAgentConfigModel,
-    ai::cloud_environments::CloudAmbientAgentEnvironmentModel,
-    ai::{
-        ambient_agents::scheduled::CloudScheduledAmbientAgentModel,
-        document::ai_document_model::AIDocumentId,
-        execution_profiles::CloudAIExecutionProfileModel,
-        facts::CloudAIFactModel,
-        mcp::{templatable::CloudTemplatableMCPServerModel, CloudMCPServerModel},
-    },
-    appearance::Appearance,
-    auth::UserUid,
-    channel::ChannelState,
-    drive::{
-        folders::{CloudFolderModel, FolderId},
-        items::WarpDriveItem,
-        CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings,
-    },
-    env_vars::CloudEnvVarCollectionModel,
-    notebooks::{CloudNotebookModel, NotebookId},
-    persistence::ModelEvent,
-    server::{
-        ids::{ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId},
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
-    settings::cloud_preferences::CloudPreferenceModel,
-    util::time_format::format_approx_duration_from_now_utc,
-    workflows::{
-        workflow_enum::CloudWorkflowEnumModel, CloudWorkflow, CloudWorkflowModel, WorkflowId,
-        WorkflowSource,
-    },
-    workspaces::{
-        user_profiles::{UserProfileWithUID, UserProfiles},
-        user_workspaces::UserWorkspaces,
-    },
-};
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use derivative::Derivative;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    sync::Arc,
-};
 use url::Url;
-use warp_core::{channel::Channel, features::FeatureFlag};
-use warp_graphql::{
-    queries::get_updated_cloud_objects::UpdatedObjectInput, scalars::time::ServerTimestamp,
-};
+use warp_core::channel::Channel;
+use warp_core::features::FeatureFlag;
+use warp_graphql::queries::get_updated_cloud_objects::UpdatedObjectInput;
+use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, SingletonEntity};
+
+use self::breadcrumbs::ContainingObject;
+use self::model::actions::ObjectActions;
+use self::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, Serializer, StringModel,
+};
+use self::model::persistence::CloudModel;
+use crate::ai::ambient_agents::scheduled::CloudScheduledAmbientAgentModel;
+use crate::ai::cloud_agent_config::CloudAgentConfigModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
+use crate::ai::facts::CloudAIFactModel;
+use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
+use crate::ai::mcp::CloudMCPServerModel;
+use crate::appearance::Appearance;
+use crate::auth::UserUid;
+use crate::channel::ChannelState;
+use crate::drive::folders::{CloudFolderModel, FolderId};
+use crate::drive::items::WarpDriveItem;
+use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
+use crate::env_vars::CloudEnvVarCollectionModel;
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{
+    ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId,
+};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
+use crate::settings::cloud_preferences::CloudPreferenceModel;
+use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
+use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId, WorkflowSource};
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub mod breadcrumbs;
 pub mod grab_edit_access_modal;
