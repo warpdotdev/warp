@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use anyhow::{anyhow, Context, Result};
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
@@ -13,6 +12,7 @@ use reqwest::Error as ReqwestError;
 use warpui::r#async::Timer;
 
 use crate::ai::agent::ReceivedMessageInput;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, ReadAgentMessageResponse};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::presigned_upload::HttpStatusError;

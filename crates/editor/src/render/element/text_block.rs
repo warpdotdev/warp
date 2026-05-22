@@ -1,9 +1,8 @@
-use crate::{
-    extract_block,
-    render::model::{BlockItem, RenderState, viewport::ViewportItem},
-};
-
-use super::{RenderableBlock, paint::RenderContext};
+use super::RenderableBlock;
+use super::paint::RenderContext;
+use crate::extract_block;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 pub struct RenderableTextBlock {
     viewport_item: ViewportItem,

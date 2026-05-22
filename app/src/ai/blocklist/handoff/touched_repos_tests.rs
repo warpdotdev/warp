@@ -6,10 +6,12 @@
 //! path and don't get standalone tests — their correctness is enforced by
 //! their call sites.
 
-use super::*;
 use std::fs;
+
 use tempfile::tempdir;
 use tokio::runtime::Runtime;
+
+use super::*;
 
 #[test]
 fn find_git_root_walks_up_to_dot_git() {

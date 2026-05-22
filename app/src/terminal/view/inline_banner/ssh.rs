@@ -1,11 +1,12 @@
-use warpui::{elements::MouseStateHandle, Element};
-
-use crate::{appearance::Appearance, terminal::view::TerminalAction};
+use warpui::elements::MouseStateHandle;
+use warpui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerContent,
     InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::view::TerminalAction;
 
 #[derive(Clone, Copy, Debug)]
 pub enum SSHBannerAction {

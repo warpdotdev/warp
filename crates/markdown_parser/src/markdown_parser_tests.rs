@@ -1,14 +1,11 @@
-use nom::{
-    Finish,
-    error::{VerboseError, convert_error},
-};
+use nom::Finish;
+use nom::error::{VerboseError, convert_error};
 use serde_yaml::Mapping;
 
+use super::*;
 use crate::{
     CustomWeight, FormattedTable, FormattedTextStyles, LineCount, compute_formatted_text_delta,
 };
-
-use super::*;
 
 // Simple transformer to make testing easier.
 fn test_parse_markdown(source: &str) -> Vec<FormattedTextLine> {

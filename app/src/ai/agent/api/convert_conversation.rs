@@ -4,12 +4,28 @@
 //! If some UI state is stored in the client, it needs to also be represented in the proto tasks somehow so it can be restored.
 //! Some conversions may be lossy if it's not important to recover that UI state.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use ai::agent::action_result::{
+    AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
+    RequestComputerUseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
+    UseComputerResult,
+};
+use ai::skills::ParsedSkill;
+use chrono::{DateTime, Local, TimeZone};
+use persistence::model::AgentConversationData;
+use warp_core::command::ExitCode;
+use warp_multi_agent_api as api;
+use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
+
 use crate::ai::agent::api::convert_from::{
     convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage,
 };
-use crate::ai::agent::conversation::update_todo_list_from_todo_op;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{
+    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -24,7 +40,7 @@ use crate::ai::agent::{
     RequestFileEditsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId,
     Shared, ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
     SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, WriteToLongRunningShellCommandResult,
+    UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -32,22 +48,6 @@ use crate::ai::llms::LLMId;
 use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsContext};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::terminal_model::BlockIndex;
-use ai::agent::action_result::{
-    AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RequestComputerUseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
-    UseComputerResult,
-};
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeZone};
-use persistence::model::AgentConversationData;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use warp_core::command::ExitCode;
-use warp_multi_agent_api as api;
-use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
-
-use crate::ai::agent::conversation::ServerAIConversationMetadata;
-use crate::ai::agent::UserQueryMode;
 
 /// How to restore a conversation from the cloud.
 pub enum RestorationMode {
@@ -241,7 +241,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::{engine::general_purpose, Engine};
+            use base64::engine::general_purpose;
+            use base64::Engine;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {

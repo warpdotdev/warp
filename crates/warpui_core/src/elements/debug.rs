@@ -1,13 +1,15 @@
 //! Module containing the definition of [`DebugElement`].
 
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
+
 use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SizeConstraint,
 };
 use crate::event::DispatchedEvent;
 use crate::scene::{Border, Dash};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
 
 /// A debug element that draws a dashed around its child. Intended for quick visual debugging.
 pub struct DebugElement {

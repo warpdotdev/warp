@@ -1,9 +1,9 @@
-use crate::ai::blocklist::task_status_sync_model::classify_renderable_error;
-use crate::server::server_api::ai::TaskStatusUpdate;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::terminal::ShareSessionError;
 use super::AgentDriverError;
+use crate::ai::blocklist::task_status_sync_model::classify_renderable_error;
+use crate::server::server_api::ai::TaskStatusUpdate;
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
 /// suitable for reporting via `update_agent_task`.

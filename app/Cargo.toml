@@ -163,6 +163,7 @@ plist = "1"
 pprof = { workspace = true, optional = true, features = ["protobuf-codec"] }
 prost.workspace = true
 prost-types.workspace = true
+qrcode.workspace = true
 rand.workspace = true
 rangemap.workspace = true
 rayon.workspace = true
@@ -649,7 +650,9 @@ default = [
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
     "solo_user_byok",
+    "custom_inference_endpoints",
     "billing_and_usage_page_v2",
+    "remote_code_review",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -951,6 +954,7 @@ hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
+custom_inference_endpoints = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
 configurable_toolbar = []

@@ -7,19 +7,19 @@ use uuid::Uuid;
 use warp_core::ui::appearance::Appearance;
 use warpui::{AppContext, SingletonEntity as _};
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, UniquePer,
-    },
-    drive::items::WarpDriveItem,
-    server::{datetime_ext::DateTimeExt, ids::SyncId, sync_queue::QueueItem},
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
 };
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision, UniquePer,
+};
+use crate::drive::items::WarpDriveItem;
+use crate::server::datetime_ext::DateTimeExt;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
 
 const UNIQUENESS_KEY_PREFIX: &str = "templatable_mcp_server";
 

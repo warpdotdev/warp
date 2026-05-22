@@ -1,38 +1,33 @@
 pub mod header;
 pub mod header_content;
 
-use crate::pane_group::pane::ActionOrigin;
-use crate::{
-    appearance::Appearance,
-    pane_group::{Direction, SplitPaneState, TabBarHoverIndex},
-    server::telemetry::SharingDialogSource,
-    settings::{PaneSettings, PaneSettingsChangedEvent},
-    util::bindings::CustomAction,
-};
-
-use super::{
-    BackingView, PaneConfiguration, PaneConfigurationEvent, PaneId, PaneStack, PaneStackEvent,
-};
 use header::PaneHeader;
-
-use warpui::{
-    elements::{
-        Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement,
-        SavePosition, Shrinkable,
-    },
-    keymap::EditableBinding,
-    presenter::ChildView,
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
-use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
-
 pub use header::PaneHeaderAction;
 pub use header::PaneHeaderAction::CustomAction as PaneHeaderCustomAction;
 pub use header_content::{
     HeaderContent, HeaderRenderContext, StandardHeader, StandardHeaderOptions,
 };
+use warpui::elements::{
+    Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement, SavePosition,
+    Shrinkable,
+};
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
+use super::{
+    BackingView, PaneConfiguration, PaneConfigurationEvent, PaneId, PaneStack, PaneStackEvent,
+};
+use crate::appearance::Appearance;
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
+use crate::pane_group::pane::ActionOrigin;
+use crate::pane_group::{Direction, SplitPaneState, TabBarHoverIndex};
+use crate::server::telemetry::SharingDialogSource;
+use crate::settings::{PaneSettings, PaneSettingsChangedEvent};
+use crate::util::bindings::CustomAction;
 
 const HAS_SHARED_OBJECT_CONTEXT_KEY: &str = "PaneView_HasSharedObject";
 
@@ -250,6 +245,11 @@ impl<P: BackingView> PaneView<P> {
             PaneConfigurationEvent::ToggleSharingDialog(source) => {
                 self.header.update(ctx, |header, ctx| {
                     header.share_pane_contents(*source, ctx);
+                });
+            }
+            PaneConfigurationEvent::OpenSharingQrCode(source) => {
+                self.header.update(ctx, |header, ctx| {
+                    header.open_shared_session_qr_code(*source, ctx);
                 });
             }
             _ => {}

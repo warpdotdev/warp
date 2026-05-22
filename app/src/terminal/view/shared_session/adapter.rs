@@ -1,29 +1,27 @@
 //! An adapter to make session-sharing work with the [`TerminalView`].
 
-use super::sharer::Sharer;
-use super::viewer::Viewer;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
-use crate::auth::UserUid;
-use crate::banner::{Banner, BannerTextContent};
-use crate::terminal::shared_session::render_util::{
-    participant_avatar_for_selected_block, ParticipantAvatarParams,
-};
-use crate::terminal::shared_session::{
-    participant_avatar_view::ParticipantAvatarView, presence_manager::PresenceManager,
-};
-use crate::terminal::view::{TerminalAction, TerminalView};
-
-use crate::terminal::view::throttle;
-use crate::ui_components::icons::Icon;
 use chrono::{DateTime, Local};
 use markdown_parser::FormattedTextFragment;
 use session_sharing_protocol::common::{ParticipantId, ParticipantList, Role, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use warp_core::features::FeatureFlag;
-use warpui::{elements::MouseStateHandle, ModelHandle, ViewContext, ViewHandle};
-use warpui::{AppContext, Element};
+use warpui::elements::MouseStateHandle;
+use warpui::{AppContext, Element, ModelHandle, ViewContext, ViewHandle};
+
+use super::sharer::Sharer;
+use super::viewer::Viewer;
+use crate::auth::UserUid;
+use crate::banner::{Banner, BannerTextContent};
+use crate::terminal::shared_session::participant_avatar_view::ParticipantAvatarView;
+use crate::terminal::shared_session::presence_manager::PresenceManager;
+use crate::terminal::shared_session::render_util::{
+    participant_avatar_for_selected_block, ParticipantAvatarParams,
+};
+use crate::terminal::view::{throttle, TerminalAction, TerminalView};
+use crate::ui_components::icons::Icon;
 
 /// The kind of shared session this is.
 pub enum Kind {

@@ -11,6 +11,10 @@ use persistence::model::AgentConversationRecord;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
+use super::{
+    agent_id_key_from_persisted_data, AIConversationMetadata, BlocklistAIHistoryModel,
+    MAX_HISTORICAL_CONVERSATIONS,
+};
 use crate::ai::agent::api::convert_conversation::{
     convert_conversation_data_to_ai_conversation, RestorationMode,
 };
@@ -19,18 +23,12 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
 use crate::ai::agent::task::Task;
+#[cfg(feature = "local_fs")]
+use crate::persistence::agent::read_agent_conversation_by_id;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::SerializedBlock;
-
-#[cfg(feature = "local_fs")]
-use crate::persistence::agent::read_agent_conversation_by_id;
-
-use super::{
-    agent_id_key_from_persisted_data, AIConversationMetadata, BlocklistAIHistoryModel,
-    MAX_HISTORICAL_CONVERSATIONS,
-};
 
 /// A conversation transcript from a CLI agent harness (e.g. Claude Code).
 #[derive(Debug, Clone)]

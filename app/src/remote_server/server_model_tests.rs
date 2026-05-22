@@ -1,16 +1,16 @@
-use crate::auth::auth_state::AuthState;
-use crate::code_review::diff_state::DiffMode;
-use crate::remote_server::diff_state_tracker::DiffModelKey;
 use std::collections::HashMap;
 use std::sync::Arc;
+
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
-
 use super::super::proto::{Authenticate, Initialize};
 use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{PendingFileOps, ServerModel};
+use crate::auth::auth_state::AuthState;
+use crate::code_review::diff_state::DiffMode;
+use crate::remote_server::diff_state_tracker::DiffModelKey;
 
 fn test_model(app: &mut App) -> ServerModel {
     ServerModel {

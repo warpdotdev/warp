@@ -1,9 +1,8 @@
 use warp_cli::RecoveryMechanism;
 use warpui::{AppContext, SingletonEntity as _, ViewContext};
 
-use crate::crash_recovery::CrashRecovery;
-
 use super::{Workspace, WorkspaceBannerFields};
+use crate::crash_recovery::CrashRecovery;
 
 pub fn banner_metadata(ctx: &AppContext) -> Option<WorkspaceBannerFields> {
     let crash_recovery = CrashRecovery::as_ref(ctx);

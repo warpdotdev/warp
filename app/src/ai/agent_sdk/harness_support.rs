@@ -11,7 +11,8 @@ use warp_cli::harness_support::{
 };
 use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
-use warpui::{platform::TerminationMode, AppContext, ModelHandle, SingletonEntity};
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::common::set_ambient_task_context_from_run_id;
 use crate::ai::ambient_agents::AmbientAgentTaskId;

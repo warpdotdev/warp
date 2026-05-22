@@ -1,14 +1,12 @@
 use pathfinder_geometry::vector::Vector2F;
 use warpui::integration::TestStep;
-use warpui::{windowing::WindowManager, SingletonEntity};
+use warpui::windowing::WindowManager;
+use warpui::SingletonEntity;
 
-use crate::{
-    integration_testing::{
-        step::new_step_with_default_assertions, terminal::assert_context_menu_is_open,
-        view_getters::single_terminal_view,
-    },
-    terminal::view::TerminalAction,
-};
+use crate::integration_testing::step::new_step_with_default_assertions;
+use crate::integration_testing::terminal::assert_context_menu_is_open;
+use crate::integration_testing::view_getters::single_terminal_view;
+use crate::terminal::view::TerminalAction;
 
 pub fn open_input_context_menu() -> TestStep {
     new_step_with_default_assertions("Open input context menu")

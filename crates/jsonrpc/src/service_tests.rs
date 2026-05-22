@@ -1,10 +1,11 @@
 #[cfg(test)]
 mod service_tests {
-    use crate::{JsonRpcService, Transport};
+    use std::sync::{Arc, Mutex};
+
     use async_trait::async_trait;
-    use std::sync::Arc;
-    use std::sync::Mutex;
     use warpui::r#async::executor::Background;
+
+    use crate::{JsonRpcService, Transport};
 
     #[derive(Debug, Clone)]
     struct MockTransport {

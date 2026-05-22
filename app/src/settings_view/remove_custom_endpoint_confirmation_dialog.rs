@@ -1,18 +1,16 @@
-use crate::{
-    appearance::Appearance,
-    ui_components::dialog::{dialog_styles, Dialog},
-    view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme},
-};
 use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Border, ChildView, Container, CornerRadius, Dismiss, Empty, Flex, ParentElement, Radius, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildView, Container, CornerRadius, Dismiss, Empty, Flex, ParentElement, Radius,
-        Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
 
 const DIALOG_WIDTH: f32 = 450.;
 

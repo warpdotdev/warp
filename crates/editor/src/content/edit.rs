@@ -1,10 +1,8 @@
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    mem,
-    ops::Range,
-    path::{Path, PathBuf},
-};
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::mem;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -12,41 +10,34 @@ use markdown_parser::{Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
-use warp_core::{features::FeatureFlag, ui::theme::Fill as ThemeFill};
-use warpui::{
-    AppContext, SingletonEntity,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    fonts::Weight,
-    image_cache::ImageType,
-    text::point::Point,
-    text_layout::{StyleAndFont, TextAlignment},
-    units::{IntoPixels, Pixels},
-};
-
-use crate::{
-    parallel_util::Last,
-    render::{
-        TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO,
-        layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font},
-        model::{
-            BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
-            HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem,
-            LaidOutTable, LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles,
-            RenderLayoutOptions, SelectableTextRun, TableBlockConfig, TableStyle,
-            gutter_expansion_button_types,
-        },
-    },
-};
-use string_offset::{ByteOffset, CharOffset};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::fonts::Weight;
+use warpui::image_cache::ImageType;
 use warpui::text::char_slice;
+use warpui::text::point::Point;
+use warpui::text_layout::{StyleAndFont, TextAlignment};
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, SingletonEntity};
 
-use super::{
-    buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock},
-    mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout},
-    text::{BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache},
+use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
+use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
+use super::text::{
+    BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
+use crate::parallel_util::Last;
+use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
+use crate::render::model::{
+    BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
+    HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem, LaidOutTable,
+    LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles, RenderLayoutOptions,
+    SelectableTextRun, TableBlockConfig, TableStyle, gutter_expansion_button_types,
+};
+use crate::render::{TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO};
 
 #[cfg(test)]
 #[path = "edit_tests.rs"]

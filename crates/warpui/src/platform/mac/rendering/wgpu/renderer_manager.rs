@@ -1,9 +1,11 @@
-use crate::rendering::wgpu::{Renderer, Resources};
-use crate::rendering::GlyphConfig;
-use pathfinder_geometry::vector::Vector2F;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+
+use pathfinder_geometry::vector::Vector2F;
 use wgpu::Device;
+
+use crate::rendering::wgpu::{Renderer, Resources};
+use crate::rendering::GlyphConfig;
 
 pub struct RendererManager {
     renderers: HashMap<DeviceID, Renderer>,

@@ -1,16 +1,13 @@
-use warpui::{
-    elements::{
-        self, Align, Border, CacheOption, ConstrainedBox, Container, Element, Image, ParentElement,
-        Text,
-    },
-    ui_components::components::{UiComponent, UiComponentStyles},
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::external_product_icon::ExternalProductIcon;
+use warp_core::ui::icons::Icon;
+use warpui::elements::{
+    self, Align, Border, CacheOption, ChildAnchor, ConstrainedBox, Container, Element, Image,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack, Text,
 };
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 
 use super::red_notification_dot::RedNotificationDot;
-use warp_core::ui::{external_product_icon::ExternalProductIcon, icons::Icon};
-
-use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{ChildAnchor, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack};
 
 pub enum AvatarContent {
     /// Rendered as capital initial of the given display name.

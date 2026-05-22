@@ -1,84 +1,72 @@
-use std::{borrow::Cow, mem, ops::Range, sync::Arc};
+use std::borrow::Cow;
+use std::mem;
+use std::ops::Range;
+use std::sync::Arc;
 
 use async_channel::Sender;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
 use pathfinder_color::ColorU;
 use string_offset::{ByteOffset, CharOffset};
-use syntect::{
-    easy::HighlightLines,
-    highlighting::{self, Theme, ThemeSet},
-    parsing::SyntaxSet,
-    util::LinesWithEndings,
-};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{self, Theme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 use warp_completer::signatures::CommandRegistry;
-use warp_editor::{
-    content::{
-        anchor::Anchor,
-        buffer::{Buffer, BufferEvent, EditOrigin},
-        selection_model::BufferSelectionModel,
-        text::{
-            BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
-            CODE_BLOCK_SHELL_DISPLAY_LANG,
-        },
-    },
-    editor::RunnableCommandModel,
+use warp_editor::content::anchor::Anchor;
+use warp_editor::content::buffer::{Buffer, BufferEvent, EditOrigin};
+use warp_editor::content::selection_model::BufferSelectionModel;
+use warp_editor::content::text::{
+    BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
+    CODE_BLOCK_SHELL_DISPLAY_LANG,
 };
-
-use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
+use warp_editor::editor::RunnableCommandModel;
 use warp_util::user_input::UserInput;
-use warpui::{
-    elements::Align, platform::Cursor, r#async::SpawnedFutureHandle, AppContext, AssetProvider as _,
+use warpui::elements::{
+    Align, Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::fonts::Properties;
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::Properties,
-    presenter::ChildView,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    Element, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
-    WeakModelHandle, WindowId,
+    AppContext, AssetProvider as _, Element, Entity, ModelAsRef, ModelContext, ModelHandle,
+    SingletonEntity, ViewHandle, WeakModelHandle, WindowId,
 };
 
-use crate::{
-    appearance::Appearance,
-    completer::SessionAgnosticContext,
-    debounce::debounce,
-    drive::workflows::arguments::ArgumentsState,
-    editor::InteractionState,
-    features::FeatureFlag,
-    menu::MenuItemFields,
-    notebooks::{
-        file::MarkdownDisplayMode,
-        styles::block_footer_action_button,
-        telemetry::{ActionEntrypoint, BlockInfo},
-    },
-    settings::FontSettings,
-    terminal::input::{
-        decorations::{parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot},
-        DEBOUNCE_INPUT_DECORATION_PERIOD,
-    },
-    themes::theme::{AnsiColorIdentifier, AnsiColors},
-    ui_components::{buttons::icon_button, icons::Icon},
-    util::{
-        bindings::CustomAction,
-        color::{ContrastingColor, MinimumAllowedContrast},
-    },
-    view_components::{dropdown::DropdownAction, Dropdown},
-    workflows::{workflow::Workflow, WorkflowType},
-    ASSETS,
+use super::interaction_state_model::InteractionStateModel;
+use super::keys::{custom_action_to_display, NotebookKeybindings};
+use super::model::ChildModelHandle;
+use super::view::EditorViewAction;
+use super::{rich_text_styles, NotebookWorkflow};
+use crate::appearance::Appearance;
+use crate::completer::SessionAgnosticContext;
+use crate::debounce::debounce;
+use crate::drive::workflows::arguments::ArgumentsState;
+use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
+use crate::menu::MenuItemFields;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::styles::block_footer_action_button;
+use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo};
+use crate::settings::FontSettings;
+use crate::terminal::input::decorations::{
+    parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot,
 };
-
-use super::{
-    interaction_state_model::InteractionStateModel,
-    keys::{custom_action_to_display, NotebookKeybindings},
-    model::ChildModelHandle,
-    rich_text_styles,
-    view::EditorViewAction,
-    NotebookWorkflow,
-};
+use crate::terminal::input::DEBOUNCE_INPUT_DECORATION_PERIOD;
+use crate::themes::theme::{AnsiColorIdentifier, AnsiColors};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::CustomAction;
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
+use crate::view_components::dropdown::DropdownAction;
+use crate::view_components::Dropdown;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::WorkflowType;
+use crate::ASSETS;
 
 lazy_static! {
     static ref SUPPORTED_LANGUAGES: &'static [&'static str] = &[

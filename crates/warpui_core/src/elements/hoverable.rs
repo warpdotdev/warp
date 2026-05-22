@@ -1,18 +1,17 @@
-use super::{Point, SelectableElement, Selection, SelectionFragment, ZIndex};
-use crate::platform::Cursor;
-use crate::text::word_boundaries::WordBoundariesPolicy;
-use crate::text::{IsRect, SelectionDirection, SelectionType};
-use crate::TaskId;
-use crate::{
-    event::DispatchedEvent, AfterLayoutContext, AppContext, Element, Event, EventContext,
-    PaintContext,
-};
-use instant::Instant;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+
+use instant::Instant;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
+
+use super::{Point, SelectableElement, Selection, SelectionFragment, ZIndex};
+use crate::event::DispatchedEvent;
+use crate::platform::Cursor;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
+use crate::{AfterLayoutContext, AppContext, Element, Event, EventContext, PaintContext, TaskId};
 
 /// First arg is is_hovered. True when hovering in, false when hovering out.
 type HoverHandler = Box<dyn FnMut(bool, &mut EventContext, &AppContext, Vector2F)>;

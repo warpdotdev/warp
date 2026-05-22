@@ -1,11 +1,10 @@
-use warpui::{assets::asset_cache::AssetSource, App};
-
-use crate::{
-    terminal::ssh::util::convert_script_to_one_line,
-    test_util::settings::initialize_settings_for_tests, ASSETS,
-};
+use warpui::assets::asset_cache::AssetSource;
+use warpui::App;
 
 use super::*;
+use crate::terminal::ssh::util::convert_script_to_one_line;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::ASSETS;
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

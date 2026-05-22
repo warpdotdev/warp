@@ -1,58 +1,47 @@
-use crate::features::FeatureFlag;
-use crate::report_if_error;
-use crate::settings::{InputSettings, WarpPromptSeparator};
-use crate::terminal::event::{BlockType, UserBlockCompleted};
-use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionsEvent};
-use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::{
-    debounce::debounce,
-    editor::EditorView,
-    menu::{MenuItem, MenuItemFields},
-    terminal::{
-        model::{
-            block::{Block, BlockMetadata},
-            session::Sessions,
-        },
-        session_settings::{
-            GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
-            ToolbarChipSelection,
-        },
-        view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction},
-    },
-};
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash as _, Hasher as _};
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
 use settings::Setting as _;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::user_preferences::GetUserPreferences;
-
-use super::ChipResult;
-use super::{
-    chips_to_string,
-    context_chip::{
-        ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
-        ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
-        RefreshConfig, ShellCommandGenerator,
-    },
-    logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger},
-    prompt::Prompt,
-    ChipValue, ContextChipKind,
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+#[cfg(feature = "local_fs")]
+use warpui::WeakModelHandle;
+use warpui::{
+    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
 };
+
+use super::context_chip::{
+    ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
+    ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
+    RefreshConfig, ShellCommandGenerator,
+};
+use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
+use super::prompt::Prompt;
+use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::context_chips::display_chip::GitLineChanges;
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash as _, Hasher as _};
-use std::sync::Arc;
-use std::time::Duration;
-#[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
-use warpui::{
-    r#async::{SpawnedFutureHandle, Timer},
-    AppContext, ViewHandle,
+use crate::debounce::debounce;
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::report_if_error;
+use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::terminal::event::{BlockType, UserBlockCompleted};
+use crate::terminal::model::block::{Block, BlockMetadata};
+use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::session_settings::{
+    GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
+    ToolbarChipSelection,
 };
-use warpui::{Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
+use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
 
 #[cfg(test)]
 #[path = "current_prompt_tests.rs"]

@@ -1,8 +1,7 @@
 use pathfinder_geometry::vector::vec2f;
 
-use crate::rendering;
-
 use super::*;
+use crate::rendering;
 
 #[test]
 fn test_hit_rect_recording() {

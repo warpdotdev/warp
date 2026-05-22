@@ -1,21 +1,17 @@
-use cocoa::foundation::NSUInteger;
-use std::{ffi::CStr, os::raw::c_char};
+use std::ffi::CStr;
+use std::os::raw::c_char;
 
-use warpui_core::event::{KeyEventDetails, ModifiersState};
-use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
-use warpui_core::{keymap::Keystroke, Event};
-
-use cocoa::{
-    appkit::{NSEvent, NSEventModifierFlags, NSEventType},
-    base::{id, YES},
-    foundation::NSString,
-};
+use cocoa::appkit::{NSEvent, NSEventModifierFlags, NSEventType};
+use cocoa::base::{id, YES};
+use cocoa::foundation::{NSString, NSUInteger};
 use pathfinder_geometry::vector::vec2f;
+use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
+use warpui_core::Event;
 
-use super::{
-    keycode::{scancode_to_physicalkey, Keycode},
-    utils::unicode_char_to_key,
-};
+use super::keycode::{scancode_to_physicalkey, Keycode};
+use super::utils::unicode_char_to_key;
 
 // Unpublished but widely known and stable flags for distinguishing left/right alt.
 // Google "NX_DEVICELALTKEYMASK" for more.

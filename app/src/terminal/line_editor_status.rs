@@ -1,10 +1,12 @@
 use std::time::Duration;
 
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, ModelContext, ModelHandle};
+
+use super::shell::ShellType;
+use super::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::AnsiHandlerEvent;
-use warpui::{r#async::SpawnedFutureHandle, Entity, ModelContext, ModelHandle};
-
-use super::{shell::ShellType, ModelEvent, ModelEventDispatcher};
 
 /// The duration after a precmd/end prompt hook (depending on the shell type) to wait before
 /// assuming the shell's line editor is active again. If we receive a preexec hook in that time,

@@ -7,9 +7,10 @@
     allow(dead_code)
 )]
 
-use owned_ttf_parser::{AsFaceRef, Face, FaceParsingError, OwnedFace};
 use std::fs::File;
 use std::path::PathBuf;
+
+use owned_ttf_parser::{AsFaceRef, Face, FaceParsingError, OwnedFace};
 
 /// A handle that wraps around a font face.
 pub struct FontHandle {

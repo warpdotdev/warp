@@ -8,9 +8,8 @@ use warp_editor::content::text::IndentBehavior;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
-use crate::SyntaxTreeState;
-
 use super::*;
+use crate::SyntaxTreeState;
 
 // Simple stub function to allow compilation - can be improved later
 fn mock_buffer_and_tree(text_content: &str, language: Arc<Language>) -> (Buffer, Tree) {

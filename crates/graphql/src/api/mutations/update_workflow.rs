@@ -1,8 +1,10 @@
+use crate::error::UserFacingError;
+use crate::object::ObjectUpdateSuccess;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
 use crate::scalars::Time;
-use crate::{
-    error::UserFacingError, object::ObjectUpdateSuccess, request_context::RequestContext,
-    response_context::ResponseContext, schema, workflow::Workflow,
-};
+use crate::schema;
+use crate::workflow::Workflow;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct UpdateWorkflowVariables {

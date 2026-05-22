@@ -1,4 +1,17 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+use std::collections::HashSet;
+#[cfg(feature = "local_fs")]
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use futures_lite::FutureExt;
+use fuzzy_match::FuzzyMatchResult;
+use instant::Instant;
+use itertools::Itertools;
+use warp_util::path::CleanPathResult;
+use warpui::{AppContext, Entity, SingletonEntity};
+
 use super::search_item::{CreateFileSearchItem, FileSearchItem};
 use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
@@ -6,17 +19,6 @@ use crate::search::data_source::{Query, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
 use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
-use futures_lite::FutureExt;
-use fuzzy_match::FuzzyMatchResult;
-use instant::Instant;
-use itertools::Itertools;
-use std::collections::HashSet;
-#[cfg(feature = "local_fs")]
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_util::path::CleanPathResult;
-use warpui::{AppContext, Entity, SingletonEntity};
 
 const MAX_RESULTS: usize = 100;
 

@@ -1,14 +1,13 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
+use settings::macros::{maybe_define_setting, register_settings_events};
 use settings::{
-    macros::{maybe_define_setting, register_settings_events},
     ChangeEventReason, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
 use strum_macros::EnumIter;
 use warp_util::path::ShellFamily;
-use warpui::{AppContext, ModelContext};
-use warpui::{Entity, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
 

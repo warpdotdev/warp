@@ -1,6 +1,5 @@
-use crate::signatures::{Argument, Command, CommandSignature, Opt};
-
 use super::*;
+use crate::signatures::{Argument, Command, CommandSignature, Opt};
 
 /// Creates a `test_command` signature with a `test_subcommand` subcommand
 /// and the given options on the root command.

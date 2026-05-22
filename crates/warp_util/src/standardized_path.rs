@@ -5,9 +5,8 @@
 //! [`CanonicalizedPath`](repo_metadata::CanonicalizedPath), construction does **not** resolve
 //! symlinks or verify existence on disk.
 
-use std::fmt;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fmt, io};
 
 use serde::{Deserialize, Serialize};
 use typed_path::{PathType, TypedPath, TypedPathBuf};

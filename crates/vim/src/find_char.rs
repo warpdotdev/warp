@@ -1,5 +1,6 @@
-use crate::vim::{Direction, FindCharDestination, FindCharMotion};
 use warpui::text::TextBuffer;
+
+use crate::vim::{Direction, FindCharDestination, FindCharMotion};
 
 /// Find the destination column for Vim's f/F/t/T motions on a single line.
 ///

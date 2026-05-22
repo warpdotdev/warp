@@ -7,13 +7,14 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::index::{Entry, FileId};
-use ignore::gitignore::Gitignore;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
+use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+
+use crate::index::{Entry, FileId};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileSymbols {

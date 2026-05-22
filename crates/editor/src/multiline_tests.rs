@@ -2,8 +2,9 @@
 // it's used in the implementation of `infer_line_ending`.
 #![allow(clippy::disallowed_methods)]
 
-use super::*;
 use warp_core::platform::SessionPlatform;
+
+use super::*;
 
 #[test]
 fn test_infer_line_ending_empty_file() {

@@ -1,12 +1,16 @@
-use std::{fmt, path::PathBuf};
+use std::fmt;
+use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    config_file::ConfigFileArgs, environment::EnvironmentCreateArgs, mcp::MCPSpec,
-    model::ModelArgs, scope::ObjectScope, share::ShareArgs, skill::SkillSpec,
-};
+use crate::config_file::ConfigFileArgs;
+use crate::environment::EnvironmentCreateArgs;
+use crate::mcp::MCPSpec;
+use crate::model::ModelArgs;
+use crate::scope::ObjectScope;
+use crate::share::ShareArgs;
+use crate::skill::SkillSpec;
 
 /// Output format for agent results.
 #[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Default)]

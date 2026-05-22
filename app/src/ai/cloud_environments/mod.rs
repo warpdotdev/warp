@@ -1,22 +1,22 @@
-use serde::{Deserialize, Serialize};
 use std::fmt;
-use warp_server_client::cloud_object::Owner;
 
-use crate::{
-    auth::AuthStateProvider,
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision,
-    },
-    server::{ids::SyncId, sync_queue::QueueItem},
-    workspaces::user_workspaces::UserWorkspaces,
-};
+use serde::{Deserialize, Serialize};
+use warp_server_client::cloud_object::Owner;
 use warpui::{AppContext, SingletonEntity as _};
+
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {

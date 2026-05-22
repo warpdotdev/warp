@@ -1,3 +1,7 @@
+use ai::agent::action_result::StartAgentVersion;
+use warp_core::features::FeatureFlag;
+use warpui::{App, EntityId};
+
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
@@ -9,9 +13,6 @@ use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStream
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
-use ai::agent::action_result::StartAgentVersion;
-use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId};
 
 const FIRST_REQUEST_ID: StartAgentRequestId = StartAgentRequestId::from_raw_for_test(0);
 

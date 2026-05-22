@@ -1,5 +1,6 @@
-use chrono::Local;
 use std::path::PathBuf;
+
+use chrono::Local;
 use warp_editor::render::model::LineCount;
 use warpui::App;
 

@@ -9,37 +9,29 @@ use std::sync::Arc;
 
 use futures::stream::AbortHandle;
 use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_language_word};
+pub use input_classifier::InputType;
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{InputMode, InputType as ProtocolInputType};
 use settings::Setting as _;
+use warp_completer::completer::CompletionContext;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::InputType;
-
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::BlocklistAIContextModel;
+use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::input_classifier::InputClassifierModel;
+use crate::settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use crate::PrivacySettings;
-use warp_completer::completer::CompletionContext;
-
-use crate::{
-    input_classifier::InputClassifierModel,
-    report_if_error, send_telemetry_from_ctx,
-    settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings},
-    terminal::{
-        input::decorations::ParsedTokensSnapshot,
-        model::{rich_content::RichContentType, session::SessionId},
-        History, TerminalModel,
-    },
-    TelemetryEvent,
-};
-
-use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::terminal::input::decorations::ParsedTokensSnapshot;
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::{History, TerminalModel};
+use crate::{report_if_error, send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
 
 /// Cutoff score for deciding an user input matches a history command entry.
 const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;

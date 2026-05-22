@@ -1,13 +1,11 @@
 use clap::{Args, Subcommand};
 
-use crate::{
-    config_file::ConfigFileArgs,
-    environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs},
-    mcp::MCPSpec,
-    model::ModelArgs,
-    scope::ObjectScope,
-    skill::SkillSpec,
-};
+use crate::config_file::ConfigFileArgs;
+use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use crate::mcp::MCPSpec;
+use crate::model::ModelArgs;
+use crate::scope::ObjectScope;
+use crate::skill::SkillSpec;
 
 /// `ScheduleCommand` has a slightly unusual definition because we allow `oz schedule` as
 // a shorthand for `oz schedule create`.

@@ -1,9 +1,8 @@
-use warpui::{async_assert, async_assert_eq, integration::AssertionCallback};
+use warpui::integration::AssertionCallback;
+use warpui::{async_assert, async_assert_eq};
 
-use crate::{
-    integration_testing::view_getters::{command_search_view, workspace_view},
-    search::QueryFilter,
-};
+use crate::integration_testing::view_getters::{command_search_view, workspace_view};
+use crate::search::QueryFilter;
 
 pub fn assert_command_search_is_open() -> AssertionCallback {
     Box::new(move |app, window_id| {

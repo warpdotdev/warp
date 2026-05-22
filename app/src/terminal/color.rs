@@ -1,8 +1,10 @@
-use crate::terminal::model::ansi::color_index;
-use crate::themes::theme::{AnsiColors, WarpTheme};
 use std::fmt;
 use std::ops::{Index, IndexMut};
+
 use warpui::color::ColorU;
+
+use crate::terminal::model::ansi::color_index;
+use crate::themes::theme::{AnsiColors, WarpTheme};
 
 pub const COUNT: usize = 269;
 

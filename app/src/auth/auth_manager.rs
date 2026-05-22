@@ -6,38 +6,36 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use settings::Setting as _;
+#[cfg(target_family = "wasm")]
+use url::Url;
+use user_persistence::PersistedUser;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
-use warpui::{clipboard::ClipboardContent, Entity, ModelContext, SingletonEntity, UpdateModel};
+use warpui::clipboard::ClipboardContent;
+use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use super::auth_state::{AuthState, PersistAction};
 use super::auth_view_modal::{AuthRedirectPayload, AuthViewVariant};
 use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
-use super::AuthStateProvider;
-use super::UserUid;
+use super::{AuthStateProvider, UserUid};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::AIRequestUsageModel;
 use crate::autoupdate::AutoupdateState;
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::server_api::auth::FetchUserResult;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::{
-    graphql::get_user_facing_error_message,
-    server_api::{
-        auth::{
-            AnonymousUserCreationError, AuthClient, MintCustomTokenError, UserAuthenticationError,
-        },
-        ServerApi,
-    },
-    telemetry::AnonymousUserSignupEntrypoint,
+use crate::server::graphql::get_user_facing_error_message;
+use crate::server::server_api::auth::{
+    AnonymousUserCreationError, AuthClient, FetchUserResult, MintCustomTokenError,
+    UserAuthenticationError,
 };
+use crate::server::server_api::{ServerApi, ServerApiProvider};
+use crate::server::telemetry::AnonymousUserSignupEntrypoint;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::initializer::SettingsInitializer;
 use crate::settings::PrivacySettings;
@@ -50,9 +48,6 @@ use crate::{
     persistence, report_error, report_if_error, send_telemetry_from_ctx,
     send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
 };
-#[cfg(target_family = "wasm")]
-use url::Url;
-use user_persistence::PersistedUser;
 
 #[derive(Debug)]
 pub enum AuthManagerEvent {

@@ -15,20 +15,14 @@
 mod execute;
 mod preprocess;
 
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{
-    AIAgentActionResultType, AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange,
-    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
-};
-use crate::ai::{
-    agent::AIAgentInput,
-    blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use chrono::Local;
-pub(crate) use execute::apply_edits;
-pub(crate) use execute::coerce_integer_args;
-pub(crate) use execute::FileReadResult;
-pub(crate) use execute::MalformedFinalLineProxyEvent;
+pub(crate) use execute::{
+    apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
+};
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
@@ -39,41 +33,32 @@ pub use execute::{
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
-
 use futures::future::{join_all, BoxFuture};
-use preprocess::{PendingPreprocessedActions, PreprocessId};
-
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
-    sync::Arc,
-};
-
-use crate::ai::agent::conversation::AIConversationId;
 use itertools::Itertools;
 use parking_lot::FairMutex;
+use preprocess::{PendingPreprocessedActions, PreprocessId};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{AIAgentAction, AIAgentActionId, AIAgentActionResult},
-        get_relevant_files::controller::GetRelevantFilesController,
-    },
-    terminal::{
-        model::session::active_session::ActiveSession, model_events::ModelEventDispatcher,
-        TerminalModel,
-    },
-};
-
+use self::execute::ask_user_question::AskUserQuestionExecutor;
+use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
-    ask_user_question::AskUserQuestionExecutor, search_codebase::SearchCodebaseExecutor,
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
     RunningActionPhase, TryExecuteResult,
 };
-
 use super::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
+    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+};
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::TerminalModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// The status of an action from an AI output.

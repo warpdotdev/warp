@@ -1,25 +1,27 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
-use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
-use crate::terminal::shell::ShellType;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
-use futures::{channel::oneshot, future::join_all};
+use futures::channel::oneshot;
+use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_completer::completer::CommandExitStatus;
-use warp_core::{command::ExitCode, safe_info, safe_warn};
-use warpui::{r#async::FutureExt, ModelContext, ModelSpawner, SingletonEntity};
-
-use super::{terminal::TerminalDriver, AgentDriverError};
 use warp_cli::agent::Harness;
+use warp_completer::completer::CommandExitStatus;
+use warp_core::command::ExitCode;
+use warp_core::{safe_info, safe_warn};
+use warpui::r#async::FutureExt;
+use warpui::{ModelContext, ModelSpawner, SingletonEntity};
+
+use super::terminal::TerminalDriver;
+use super::AgentDriverError;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
+use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 

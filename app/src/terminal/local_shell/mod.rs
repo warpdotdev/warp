@@ -1,16 +1,20 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+
 use anyhow::{anyhow, Result};
 #[cfg(feature = "local_tty")]
+use command::r#async::Command;
+#[cfg(feature = "local_tty")]
 use futures::future::{BoxFuture, FutureExt};
-use std::{collections::HashMap, path::PathBuf, process::Stdio};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::local_tty::shell::ShellStarter;
 #[cfg(feature = "local_tty")]
 use super::model::session::LocalCommandExecutor;
-use super::{local_tty::shell::ShellStarter, shell::ShellType};
+use super::shell::ShellType;
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::local_tty::shell::ShellStarterSourceOrWslName;
-#[cfg(feature = "local_tty")]
-use command::r#async::Command;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Debug)]
 pub enum LocalShellState {

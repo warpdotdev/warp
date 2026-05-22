@@ -1,35 +1,31 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
-
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        execution_profiles::{
-            profiles::{AIExecutionProfilesModel, ClientProfileId},
-            AIExecutionProfile, ActionPermission, AskUserQuestionPermission, WriteToPtyPermission,
-        },
-    },
-    report_if_error,
-    settings::{AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate},
-    workspaces::{user_workspaces::UserWorkspaces, workspace::AiAutonomySettings},
-};
-use warp_core::execution_mode::AppExecutionMode;
-
-use crate::ai::mcp::mcp_provider_from_file_path;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::TemplatableMCPServerManager;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use warp_completer::parsers::simple::decompose_command;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warp_core::settings::Setting;
 use warp_core::user_preferences::GetUserPreferences;
-use warp_core::{features::FeatureFlag, settings::Setting};
 use warp_util::path::EscapeChar;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::{
+    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, WriteToPtyPermission,
+};
+use crate::ai::mcp::mcp_provider_from_file_path;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::report_if_error;
+use crate::settings::{
+    AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::AiAutonomySettings;
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]

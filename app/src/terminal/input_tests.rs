@@ -1,5 +1,28 @@
 use std::collections::HashSet;
 
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use chrono::Local;
+use fuzzy_match::FuzzyMatchResult;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
+use repo_metadata::RepoMetadataModel;
+use session_sharing_protocol::common::Role;
+use smol_str::SmolStr;
+use unindent::Unindent;
+#[cfg(feature = "voice_input")]
+use voice_input::VoiceInputToggledFrom;
+use warp_completer::completer::{
+    EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
+    SuggestionResults, SuggestionType,
+};
+use warp_completer::meta::Span;
+use warp_util::user_input::UserInput;
+use warpui::platform::WindowStyle;
+use warpui::text::SelectionType;
+use warpui::{App, ReadModel, UpdateView, WindowId};
+use watcher::HomeDirectoryWatcher;
+use workflows::workflow::{Argument, ArgumentType, Workflow};
+
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -18,24 +41,16 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::changelog_model::ChangelogModel;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::pricing::PricingInfoModel;
-use crate::search::files::model::FileSearchModel;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::input::slash_command_model::SlashCommandEntryState;
-use crate::terminal::input::slash_commands::SlashCommandsEvent;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
-use watcher::HomeDirectoryWatcher;
-
-use crate::editor::{EditorAction, TextStyleOperation};
+use crate::context_chips::prompt::Prompt;
+use crate::editor::{DisplayPoint, EditorAction, Point, TextStyleOperation};
 use crate::input_suggestions::{HistoryOrder, Item};
 use crate::network::NetworkStatus;
-use crate::server::cloud_objects::{listener::Listener, update_manager::UpdateManager};
+use crate::pricing::PricingInfoModel;
+use crate::search::files::model::FileSearchModel;
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
-
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AliasExpansionSettings, AppEditorSettings, InputBoxType, PrivacySettings};
@@ -44,15 +59,14 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::block_list_viewport::ScrollPosition;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::event::{BlockMetadataReceivedEvent, BootstrappedEvent};
+use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
+use crate::terminal::input::slash_command_model::SlashCommandEntryState;
+use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
-use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
-use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use crate::terminal::block_list_viewport::ScrollPosition;
 use crate::terminal::local_tty::shell::ShellStarter;
 use crate::terminal::model::ansi::{Handler, PrecmdValue};
 use crate::terminal::model::block::SerializedBlock;
@@ -62,46 +76,24 @@ use crate::terminal::model::index::Side;
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-use chrono::Local;
-use warpui::text::SelectionType;
-
-use crate::terminal::shell::ShellType;
-use crate::test_util::settings::initialize_settings_for_tests;
-use crate::themes::theme::AnsiColorIdentifier;
-use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
-use crate::{
-    editor::{DisplayPoint, Point},
-    terminal::TerminalView,
-};
-use crate::{experiments, AgentNotificationsModel};
-use fuzzy_match::FuzzyMatchResult;
-use session_sharing_protocol::common::Role;
-use smol_str::SmolStr;
-use warp_completer::completer::{
-    EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
-    SuggestionResults, SuggestionType,
-};
-use warp_completer::meta::Span;
-
-use unindent::Unindent;
-
-#[cfg(feature = "voice_input")]
-use voice_input::VoiceInputToggledFrom;
-use warpui::platform::WindowStyle;
-use warpui::{App, ReadModel, UpdateView, WindowId};
-
-use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
-
-use warp_util::user_input::UserInput;
-use workflows::workflow::{Argument, ArgumentType, Workflow};
-
-use crate::context_chips::prompt::Prompt;
-use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
 use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::shell::ShellType;
+use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
-use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, ReferralThemeStatus};
+use crate::terminal::TerminalView;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{
+    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    ReferralThemeStatus,
+};
 
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
