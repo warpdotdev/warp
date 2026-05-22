@@ -1,25 +1,21 @@
+use core::fmt;
+use std::borrow::Cow;
+use std::boxed::Box;
+
 use itertools::Itertools;
 
-use crate::{
-    color::ColorU,
-    elements::{
-        Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
-        Icon, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    fonts::FamilyId,
-    platform::Cursor,
-    ui_components::{
-        button::Button,
-        components::{Coords, UiComponent, UiComponentStyles},
-        tool_tip::{Tooltip, TooltipWithSublabel},
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext,
-};
-
-use core::fmt;
-use std::{borrow::Cow, boxed::Box};
-
 use super::button::ButtonTooltipPosition;
+use crate::color::ColorU;
+use crate::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill, Flex, Icon,
+    MainAxisAlignment, MouseStateHandle, ParentElement, Radius, Text,
+};
+use crate::fonts::FamilyId;
+use crate::platform::Cursor;
+use crate::ui_components::button::Button;
+use crate::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use crate::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
+use crate::{AppContext, Element, Entity, TypedActionView, View, ViewContext};
 const MAX_WIDTH: f32 = 300.0;
 
 /// A segmented control component with multiple selectable options

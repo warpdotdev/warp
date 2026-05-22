@@ -4,33 +4,39 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::codebase_index_proto::{
-    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
-    RemoteCodebaseIndexStatus,
-};
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
+use crate::codebase_index_proto::{
+    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
+    RemoteCodebaseIndexStatus,
+};
 use crate::proto::{
     client_message, get_branches_response, get_fragment_metadata_from_hash_response,
     server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate,
-    DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
-    FragmentMetadataLookupErrorCode, GetBranches, GetDiffState, GetDiffStateResponse,
-    GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
-    OpenBuffer, OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse,
-    ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage,
-    SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
+    CodebaseIndexLimits, CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode,
+    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
+    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
+    IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
+    UploadHandoffSnapshotResponse, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
-use crate::protocol::{self, ProtocolError, RequestId};
+#[cfg(not(target_family = "wasm"))]
+mod remote_server_log;
+#[cfg(not(target_family = "wasm"))]
+pub use remote_server_log::RemoteServerLog;
 use warp_core::{safe_error, safe_warn, SessionId};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::TransportStream;
+
+use crate::protocol::{self, ProtocolError, RequestId};
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -132,6 +138,7 @@ pub struct InitializeParams {
     pub user_id: String,
     pub user_email: String,
     pub crash_reporting_enabled: bool,
+    pub codebase_index_limits: Option<CodebaseIndexLimits>,
 }
 
 /// A request-failure notification emitted by [`RemoteServerClient::send_request`].
@@ -216,9 +223,11 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        RemoteServerLog,
     ) {
-        spawn_stderr_forwarder(stderr, executor);
-        Self::new(stdout, stdin, executor)
+        let stderr_tail = spawn_stderr_forwarder(stderr, executor);
+        let (client, event_rx, failure_rx) = Self::new(stdout, stdin, executor);
+        (client, event_rx, failure_rx, stderr_tail)
     }
 }
 
@@ -287,6 +296,7 @@ impl RemoteServerClient {
                 user_id: params.user_id,
                 user_email: params.user_email,
                 crash_reporting_enabled: params.crash_reporting_enabled,
+                codebase_index_limits: params.codebase_index_limits,
             })),
         };
 
@@ -395,10 +405,11 @@ impl RemoteServerClient {
                         .ok_or(ClientError::UnexpectedResponse)?;
                 log::info!(
                     "[Remote codebase indexing] Client received {operation} response: \
-                     repo_path={} state={:?} root_hash_present={}",
+                     repo_path={} state={:?} root_hash_present={} failure_message={:?}",
                     status.repo_path,
                     status.state,
                     status.root_hash.is_some(),
+                    status.failure_message,
                 );
                 Ok(status)
             }
@@ -509,12 +520,17 @@ impl RemoteServerClient {
 
     /// Sends an `UpdatePreferences` notification when the user's privacy
     /// settings change (e.g. toggling crash reporting).
-    pub fn update_preferences(&self, crash_reporting_enabled: bool) {
+    pub fn update_preferences(
+        &self,
+        crash_reporting_enabled: bool,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
+    ) {
         let msg = ClientMessage {
             request_id: String::new(),
             message: Some(client_message::Message::UpdatePreferences(
                 crate::proto::UpdatePreferences {
                     crash_reporting_enabled,
+                    codebase_index_limits,
                 },
             )),
         };
@@ -840,10 +856,11 @@ impl RemoteServerClient {
                 let status = proto_to_codebase_index_status_updated(&update)?;
                 log::info!(
                     "[Remote codebase indexing] Client received codebase index status push: \
-                     repo_path={} state={:?} root_hash_present={}",
+                     repo_path={} state={:?} root_hash_present={} failure_message={:?}",
                     status.repo_path,
                     status.state,
                     status.root_hash.is_some(),
+                    status.failure_message,
                 );
                 Some(ClientEvent::CodebaseIndexStatusUpdated { status })
             }
@@ -1115,6 +1132,42 @@ impl RemoteServerClient {
         }
     }
 
+    /// Sends an `UploadHandoffSnapshot` request to the remote server and
+    /// awaits the `UploadHandoffSnapshotResponse`.
+    pub async fn upload_handoff_snapshot(
+        &self,
+        paths: Vec<StandardizedPath>,
+    ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UploadHandoffSnapshot(
+                UploadHandoffSnapshot {
+                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                },
+            )),
+        };
+
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::UploadHandoffSnapshot,
+            )
+            .await?;
+
+        match response.message {
+            Some(server_message::Message::UploadHandoffSnapshotResponse(resp)) => Ok(resp),
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for UploadHandoffSnapshot"),
+                    full: ("Remote server unexpected response for UploadHandoffSnapshot: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Wrapper around [`send_request_internal`] that automatically fires a
     /// [`ClientEvent::RequestFailed`] event on error, so transport-level
     /// failures are tracked for telemetry without requiring each caller
@@ -1318,15 +1371,19 @@ impl RemoteServerClient {
     }
 }
 
-/// Spawns a background task that reads lines from the server's stderr and
-/// forwards them to the client's logging.
+/// Spawns a background task that reads lines from the server's stderr,
+/// forwards them to the client's logging, and retains the last few lines
+/// in a shared buffer for telemetry.
 #[cfg(not(target_family = "wasm"))]
 pub fn spawn_stderr_forwarder(
     stderr: impl AsyncRead + TransportStream,
     executor: &executor::Background,
-) {
+) -> RemoteServerLog {
     use futures::io::AsyncBufReadExt;
     use futures::StreamExt;
+
+    let tail = RemoteServerLog::new();
+    let tail_writer = tail.clone();
 
     executor
         .spawn(async move {
@@ -1334,9 +1391,12 @@ pub fn spawn_stderr_forwarder(
             let mut lines = reader.lines();
             while let Some(Ok(line)) = lines.next().await {
                 log::info!("[remote_server] {line}");
+                tail_writer.push(line);
             }
         })
         .detach();
+
+    tail
 }
 
 #[cfg(test)]

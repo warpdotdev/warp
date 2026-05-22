@@ -1,13 +1,13 @@
 mod service_impl;
 
-use command::blocking::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use command::blocking::Command;
+use service_impl::{LogServiceImpl, PluginHostBootstrapServiceImpl};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{PLUGIN_HOST_ADDRESS_ENV_VAR, PLUGIN_HOST_FLAG};
-use service_impl::{LogServiceImpl, PluginHostBootstrapServiceImpl};
 
 /// Singleton model responsible for spawning the plugin host child process and initializing IPC
 /// server and clients for communication between the app and plugin host processes.

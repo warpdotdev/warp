@@ -1,39 +1,38 @@
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::anyhow;
 use async_channel;
 use chrono::{DateTime, Utc};
 use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use repo_metadata::entry::IgnoredPathStrategy;
 use repo_metadata::Repository;
-use std::{path::Path, sync::Arc};
 use warp_core::safe_error;
 use warpui::{Entity, ModelContext, ModelHandle};
 
+use super::fragment_metadata::{
+    FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
+};
+use super::manager::{
+    CodebaseIndexFinishedStatus, CodebaseIndexStatus, FragmentMetadataLookupError,
+    RetrieveFileError,
+};
+use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
+use super::store_client::StoreClient;
+use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{
-    fragment_metadata::{FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates},
-    manager::{
-        CodebaseIndexFinishedStatus, CodebaseIndexStatus, FragmentMetadataLookupError,
-        RetrieveFileError,
-    },
-    merkle_tree::{MerkleTree, SerializedCodebaseIndex},
-    store_client::StoreClient,
-    sync_client::{FlushFragmentResult, SyncOperationError},
     CodebaseContextConfig, ContentHash, EmbeddingConfig, Error, Fragment, NodeHash, RepoMetadata,
 };
-use crate::{
-    index::locations::{CodeContextLocation, FileFragmentLocation},
-    telemetry::{AITelemetryEvent, CodebaseContextSyncType},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
-use instant::Instant;
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
+use crate::telemetry::{AITelemetryEvent, CodebaseContextSyncType};
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -503,6 +502,13 @@ impl CodebaseIndex {
         store_client: Arc<dyn StoreClient>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .pending_file_changes
+            .as_ref()
+            .is_none_or(|changed_files| changed_files.is_empty())
+        {
+            return;
+        }
         let last_server_synced_root_node = self.last_server_synced_root_node();
         let old_state = self.update_tree_sync_state(
             TreeSourceSyncState::Syncing {

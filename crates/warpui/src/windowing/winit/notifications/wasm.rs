@@ -1,11 +1,11 @@
-use crate::notification::NotificationSendError;
-use crate::notification::RequestPermissionsOutcome;
+use wasm_bindgen_futures::JsFuture;
+use winit::event_loop::EventLoopProxy;
+
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
 use crate::platform::NotificationInfo;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::CustomEvent;
 use crate::WindowId;
-use wasm_bindgen_futures::JsFuture;
-use winit::event_loop::EventLoopProxy;
 
 pub async fn send_notification(
     notification_info: NotificationInfo,

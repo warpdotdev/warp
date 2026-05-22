@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
 use repo_metadata::{BuildTreeError, DirectoryWatcher, Repository};
@@ -13,7 +11,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use chrono::Utc;
         use super::changed_files::ChangedFiles;
-        use crate::index::path_passes_filters;
+        use crate::index::{is_git_internal_path, matches_gitignores};
         use ignore::gitignore::Gitignore;
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
         use warp_core::features::FeatureFlag;
@@ -29,19 +27,14 @@ cfg_if::cfg_if! {
 use warp_core::safe_anyhow;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{
-    codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress},
-    fragment_metadata::FragmentMetadata,
-    priority_queue::{BuildQueue, Priority},
-    snapshot::*,
-    store_client::StoreClient,
-    CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash,
-};
-
-use crate::{
-    index::locations::CodeContextLocation,
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
+use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
+use super::fragment_metadata::FragmentMetadata;
+use super::priority_queue::{BuildQueue, Priority};
+use super::snapshot::*;
+use super::store_client::StoreClient;
+use super::{CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash};
+use crate::index::locations::CodeContextLocation;
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 /// The interval for debouncing filesystem events.
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);
@@ -842,9 +835,21 @@ impl CodebaseIndexManager {
         gitignores: Arc<Vec<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let watch_filter = WatchFilter::with_filter(Arc::new(move |path| {
-            path_passes_filters(path, gitignores.as_slice())
-        }));
+        // The codebase indexer only cares about source files:
+        // skip anything inside `.git/` and anything matched by gitignore
+        // (including descendants of an ignored ancestor directory).
+        // The same predicate gates both directory descent and event emission.
+        let filter = Arc::new(move |path: &Path| {
+            !is_git_internal_path(path)
+                && !matches_gitignores(
+                    path,
+                    path.is_dir(),
+                    gitignores.as_slice(),
+                    true, /* check_ancestors */
+                )
+        });
+
+        let watch_filter = WatchFilter::with_filter(filter.clone(), filter);
         self.watcher.update(ctx, |watcher, _ctx| {
             std::mem::drop(watcher.register_path(
                 root_path,

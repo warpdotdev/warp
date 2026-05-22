@@ -1,10 +1,15 @@
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
-use crate::terminal::model::session::active_session::ActiveSession;
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
+#[cfg(not(target_family = "wasm"))]
+use itertools::Itertools;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 #[cfg(not(target_family = "wasm"))]
 use super::get_server_output_id;
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::terminal::model::session::active_session::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     ai::{
@@ -14,10 +19,6 @@ use crate::{
     },
     send_telemetry_from_app_ctx, TelemetryEvent,
 };
-#[cfg(not(target_family = "wasm"))]
-use itertools::Itertools;
-#[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
 
 pub struct CallMCPToolExecutor {
     _active_session: ModelHandle<ActiveSession>,

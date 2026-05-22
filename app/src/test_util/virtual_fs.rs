@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+
 pub use virtual_fs::{Dirs, Stub, VirtualFS};
 
 pub trait WarpDirs {

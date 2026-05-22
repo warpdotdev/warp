@@ -1,23 +1,16 @@
-use pathfinder_geometry::vector::vec2f;
 use std::borrow::Cow;
 
+use pathfinder_geometry::vector::vec2f;
+
 use crate::elements::{
-    Align, ChildAnchor, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty,
+    Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize, MouseState, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack,
 };
 use crate::geometry::vector::Vector2F;
-
 use crate::platform::Cursor;
-use crate::{
-    elements::{
-        Border, ConstrainedBox, Container, Element, Empty, Hoverable, Icon, MouseState,
-        MouseStateHandle,
-    },
-    ui_components::{
-        components::{UiComponent, UiComponentStyles},
-        text::Span,
-    },
-};
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
+use crate::ui_components::text::Span;
 
 /// Enum specifying relative alignment of the text and icon within
 /// a button.  "First" is used instead of left/right to make this

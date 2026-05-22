@@ -1,22 +1,16 @@
-use warpui::{
-    AppContext, Element, SizeConstraint,
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Icon,
-        ParentElement, Radius, Shrinkable, Text,
-    },
-    geometry::vector::vec2f,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Icon,
+    ParentElement, Radius, Shrinkable, Text,
 };
-
-use crate::{
-    editor::EmbeddedItemModel,
-    extract_block,
-    render::{
-        element::paint::{CursorData, CursorDisplayType},
-        model::{BlockItem, RichTextStyles, viewport::ViewportItem},
-    },
-};
+use warpui::geometry::vector::vec2f;
+use warpui::{AppContext, Element, SizeConstraint};
 
 use super::RenderableBlock;
+use crate::editor::EmbeddedItemModel;
+use crate::extract_block;
+use crate::render::element::paint::{CursorData, CursorDisplayType};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RichTextStyles};
 
 pub struct RenderableBrokenEmbedding {
     row: Box<dyn Element>,

@@ -1,68 +1,63 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use dunce::canonicalize;
+use itertools::Itertools;
+use pathfinder_color::ColorU;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
+use warp_util::path::LineAndColumnArg;
+use warpui::elements::{
+    resizable_state_handle, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
+    CrossAxisAlignment, DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, PositionedElementAnchor, Resizable, ResizableStateHandle,
+    Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::EditableBinding;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
+use warpui::{
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle,
+};
+
 use crate::ai::agent::AgentReviewCommentBatch;
+use crate::appearance::{Appearance, AppearanceEvent};
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::code_review_header::HEADER_BUTTON_PADDING;
 #[cfg(feature = "local_fs")]
 use crate::code_review::code_review_view::CodeReviewAction;
 use crate::code_review::code_review_view::{
-    render_file_navigation_button, CodeReviewView, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
+    render_file_navigation_button, CodeReviewCommentDebugState, CodeReviewView,
+    CodeReviewViewEvent, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
 };
-use crate::code_review::code_review_view::{CodeReviewCommentDebugState, CodeReviewViewEvent};
+use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
-use crate::pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT};
-use crate::pane_group::WorkingDirectoriesEvent;
-use crate::pane_group::{Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesModel};
+use crate::drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH};
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
+use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
+use crate::pane_group::{
+    Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel,
+};
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::MenuPositioning;
+use crate::terminal::resizable_data::{ModalType, ResizableData};
+use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
-use crate::ui_components::{buttons::icon_button_with_color, icons};
+use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::icons;
 use crate::util::bindings::{keybinding_name_to_display_string, CustomAction};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 use crate::workspace::WorkspaceAction;
-use crate::{
-    appearance::{Appearance, AppearanceEvent},
-    drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH},
-    terminal::resizable_data::{ModalType, ResizableData},
-};
-use crate::{
-    code::buffer_location::LocalOrRemotePath, code_review::diff_state::DiffStateModel,
-    terminal::view::TerminalView,
-};
-use dunce::canonicalize;
-use itertools::Itertools;
-use pathfinder_color::ColorU;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::Icon;
-use warp_util::path::LineAndColumnArg;
-use warpui::elements::{ChildAnchor, Empty, PositionedElementAnchor};
-use warpui::keymap::EditableBinding;
-use warpui::EntityId;
-use warpui::{
-    elements::{
-        resizable_state_handle, Container, DragBarSide, Element, MainAxisSize, MouseStateHandle,
-        Resizable, ResizableStateHandle,
-    },
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WeakViewHandle,
-};
-use warpui::{
-    elements::{
-        ChildView, Clipped, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisAlignment,
-        ParentElement, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    ui_components::components::UiComponent,
-};
 
 /// Describes which agent destination is available for sending review comments.
 #[derive(Clone, Debug, PartialEq)]
@@ -285,9 +280,13 @@ impl CodeReviewState {
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    fn get_repo_display_name(&self, repo_path: &LocalOrRemotePath) -> Option<String> {
-        let name = repo_path.display_name();
-        (!name.is_empty()).then(|| name.to_string())
+    fn get_repo_display_name(
+        &self,
+        repo_path: &LocalOrRemotePath,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let name = display_name_with_host(repo_path, ctx);
+        (!name.is_empty()).then_some(name)
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -299,7 +298,7 @@ impl CodeReviewState {
                 .iter()
                 .map(|repo_path| {
                     let display_name = self
-                        .get_repo_display_name(repo_path)
+                        .get_repo_display_name(repo_path, ctx)
                         .unwrap_or_else(|| "Unknown".to_string());
                     DropdownItem::new(
                         display_name,
@@ -314,7 +313,7 @@ impl CodeReviewState {
             let selected_display_name = self
                 .selected_repo_path
                 .as_ref()
-                .and_then(|selected| self.get_repo_display_name(selected));
+                .and_then(|selected| self.get_repo_display_name(selected, ctx));
 
             (items, selected_display_name)
         };
@@ -838,17 +837,21 @@ impl RightPanelView {
 
             #[cfg(feature = "local_fs")]
             let no_repo_body = {
-                let button = Some(ChildView::new(&self.open_repository_button).finish());
+                let open_repo_button =
+                    || Some(ChildView::new(&self.open_repository_button).finish());
                 if let Some(env) = &self.code_review_session_env {
                     if env.is_remote {
-                        CodeReviewView::render_remote_state(appearance, button)
+                        // No "Open repository" CTA when the session is remote — the
+                        // button navigates to a local folder, which is not meaningful
+                        // in a remote session.
+                        CodeReviewView::render_remote_state(appearance, None)
                     } else if env.is_wsl {
-                        CodeReviewView::render_wsl_state(appearance, button)
+                        CodeReviewView::render_wsl_state(appearance, open_repo_button())
                     } else {
-                        CodeReviewView::render_not_repo_state(appearance, button)
+                        CodeReviewView::render_not_repo_state(appearance, open_repo_button())
                     }
                 } else {
-                    CodeReviewView::render_not_repo_state(appearance, button)
+                    CodeReviewView::render_not_repo_state(appearance, open_repo_button())
                 }
             };
 
@@ -917,13 +920,7 @@ impl RightPanelView {
         let diff_stats = crv.loaded_diff_stats();
 
         let repo_path_element = repo_path.map(|repo_path| {
-            let display_path = match repo_path.to_local_path() {
-                Some(path) => dirs::home_dir()
-                    .and_then(|home| path.strip_prefix(&home).ok())
-                    .map(|relative| format!("~/{}", relative.display()))
-                    .unwrap_or_else(|| path.display().to_string()),
-                None => repo_path.display_path(),
-            };
+            let display_path = display_path_with_host(repo_path, true, app);
             Container::new(
                 Text::new_inline(
                     format!("{display_path}:"),
@@ -1591,7 +1588,7 @@ impl RightPanelView {
         ai_enabled: bool,
         ctx: &AppContext,
     ) -> Option<ViewHandle<TerminalView>> {
-        let terminal_views = pane_group.read(ctx, |pg, ctx| pg.terminal_views(ctx));
+        let terminal_views = pane_group.read(ctx, |pg, ctx| pg.visible_terminal_views(ctx));
         let focused_terminal = pane_group.read(ctx, |pg, ctx| pg.focused_session_view(ctx));
         let pane_group_id = pane_group.id();
         let preferred_terminal_id = self

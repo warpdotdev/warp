@@ -1,18 +1,15 @@
 use std::path::PathBuf;
 
-use warpui::{
-    elements::ChildView, ui_components::components::UiComponentStyles, AppContext, Element, Entity,
-    TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::elements::ChildView;
+use warpui::ui_components::components::UiComponentStyles;
+use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::{
-    tab_configs::PickerStyle,
-    util::git::{
-        detect_current_branch, get_all_branches, get_all_branches_with_known_main,
-        sort_branches_main_first, BranchEntry,
-    },
-    view_components::{DropdownItem, FilterableDropdown},
+use crate::tab_configs::PickerStyle;
+use crate::util::git::{
+    detect_current_branch, get_all_branches, get_all_branches_with_known_main,
+    sort_branches_main_first, BranchEntry,
 };
+use crate::view_components::{DropdownItem, FilterableDropdown};
 
 const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
 /// Placeholder text shown in the dropdown top bar while branches are loading.

@@ -1,25 +1,22 @@
-use super::dropdown::DropdownAction;
-use crate::{
-    appearance::Appearance,
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant},
-    themes::theme::Fill,
-    ui_components::icons::Icon,
-};
 use pathfinder_geometry::vector::vec2f;
+use warpui::elements::{
+    Border, ChildAnchor, ConstrainedBox, CornerRadius, CrossAxisAlignment, Flex,
+    Icon as WarpUiIcon, MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ConstrainedBox, CornerRadius, CrossAxisAlignment, Flex,
-        Icon as WarpUiIcon, MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack,
-    },
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     Action, AppContext, BlurContext, Element, Entity, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
+
+use super::dropdown::DropdownAction;
+use crate::appearance::Appearance;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
+use crate::themes::theme::Fill;
+use crate::ui_components::icons::Icon;
 
 #[cfg(test)]
 #[path = "compact_dropdown_tests.rs"]

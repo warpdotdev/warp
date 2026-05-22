@@ -1,16 +1,13 @@
 //! Structures for storing the grid contents in a flat buffer.
 
-use std::{
-    collections::BTreeMap,
-    ops::{Index, Range},
-};
+use std::collections::BTreeMap;
+use std::ops::{Index, Range};
 
 use get_size::GetSize;
 use string_offset::ByteOffset;
 
-use crate::model::char_or_str::CharOrStr;
-
 use super::grapheme::Grapheme;
+use crate::model::char_or_str::CharOrStr;
 
 /// A helper structure that wraps the underlying grid content and provides
 /// higher-level APIs for accessing the data.

@@ -1,43 +1,40 @@
-use serde::Serialize;
 use std::rc::Rc;
+
+use pathfinder_geometry::vector::vec2f;
+use serde::Serialize;
+use warp_core::channel::ChannelState;
+use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
+use warpui::elements::{
+    ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Fill, Flex, HighlightedHyperlink, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+    Shrinkable, Stack, Text,
+};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, EventContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{PassiveSuggestionTrigger, StaticQueryType};
 use crate::ai::blocklist::prompt::prompt_alert::{
     PromptAlertEvent, PromptAlertState, PromptAlertView,
 };
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
+use crate::appearance::Appearance;
+use crate::server::ids::ServerId;
 use crate::server::telemetry::InteractionSource;
 use crate::settings::InputSettings;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
-use crate::util::bindings::keybinding_name_to_keystroke;
-use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{
-    ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Fill, Flex, HighlightedHyperlink, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
-    Text,
-};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{elements::MouseStateHandle, Element};
-use warpui::{
-    AppContext, Entity, EventContext, ModelHandle, TypedActionView, ViewContext, ViewHandle,
-};
-use warpui::{SingletonEntity, View};
-
-use crate::terminal::view::{ContextMenuAction, InputType, PromptSuggestion};
+use crate::terminal::view::{ContextMenuAction, InputType, PromptSuggestion, TerminalAction};
 use crate::ui_components::blended_colors;
-use crate::{appearance::Appearance, terminal::view::TerminalAction};
-use warp_core::channel::ChannelState;
-use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
-
 use crate::ui_components::icons::Icon as WarpUIIcon;
-
-use crate::ai::agent::{PassiveSuggestionTrigger, StaticQueryType};
-use crate::server::ids::ServerId;
+use crate::util::bindings::keybinding_name_to_keystroke;
 
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;

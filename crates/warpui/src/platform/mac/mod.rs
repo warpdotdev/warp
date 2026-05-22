@@ -15,21 +15,15 @@ pub mod utils;
 mod window;
 
 pub use app::{App, AppExt};
+use clipboard::*;
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSAutoreleasePool, NSString};
 pub use delegate::{AppDelegate, IntegrationTestDelegate};
 pub use fonts::FontDB;
-pub use rendering::is_low_power_gpu_available;
-pub use window::Window;
-pub use window::WindowExt;
-
-use clipboard::*;
-
 use geometry::*;
-
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSString},
-};
 use objc::{msg_send, sel, sel_impl};
+pub use rendering::is_low_power_gpu_available;
+pub use window::{Window, WindowExt};
 
 /// Create an autoreleased NSString from a string reference.
 pub fn make_nsstring<S>(s: S) -> id

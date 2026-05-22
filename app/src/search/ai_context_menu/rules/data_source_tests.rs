@@ -18,6 +18,9 @@ use crate::search::data_source::Query;
 use crate::search::mixer::SyncDataSource;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::object::MockObjectClient;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::AISettings;
@@ -26,10 +29,6 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::NetworkStatus;
-
-use crate::server::server_api::object::MockObjectClient;
-use crate::server::server_api::team::MockTeamClient;
-use crate::server::server_api::workspace::MockWorkspaceClient;
 
 type ServerAIFact = GenericServerObject<
     crate::cloud_object::model::generic_string_model::GenericStringObjectId,

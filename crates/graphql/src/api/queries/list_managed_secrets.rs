@@ -1,6 +1,7 @@
-use crate::{
-    error::UserFacingError, managed_secrets::ManagedSecret, request_context::RequestContext, schema,
-};
+use crate::error::UserFacingError;
+use crate::managed_secrets::ManagedSecret;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 /// A GraphQL query to list all managed secrets for the current user.
 #[derive(cynic::QueryFragment, Debug)]

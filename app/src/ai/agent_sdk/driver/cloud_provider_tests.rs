@@ -1,10 +1,11 @@
-use std::{collections::HashMap, ffi::OsString, path::PathBuf};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
+use super::aws::AwsCloudProvider;
+use super::gcp::GcpCloudProvider;
+use super::{collect_env_vars, load_providers, CloudProvider};
 use crate::ai::cloud_environments::{AwsProviderConfig, GcpProviderConfig, ProvidersConfig};
-
-use super::{
-    aws::AwsCloudProvider, collect_env_vars, gcp::GcpCloudProvider, load_providers, CloudProvider,
-};
 
 #[test]
 fn aws_provider_env_vars_before_setup() {

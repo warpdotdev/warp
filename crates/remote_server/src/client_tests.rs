@@ -1,6 +1,9 @@
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use warp_core::SessionId;
+use warpui::r#async::executor;
 
+use super::*;
 use crate::proto::{
     client_message, get_fragment_metadata_from_hash_response, run_command_response, server_message,
     ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
@@ -10,10 +13,6 @@ use crate::proto::{
     MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
 };
 use crate::protocol;
-use warp_core::SessionId;
-use warpui::r#async::executor;
-
-use super::*;
 
 /// Generic mock server: loops reading ClientMessages and responds using the
 /// provided closure. Exits cleanly on EOF.
@@ -153,6 +152,7 @@ async fn initialize_round_trip() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -183,6 +183,7 @@ async fn initialize_sends_empty_auth_token_when_none() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -211,6 +212,7 @@ async fn initialize_sends_auth_token_when_provided() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await
@@ -395,6 +397,7 @@ async fn disconnected_on_closed_stream() {
                 user_id: String::new(),
                 user_email: String::new(),
                 crash_reporting_enabled: true,
+                codebase_index_limits: None,
             },
         )
         .await;
@@ -459,6 +462,7 @@ async fn concurrent_in_flight_requests() {
                     user_id: String::new(),
                     user_email: String::new(),
                     crash_reporting_enabled: true,
+                    codebase_index_limits: None,
                 },
             )
             .await

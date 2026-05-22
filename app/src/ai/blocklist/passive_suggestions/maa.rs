@@ -1,12 +1,20 @@
 use std::sync::Arc;
 
+use ai::agent::action::{AIAgentActionType, FileEdit};
+use ai::diff_validation::ParsedDiff;
+use chrono::{DateTime, Utc};
+use parking_lot::FairMutex;
+use warp_core::features::FeatureFlag;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+
 use super::super::controller::{BlocklistAIController, BlocklistAIControllerEvent};
 use crate::ai::agent::api::generate_multi_agent_output;
-use crate::ai::agent::AIIdentifiers;
-use crate::ai::agent::FileContext;
-use crate::ai::agent::PassiveCodeDiffEntry;
-use crate::ai::agent::PassiveSuggestionTrigger;
-use crate::ai::agent::{conversation::AIConversationId, ShellCommandCompletedTrigger};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIIdentifiers, FileContext, PassiveCodeDiffEntry, PassiveSuggestionTrigger,
+    ShellCommandCompletedTrigger,
+};
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::inline_action::code_diff_view::FileDiff;
 use crate::ai::blocklist::{
@@ -23,13 +31,6 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use ai::agent::action::{AIAgentActionType, FileEdit};
-use ai::diff_validation::ParsedDiff;
-use chrono::{DateTime, Utc};
-use parking_lot::FairMutex;
-use warp_core::features::FeatureFlag;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -598,9 +599,10 @@ async fn extract_suggestion_from_stream(
         ai::agent::convert::ConvertToAPITypeError,
     >,
 ) -> Option<StreamExtractionResult> {
-    use crate::ai::agent::task::helper::MessageExt;
     use futures_util::StreamExt;
     use warp_multi_agent_api as api;
+
+    use crate::ai::agent::task::helper::MessageExt;
 
     let Ok(mut stream) = stream_result else {
         return None;
@@ -680,8 +682,9 @@ async fn extract_suggestion_from_stream(
 fn coalesce_messages_from_client_actions(
     client_actions: &[warp_multi_agent_api::ClientAction],
 ) -> Vec<warp_multi_agent_api::Message> {
-    use field_mask::FieldMaskOperation;
     use std::collections::HashMap;
+
+    use field_mask::FieldMaskOperation;
     use warp_multi_agent_api as api;
     use warp_multi_agent_api::client_action::Action;
 

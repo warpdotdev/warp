@@ -1,46 +1,42 @@
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
-use warpui::{rendering::GPUPowerPreference, AppContext, SingletonEntity};
+use warp_core::semantic_selection::SemanticSelection;
+use warpui::rendering::GPUPowerPreference;
+use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
 
-use crate::{
-    ai::cloud_agent_settings::CloudAgentSettings,
-    appearance,
-    banner::BannerState,
-    drive::settings::WarpDriveSettings,
-    report_if_error,
-    resource_center::TipsCompleted,
-    search::command_search::settings::CommandSearchSettings,
-    terminal::{
-        alt_screen_reporting::AltScreenReporting,
-        general_settings::GeneralSettings,
-        keys_settings::KeysSettings,
-        ligature_settings::LigatureSettings,
-        safe_mode_settings::SafeModeSettings,
-        session_settings::{SessionSettings, SessionSettingsChangedEvent},
-        settings::TerminalSettings,
-        shared_session::settings::SharedSessionSettings,
-        warpify::settings::WarpifySettings,
-        BlockListSettings,
-    },
-    undo_close::UndoCloseSettings,
-    window_settings::WindowSettings,
-    workflows::aliases::WorkflowAliases,
-    workspace::tab_settings::TabSettings,
-};
-
-use warp_core::semantic_selection::SemanticSelection;
-
+use super::app_icon::AppIconSettings;
+use super::app_installation_detection::UserAppInstallDetectionSettings;
+use super::cloud_preferences::CloudPreferencesSettings;
+use super::initializer::SettingsInitializer;
+use super::native_preference::NativePreferenceSettings;
 use super::{
-    app_icon::AppIconSettings, app_installation_detection::UserAppInstallDetectionSettings,
-    cloud_preferences::CloudPreferencesSettings, initializer::SettingsInitializer,
-    native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
-    AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-    CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    GPUSettings, InputBoxType, InputModeSettings, InputSettings, PaneSettings,
-    SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-    VimBannerSettings, WarpDrivePrivacySettings,
+    AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
+    BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
+    FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
+    InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
+    SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::banner::BannerState;
+use crate::drive::settings::WarpDriveSettings;
+use crate::resource_center::TipsCompleted;
+use crate::search::command_search::settings::CommandSearchSettings;
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::ligature_settings::LigatureSettings;
+use crate::terminal::safe_mode_settings::SafeModeSettings;
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::settings::TerminalSettings;
+use crate::terminal::shared_session::settings::SharedSessionSettings;
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::BlockListSettings;
+use crate::undo_close::UndoCloseSettings;
+use crate::window_settings::WindowSettings;
+use crate::workflows::aliases::WorkflowAliases;
+use crate::workspace::tab_settings::TabSettings;
+use crate::{appearance, report_if_error};
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,

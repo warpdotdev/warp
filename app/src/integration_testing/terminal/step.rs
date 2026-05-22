@@ -2,46 +2,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use warpui::{
-    async_assert,
-    integration::{AssertionOutcome, TestStep},
-    Event, SingletonEntity,
-};
+use warpui::integration::{AssertionOutcome, TestStep};
+use warpui::{async_assert, Event, SingletonEntity};
 
-use crate::integration_testing::terminal::{
-    assert_context_menu_is_open, assert_long_running_block_executing,
-};
-use crate::integration_testing::view_getters::single_terminal_view_for_tab;
-use crate::integration_testing::{
-    block::assert_num_blocks_in_model, terminal::assert_active_block_input_is_empty,
-};
-use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::shell::ShellType;
-use crate::{
-    cmd_or_ctrl_shift, integration_testing::terminal::validate_block_output_on_finished_block,
-};
-use crate::{
-    integration_testing::command_palette::open_command_palette_and_run_action,
-    settings::PrivacySettings,
-};
-use crate::{
-    integration_testing::{
-        step::{
-            assert_no_pending_model_events, new_step_with_default_assertions,
-            new_step_with_default_assertions_for_pane,
-        },
-        view_getters::{single_input_view_for_tab, terminal_view},
-    },
-    terminal::input::InputSuggestionsMode,
-};
-
+use super::util::{current_shell_starter_and_version, nonce, ExpectedExitStatus, ExpectedOutput};
 use super::{
     assert_active_block_output_for_single_terminal_in_tab, assert_active_block_received_precmd,
     assert_alt_grid_active, assert_command_executed,
     assert_long_running_block_executing_for_single_terminal_in_tab, assert_terminal_bootstrapped,
-    util::{current_shell_starter_and_version, nonce, ExpectedExitStatus, ExpectedOutput},
     validate_block_output, PYTHON_PROMPT_READY,
 };
+use crate::cmd_or_ctrl_shift;
+use crate::integration_testing::block::assert_num_blocks_in_model;
+use crate::integration_testing::command_palette::open_command_palette_and_run_action;
+use crate::integration_testing::step::{
+    assert_no_pending_model_events, new_step_with_default_assertions,
+    new_step_with_default_assertions_for_pane,
+};
+use crate::integration_testing::terminal::{
+    assert_active_block_input_is_empty, assert_context_menu_is_open,
+    assert_long_running_block_executing, validate_block_output_on_finished_block,
+};
+use crate::integration_testing::view_getters::{
+    single_input_view_for_tab, single_terminal_view_for_tab, terminal_view,
+};
+use crate::settings::PrivacySettings;
+use crate::terminal::input::InputSuggestionsMode;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::shell::ShellType;
 
 pub fn wait_until_bootstrapped_single_pane_for_tab(tab_index: usize) -> TestStep {
     wait_until_bootstrapped_pane(tab_index, 0)

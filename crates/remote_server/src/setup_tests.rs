@@ -270,8 +270,9 @@ fn parse_preinstall_unsupported_non_glibc() {
 #[cfg(unix)]
 #[test]
 fn install_script_tilde_expansion_resolves_correctly() {
-    use command::blocking::Command;
     use std::process::Stdio;
+
+    use command::blocking::Command;
 
     let bash = if std::path::Path::new("/bin/bash").exists() {
         "/bin/bash"

@@ -2,16 +2,14 @@ use itertools::Itertools;
 use markdown_parser::parse_markdown;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
+use warpui::App;
+use warpui::text::TextBuffer;
+use warpui::text::point::Point;
+use warpui::text::word_boundaries::WordBoundariesPolicy;
 
-use crate::content::{
-    buffer::{Buffer, EditOrigin},
-    selection_model::BufferSelectionModel,
-    text::IndentBehavior,
-};
-use warpui::{
-    App,
-    text::{TextBuffer, point::Point, word_boundaries::WordBoundariesPolicy},
-};
+use crate::content::buffer::{Buffer, EditOrigin};
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::IndentBehavior;
 
 #[test]
 fn test_forward_iteration() {

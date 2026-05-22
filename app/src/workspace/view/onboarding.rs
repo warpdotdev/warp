@@ -1,17 +1,18 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use onboarding::{ProjectOnboardingSettings, SelectedSettings};
+use warp_core::execution_mode::AppExecutionMode;
+use warpui::{SingletonEntity as _, ViewContext};
+
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::settings::AISettings;
-use crate::terminal;
 use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
 use crate::workspace::Workspace;
-use crate::FeatureFlag;
-use onboarding::{ProjectOnboardingSettings, SelectedSettings};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_core::execution_mode::AppExecutionMode;
-use warpui::{SingletonEntity as _, ViewContext};
+use crate::{terminal, FeatureFlag};
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]

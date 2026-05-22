@@ -106,11 +106,11 @@
 /app/src/terminal/view/inline_banner/ @harryalbert
 
 # Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / warpifying
-/app/src/ai/blocklist/ @zachbai
-/app/src/root_view.rs @zachbai
+/app/src/ai/blocklist/ @zachbai @MaggieShan
+/app/src/root_view.rs @zachbai @MaggieShan
 /app/src/terminal/bootstrap.rs @zachbai
-/app/src/terminal/warpify/ @zachbai
-/app/src/settings_view/warpify_page.rs @zachbai
+/app/src/terminal/warpify/ @zachbai @MaggieShan
+/app/src/settings_view/warpify_page.rs @zachbai @MaggieShan
 /app/assets/bundled/bootstrap/ @zachbai
 /crates/warp_completer/ @zachbai @szgupta @alokedesai @acarl005
 
@@ -118,8 +118,8 @@
 /app/src/ai/agent/ @zachbai
 
 # Vertical tabs
-/app/src/workspace/view/vertical_tabs.rs @zachbai
-/app/src/workspace/view/vertical_tabs/ @zachbai
+/app/src/workspace/view/vertical_tabs.rs @johnturcoo
+/app/src/workspace/view/vertical_tabs/ @johnturcoo
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M
@@ -131,6 +131,7 @@
 
 # Rich input
 /app/src/terminal/view/use_agent_footer/ @Advait-M
+/app/src/terminal/view/use_agent_footer/warpify_footer.rs @MaggieShan
 /app/src/terminal/input/cli_agent.rs @Advait-M
 
 # UI framework
@@ -167,7 +168,9 @@
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
 
 # Long-running shell commands
-/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala
+/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli_controller.rs @vkodithala @MaggieShan
 
 # Vim
 /crates/vim/ @liliwilson

@@ -1,7 +1,5 @@
-use std::{
-    any::{Any, TypeId},
-    fmt::Debug,
-};
+use std::any::{Any, TypeId};
+use std::fmt::Debug;
 
 /// Trait representing a Typed action.
 ///

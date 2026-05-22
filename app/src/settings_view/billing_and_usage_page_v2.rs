@@ -1,97 +1,77 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::Local;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::Arc;
+use settings::Setting;
 use thousands::Separable;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_graphql::billing::AddonCreditsOption;
+use warpui::elements::{
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
 use warpui::prelude::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-        Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
     ViewContext, ViewHandle,
 };
 
-use settings::Setting;
-
-use crate::{
-    ai::{
-        request_usage_model::{
-            BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
-        },
-        AIRequestUsageModel,
-    },
-    auth::{
-        auth_state::AuthState, auth_view_modal::AuthViewVariant, AuthManager, AuthStateProvider,
-    },
-    modal::{Modal, ModalEvent, ModalViewState},
-    pricing::PricingInfoModel,
-    send_telemetry_from_ctx,
-    server::{ids::ServerId, telemetry::TelemetryEvent},
-    settings::ai::AISettings,
-    ui_components::{
-        blended_colors,
-        buttons::icon_button,
-        icons::Icon,
-        tab_selector::{self, SettingsTab},
-    },
-    view_components::{
-        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
-        ToastFlavor,
-    },
-    workspaces::{
-        update_manager::TeamUpdateManager,
-        user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-        workspace::{CustomerType, Workspace, WorkspaceUid},
-    },
-    WorkspaceAction,
-};
-
-use super::{
-    billing_and_usage::{
-        billing_cycle_usage_section::BillingCycleUsageSectionView,
-        overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
-        usage_history_entry::UsageHistoryEntry,
-        usage_history_model::UsageHistoryModel,
-    },
-    billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab},
-    settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo},
-    SettingsSection,
-};
-
+use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSectionView;
+use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
+use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
+use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
+use super::billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab};
+use super::settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo};
+use super::SettingsSection;
+use crate::ai::request_usage_model::{
+    BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
+};
+use crate::ai::AIRequestUsageModel;
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pricing::PricingInfoModel;
+use crate::server::ids::ServerId;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::ai::AISettings;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::ui_components::tab_selector::{self, SettingsTab};
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::view_components::ToastFlavor;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
+use crate::{send_telemetry_from_ctx, WorkspaceAction};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your personal balance.";
+const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 
-const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
+const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING: &str =
+    "Restricted due to billing issue. Contact your team admin to update their payment method.";
+const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method.";
 
 const HEADER_FONT_SIZE: f32 = 16.;
 
-const CARD_BORDER_COLOR: ColorU = ColorU {
-    r: 43,
-    g: 43,
-    b: 43,
-    a: 255,
-};
 pub(super) const BASE_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 207,
     g: 145,
@@ -114,6 +94,12 @@ pub(super) const AMBIENT_CREDITS_DOT_COLOR: ColorU = ColorU {
     r: 99,
     g: 102,
     b: 241,
+    a: 255,
+};
+pub(super) const AGGREGATE_CREDITS_DOT_COLOR: ColorU = ColorU {
+    r: 140,
+    g: 140,
+    b: 140,
     a: 255,
 };
 const DEFAULT_MAX_MONTHLY_SPEND_CENTS: i32 = 20_000;
@@ -153,6 +139,34 @@ struct AddonCreditsState {
     options: Vec<AddonCreditsOption>,
     denomination_buttons: Vec<ViewHandle<ActionButton>>,
     purchase_loading: bool,
+}
+enum AddonCreditsPanelState {
+    IneligiblePlan(AddonCreditsRestriction),
+    AutoreloadNonAdmin {
+        description_text: String,
+        warning_text: Option<&'static str>,
+    },
+    Purchase(AddonCreditsPurchaseState),
+}
+
+enum AddonCreditsRestriction {
+    UpgradeToBuild {
+        link_text: &'static str,
+        url: String,
+    },
+    ContactAccountExecutive,
+    ContactTeamAdmin,
+}
+
+struct AddonCreditsPurchaseState {
+    description_text: String,
+    auto_reload_enabled: bool,
+    has_admin_permissions: bool,
+    purchase_disabled: bool,
+    auto_reload_switch_disabled: bool,
+    price_label: String,
+    auto_reload_tooltip_text: String,
+    warning_text: Option<&'static str>,
 }
 
 struct UsageHistoryState {
@@ -627,42 +641,44 @@ impl BillingAndUsagePageV2View {
                     );
                 }
 
-                let team_uid = team.uid;
-                let fg_color = appearance.theme().active_ui_text_color();
-                right_side.add_child(
-                    Container::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Link,
-                                self.plan_mouse_states.open_admin_panel_link.clone(),
-                            )
-                            .with_text_and_icon_label(
-                                TextAndIcon::new(
-                                    TextAndIconAlignment::IconFirst,
-                                    "Open admin panel",
-                                    Icon::Users.to_warpui_icon(fg_color),
-                                    MainAxisSize::Min,
-                                    MainAxisAlignment::Center,
-                                    vec2f(14., 14.),
+                if team.billing_metadata.is_enterprise_plan() {
+                    let team_uid = team.uid;
+                    let fg_color = appearance.theme().active_ui_text_color();
+                    right_side.add_child(
+                        Container::new(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Link,
+                                    self.plan_mouse_states.open_admin_panel_link.clone(),
                                 )
-                                .with_inner_padding(4.),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(fg_color.into()),
-                                ..Default::default()
-                            })
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                );
-                            })
-                            .finish(),
-                    )
-                    .with_margin_left(8.)
-                    .finish(),
-                );
+                                .with_text_and_icon_label(
+                                    TextAndIcon::new(
+                                        TextAndIconAlignment::IconFirst,
+                                        "Open admin panel",
+                                        Icon::Users.to_warpui_icon(fg_color),
+                                        MainAxisSize::Min,
+                                        MainAxisAlignment::Center,
+                                        vec2f(14., 14.),
+                                    )
+                                    .with_inner_padding(4.),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_color: Some(fg_color.into()),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenAdminPanel { team_uid },
+                                    );
+                                })
+                                .finish(),
+                        )
+                        .with_margin_left(8.)
+                        .finish(),
+                    );
+                }
             }
         } else {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
@@ -767,6 +783,8 @@ impl BillingAndUsagePageV2View {
             .with_spacing(8.)
             .with_main_axis_size(MainAxisSize::Max);
 
+        let outline_color = theme.outline().into_solid();
+
         if has_base_credits {
             let reset_str = ai_model
                 .next_refresh_time_local()
@@ -784,7 +802,7 @@ impl BillingAndUsagePageV2View {
                         "Base credits",
                         &reset_str,
                         base_remaining,
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -801,7 +819,7 @@ impl BillingAndUsagePageV2View {
                         "Personal credits",
                         &classified.personal.expiry_label(),
                         classified.personal.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -818,7 +836,7 @@ impl BillingAndUsagePageV2View {
                         "Team credits",
                         &classified.team.expiry_label(),
                         classified.team.total_balance(),
-                        CARD_BORDER_COLOR,
+                        outline_color,
                     ),
                 )
                 .finish(),
@@ -1015,122 +1033,61 @@ impl BillingAndUsagePageV2View {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let fg = appearance.theme().foreground();
-        let bg = appearance.theme().background();
-        let ui_builder = appearance.ui_builder();
-        let theme = appearance.theme();
+        match self.addon_credits_panel_state(
+            workspace,
+            team_uid,
+            has_admin_permissions,
+            delinquent,
+            app,
+        ) {
+            AddonCreditsPanelState::IneligiblePlan(restriction) => {
+                self.render_addon_credits_ineligible_plan_card(restriction, appearance)
+            }
+            AddonCreditsPanelState::AutoreloadNonAdmin {
+                description_text,
+                warning_text,
+            } => self.render_addon_credits_non_admin_auto_reload_card(
+                appearance,
+                description_text,
+                warning_text,
+            ),
+            AddonCreditsPanelState::Purchase(state) => {
+                self.render_addon_credits_purchase_card(workspace, team_uid, state, appearance)
+            }
+        }
+    }
 
-        let header = Text::new_inline("Buy credits", appearance.ui_font_family(), HEADER_FONT_SIZE)
-            .with_color(fg.into())
-            .with_style(Properties::default().weight(Weight::Medium))
-            .finish();
-
+    fn addon_credits_panel_state(
+        &self,
+        workspace: &Workspace,
+        team_uid: ServerId,
+        has_admin_permissions: bool,
+        delinquent: bool,
+        app: &AppContext,
+    ) -> AddonCreditsPanelState {
         let team_can_purchase = UserWorkspaces::as_ref(app)
             .current_team()
             .and_then(|t| t.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|p| p.enabled);
-        let can_upgrade = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|ws| ws.billing_metadata.can_upgrade_to_build_plan())
-            .unwrap_or(false);
+        let can_upgrade = workspace.billing_metadata.can_upgrade_to_build_plan();
 
-        let purchase_restriction_message =
-            match (team_can_purchase, can_upgrade, has_admin_permissions) {
-                (true, _, _) => None,
-                (false, true, true) => {
-                    let url = UserWorkspaces::upgrade_link_for_team(team_uid);
-                    let is_legacy = UserWorkspaces::handle(app)
-                        .as_ref(app)
-                        .current_team()
-                        .is_some_and(|t| t.billing_metadata.is_on_legacy_paid_plan());
-                    let (link, suffix) = if is_legacy {
-                        ("Switch to Build", " to purchase add-on credits.")
-                    } else {
-                        ("Upgrade to Build", " to purchase add-on credits.")
-                    };
-                    Some(
-                        FormattedTextElement::new(
-                            FormattedText::new([FormattedTextLine::Line(vec![
-                                FormattedTextFragment::hyperlink(link, url),
-                                FormattedTextFragment::plain_text(suffix),
-                            ])]),
-                            appearance.ui_font_size(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_family(),
-                            theme.sub_text_color(bg).into(),
-                            HighlightedHyperlink::default(),
-                        )
-                        .with_hyperlink_font_color(theme.accent().into_solid())
-                        .register_default_click_handlers_with_action_support(|lens, event, ctx| {
-                            match lens {
-                                warpui::elements::HyperlinkLens::Url(u) => ctx.open_url(u),
-                                warpui::elements::HyperlinkLens::Action(a) => {
-                                    if let Some(act) =
-                                        a.as_any().downcast_ref::<BillingAndUsagePageAction>()
-                                    {
-                                        event.dispatch_typed_action(act.clone());
-                                    }
-                                }
-                            }
-                        })
-                        .finish(),
-                    )
-                }
-                (false, false, true) => Some(
-                    ui_builder
-                        .paragraph("Contact your Account Executive for more add-on credits.")
-                        .with_style(UiComponentStyles {
-                            font_color: Some(theme.sub_text_color(bg).into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
-                ),
-                (_, _, false) => Some(
-                    ui_builder
-                        .paragraph("Contact a team admin to purchase add-on credits.")
-                        .with_style(UiComponentStyles {
-                            font_color: Some(theme.sub_text_color(bg).into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
-                ),
-            };
-
-        if let Some(explanation) = purchase_restriction_message {
-            let card = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_children([
-                    Container::new(header).with_margin_bottom(8.).finish(),
-                    explanation,
-                ])
-                .finish();
-            return Container::new(card)
-                .with_background_color(theme.surface_1().into_solid())
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .with_margin_bottom(16.)
-                .with_uniform_padding(16.)
-                .finish();
+        if !team_can_purchase {
+            if !has_admin_permissions {
+                return AddonCreditsPanelState::IneligiblePlan(
+                    AddonCreditsRestriction::ContactTeamAdmin,
+                );
+            } else if can_upgrade {
+                return AddonCreditsPanelState::IneligiblePlan(
+                    AddonCreditsRestriction::UpgradeToBuild {
+                        link_text: "Upgrade to Build",
+                        url: UserWorkspaces::upgrade_link_for_team(team_uid),
+                    },
+                );
+            }
+            return AddonCreditsPanelState::IneligiblePlan(
+                AddonCreditsRestriction::ContactAccountExecutive,
+            );
         }
-
-        let team_count = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|t| t.members.len())
-            .unwrap_or(1);
-        let description_text = if team_count > 1 {
-            format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
-        } else {
-            ADDON_CREDITS_DESCRIPTION.to_string()
-        };
-        let paragraph = ui_builder
-            .paragraph(description_text)
-            .with_style(UiComponentStyles {
-                font_color: Some(theme.sub_text_color(bg).into()),
-                ..Default::default()
-            })
-            .build()
-            .finish();
 
         let selected_credit_option = self
             .addon_credits
@@ -1141,22 +1098,283 @@ impl BillingAndUsagePageV2View {
             .addon_credits_settings
             .auto_reload_enabled;
 
-        let denomination_button_elements = self
-            .addon_credits
-            .denomination_buttons
-            .iter()
-            .map(|button_handle| ChildView::new(button_handle).finish())
-            .collect::<Vec<_>>();
-        let denomination_buttons_row = Wrap::row()
-            .with_children(denomination_button_elements)
+        let team_count = UserWorkspaces::as_ref(app)
+            .current_team()
+            .map(|t| t.members.len())
+            .unwrap_or(1);
+        let description_text = if team_count > 1 {
+            format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
+        } else {
+            ADDON_CREDITS_DESCRIPTION.to_string()
+        };
+
+        let would_exceed = selected_credit_option.is_some_and(|opt| {
+            let limit = workspace
+                .settings
+                .addon_credits_settings
+                .max_monthly_spend_cents
+                .unwrap_or(DEFAULT_MAX_MONTHLY_SPEND_CENTS);
+            (workspace.bonus_grants_purchased_this_month.cents_spent + opt.price_usd_cents) > limit
+        });
+        let purchase_disabled = self.addon_credits.purchase_loading
+            || would_exceed
+            || delinquent
+            || auto_reload_enabled;
+        let auto_reload_switch_disabled = !has_admin_permissions
+            || delinquent
+            || (!auto_reload_enabled && selected_credit_option.is_none());
+        let price_label = selected_credit_option
+            .map(|opt| {
+                let credits = opt.credits.separate_with_commas();
+                let dollars = format!("${:.2}", opt.price_usd_cents as f64 / 100.0);
+                format!("{credits} credits / {dollars}")
+            })
+            .unwrap_or_default();
+        let auto_reload_credit_amount = selected_credit_option
+            .map(|o| format!("{} credits", o.credits.separate_with_commas()))
+            .unwrap_or_else(|| "selected credit amount".to_string());
+        let auto_reload_tooltip_text = format!(
+            "When any member on your team’s credit balance reaches 100 credits remaining, \
+            automatically purchase {auto_reload_credit_amount}."
+        );
+        let warning_text = if delinquent && has_admin_permissions {
+            Some(ADDON_CREDITS_DELINQUENT_WARNING_STRING)
+        } else if delinquent {
+            Some(ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING)
+        } else if workspace
+            .billing_metadata
+            .has_failed_addon_credit_auto_reload_status()
+        {
+            Some(if has_admin_permissions {
+                RESTRICTED_BILLING_USAGE_WARNING_STRING
+            } else {
+                RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING
+            })
+        } else if would_exceed {
+            Some(match (auto_reload_enabled, has_admin_permissions) {
+                (true, true) => {
+                    "Auto-reload is paused because the next reload would exceed your monthly spend limit. Increase your limit to continue using auto-reload."
+                }
+                (true, false) => {
+                    "Auto-reload is paused because the next reload would exceed your team’s monthly spend limit. Contact a team admin to increase it."
+                }
+                (false, true) => {
+                    "This purchase would exceed your monthly limit. Increase your limit to continue."
+                }
+                (false, false) => {
+                    "This purchase would exceed your team’s monthly spend limit. Contact a team admin to increase it."
+                }
+            })
+        } else {
+            None
+        };
+
+        if !has_admin_permissions && auto_reload_enabled {
+            let configured_auto_reload_option = workspace
+                .settings
+                .addon_credits_settings
+                .selected_auto_reload_credit_denomination
+                .and_then(|credits| {
+                    self.addon_credits
+                        .options
+                        .iter()
+                        .find(|option| option.credits == credits)
+                })
+                .or(selected_credit_option);
+            let description_text = match configured_auto_reload_option {
+                Some(option) => {
+                    let credits = option.credits.separate_with_commas();
+                    let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
+                    format!(
+                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                    )
+                }
+                None => {
+                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                }
+            };
+            return AddonCreditsPanelState::AutoreloadNonAdmin {
+                description_text,
+                warning_text,
+            };
+        }
+
+        AddonCreditsPanelState::Purchase(AddonCreditsPurchaseState {
+            description_text,
+            auto_reload_enabled,
+            has_admin_permissions,
+            purchase_disabled,
+            auto_reload_switch_disabled,
+            price_label,
+            auto_reload_tooltip_text,
+            warning_text,
+        })
+    }
+
+    fn render_addon_credits_ineligible_plan_card(
+        &self,
+        restriction: AddonCreditsRestriction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let bg = theme.background();
+        let explanation = match restriction {
+            AddonCreditsRestriction::UpgradeToBuild { link_text, url } => {
+                FormattedTextElement::new(
+                    FormattedText::new([FormattedTextLine::Line(vec![
+                        FormattedTextFragment::hyperlink(link_text, url),
+                        FormattedTextFragment::plain_text(" to purchase add-on credits."),
+                    ])]),
+                    appearance.ui_font_size(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_family(),
+                    theme.sub_text_color(bg).into(),
+                    HighlightedHyperlink::default(),
+                )
+                .with_hyperlink_font_color(theme.accent().into_solid())
+                .register_default_click_handlers_with_action_support(
+                    |lens, event, ctx| match lens {
+                        warpui::elements::HyperlinkLens::Url(u) => ctx.open_url(u),
+                        warpui::elements::HyperlinkLens::Action(a) => {
+                            if let Some(act) =
+                                a.as_any().downcast_ref::<BillingAndUsagePageAction>()
+                            {
+                                event.dispatch_typed_action(act.clone());
+                            }
+                        }
+                    },
+                )
+                .finish()
+            }
+            AddonCreditsRestriction::ContactAccountExecutive => appearance
+                .ui_builder()
+                .paragraph("Contact your Account Executive for more add-on credits.")
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.sub_text_color(bg).into()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+            AddonCreditsRestriction::ContactTeamAdmin => appearance
+                .ui_builder()
+                .paragraph("Contact a team admin to enable add-on credits.")
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.sub_text_color(bg).into()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        };
+        let header = Text::new_inline("Buy credits", appearance.ui_font_family(), HEADER_FONT_SIZE)
+            .with_color(theme.foreground().into())
+            .with_style(Properties::default().weight(Weight::Medium))
+            .finish();
+        let card = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_children([
+                Container::new(header).with_margin_bottom(8.).finish(),
+                explanation,
+            ])
+            .finish();
+
+        Container::new(card)
+            .with_background_color(theme.surface_1().into_solid())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_margin_bottom(16.)
+            .with_uniform_padding(16.)
+            .finish()
+    }
+
+    fn render_addon_credits_non_admin_auto_reload_card(
+        &self,
+        appearance: &Appearance,
+        description_text: String,
+        warning_text: Option<&'static str>,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let bg = theme.background();
+        let auto_reload_header = Text::new_inline(
+            MANAGED_AUTO_RELOAD_HEADER,
+            appearance.ui_font_family(),
+            HEADER_FONT_SIZE,
+        )
+        .with_color(theme.foreground().into())
+        .with_style(Properties::default().weight(Weight::Medium))
+        .finish();
+        let auto_reload_description = appearance
+            .ui_builder()
+            .paragraph(description_text)
+            .with_style(UiComponentStyles {
+                font_color: Some(theme.sub_text_color(bg).into()),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let mut card_children = vec![auto_reload_header, auto_reload_description];
+        if let Some(warning_text) = warning_text {
+            card_children.push(self.render_warning_row(appearance, warning_text.to_string()));
+        }
+        let card = Flex::column()
+            .with_children(card_children)
             .with_spacing(8.)
             .finish();
 
+        Container::new(card)
+            .with_background_color(theme.surface_1().into_solid())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_margin_bottom(16.)
+            .with_uniform_padding(16.)
+            .finish()
+    }
+
+    fn render_addon_credits_purchase_card(
+        &self,
+        workspace: &Workspace,
+        team_uid: ServerId,
+        state: AddonCreditsPurchaseState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let card_upper = self.render_addon_credits_upper_section(workspace, &state, appearance);
+        let card_lower = self.render_addon_credits_lower_section(team_uid, &state, appearance);
+
+        Container::new(
+            Flex::column()
+                .with_children([card_upper, card_lower])
+                .finish(),
+        )
+        .with_background_color(theme.surface_1().into_solid())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_margin_bottom(16.)
+        .finish()
+    }
+
+    fn render_addon_credits_upper_section(
+        &self,
+        workspace: &Workspace,
+        state: &AddonCreditsPurchaseState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let bg = theme.background();
+        let ui_builder = appearance.ui_builder();
+        let header = Text::new_inline("Buy credits", appearance.ui_font_family(), HEADER_FONT_SIZE)
+            .with_color(theme.foreground().into())
+            .with_style(Properties::default().weight(Weight::Medium))
+            .finish();
+        let paragraph = ui_builder
+            .paragraph(state.description_text.clone())
+            .with_style(UiComponentStyles {
+                font_color: Some(theme.sub_text_color(bg).into()),
+                ..Default::default()
+            })
+            .build()
+            .finish();
         let mut upper_section = Flex::column()
             .with_children([header, paragraph])
             .with_spacing(8.);
 
-        if has_admin_permissions {
+        if state.has_admin_permissions {
             let info_icon = render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
@@ -1168,14 +1386,12 @@ impl BillingAndUsagePageV2View {
                     ),
                 },
             );
-
             let spend_limit = workspace
                 .settings
                 .addon_credits_settings
                 .max_monthly_spend_cents
                 .map(|c| format!("${:.2}", c as f64 / 100.0))
                 .unwrap_or_else(|| "$200.00".to_string());
-
             let spend_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_children([
@@ -1196,31 +1412,123 @@ impl BillingAndUsagePageV2View {
                 ])
                 .finish();
             upper_section.add_child(spend_row);
+
+            if let Some(purchased_row) =
+                Self::render_purchased_this_month_row(workspace, appearance)
+            {
+                upper_section.add_child(purchased_row);
+            }
         }
 
-        let would_exceed = selected_credit_option.is_some_and(|opt| {
-            let limit = workspace
-                .settings
-                .addon_credits_settings
-                .max_monthly_spend_cents
-                .unwrap_or(DEFAULT_MAX_MONTHLY_SPEND_CENTS);
-            (workspace.bonus_grants_purchased_this_month.cents_spent + opt.price_usd_cents) > limit
-        });
+        if state.has_admin_permissions || !state.auto_reload_enabled {
+            let denomination_button_elements = self
+                .addon_credits
+                .denomination_buttons
+                .iter()
+                .map(|button_handle| ChildView::new(button_handle).finish())
+                .collect::<Vec<_>>();
+            upper_section.add_child(
+                Container::new(
+                    Wrap::row()
+                        .with_children(denomination_button_elements)
+                        .with_spacing(8.)
+                        .finish(),
+                )
+                .finish(),
+            );
+        }
 
-        let disabled = self.addon_credits.purchase_loading
-            || would_exceed
-            || delinquent
-            || auto_reload_enabled;
+        Container::new(upper_section.finish())
+            .with_horizontal_padding(16.)
+            .with_padding_top(16.)
+            .with_padding_bottom(16.)
+            .finish()
+    }
+
+    fn render_purchased_this_month_row(
+        workspace: &Workspace,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let bonus_grants = &workspace.bonus_grants_purchased_this_month;
+        if bonus_grants.total_credits_purchased == 0 {
+            return None;
+        }
+
+        let credits_purchased = bonus_grants.total_credits_purchased;
+        let cost_dollars = bonus_grants.cents_spent as f64 / 100.0;
+        let theme = appearance.theme();
+
+        let label = Text::new_inline("Purchased this month", appearance.ui_font_family(), 12.)
+            .with_color(theme.active_ui_text_color().into())
+            .finish();
+
+        let credits_text = if credits_purchased == 1 {
+            "1 credit".to_string()
+        } else {
+            format!("{} credits", credits_purchased.separate_with_commas())
+        };
+
+        let credits_component = Container::new(
+            Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
+                .with_color(blended_colors::text_disabled(theme, theme.surface_1()))
+                .finish(),
+        )
+        .with_margin_right(8.)
+        .finish();
+
+        let cost_component = Text::new_inline(
+            format!("${cost_dollars:.2}"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        Some(
+            Container::new(
+                Flex::row()
+                    .with_child(label)
+                    .with_child(
+                        Flex::row()
+                            .with_child(credits_component)
+                            .with_child(cost_component)
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish(),
+            )
+            .with_margin_bottom(4.)
+            .finish(),
+        )
+    }
+
+    fn render_addon_credits_lower_section(
+        &self,
+        team_uid: ServerId,
+        state: &AddonCreditsPurchaseState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let fg = theme.foreground();
+        let auto_reload_enabled = state.auto_reload_enabled;
         let purchase_button_label = if self.addon_credits.purchase_loading {
             "Buying\u{2026}"
         } else {
             "One-time purchase"
         };
-        let purchase_button_font_color =
-            disabled.then_some(theme.disabled_text_color(theme.surface_3()).into());
-        let purchase_button_background_color = disabled.then_some(theme.surface_3().into());
-        let purchase_button_border_color = disabled.then_some(ColorU::transparent_black().into());
-        let mut purchase_button = ui_builder
+        let purchase_button_font_color = state
+            .purchase_disabled
+            .then_some(theme.disabled_text_color(theme.surface_3()).into());
+        let purchase_button_background_color =
+            state.purchase_disabled.then_some(theme.surface_3().into());
+        let purchase_button_border_color = state
+            .purchase_disabled
+            .then_some(ColorU::transparent_black().into());
+        let mut purchase_button = appearance
+            .ui_builder()
             .button(
                 ButtonVariant::Accent,
                 self.buy_credits_mouse_states.buy_button.clone(),
@@ -1240,83 +1548,53 @@ impl BillingAndUsagePageV2View {
                     team_uid,
                 });
             });
-        if disabled {
+        if state.purchase_disabled {
             purchase_button = purchase_button.disable();
         }
         let purchase_button = purchase_button.finish();
-
-        let auto_reload_credit_amount = selected_credit_option
-            .map(|o| format!("{} credits", o.credits.separate_with_commas()))
-            .unwrap_or_else(|| "selected credit amount".to_string());
-        let auto_reload_tooltip_text = format!(
-            "When any member on your team’s credit balance reaches 100 credits remaining, \
-            automatically purchase {auto_reload_credit_amount}."
-        );
-
-        let auto_reload_switch_element = {
-            let switch_builder = ui_builder
-                .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
-                .check(auto_reload_enabled);
-            let cannot_enable_auto_reload =
-                !auto_reload_enabled && selected_credit_option.is_none();
-            if !has_admin_permissions || delinquent || cannot_enable_auto_reload {
-                switch_builder.disable().build().finish()
-            } else {
-                switch_builder
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(
-                            BillingAndUsagePageAction::UpdateAutoReloadEnabled {
-                                team_uid,
-                                enabled: !auto_reload_enabled,
-                            },
-                        );
-                    })
-                    .finish()
-            }
-        };
-
-        let auto_reload_info_icon = render_info_icon(
-            appearance,
-            AdditionalInfo::<BillingAndUsagePageAction> {
-                mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
-                on_click_action: None,
-                secondary_text: None,
-                tooltip_override_text: Some(auto_reload_tooltip_text),
-            },
-        );
-
-        if has_admin_permissions || !auto_reload_enabled {
-            let denomination_row = Container::new(denomination_buttons_row).finish();
-            upper_section.add_child(denomination_row);
-        }
-
-        let card_upper = Container::new(upper_section.finish())
-            .with_horizontal_padding(16.)
-            .with_padding_top(16.)
-            .with_padding_bottom(16.)
-            .finish();
-
-        let price_label = selected_credit_option
-            .map(|opt| {
-                let credits = opt.credits.separate_with_commas();
-                let dollars = format!("${:.2}", opt.price_usd_cents as f64 / 100.0);
-                format!("{credits} credits / {dollars}")
-            })
-            .unwrap_or_default();
-
         let price_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Text::new_inline(price_label, appearance.ui_font_family(), 14.)
+                Text::new_inline(state.price_label.clone(), appearance.ui_font_family(), 14.)
                     .with_color(fg.into())
                     .with_style(Properties::default().weight(Weight::Medium))
                     .finish(),
             );
 
-        let right_group = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_children([
+        let mut right_group = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if state.has_admin_permissions {
+            let auto_reload_switch_element = {
+                let switch_builder = appearance
+                    .ui_builder()
+                    .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
+                    .check(auto_reload_enabled);
+                if state.auto_reload_switch_disabled {
+                    switch_builder.disable().build().finish()
+                } else {
+                    switch_builder
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(
+                                BillingAndUsagePageAction::UpdateAutoReloadEnabled {
+                                    team_uid,
+                                    enabled: !auto_reload_enabled,
+                                },
+                            );
+                        })
+                        .finish()
+                }
+            };
+            let auto_reload_info_icon = render_info_icon(
+                appearance,
+                AdditionalInfo::<BillingAndUsagePageAction> {
+                    mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
+                    on_click_action: None,
+                    secondary_text: None,
+                    tooltip_override_text: Some(state.auto_reload_tooltip_text.clone()),
+                },
+            );
+
+            right_group.add_children([
                 Text::new_inline("Auto-reload", appearance.ui_font_family(), 14.)
                     .with_color(fg.into())
                     .with_style(Properties::default().weight(Weight::Semibold))
@@ -1327,53 +1605,26 @@ impl BillingAndUsagePageV2View {
                 Container::new(auto_reload_switch_element)
                     .with_margin_left(8.)
                     .finish(),
-                Container::new(purchase_button)
-                    .with_margin_left(16.)
-                    .finish(),
-            ])
-            .finish();
-
+            ]);
+        }
+        right_group.add_child(
+            Container::new(purchase_button)
+                .with_margin_left(if state.has_admin_permissions { 16. } else { 0. })
+                .finish(),
+        );
         let lower_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_main_axis_size(MainAxisSize::Max)
             .with_child(price_row.finish())
-            .with_child(right_group);
-
+            .with_child(right_group.finish());
         let mut lower_children: Vec<Box<dyn Element>> = vec![lower_row.finish()];
 
-        if delinquent {
-            lower_children.push(self.render_warning_row(
-                appearance,
-                AUTO_RELOAD_DELINQUENT_WARNING_STRING.to_string(),
-            ));
-        } else if workspace
-            .billing_metadata
-            .has_failed_addon_credit_auto_reload_status()
-        {
-            lower_children.push(self.render_warning_row(
-                appearance,
-                RESTRICTED_BILLING_USAGE_WARNING_STRING.to_string(),
-            ));
-        } else if would_exceed {
-            let warning_text = match (auto_reload_enabled, has_admin_permissions) {
-                (true, true) => {
-                    "Auto-reload is paused because the next reload would exceed your monthly spend limit. Increase your limit to continue using auto-reload."
-                }
-                (true, false) => {
-                    "Auto-reload is paused because the next reload would exceed your team’s monthly spend limit. Contact a team admin to increase it."
-                }
-                (false, true) => {
-                    "This purchase would exceed your monthly limit. Increase your limit to continue."
-                }
-                (false, false) => {
-                    "This purchase would exceed your team’s monthly spend limit. Contact a team admin to increase it."
-                }
-            };
+        if let Some(warning_text) = state.warning_text {
             lower_children.push(self.render_warning_row(appearance, warning_text.to_string()));
         }
 
-        let card_lower = Container::new(
+        Container::new(
             Flex::column()
                 .with_children(lower_children)
                 .with_spacing(8.)
@@ -1381,16 +1632,6 @@ impl BillingAndUsagePageV2View {
         )
         .with_uniform_padding(16.)
         .with_border(Border::top(1.).with_border_color(theme.outline().into()))
-        .finish();
-
-        Container::new(
-            Flex::column()
-                .with_children([card_upper, card_lower])
-                .finish(),
-        )
-        .with_background_color(theme.surface_1().into_solid())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .with_margin_bottom(16.)
         .finish()
     }
 
@@ -1461,13 +1702,17 @@ impl BillingAndUsagePageV2View {
             }
         }
 
-        content.add_child(
-            Container::new(ChildView::new(&self.billing_cycle_usage_section).finish())
+        let mut billing_cycle_usage_section =
+            Container::new(ChildView::new(&self.billing_cycle_usage_section).finish());
+        if !content.is_empty() {
+            billing_cycle_usage_section = billing_cycle_usage_section
                 .with_margin_top(16.)
                 .with_padding_top(24.)
-                .with_border(Border::top(1.).with_border_color(appearance.theme().outline().into()))
-                .finish(),
-        );
+                .with_border(
+                    Border::top(1.).with_border_color(appearance.theme().outline().into()),
+                );
+        }
+        content.add_child(billing_cycle_usage_section.finish());
 
         content.finish()
     }
@@ -1870,7 +2115,9 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     let credits = auto_reload_denomination_credits
                         .map(|c| c.separate_with_commas())
                         .unwrap_or_else(|| "your selected".to_string());
-                    format!("Auto-reload enabled. We'll refill with {credits} credits when your balance runs low.")
+                    format!(
+                        "Auto-reload enabled. We'll refill with {credits} credits when your balance runs low."
+                    )
                 } else {
                     "Auto-reload disabled.".to_string()
                 });

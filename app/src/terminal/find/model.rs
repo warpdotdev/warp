@@ -6,33 +6,29 @@ mod rich_content;
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
 
-pub use async_find::{AsyncFindController, AsyncFindStatus};
-pub use block_list::{BlockGridMatch, BlockListFindRun, BlockListMatch};
-pub use rich_content::{FindableRichContentView, RichContentMatchId};
-
-use crate::terminal::block_list_element::GridType;
-use crate::terminal::block_list_viewport::InputMode;
-use crate::terminal::model::grid::grid_handler::GridHandler;
-use crate::terminal::model::index::Point;
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use alt_screen::{run_find_on_alt_screen, AltScreenFindRun};
+pub use async_find::{AsyncFindController, AsyncFindStatus};
+use block_list::run_find_on_block_list;
+pub use block_list::{BlockGridMatch, BlockListFindRun, BlockListMatch};
 use parking_lot::FairMutex;
+use rich_content::FindableRichContentHandle;
+pub use rich_content::{FindableRichContentView, RichContentMatchId};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle};
 
-use crate::{
-    settings::InputModeSettings,
-    terminal::model::{terminal_model::BlockIndex, TerminalModel},
-    view_components::find::{FindEvent, FindModel},
-};
-
-use crate::view_components::find::FindDirection;
-
-use block_list::run_find_on_block_list;
-use rich_content::FindableRichContentHandle;
+use crate::settings::InputModeSettings;
+use crate::terminal::block_list_element::GridType;
+use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::model::grid::grid_handler::GridHandler;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::model::TerminalModel;
+use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 
 /// Pre-computed find data for rendering a single block.
 ///

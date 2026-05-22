@@ -1,9 +1,8 @@
 use warp_util::path::user_friendly_path;
 
+use super::model::session::SessionType;
 use crate::terminal::model::block::Block;
 use crate::terminal::model::session::Sessions;
-
-use super::model::session::SessionType;
 
 pub fn home_dir_for_block(block: &Block, sessions: &Sessions) -> Option<String> {
     match block.session_id() {

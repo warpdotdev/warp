@@ -2,25 +2,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::ai::agent::api::convert_conversation::{
-    convert_input_context, convert_tool_call_result_to_input,
-};
-use crate::ai::agent::comment::CodeReview;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::todos::AIAgentTodoList;
-use crate::ai::agent::{
-    util::parse_markdown_into_text_and_code_sections, AIAgentAction, AIAgentActionType,
-    AIAgentCitation, AIAgentInput, AIAgentOutputMessage, AIAgentText, AIAgentTodo,
-    ArtifactCreatedData, MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
-    RunAgentsRequest, StartAgentExecutionMode, SuggestedAgentModeWorkflow, SuggestedRule,
-    Suggestions, TodoOperation,
-};
-use crate::ai::agent::{
-    CloneRepositoryURL, SubagentCall, SubagentType, SummarizationType, WebFetchStatus,
-    WebSearchStatus,
-};
-use crate::ai::artifact_download::sanitized_basename;
-use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use ai::agent::action::LifecycleEventType as StartAgentLifecycleEventType;
 use ai::agent::action_result::StartAgentVersion;
 use ai::agent::convert::ToolToAIAgentActionError;
@@ -30,7 +11,22 @@ use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
 use warp_multi_agent_api as api;
 
-use crate::ai::agent::{AIAgentAttachment, UserQueryMode};
+use crate::ai::agent::api::convert_conversation::{
+    convert_input_context, convert_tool_call_result_to_input,
+};
+use crate::ai::agent::comment::CodeReview;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
+    AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
+    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
+    StartAgentExecutionMode, SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule,
+    Suggestions, SummarizationType, TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+};
+use crate::ai::artifact_download::sanitized_basename;
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 
 impl TryFrom<api::Attachment> for AIAgentAttachment {
     type Error = anyhow::Error;
@@ -765,9 +761,8 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(request_computer_use.into())
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::{
-                    conversation_search_metadata::Target, Metadata,
-                };
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
+                use api::message::tool_call::subagent::Metadata;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,

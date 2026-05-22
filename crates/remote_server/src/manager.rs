@@ -6,32 +6,6 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
-use crate::auth::RemoteServerAuthContext;
-#[cfg(not(target_family = "wasm"))]
-use crate::client::ClientEvent;
-#[cfg(not(target_family = "wasm"))]
-use crate::client::InitializeParams;
-use crate::client::RemoteServerClient;
-use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
-use crate::proto::{
-    diff_state, get_diff_state_response, DiffMode, DiffState, DiffStateErrorValue,
-    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, FileStatusInfo,
-    GetDiffStateResponse, TextEdit,
-};
-use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
-use crate::setup::PreinstallCheckResult;
-#[cfg(not(target_family = "wasm"))]
-use crate::setup::PreinstallStatus;
-#[cfg(not(target_family = "wasm"))]
-use crate::setup::RemoteOs;
-use crate::setup::RemotePlatform;
-use crate::setup::RemoteServerSetupState;
-#[cfg(not(target_family = "wasm"))]
-use crate::setup::UnsupportedReason;
-#[cfg(not(target_family = "wasm"))]
-use crate::transport::Connection;
-use crate::transport::{Error, InstallSource, RemoteTransport};
-use crate::HostId;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
@@ -42,6 +16,31 @@ use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::FutureExt as _;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+
+use crate::auth::RemoteServerAuthContext;
+#[cfg(not(target_family = "wasm"))]
+use crate::client::ClientEvent;
+#[cfg(not(target_family = "wasm"))]
+use crate::client::InitializeParams;
+use crate::client::RemoteServerClient;
+use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
+use crate::proto::{
+    diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
+    DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
+    FileStatusInfo, GetDiffStateResponse, TextEdit,
+};
+use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
+#[cfg(not(target_family = "wasm"))]
+use crate::setup::PreinstallStatus;
+#[cfg(not(target_family = "wasm"))]
+use crate::setup::RemoteOs;
+#[cfg(not(target_family = "wasm"))]
+use crate::setup::UnsupportedReason;
+use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState};
+#[cfg(not(target_family = "wasm"))]
+use crate::transport::Connection;
+use crate::transport::{Error, InstallSource, RemoteTransport};
+use crate::HostId;
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;
@@ -62,6 +61,7 @@ struct ReconnectParams {
     exit_status: Option<RemoteServerExitStatus>,
     transport: Arc<dyn RemoteTransport>,
     auth_context: Arc<RemoteServerAuthContext>,
+    codebase_index_limits: Option<CodebaseIndexLimits>,
     control_path: Option<PathBuf>,
     identity_key: String,
 }
@@ -125,6 +125,7 @@ pub enum RemoteServerOperation {
     GetDiffState,
     DiscardFiles,
     GetBranches,
+    UploadHandoffSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -314,6 +315,9 @@ pub enum RemoteSessionState {
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
         control_path: Option<PathBuf>,
+        /// Tail buffer of the last N stderr lines from the proxy subprocess.
+        #[cfg(not(target_family = "wasm"))]
+        stderr_tail: crate::client::RemoteServerLog,
     },
     /// Initialize handshake succeeded. Client is ready for requests.
     Connected {
@@ -374,6 +378,9 @@ pub enum RemoteServerManagerEvent {
         /// Exit status of the SSH subprocess, if available.
         /// Used by telemetry to distinguish proxy crashes from other failures.
         exit_status: Option<RemoteServerExitStatus>,
+        /// Last lines from the proxy's stderr, if available.
+        /// Provides server-side context for why the proxy exited.
+        proxy_stderr: Option<String>,
         /// `true` when the failure is attributed to a user-initiated
         /// cancellation (session deregistered or transport-level
         /// disconnect) rather than a server-side error. Subscribers
@@ -674,6 +681,8 @@ pub struct RemoteServerManager {
     /// Detected remote platform per session, populated during the binary check
     /// phase via `detect_platform()`. Used for telemetry.
     session_platforms: HashMap<SessionId, RemotePlatform>,
+    /// Last client-resolved codebase index limits sent to remote daemons.
+    codebase_index_limits: Option<CodebaseIndexLimits>,
 }
 
 impl Entity for RemoteServerManager {
@@ -693,7 +702,15 @@ impl RemoteServerManager {
             session_bootstrap_info: HashMap::new(),
             auth_context: None,
             session_platforms: HashMap::new(),
+            codebase_index_limits: None,
         }
+    }
+
+    pub fn update_codebase_index_limits(
+        &mut self,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
+    ) {
+        self.codebase_index_limits = codebase_index_limits;
     }
 
     /// Returns a connected client for the given host by picking an arbitrary
@@ -1026,6 +1043,7 @@ impl RemoteServerManager {
             // for reconnection after a spontaneous disconnect.
             let transport: Arc<dyn RemoteTransport> = Arc::new(transport);
             let auth_context_for_task = Arc::clone(&auth_context);
+            let codebase_index_limits = self.codebase_index_limits;
             // Capture the identity key synchronously so it travels with the
             // session and can be used to filter token-rotation notifications.
             let identity_key = auth_context.remote_server_identity_key();
@@ -1036,6 +1054,7 @@ impl RemoteServerManager {
                         session_id,
                         &*transport,
                         &auth_context_for_task,
+                        codebase_index_limits,
                         &spawner,
                         &executor,
                     )
@@ -1067,12 +1086,13 @@ impl RemoteServerManager {
                             // to Disconnected while we wait so the session slot
                             // is not empty (an empty slot would be misread as
                             // "user deregistered" by the is_cancelled check).
-                            let maybe_child = spawner
+                            let maybe_child_and_stderr = spawner
                                 .spawn(move |me, _ctx| {
                                     match me.sessions.remove(&session_id) {
                                         Some(RemoteSessionState::Initializing {
                                             _child,
                                             control_path,
+                                            stderr_tail,
                                             ..
                                         }) => {
                                             me.sessions.insert(
@@ -1081,7 +1101,7 @@ impl RemoteServerManager {
                                                     control_path,
                                                 },
                                             );
-                                            Some(_child)
+                                            Some((_child, stderr_tail))
                                         }
                                         other => {
                                             // Put back whatever was there
@@ -1103,9 +1123,13 @@ impl RemoteServerManager {
                             // which is critical for ResponseChannelClosed
                             // errors where the non-blocking try_status()
                             // previously returned None due to a timing race.
-                            let exit_status = match maybe_child {
-                                Some(child) => Self::await_exit_status(child, session_id).await,
-                                None => None,
+                            let (exit_status, proxy_stderr) = match maybe_child_and_stderr {
+                                Some((child, stderr_tail)) => {
+                                    let status = Self::await_exit_status(child, session_id).await;
+                                    let stderr = stderr_tail.drain();
+                                    (status, stderr)
+                                }
+                                None => (None, None),
                             };
 
                             let _ = spawner
@@ -1137,6 +1161,7 @@ impl RemoteServerManager {
                                         phase,
                                         error,
                                         exit_status,
+                                        proxy_stderr,
                                         is_cancelled,
                                     });
                                     me.mark_session_disconnected(session_id, ctx);
@@ -1162,6 +1187,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         transport: &dyn RemoteTransport,
         auth_context: &RemoteServerAuthContext,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
         spawner: &ModelSpawner<Self>,
         executor: &Arc<warpui::r#async::executor::Background>,
     ) -> Result<InitializeHandshake, ConnectAndHandshakeError> {
@@ -1172,6 +1198,7 @@ impl RemoteServerManager {
             failure_rx,
             child,
             control_path,
+            stderr_tail,
         } = transport
             .connect(executor.clone())
             .await
@@ -1194,6 +1221,7 @@ impl RemoteServerManager {
                         client: client_for_init,
                         _child: child,
                         control_path,
+                        stderr_tail,
                     },
                 );
                 true
@@ -1216,6 +1244,7 @@ impl RemoteServerManager {
                     user_id: auth_context.user_id().to_owned(),
                     user_email: auth_context.user_email().to_owned(),
                     crash_reporting_enabled: auth_context.crash_reporting_enabled(),
+                    codebase_index_limits,
                 },
             )
             .await
@@ -1593,9 +1622,11 @@ impl RemoteServerManager {
                         log::info!(
                             "[Remote codebase indexing] Manager received codebase index mutation response: \
                              operation={operation:?} host={host_id} session={session_id:?} \
-                             remote_identity_key={remote_identity_key} repo_path={} state={:?}",
+                             remote_identity_key={remote_identity_key} repo_path={} state={:?} \
+                             failure_message={:?}",
                             status.repo_path,
-                            status.state
+                            status.state,
+                            status.failure_message
                         );
                         let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
                         let _ = spawner
@@ -2168,6 +2199,7 @@ impl RemoteServerManager {
             client,
             _child,
             control_path,
+            ..
         }) = self.sessions.remove(&session_id)
         else {
             return;
@@ -2401,6 +2433,7 @@ impl RemoteServerManager {
                     exit_status,
                     transport,
                     auth_context,
+                    codebase_index_limits: self.codebase_index_limits,
                     control_path,
                     identity_key,
                 },
@@ -2429,6 +2462,7 @@ impl RemoteServerManager {
             exit_status,
             transport,
             auth_context,
+            codebase_index_limits,
             control_path,
             identity_key,
         } = params;
@@ -2450,6 +2484,7 @@ impl RemoteServerManager {
         let executor = ctx.background_executor().clone();
         let transport_clone = Arc::clone(&transport);
         let auth_context_for_task = Arc::clone(&auth_context);
+        let codebase_index_limits_for_task = codebase_index_limits;
 
         ctx.background_executor()
             .spawn(async move {
@@ -2470,6 +2505,7 @@ impl RemoteServerManager {
                     session_id,
                     &*transport_clone,
                     &auth_context_for_task,
+                    codebase_index_limits_for_task,
                     &spawner,
                     &executor,
                 )
@@ -2527,6 +2563,7 @@ impl RemoteServerManager {
                                         exit_status,
                                         transport,
                                         auth_context,
+                                        codebase_index_limits,
                                         control_path,
                                         identity_key,
                                     },

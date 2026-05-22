@@ -9,11 +9,9 @@ mod websocket;
 // Re-export for macro use.
 #[doc(hidden)]
 pub use inventory::submit;
+pub use registration::{register_error, ErrorRegistration, RegisteredError};
 
 pub use self::anyhow::AnyhowErrorExt;
-pub use registration::{ErrorRegistration, RegisteredError};
-
-pub use registration::register_error;
 
 /// The `target` that is set by log entries from this module.
 pub const LOG_TARGET: &str = "errors::report_error";

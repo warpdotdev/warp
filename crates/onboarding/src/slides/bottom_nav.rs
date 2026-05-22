@@ -1,11 +1,10 @@
-use crate::slides::progress_dots;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        Align, Container, CrossAxisAlignment, Empty, Flex, MainAxisSize, ParentElement, Shrinkable,
-    },
-    Element,
+use warpui::elements::{
+    Align, Container, CrossAxisAlignment, Empty, Flex, MainAxisSize, ParentElement, Shrinkable,
 };
+use warpui::Element;
+
+use crate::slides::progress_dots;
 
 pub fn onboarding_bottom_nav(
     appearance: &Appearance,
