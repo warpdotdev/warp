@@ -1,20 +1,18 @@
-use super::agent_slide::AgentSlideAction;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::{
-    appearance::Appearance,
-    icons::Icon,
-    theme::{color::internal_colors, Fill},
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
+    Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Stack, Text,
 };
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Radius, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    Element,
-};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::Element;
+
+use super::agent_slide::AgentSlideAction;
 
 pub(super) struct TwoLineButtonSpec {
     pub(super) is_selected: bool,

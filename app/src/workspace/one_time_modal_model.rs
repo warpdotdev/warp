@@ -1,3 +1,7 @@
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
+
 use super::hoa_onboarding;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::auth::auth_manager::AuthManagerEvent;
@@ -9,9 +13,6 @@ use crate::settings::cloud_preferences_syncer::{
 use crate::settings::{AISettings, CodeSettings};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::session_settings::{AgentToolbarChipSelection, SessionSettings};
-use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
 /// A generic model for managing one-time modals that should be shown to users only once.
 ///

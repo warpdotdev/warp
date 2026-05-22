@@ -1,24 +1,17 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use warp_util::{
-    local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
-use crate::{
-    ai_assistant::execution_context::WarpAiExecutionContext,
-    terminal::{
-        model::session::SessionsEvent,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        shell::ShellType,
-        ShellLaunchData,
-    },
-};
-
 use super::{Session, SessionType, Sessions};
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::terminal::model::session::SessionsEvent;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
+use crate::terminal::ShellLaunchData;
 
 pub struct ActiveSession {
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,

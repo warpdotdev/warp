@@ -1,8 +1,8 @@
 use warp_completer::util::parse_current_commands_and_tokens;
 
-use crate::{Context, test_utils::CompletionContext};
-
 use super::*;
+use crate::Context;
+use crate::test_utils::CompletionContext;
 
 async fn mock_parsed_input_token(buffer_text: String) -> ParsedTokensSnapshot {
     let completion_context = CompletionContext::new();

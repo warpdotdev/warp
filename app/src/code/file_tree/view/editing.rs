@@ -4,22 +4,20 @@
 #[path = "editing_tests.rs"]
 mod tests;
 
-use repo_metadata::file_tree_store::FileTreeEntryState;
-use repo_metadata::{FileMetadata, FileTreeEntry};
 use std::cmp::Ordering;
 use std::sync::Arc;
+
+use repo_metadata::file_tree_store::FileTreeEntryState;
+use repo_metadata::{FileMetadata, FileTreeEntry};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{elements::MouseStateHandle, ViewContext};
+use warpui::elements::MouseStateHandle;
+use warpui::ViewContext;
 
 use super::{FileTreeIdentifier, FileTreeItem, FileTreeView};
-use crate::{
-    code::file_tree::{
-        view::{PendingEdit, PendingEditKind},
-        FileTreeEvent,
-    },
-    send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-};
+use crate::code::file_tree::view::{PendingEdit, PendingEditKind};
+use crate::code::file_tree::FileTreeEvent;
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::TelemetryEvent;
 
 /// Custom ordering function for items in the file tree.
 ///

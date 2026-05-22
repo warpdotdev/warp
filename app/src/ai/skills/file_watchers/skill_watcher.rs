@@ -1,35 +1,29 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use super::{
-    subscribers::{
-        HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
-    },
-    utils::{
-        find_skill_directories_in_tree, is_home_provider_path, is_home_skill_directory,
-        is_skill_file, read_skills_from_directories,
-    },
-};
-use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
-
-use crate::server::datetime_ext::DateTimeExt;
-use crate::warp_managed_paths_watcher::{
-    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
-    WarpManagedPathsWatcherEvent,
-};
 use ai::skills::{
     home_skills_path, parse_skill, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use async_channel::Sender;
 use chrono::{DateTime, Duration, Utc};
-use repo_metadata::{
-    repositories::DetectedRepositories,
-    repository::{Repository, SubscriberId},
-    DirectoryWatcher, RepoMetadataModel, RepositoryUpdate,
-};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::repository::{Repository, SubscriberId};
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+
+use super::subscribers::{
+    HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
+};
+use super::utils::{
+    find_skill_directories_in_tree, is_home_provider_path, is_home_skill_directory, is_skill_file,
+    read_skills_from_directories,
+};
+use crate::server::datetime_ext::DateTimeExt;
+use crate::warp_managed_paths_watcher::{
+    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
+    WarpManagedPathsWatcherEvent,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum SkillWatcherEvent {

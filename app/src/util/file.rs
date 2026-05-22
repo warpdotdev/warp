@@ -1,17 +1,15 @@
 pub mod external_editor;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 #[cfg(windows)]
 use warp_util::path::is_network_resource;
 use warp_util::path::{CleanPathResult, LineAndColumnArg};
 
+pub use self::external_editor::{open_file_path_in_external_editor, open_file_path_with_editor};
 use crate::terminal::model::grid::grid_handler::{ContainsPoint, Link};
 use crate::terminal::model::index::Point;
 use crate::terminal::ShellLaunchData;
-
-pub use self::external_editor::{open_file_path_in_external_editor, open_file_path_with_editor};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FilePathType {

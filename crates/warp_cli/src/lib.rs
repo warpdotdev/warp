@@ -1,10 +1,10 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use std::{env, fmt, path::Path};
+use std::path::Path;
+use std::{env, fmt};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use url::Url;
-
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 

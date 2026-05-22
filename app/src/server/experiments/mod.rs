@@ -11,16 +11,17 @@
 //! See [here](https://www.notion.so/warpdev/Server-side-experiments-dynamic-feature-enablement-c0fb9aed695d4178a19b8830e3269094)
 //! for a full guide on the server-side experiment framework.
 
-use crate::features::FeatureFlag;
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::CustomerType;
 use settings::Setting;
 use warpui::AppContext;
 #[cfg(not(test))]
 use warpui::SingletonEntity as _;
 #[cfg(test)]
 use warpui::SingletonEntity;
+
+use crate::features::FeatureFlag;
+use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
 
 mod convert;
 mod model;

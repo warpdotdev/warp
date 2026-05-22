@@ -1,3 +1,17 @@
+use std::default::Default;
+
+use warp_core::ui::appearance::Appearance;
+use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
+use super::shared_objects_creation_denied_body::{
+    SharedObjectsCreationDeniedBody, SharedObjectsCreationDeniedBodyEvent,
+};
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
 use crate::modal::{Modal, ModalEvent};
@@ -6,20 +20,6 @@ use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-use std::default::Default;
-use warp_core::ui::appearance::Appearance;
-use warpui::fonts::Weight;
-use warpui::keymap::FixedBinding;
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::AppContext;
-use warpui::SingletonEntity;
-use warpui::ViewHandle;
-use warpui::{Element, Entity, TypedActionView, View, ViewContext};
-
-use super::shared_objects_creation_denied_body::{
-    SharedObjectsCreationDeniedBody, SharedObjectsCreationDeniedBodyEvent,
-};
 
 const DEFAULT_LIMIT_REACHED_MODAL_HEADER: &str = "Shared object limit reached";
 

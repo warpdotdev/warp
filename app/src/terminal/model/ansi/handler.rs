@@ -7,15 +7,16 @@ use warpui::color::ColorU;
 
 use super::dcs_hooks::*;
 use super::ProcessorInput;
-use crate::terminal::model::completions::{ShellCompletion, ShellCompletionUpdate};
+use crate::terminal::model::completions::{
+    ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
+};
 use crate::terminal::model::image_map::StoredImageMetadata;
+use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::kitty::{KittyAction, KittyChunk, KittyResponse};
+use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::terminal_model::TmuxInstallationState;
-use crate::terminal::model::{
-    completions::ShellData as CompletionsShellData, index::VisibleRow, selection::ScrollDelta,
-    tmux::ControlModeEvent,
-};
+use crate::terminal::model::tmux::ControlModeEvent;
 
 /// Trait to be implemented by model objects that handle pty output. The
 /// ansi::Performer (our pty output parser) delegates handling of specific

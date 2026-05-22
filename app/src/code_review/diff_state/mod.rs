@@ -5,18 +5,18 @@
 //! operations to whichever is active.
 //! All consumers should use `DiffStateModel` rather than accessing sub-models directly.
 
-use crate::util::git::{BranchEntry, Commit, PrInfo};
-use warp_core::SessionId;
-use warp_util::remote_path::RemotePath;
-use warpui::{AppContext, ModelContext, ModelHandle};
-
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use warp_core::SessionId;
+use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::{AppContext, ModelContext, ModelHandle};
 
 use crate::code_review::diff_size_limits::DiffSize;
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
 #[cfg(feature = "local_fs")]
@@ -527,19 +527,21 @@ impl DiffStateModel {
         }
     }
 
-    pub(crate) fn load_diffs_for_current_repo(&self, force: bool, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn load_diffs_for_current_repo(
+        &self,
+        should_fetch_base: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match self {
             Self::Local(local) => {
                 local.update(ctx, |local, ctx| {
-                    local.load_diffs_for_current_repo(force, ctx);
+                    local.load_diffs_for_current_repo(should_fetch_base, ctx);
                 });
             }
             Self::Remote(remote) => {
-                if force {
-                    remote.update(ctx, |remote, ctx| {
-                        remote.replay_latest_diffs(ctx);
-                    });
-                }
+                remote.update(ctx, |remote, ctx| {
+                    remote.fetch_fresh_snapshot(ctx);
+                });
             }
         }
     }

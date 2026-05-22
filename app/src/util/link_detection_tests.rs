@@ -1,6 +1,6 @@
-use super::*;
-
 use itertools::Itertools;
+
+use super::*;
 
 #[test]
 fn test_possible_file_paths_in_word() {

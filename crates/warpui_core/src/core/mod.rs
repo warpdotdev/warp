@@ -6,34 +6,32 @@ mod model;
 mod view;
 mod window;
 
+use std::any::{Any, TypeId};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug};
+use std::hash::Hash;
+use std::mem;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
 pub use action::*;
+use anyhow::Error;
 pub use app::*;
 pub use autotracking::Tracked;
+use derivative::Derivative;
 pub use entity::*;
+use futures_util::future::BoxFuture;
 pub use model::*;
+use pathfinder_geometry::rect::RectF;
+use serde::{Deserialize, Serialize};
 pub use view::*;
 pub use window::*;
 
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
-use crate::{keymap, Element};
-use anyhow::Error;
-
 use crate::rendering::OnGPUDeviceSelected;
-use derivative::Derivative;
-use futures_util::future::BoxFuture;
-use pathfinder_geometry::rect::RectF;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::rc::Rc;
-use std::time::Duration;
-use std::{
-    any::{Any, TypeId},
-    collections::{HashMap, HashSet},
-    fmt::{self, Debug},
-    hash::Hash,
-    mem,
-    sync::{atomic::AtomicUsize, atomic::Ordering},
-};
+use crate::{keymap, Element};
 
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]

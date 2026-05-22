@@ -37,16 +37,13 @@
 //! * [`AnyMultilineString::to_line_ending`] or [`AnyMultilineString::into_line_ending`] to convert
 //!   to a line ending known at runtime
 
-use std::{
-    borrow::{Borrow, Cow},
-    fmt,
-    marker::PhantomData,
-    ops::Deref,
-};
+use std::borrow::{Borrow, Cow};
+use std::fmt;
+use std::marker::PhantomData;
+use std::ops::Deref;
 
 use itertools::Itertools as _;
 use line_ending::LineEnding;
-
 use warp_core::platform::SessionPlatform;
 
 /// A line ending format. This is the compile-time equivalent to [`LineEnding`].

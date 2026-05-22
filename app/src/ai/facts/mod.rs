@@ -1,19 +1,20 @@
-use crate::ai::agent::SuggestedLoggingId;
-use crate::drive::items::{ai_fact::WarpDriveAIFact, WarpDriveItem};
-use crate::server::{ids::SyncId, sync_queue::QueueItem};
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    drive::CloudObjectTypeAndId,
-};
 use serde::{Deserialize, Serialize};
 use warp_core::ui::appearance::Appearance;
+
+use crate::ai::agent::SuggestedLoggingId;
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::drive::items::ai_fact::WarpDriveAIFact;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
 
 pub mod manager;
 pub mod view;
@@ -88,13 +89,6 @@ impl StringModel for AIFact {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::AIFact(server_ai_fact) = server_cloud_object {
-            return Some(server_ai_fact.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

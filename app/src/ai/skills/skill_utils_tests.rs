@@ -1,6 +1,8 @@
-use super::*;
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use std::path::PathBuf;
+
+use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+
+use super::*;
 
 #[test]
 fn test_skill_path_from_file_path_skill_md() {

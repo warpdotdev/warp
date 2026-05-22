@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 
+use chrono::{DateTime, FixedOffset};
 use settings::Setting as _;
 
-use crate::{
-    report_if_error, terminal::general_settings::GeneralSettings,
-    util::bindings::trigger_to_keystroke,
-};
-
-use chrono::{DateTime, FixedOffset};
+use crate::report_if_error;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::util::bindings::trigger_to_keystroke;
 
 mod main_page;
 pub mod utils;
@@ -20,7 +18,8 @@ pub mod sections;
 mod view;
 use serde::{Deserialize, Serialize};
 pub use view::{ResourceCenterAction, ResourceCenterEvent, ResourceCenterPage, ResourceCenterView};
-use warpui::{keymap::Keystroke, AppContext, Entity, SingletonEntity};
+use warpui::keymap::Keystroke;
+use warpui::{AppContext, Entity, SingletonEntity};
 
 use self::section_views::feature_section::FeatureSection;
 

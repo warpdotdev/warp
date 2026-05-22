@@ -1,28 +1,28 @@
-use ::ai::index::full_source_code_embedding::{
-    store_client::StoreClient, ContentHash, Fragment, RepoMetadata,
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use ::ai::index::full_source_code_embedding::store_client::StoreClient;
+use ::ai::index::full_source_code_embedding::{ContentHash, Fragment, RepoMetadata};
 use itertools::Itertools;
 use remote_server::proto::{
     file_context_proto, FragmentMetadata, LineRange, ReadFileContextFile, ReadFileContextRequest,
     ReadFileContextResponse,
 };
-use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 use string_offset::ByteOffset;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult},
-        blocklist::SessionContext,
-    },
-    features::FeatureFlag,
-    remote_server::codebase_index_model::{
-        RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
-    },
-    server::server_api::{ServerApi, ServerApiProvider},
+use crate::ai::agent::{
+    AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult,
 };
-
+use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::features::FeatureFlag;
+use crate::remote_server::codebase_index_model::{
+    RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
+};
+use crate::server::server_api::{ServerApi, ServerApiProvider};
 
 pub(super) enum RemoteSearchRequest {
     Pending(futures_util::stream::AbortHandle),

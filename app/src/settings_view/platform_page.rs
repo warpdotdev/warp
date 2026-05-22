@@ -1,46 +1,43 @@
-use super::{
-    platform::{
-        CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
-        ExpireApiKeyButtonEvent,
-    },
-    settings_page::{
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-        CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
-    },
-    SettingsSection,
-};
-use crate::auth::AuthStateProvider;
-use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    modal::{Modal, ModalEvent, ModalViewState},
-    search_bar::SearchBar,
-    ui_components::icons::Icon,
-    util::time_format::format_approx_duration_from_now_utc,
-};
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
-use warpui::text_layout::ClipConfig;
-use warpui::{
-    elements::{
-        resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
-        CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
-        ResizableStateHandle, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+use warp_graphql::object_permissions::OwnerType;
+use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
+use warpui::elements::{
+    resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
+    CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
+    ResizableStateHandle, Shrinkable, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::platform::{
+    CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
+    ExpireApiKeyButtonEvent,
+};
+use super::settings_page::{
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
+};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::search_bar::SearchBar;
+use crate::server::ids::ApiKeyUid;
+use crate::server::server_api::auth::AuthClient;
+use crate::ui_components::icons::Icon;
+use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
@@ -140,32 +137,9 @@ impl PlatformPageView {
                         me.api_keys = keys
                             .into_iter()
                             .map(|gql_key| {
-                                // Ensure the per-key expire button exists
-                                let uid = gql_key.uid.into_inner();
-                                me.ensure_expire_button_for_key(ctx, uid.clone());
-                                let agent_name = gql_key.agent_info.map(|agent| agent.name);
-                                let scope = if agent_name.is_some() {
-                                    ApiKeyScope::Agent
-                                } else {
-                                    match gql_key.owner_type {
-                                        warp_graphql::object_permissions::OwnerType::User => {
-                                            ApiKeyScope::Personal
-                                        }
-                                        warp_graphql::object_permissions::OwnerType::Team => {
-                                            ApiKeyScope::Team
-                                        }
-                                    }
-                                };
-                                APIKeyProperties {
-                                    uid,
-                                    name: gql_key.name,
-                                    key_suffix: gql_key.key_suffix,
-                                    scope,
-                                    created_at: gql_key.created_at.utc(),
-                                    last_used_at: gql_key.last_used_at.map(|t| t.utc()),
-                                    expires_at: gql_key.expires_at.map(|t| t.utc()),
-                                    agent_name,
-                                }
+                                let ui_key = APIKeyProperties::from(&gql_key);
+                                me.ensure_expire_button_for_key(ctx, ui_key.uid.clone());
+                                ui_key
                             })
                             .collect();
                         ctx.notify();
@@ -293,27 +267,8 @@ impl PlatformPageView {
             CreateApiKeyModalEvent::Created { api_key } => {
                 self.create_api_key_modal_state
                     .set_title(Some("Save your key".to_string()), ctx);
-                let uid = api_key.uid.clone().into_inner();
-                self.ensure_expire_button_for_key(ctx, uid.clone());
-                let agent_name = api_key.agent_info.as_ref().map(|agent| agent.name.clone());
-                let scope = if agent_name.is_some() {
-                    ApiKeyScope::Agent
-                } else {
-                    match api_key.owner_type {
-                        warp_graphql::object_permissions::OwnerType::User => ApiKeyScope::Personal,
-                        warp_graphql::object_permissions::OwnerType::Team => ApiKeyScope::Team,
-                    }
-                };
-                let ui_key = APIKeyProperties {
-                    uid,
-                    name: api_key.name.clone(),
-                    key_suffix: api_key.key_suffix.clone(),
-                    scope,
-                    created_at: api_key.created_at.utc(),
-                    last_used_at: api_key.last_used_at.map(|t| t.utc()),
-                    expires_at: api_key.expires_at.map(|t| t.utc()),
-                    agent_name,
-                };
+                let ui_key = APIKeyProperties::from(api_key);
+                self.ensure_expire_button_for_key(ctx, ui_key.uid.clone());
                 self.api_keys.push(ui_key);
                 ctx.notify();
             }
@@ -450,6 +405,31 @@ impl APIKeyProperties {
                     .agent_name
                     .as_ref()
                     .is_some_and(|agent_name| agent_name.to_lowercase().contains(&needle)))
+    }
+}
+
+impl From<&GqlApiKeyProperties> for APIKeyProperties {
+    fn from(gql_key: &GqlApiKeyProperties) -> Self {
+        let agent_name = gql_key.agent_info.as_ref().map(|agent| agent.name.clone());
+        let scope = if agent_name.is_some() {
+            ApiKeyScope::Agent
+        } else {
+            match gql_key.owner_type {
+                OwnerType::User => ApiKeyScope::Personal,
+                OwnerType::Team => ApiKeyScope::Team,
+            }
+        };
+
+        Self {
+            uid: gql_key.uid.clone().into_inner(),
+            name: gql_key.name.clone(),
+            key_suffix: gql_key.key_suffix.clone(),
+            scope,
+            agent_name,
+            created_at: gql_key.created_at.utc(),
+            last_used_at: gql_key.last_used_at.map(|t| t.utc()),
+            expires_at: gql_key.expires_at.map(|t| t.utc()),
+        }
     }
 }
 

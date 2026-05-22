@@ -1,9 +1,7 @@
 use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
-use warp_core::{
-    register_telemetry_event,
-    telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc},
-};
+use warp_core::register_telemetry_event;
+use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
 #[derive(Clone, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]

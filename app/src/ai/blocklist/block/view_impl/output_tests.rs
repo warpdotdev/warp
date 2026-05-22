@@ -1,8 +1,7 @@
 use ai::agent::action::UploadArtifactRequest;
 
-use crate::ai::agent::UploadArtifactResult;
-
 use super::format_upload_artifact_text;
+use crate::ai::agent::UploadArtifactResult;
 
 #[test]
 fn format_upload_artifact_text_includes_request_details() {

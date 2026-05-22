@@ -1,8 +1,7 @@
 use std::num::NonZeroU16;
 
-use crate::model::grid::FlatStorage;
-
 use super::*;
+use crate::model::grid::FlatStorage;
 
 const ASCII_GRAPHEME_INFO: GraphemeInfo = GraphemeInfo {
     cell_width: 1,

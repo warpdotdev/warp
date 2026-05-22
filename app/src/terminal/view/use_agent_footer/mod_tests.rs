@@ -4,33 +4,28 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::settings::Setting as _;
 use warpui::{App, AppContext, SingletonEntity, ViewContext};
 
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentInput, ServerOutputId,
-            UserQueryMode,
-        },
-        blocklist::{
-            agent_view::AgentViewEntryOrigin,
-            block::cli_controller::UserTakeOverReason,
-            model::{AIBlockModel, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback},
-            AIBlock, ClientIdentifiers,
-        },
-        llms::LLMId,
-    },
-    features::FeatureFlag,
-    settings::AISettings,
-    terminal::cli_agent_sessions::{
-        CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
-        CLIAgentSessionsModel,
-    },
-    terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue},
-    terminal::CLIAgent,
-    test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view},
-};
-
 use super::super::{AIBlockMetadata, RichContentMetadata, RichContentType};
 use super::*;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentInput, ServerOutputId, UserQueryMode};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+use crate::ai::blocklist::model::{
+    AIBlockModel, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
+};
+use crate::ai::blocklist::{AIBlock, ClientIdentifiers};
+use crate::ai::llms::LLMId;
+use crate::features::FeatureFlag;
+use crate::settings::AISettings;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    CLIAgentSessionsModel,
+};
+use crate::terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue};
+use crate::terminal::CLIAgent;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 struct PendingAIBlockModel {
     conversation_id: AIConversationId,

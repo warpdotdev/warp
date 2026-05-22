@@ -1,11 +1,13 @@
-use std::{collections::HashMap, ffi::OsString, path::PathBuf};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::attachment_utils::attachments_download_dir;
 use warp_cli::agent::Harness;
 use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::attachment_utils::attachments_download_dir;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequestId};
 use crate::ai::llms::LLMPreferences;

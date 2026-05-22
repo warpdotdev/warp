@@ -1,83 +1,69 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::Local;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::Arc;
+use settings::Setting;
 use thousands::Separable;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
 use warp_graphql::billing::AddonCreditsOption;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkUrl, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
 use warpui::prelude::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Empty, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkUrl,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Radius, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
     ViewContext, ViewHandle,
 };
 
-use settings::Setting;
-
-use crate::{
-    ai::AIRequestUsageModel,
-    auth::{
-        auth_manager::LoginGatedFeature, auth_state::AuthState, auth_view_modal::AuthViewVariant,
-        AuthManager, AuthStateProvider, UserUid,
-    },
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields},
-    modal::{Modal, ModalEvent, ModalViewState},
-    pricing::{PricingInfoModel, PricingInfoModelEvent},
-    send_telemetry_from_ctx,
-    server::{ids::ServerId, telemetry::TelemetryEvent},
-    settings::ai::AISettings,
-    settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING,
-    ui_components::{
-        blended_colors,
-        buttons::icon_button,
-        icons::Icon,
-        menu_button::{icon_button_with_context_menu, MenuDirection},
-        tab_selector::{self, SettingsTab},
-    },
-    view_components::{
-        action_button::{ActionButton, PrimaryTheme, SecondaryTheme},
-        ToastFlavor,
-    },
-    workspaces::{
-        team::Team,
-        update_manager::TeamUpdateManager,
-        user_profiles::UserProfiles,
-        user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-        workspace::{CustomerType, Workspace},
-    },
-    WorkspaceAction,
+use super::admin_actions::AdminActions;
+use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
+use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
+use super::billing_and_usage::usage_history_model::UsageHistoryModel;
+use super::settings_page::{
+    build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
+    AdditionalInfo, HEADER_PADDING,
 };
-
-use super::{
-    admin_actions::AdminActions,
-    billing_and_usage::{
-        overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent},
-        usage_history_entry::UsageHistoryEntry,
-        usage_history_model::UsageHistoryModel,
-    },
-    settings_page::{
-        build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
-        AdditionalInfo, HEADER_PADDING,
-    },
-    SettingsSection,
-};
+use super::SettingsSection;
+use crate::ai::AIRequestUsageModel;
+use crate::auth::auth_manager::LoginGatedFeature;
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthManager, AuthStateProvider, UserUid};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
+use crate::server::ids::ServerId;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::ai::AISettings;
+use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::tab_selector::{self, SettingsTab};
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::view_components::ToastFlavor;
+use crate::workspaces::team::Team;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::{CustomerType, Workspace};
+use crate::{send_telemetry_from_ctx, WorkspaceAction};
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const OVERAGE_USAGE_LINK_TEXT: &str = "View details on overage usage";
@@ -3596,8 +3582,10 @@ impl BillingAndUsagePageView {
                     right_side.add_child(admin_actions);
                 }
 
-                let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
-                right_side.add_child(admin_panel_button);
+                if team.billing_metadata.is_enterprise_plan() {
+                    let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
+                    right_side.add_child(admin_panel_button);
+                }
             }
         } else {
             let (plan_badge, compare_plans_button) =

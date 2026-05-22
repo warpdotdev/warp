@@ -10,8 +10,10 @@ mod types;
 /// searching if the main Warp process has exited.
 #[cfg(unix)]
 pub fn monitor_parent_and_exit_on_change(parent_pid: Option<u32>) {
+    use std::thread;
+    use std::time::Duration;
+
     use nix::unistd::Pid;
-    use std::{thread, time::Duration};
 
     let expected_parent = match parent_pid {
         Some(pid) => Pid::from_raw(pid as i32),

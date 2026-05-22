@@ -1,24 +1,21 @@
-use warpui::{
-    elements::{
-        Border, Clipped, Container, CornerRadius, Dismiss, Empty, Flex, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::Weight,
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, ViewHandle,
+use warpui::elements::{
+    Border, Clipped, Container, CornerRadius, Dismiss, Empty, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, ViewHandle};
 
+use super::index::DriveIndexAction;
+use super::DriveObjectType;
+use crate::appearance::Appearance;
 use crate::cloud_object::Space;
-use crate::{
-    appearance::Appearance, editor::EditorView, server::ids::SyncId, ui_components::blended_colors,
-};
-
-use super::{index::DriveIndexAction, DriveObjectType};
+use crate::editor::EditorView;
+use crate::server::ids::SyncId;
+use crate::ui_components::blended_colors;
 
 const DIALOG_PADDING: f32 = 24.;
 const INPUT_MARGIN_TOP: f32 = 16.;

@@ -9,74 +9,65 @@ use std::{
     time::Duration,
 };
 
+use ai::diff_validation::DiffType;
 use futures::stream::AbortHandle;
+use lsp::types::FileLocation;
 use lsp::{
-    types::FileLocation, LanguageId, LanguageServerId, LspEvent, LspManagerModel,
-    LspManagerModelEvent, LspServerModel, ReferenceLocation,
+    LanguageId, LanguageServerId, LspEvent, LspManagerModel, LspManagerModelEvent, LspServerModel,
+    ReferenceLocation,
 };
 use lsp_types::FormattingOptions;
 use markdown_parser::FormattedText;
 use num_traits::SaturatingSub;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
-use string_offset::CharOffset;
-use vec1::Vec1;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
-use warp_editor::{
-    content::{buffer::InitialBufferState, text::IndentUnit},
-    render::model::{Decoration, LineCount},
-};
-use warp_util::{
-    content_version::ContentVersion,
-    file::{FileId, FileLoadError, FileSaveError},
-    path::to_relative_path,
-    sync::Condition,
-};
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, DropShadow, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Radius, Rect, Shrinkable, Stack, Text,
-    },
-    keymap::{macros::*, FixedBinding},
-    text::point::Point,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-    WindowId,
-};
-use warpui::{platform::SaveFilePickerConfiguration, ModelHandle};
-
-use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
-
-use crate::{
-    code::{
-        buffer_location::LocalOrRemotePath as BufferFileLocation,
-        editor::model::HoverableLink,
-        footer::{CodeFooterView, CodeFooterViewEvent},
-        global_buffer_model::{BufferState, GlobalBufferModel},
-        SaveOutcome, ShowFindReferencesCardProvider,
-    },
-    debounce::debounce,
-    settings::AISettings,
-    terminal::TerminalView,
-};
-use crate::{
-    code::{editor::EditorReviewComment, global_buffer_model::GlobalBufferModelEvent},
-    code_review::comments::CommentId,
-};
-use ai::diff_validation::DiffType;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
+use string_offset::CharOffset;
+use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::content::text::IndentUnit;
+use warp_editor::render::model::{Decoration, LineCount};
+use warp_util::content_version::ContentVersion;
+use warp_util::file::{FileId, FileLoadError, FileSaveError};
 #[cfg(feature = "local_fs")]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::path::to_relative_path;
+use warp_util::sync::Condition;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DropShadow, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+    Rect, Shrinkable, Stack, Text,
+};
+use warpui::keymap::macros::*;
+use warpui::keymap::FixedBinding;
+use warpui::platform::SaveFilePickerConfiguration;
+use warpui::text::point::Point;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WindowId,
+};
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
+use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
+use crate::code::editor::model::HoverableLink;
+use crate::code::editor::EditorReviewComment;
+use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
+use crate::code::global_buffer_model::{BufferState, GlobalBufferModel, GlobalBufferModelEvent};
+use crate::code::{SaveOutcome, ShowFindReferencesCardProvider};
+use crate::code_review::comments::CommentId;
+use crate::debounce::debounce;
+use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
+use crate::settings::AISettings;
+use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 
 const DROP_SHADOW_COLOR: ColorU = ColorU {
@@ -88,16 +79,15 @@ const DROP_SHADOW_COLOR: ColorU = ColorU {
 
 const HOVER_DEBOUNCE_PERIOD: Duration = Duration::from_millis(500);
 
+use warp_core::send_telemetry_from_ctx;
+
 use super::diff_viewer::DiffViewer;
-use super::editor::{
-    scroll::{ScrollPosition, ScrollTrigger},
-    view::{CodeEditorEvent, CodeEditorView},
-};
+use super::editor::scroll::{ScrollPosition, ScrollTrigger};
+use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::find_references_view::{FindReferencesView, FindReferencesViewEvent};
 use super::language_server_extension::ProcessedDiagnostic;
 use super::lsp_telemetry::LspTelemetryEvent;
 use super::ImmediateSaveError;
-use warp_core::send_telemetry_from_ctx;
 
 type SaveCallback =
     Box<dyn FnOnce(SaveOutcome, &mut ViewContext<LocalCodeEditorView>) + Send + Sync + 'static>;

@@ -1,15 +1,17 @@
-use std::{future::Future, path::PathBuf, pin::Pin};
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 
 use async_channel::Sender;
 use lsp_types::FileChangeType;
-use repo_metadata::{
-    repository::{RepositorySubscriber, SubscriberId},
-    DirectoryWatcher, Repository, RepositoryUpdate,
-};
+use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
+use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity, WeakModelHandle};
 
-use crate::{model::LspServerModel, types::WatchedFileChangeEvent, LspServerConfig};
+use crate::model::LspServerModel;
+use crate::types::WatchedFileChangeEvent;
+use crate::LspServerConfig;
 
 enum RepoWatchState {
     NotWatching,

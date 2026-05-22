@@ -1,14 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use itertools::Itertools;
 use similar::DiffableStr;
 use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
 use warpui::platform::Cursor;
 
-use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
-use crate::terminal::model::secrets::{SecretLevel, REGEX_LEVEL_METADATA, SECRETS_REGEX};
-
 use super::{AIBlockAction, TextLocation};
+use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
+use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 
@@ -22,11 +22,20 @@ pub(crate) fn find_secrets_in_text(text: &str) -> Vec<SecretRange> {
 
 /// Returns the ranges of detected secrets in the given text along with their SecretLevel.
 pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, SecretLevel)> {
-    // Combine all regex patterns into a single regex pattern with non-capturing groups, for efficiency.
-    // Note that we purposely use regex::Regex instead of RegexDFAs since we are working a Text (containing
-    // a normal String) rather than the Grid (where text is in Cells with 1 character each).
-    let regex = SECRETS_REGEX.read();
-    let metadata = REGEX_LEVEL_METADATA.read();
+    let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };
+
+    find_secrets_in_text_with_levels_using_regex(text, &secrets_regex)
+}
+
+pub(crate) fn find_secrets_in_text_with_levels_using_regex(
+    text: &str,
+    secrets_regex: &SecretsRegex,
+) -> Vec<(SecretRange, SecretLevel)> {
+    let SecretsRegex {
+        regex,
+        level_metadata,
+        ..
+    } = secrets_regex;
 
     let mut secret_ranges = vec![];
     let mut byte_to_char_index = vec![0; text.len() + 1]; // Map byte index to char index
@@ -49,12 +58,12 @@ pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, 
 
         // Determine which pattern matched by getting the pattern ID and map via counts
         let pattern_id = mat.pattern().as_usize();
-        let total_patterns = metadata.enterprise_count + metadata.user_count;
+        let total_patterns = level_metadata.enterprise_count + level_metadata.user_count;
         if pattern_id >= total_patterns {
             log::error!("Secret level not found for pattern ID {pattern_id}");
             continue;
         }
-        let secret_level = if pattern_id < metadata.enterprise_count {
+        let secret_level = if pattern_id < level_metadata.enterprise_count {
             SecretLevel::Enterprise
         } else {
             SecretLevel::User

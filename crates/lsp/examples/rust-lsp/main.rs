@@ -6,21 +6,18 @@
 //! - Core LSP features: go-to-definition, hover, completion, symbols
 //! - Proper shutdown and error handling
 
-use std::{
-    env,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use log::LevelFilter;
-use lsp::{
-    spawn_lsp_service, supported_servers::LSPServerType, LspServerConfig, LspService,
-    LspServiceInitializationResult,
-};
+use lsp::supported_servers::LSPServerType;
+use lsp::{spawn_lsp_service, LspServerConfig, LspService, LspServiceInitializationResult};
 use lsp_types::Position;
-use warpui::r#async::{executor::Background, Timer};
+use warpui::r#async::executor::Background;
+use warpui::r#async::Timer;
 
 fn init_logging() {
     let mut base_logger = env_logger::builder();

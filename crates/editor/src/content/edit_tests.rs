@@ -1,31 +1,28 @@
+use std::path::Path;
+
+use string_offset::CharOffset;
+use warp_core::features::FeatureFlag;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::fonts::{Properties, Style, Weight};
+use warpui::image_cache::ImageType;
+use warpui::text_layout::{LayoutCache, StyleAndFont, TextStyle};
+use warpui::{App, SingletonEntity};
+
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
 };
-use crate::{
-    content::{
-        buffer::{StyledBufferRun, StyledTextBlock},
-        edit::{
-            ParsedUrl, highlight_urls, layout_mermaid_block_for_test,
-            resolve_asset_source_relative_to_directory,
-        },
-        mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout},
-        text::{BufferBlockStyle, CodeBlockType, TextStylesWithMetadata},
-    },
-    render::{
-        layout::{TextLayout, add_link_to_style_and_font, markdown_inline_to_text_and_style_runs},
-        model::{BlockItem, RenderLayoutOptions, test_utils::TEST_STYLES},
-    },
+use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
+use crate::content::edit::{
+    ParsedUrl, highlight_urls, layout_mermaid_block_for_test,
+    resolve_asset_source_relative_to_directory,
 };
-use std::path::Path;
-use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
-use warpui::{
-    App, SingletonEntity,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    fonts::{Properties, Style, Weight},
-    image_cache::ImageType,
-    text_layout::{LayoutCache, StyleAndFont, TextStyle},
+use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
+use crate::content::text::{BufferBlockStyle, CodeBlockType, TextStylesWithMetadata};
+use crate::render::layout::{
+    TextLayout, add_link_to_style_and_font, markdown_inline_to_text_and_style_runs,
 };
+use crate::render::model::test_utils::TEST_STYLES;
+use crate::render::model::{BlockItem, RenderLayoutOptions};
 
 #[test]
 fn test_highlight_urls() {

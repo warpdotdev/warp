@@ -1,5 +1,6 @@
-use super::*;
 use std::collections::HashMap;
+
+use super::*;
 
 struct TestHandler {
     output: HashMap<u32, Vec<u8>>,

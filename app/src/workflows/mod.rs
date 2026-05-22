@@ -19,25 +19,24 @@ pub mod workflow;
 pub mod workflow_enum;
 pub mod workflow_view;
 
+use async_trait::async_trait;
+pub use categories::{CategoriesView, CategoriesViewEvent, WorkflowsViewAction};
+
 use crate::appearance::Appearance;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
     CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-    GenericCloudObject, GenericServerObject, ObjectType, Revision, ServerCloudObject,
-    UpdateCloudObjectResult,
+    GenericCloudObject, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
 };
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-
 use crate::drive::items::workflow::WarpDriveWorkflow;
 use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
 use crate::notebooks::{NotebookId, NotebookLocation};
 use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::object::ObjectClient;
 use crate::server::sync_queue::{QueueItem, SerializedModel};
-use async_trait::async_trait;
-pub use categories::{CategoriesView, CategoriesViewEvent, WorkflowsViewAction};
 
 pub fn init(app: &mut AppContext) {
     categories::init(app);
@@ -311,15 +310,6 @@ impl CloudModelType for CloudWorkflowModel {
         SerializedModel::new(
             serde_json::to_string(&self.data).expect("failed to serialize workflow"),
         )
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Workflow(server_workflow) = server_cloud_object {
-            return Some(CloudWorkflowModel {
-                data: server_workflow.model.data.clone(),
-            });
-        }
-        None
     }
 
     async fn send_create_request(

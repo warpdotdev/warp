@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use warp_core::report_error;
+use warp_graphql::scalars::Time;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
-use crate::server::server_api::{auth::AuthClient, ServerApiProvider};
-use warp_graphql::scalars::Time;
+use crate::server::server_api::auth::AuthClient;
+use crate::server::server_api::ServerApiProvider;
 
 const PAGE_SIZE: i32 = 20;
 

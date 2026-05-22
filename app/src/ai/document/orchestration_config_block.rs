@@ -2,13 +2,15 @@
 //! an active `OrchestrationConfigSnapshot`. Shows a "Use orchestration"
 //! toggle, Cloud/Local picker, and run-wide config dropdowns.
 
+use std::collections::HashMap;
+
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
 use warp_cli::agent::Harness;
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
@@ -19,8 +21,6 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use crate::workspace::WorkspaceAction;
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
@@ -36,6 +36,9 @@ use crate::ai::blocklist::telemetry::{
     OrchestrationExecutionModeKind, OrchestrationHarnessKind, PlanConfigApprovalToggledEvent,
 };
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
@@ -43,8 +46,8 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
+use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
-use warp_core::ui::theme::WarpTheme;
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -300,6 +303,17 @@ impl OrchestrationConfigBlockView {
             }
         });
 
+        ctx.subscribe_to_model(
+            &ConnectedSelfHostedWorkersModel::handle(ctx),
+            |me, _, event, ctx| match event {
+                ConnectedSelfHostedWorkersEvent::Changed => {
+                    if me.pickers_initialized {
+                        oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
+                    }
+                    ctx.notify();
+                }
+            },
+        );
         let mut view = Self {
             conversation_id,
             plan_id,
@@ -495,12 +509,18 @@ impl OrchestrationConfigBlockView {
             picker.set_use_overlay_layer(true, picker_ctx);
         });
         oc::populate_host_picker(&host_handle, initial_host, ctx);
-        ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| {
-            if let HostPickerEvent::HostChanged { slug } = event {
+        ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| match event {
+            HostPickerEvent::Opened => {
+                ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
+                });
+            }
+            HostPickerEvent::HostChanged { slug } => {
                 ctx.dispatch_typed_action(&OrchestrationConfigBlockAction::WorkerHostChanged {
                     worker_host: slug.clone(),
                 });
             }
+            HostPickerEvent::Closed => {}
         });
         self.pickers.host_picker = Some(host_handle);
 

@@ -1,33 +1,28 @@
-use warpui::{prelude::ChildView, Element, EntityId, View, ViewContext, ViewHandle};
-
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, AIAgentExchangeId},
-        blocklist::{
-            agent_view::AgentViewEntryOrigin, block::PendingUserQueryBlock,
-            telemetry_banner::TelemetryBanner, AIBlock,
-        },
-    },
-    env_vars::env_var_collection_block::EnvVarCollectionBlock,
-    terminal::{
-        block_list_viewport::ScrollPositionUpdate,
-        model::{
-            blocks::RichContentItem, rich_content::RichContentType, terminal_model::BlockIndex,
-        },
-        ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
-        view::{
-            ambient_agent::AmbientAgentEntryBlock,
-            block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock,
-            init_environment::InitEnvironmentBlock,
-            ssh_remote_server_choice_view::SshRemoteServerChoiceView,
-            ssh_remote_server_failed_banner::SshRemoteServerFailedBanner,
-        },
-        warpify::success_block::WarpifySuccessBlock,
-        TerminalView,
-    },
-};
+use warpui::prelude::ChildView;
+use warpui::{Element, EntityId, View, ViewContext, ViewHandle};
 
 use super::{InitStepBlock, InitStepKind};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::PendingUserQueryBlock;
+use crate::ai::blocklist::telemetry_banner::TelemetryBanner;
+use crate::ai::blocklist::AIBlock;
+use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::block_list_viewport::ScrollPositionUpdate;
+use crate::terminal::model::blocks::RichContentItem;
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::ssh::error::SshErrorBlock;
+use crate::terminal::ssh::install_tmux::SshInstallTmuxBlock;
+use crate::terminal::ssh::warpify::SshWarpifyBlock;
+use crate::terminal::view::ambient_agent::AmbientAgentEntryBlock;
+use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock;
+use crate::terminal::view::init_environment::InitEnvironmentBlock;
+use crate::terminal::view::ssh_remote_server_choice_view::SshRemoteServerChoiceView;
+use crate::terminal::view::ssh_remote_server_failed_banner::SshRemoteServerFailedBanner;
+use crate::terminal::warpify::success_block::WarpifySuccessBlock;
+use crate::terminal::TerminalView;
 
 /// Specifies where to insert rich content in the blocklist.
 #[derive(Clone, Copy, Debug)]

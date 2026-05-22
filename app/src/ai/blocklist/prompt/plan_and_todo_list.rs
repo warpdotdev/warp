@@ -1,40 +1,34 @@
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Fill, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Empty, Fill, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, Radius, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    platform::Cursor,
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
     View, ViewContext, ViewHandle,
 };
-use warpui::{
-    elements::{ParentElement, ParentOffsetBounds},
-    ui_components::components::UiComponent,
-};
 
-use warp_core::features::FeatureFlag;
-
-use crate::{
-    ai::{
-        agent::{
-            icons::todo_list_icon,
-            todos::popup::{AgentTodosPopupEvent, AgentTodosPopupView},
-        },
-        blocklist::{BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent},
-        document::ai_document_model::{
-            AIDocumentId, AIDocumentModel, AIDocumentModelEvent, AIDocumentVersion,
-        },
-    },
-    terminal::input::{MenuPositioning, MenuPositioningProvider},
-    ui_components::blended_colors,
-    AIAgentTodoList, BlocklistAIHistoryModel,
+use crate::ai::agent::icons::todo_list_icon;
+use crate::ai::agent::todos::popup::{AgentTodosPopupEvent, AgentTodosPopupView};
+use crate::ai::blocklist::{
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
 };
-use warpui::fonts::{Properties, Weight};
+use crate::ai::document::ai_document_model::{
+    AIDocumentId, AIDocumentModel, AIDocumentModelEvent, AIDocumentVersion,
+};
+use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
+use crate::ui_components::blended_colors;
+use crate::{AIAgentTodoList, BlocklistAIHistoryModel};
 
 const TODO_BUTTON_SAVE_POSITION_ID: &str = "plan_and_todo_list::todo_button";
 
