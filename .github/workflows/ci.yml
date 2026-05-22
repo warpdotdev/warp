@@ -617,7 +617,24 @@ jobs:
 
       - name: Verify compilation with release flags
         shell: bash
-        run: ./script/bundle --channel oss --nouniversal --check-only
+        run: |
+          if [[ "${{ matrix.os }}" = "macos" ]]; then
+            case "$(uname -m)" in
+              arm64|aarch64)
+                bundle_arch="aarch64"
+                ;;
+              x86_64)
+                bundle_arch="x86_64"
+                ;;
+              *)
+                echo "::error::Unsupported macOS runner architecture: $(uname -m)"
+                exit 1
+                ;;
+            esac
+            ./script/bundle --channel oss --check-only --arch "$bundle_arch"
+          else
+            ./script/bundle --channel oss --nouniversal --check-only
+          fi
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving
