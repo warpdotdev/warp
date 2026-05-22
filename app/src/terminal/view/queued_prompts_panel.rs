@@ -47,9 +47,7 @@ use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 const MAX_PROMPT_LINES: f32 = 5.;
-const INITIAL_CLOUD_MODE_DRAG_TOOLTIP: &str =
-    "The first cloud-mode prompt is fixed because the cloud agent processes it first.";
-const INITIAL_CLOUD_MODE_ACTION_TOOLTIP: &str = "The first cloud-mode prompt cannot be edited or deleted because the cloud agent has already accepted it.";
+const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -62,22 +60,22 @@ fn build_row_state(
     origin: QueuedQueryOrigin,
     ctx: &mut ViewContext<QueuedPromptsPanelView>,
 ) -> QueuedPromptRowState {
-    let is_initial_cloud_mode = origin == QueuedQueryOrigin::InitialCloudMode;
-    let edit_tooltip = if is_initial_cloud_mode {
-        INITIAL_CLOUD_MODE_ACTION_TOOLTIP
+    let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
+    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
+        (
+            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
+            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
+        )
     } else {
-        "Edit queued prompt"
+        ("Edit queued prompt", "Delete queued prompt")
     };
-    let delete_tooltip = if is_initial_cloud_mode {
-        INITIAL_CLOUD_MODE_ACTION_TOOLTIP
-    } else {
-        "Delete queued prompt"
-    };
+
     let edit_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Pencil)
             .with_tooltip(edit_tooltip)
             .with_size(ButtonSize::XSmall)
+            .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::StartEditingRow(query_id));
             })
@@ -87,11 +85,13 @@ fn build_row_state(
             .with_icon(TerminalIcon::Trash)
             .with_tooltip(delete_tooltip)
             .with_size(ButtonSize::XSmall)
+            .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::DeleteRow(query_id));
             })
     });
-    if is_initial_cloud_mode {
+
+    if is_initial_cloud_mode_prompt {
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
         delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
@@ -320,15 +320,19 @@ impl QueuedPromptsPanelView {
                 self.collapsed = false;
             }
             QueuedQueryEvent::Appended { query_id, .. } => {
-                let origin = QueuedQueryModel::as_ref(ctx)
+                // The row could be gone if the append+remove pair were both delivered
+                // before we observed the append (e.g. fast /queue -> drain). Skip row
+                // state init in that case; the matching Removed event already cleaned up.
+                if let Some(origin) = QueuedQueryModel::as_ref(ctx)
                     .queue(active_conv_id)
                     .iter()
                     .find(|row| row.id() == *query_id)
                     .map(|row| row.origin())
-                    .expect("appended queued query should remain available");
-                self.row_states
-                    .entry(*query_id)
-                    .or_insert_with(|| build_row_state(*query_id, origin, ctx));
+                {
+                    self.row_states
+                        .entry(*query_id)
+                        .or_insert_with(|| build_row_state(*query_id, origin, ctx));
+                }
             }
             QueuedQueryEvent::Reordered { .. }
             | QueuedQueryEvent::QueueNextPromptToggled { .. } => {}
@@ -835,7 +839,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
                 if drag_state.is_hovered() {
                     stack.add_positioned_overlay_child(
                         ui_builder
-                            .tool_tip(INITIAL_CLOUD_MODE_DRAG_TOOLTIP.to_owned())
+                            .tool_tip(INITIAL_CLOUD_MODE_PROMPT_TOOLTIP.to_owned())
                             .build()
                             .finish(),
                         OffsetPositioning::offset_from_parent(

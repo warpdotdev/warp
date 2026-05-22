@@ -30,9 +30,10 @@ This division means the panel UI in §3 only needs to *render* the lock; it does
 
 ### 3. Panel: lock the InitialCloudMode row visually
 In `app/src/ai/blocklist/queued_prompts_panel.rs`:
+- All locked-row hover affordances share a single tooltip constant `INITIAL_CLOUD_MODE_PROMPT_TOOLTIP = "The first cloud-mode prompt cannot be changed."` so the drag handle, edit button, and delete button all surface the same short explanation.
 - In the row rendering inside `render` (`(584-606)`), when the rendered query's `origin()` is `QueuedQueryOrigin::InitialCloudMode`:
-  - Render the drag handle in a visually disabled state without wrapping the row in `Draggable`. Tooltip: the first cloud-mode prompt is fixed because the cloud agent processes it first.
-  - Keep the edit and delete `ActionButton`s revealed on hover, but set each one's `InteractionState` to `Disabled` and override their tooltips to explain that the first cloud-mode prompt cannot be edited or deleted because the cloud agent has already accepted it.
+  - Render the drag handle in a visually disabled state without wrapping the row in `Draggable`, and show the shared tooltip on hover.
+  - Keep the edit and delete `ActionButton`s revealed on hover and call `set_disabled(true)` on each so the click handler is gated and the disabled tooltip is surfaced. Pair that with `with_disabled_theme(NakedTheme)` so the disabled state reuses the regular naked appearance instead of picking up the default greyed-out `DisabledTheme` fill/text. Both buttons reuse the shared tooltip.
   - Static preview text renders identically to other rows.
 - `should_render` (`(506-521)`) is unchanged. Because the cargo feature transitively enables `queue_slash_command`, the existing `FeatureFlag::QueueSlashCommand.is_enabled()` check passes when V2 is on.
 - Wire the panel into the V2 cloud-mode composing input in `Input::render_cloud_mode_v2_composing_input` (`app/src/terminal/input/agent.rs:354-513`). Render the panel as a sibling above the input card, inside the same `ConstrainedBox` constrained to `CLOUD_MODE_V2_MAX_WIDTH` (`app/src/terminal/input/agent.rs:43`). The non-V2 placement at `app/src/terminal/input/agent.rs (332-337)` is unchanged.

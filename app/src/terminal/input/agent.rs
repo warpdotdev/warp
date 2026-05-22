@@ -540,6 +540,7 @@ impl Input {
             .with_spacing(CLOUD_MODE_V2_TOP_ROW_GAP);
 
         column.add_child(self.render_cloud_mode_v2_top_row(app));
+
         if let Some(panel) = self.queued_prompts_panel.as_ref() {
             if panel.as_ref(app).should_render(app) {
                 column.add_child(ChildView::new(panel).finish());

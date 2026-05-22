@@ -31,8 +31,9 @@ Today in Cloud Mode setup, the user's submitted prompt appears as a separate "pe
 ### Initial cloud-mode prompt
 3. When the user submits the initial prompt in a Cloud Mode pane, the prompt appears as the first row of the queued-prompts panel for that conversation. The panel renders in the same position relative to the V2 cloud-mode composing input that it renders in for regular Agent Mode (above the input editor, inside the centered V2 layout).
 4. The initial cloud-mode prompt row is *locked*:
-   - Its drag handle is rendered in a visually disabled state. Hovering it shows a tooltip explaining that the first cloud-mode prompt cannot be reordered because the cloud agent always processes it first.
-   - Its edit (pencil) and delete (trash) icon-buttons remain rendered on hover, but each one is visually disabled and is not clickable. Hovering either button shows a tooltip explaining that the first cloud-mode prompt cannot be edited or deleted because the cloud agent has already accepted it.
+   - Its drag handle is rendered in a visually disabled state and does not respond to drag gestures.
+   - Its edit (pencil) and delete (trash) icon-buttons remain rendered on hover and render with the same naked styling as their interactive counterparts on other rows — no greyed-out background or text. They are not clickable.
+   - Hovering the drag handle or either icon-button shows the same short tooltip — "The first cloud-mode prompt cannot be changed." — explaining why no interaction is possible.
    - The static preview text renders identically to other rows.
 5. The locked row's preview text is the prompt as the user typed it, including any `/plan`, `/orchestrate`, or other prefix the user included (matching today's pending-user-query block treatment).
 6. When the cloud agent picks up the prompt — i.e. the first real exchange shows up in the conversation transcript, or the harness reports that the command has started (Oz harnesses use the harness-command-started signal; oz local-to-cloud handoff uses the first appended exchange) — the locked row is removed from the panel. After removal, the second row (if any) becomes the next row to fire, but is still considered a follow-up, not the initial prompt.

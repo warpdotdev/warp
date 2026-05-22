@@ -5211,7 +5211,7 @@ impl TerminalView {
         Some(id)
     }
 
-    pub(in crate::terminal::view) fn enqueue_initial_cloud_mode_prompt(
+    pub fn enqueue_initial_cloud_mode_prompt(
         &mut self,
         prompt: String,
         ctx: &mut ViewContext<Self>,

@@ -6715,14 +6715,17 @@ impl Input {
     /// editor's current buffer text) and the queued-prompt drain path (which passes
     /// the popped prompt text without ever reading from / writing to the user's
     /// in-progress buffer).
-    // TODO: the ◌ treatment is a stop-gap to rendering an svg to the right of the buffer text.
     fn freeze_input_in_loading_state_with_text(
         &mut self,
-        display_text: &str,
+        buffer_text: &str,
         ctx: &mut ViewContext<Self>,
     ) {
         self.editor.update(ctx, |editor, ctx| {
-            editor.set_buffer_text_ignoring_undo(&format!("{display_text} ◌"), ctx);
+            // Use an ephemeral edit to show the loading state
+            // and disallow edits.
+            // TODO: the ◌ treatment is a stop-gap to rendering an svg
+            // to the right of the buffer text.
+            editor.set_buffer_text_ignoring_undo(&format!("{buffer_text} ◌"), ctx);
             editor.set_interaction_state(InteractionState::Selectable, ctx);
 
             // We manually set the text color to appear disabled.
@@ -13393,6 +13396,10 @@ impl Input {
         true
     }
 
+    /// Queues the current input on cloud-mode panes that are provisioned but not
+    /// currently running (e.g. between cloud executions). Returns true and clears the
+    /// editor when the input is captured so the caller skips the normal submission
+    /// path. Only active when `QueuedPromptsV2` is enabled.
     fn maybe_queue_input_during_cloud_setup(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if !FeatureFlag::QueuedPromptsV2.is_enabled() {
             return false;
