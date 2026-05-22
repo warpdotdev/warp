@@ -699,6 +699,44 @@ fn active_session_state(
     }
 }
 
+#[test]
+fn restore_conversation_in_active_pane_enters_existing_live_conversation_without_loading() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let terminal_view = workspace.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .expect("workspace should start with a terminal view")
+        });
+        let terminal_view_id = terminal_view.read(&app, |view, _| view.view_id());
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+            });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 1);
+
+            workspace.restore_conversation_in_active_pane(conversation_id, ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+        });
+
+        terminal_view.read(&app, |view, ctx| {
+            assert_eq!(view.active_conversation_id(ctx), Some(conversation_id));
+            assert_eq!(
+                view.model.lock().conversation_transcript_viewer_status(),
+                None
+            );
+        });
+    });
+}
 fn new_session_menu_label(item: &MenuItem<WorkspaceAction>) -> String {
     match item {
         MenuItem::Item(fields) => fields.label().to_string(),

@@ -28,7 +28,9 @@ use warpui::{
 use warpui::{App, ReadModel};
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
-use crate::ai::blocklist::agent_view::ExitAgentViewError;
+use crate::ai::blocklist::agent_view::{
+    AgentViewEntryBlock, EnterAgentBlockAction, ExitAgentViewError,
+};
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
     agent_view::{AgentViewEntryOrigin, AgentViewState},
@@ -79,6 +81,7 @@ use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
+use crate::ActiveAgentViewsModel;
 
 use super::*;
 
@@ -665,68 +668,6 @@ fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_owner() {
         });
         restored_view.read(&app, |view, _| {
             assert_eq!(ai_block_count(view), 1);
-        });
-    })
-}
-
-#[test]
-fn restoring_existing_conversation_inline_enters_agent_view_without_duplicate_blocks() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-
-        let terminal = add_window_with_terminal(&mut app, None);
-
-        let conversation_id = terminal.update(&mut app, |view, ctx| {
-            let (conversation_id, _, _, _) = append_exchange_with_inputs_and_handle_event(
-                view,
-                vec![AIAgentInput::UserQuery {
-                    query: "first query".to_owned(),
-                    context: Default::default(),
-                    static_query_type: None,
-                    referenced_attachments: Default::default(),
-                    user_query_mode: UserQueryMode::Normal,
-                    running_command: None,
-                    intended_agent: None,
-                }],
-                ctx,
-            );
-            conversation_id
-        });
-
-        let restored_conversation =
-            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
-                history
-                    .conversation(&conversation_id)
-                    .cloned()
-                    .expect("conversation should exist")
-            });
-
-        terminal.update(&mut app, |view, ctx| {
-            assert_eq!(ai_block_count(view), 1);
-            assert_eq!(
-                view.agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state()
-                    .active_conversation_id(),
-                None
-            );
-
-            view.restore_conversation_after_view_creation(
-                RestoredAIConversation::new(restored_conversation),
-                false,
-                RestoreConversationEntryBehavior::EnterRestoredConversation,
-                ctx,
-            );
-
-            assert_eq!(ai_block_count(view), 1);
-            assert_eq!(
-                view.agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state()
-                    .active_conversation_id(),
-                Some(conversation_id)
-            );
         });
     })
 }
