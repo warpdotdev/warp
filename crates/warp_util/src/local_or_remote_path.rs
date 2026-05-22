@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{remote_path::RemotePath, standardized_path::StandardizedPath};
+use crate::remote_path::RemotePath;
+use crate::standardized_path::StandardizedPath;
 
 /// Uniquely identifies where a file lives — either on the local filesystem
 /// or on a remote host. Used across both the buffer model and the

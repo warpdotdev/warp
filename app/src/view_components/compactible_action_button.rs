@@ -1,19 +1,16 @@
 use std::sync::Arc;
 
-use crate::{
-    ai::blocklist::inline_action::inline_action_icons::icon_size,
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource,
-    },
-};
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement,
-    },
-    Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle,
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement,
+};
+use warpui::{Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle};
+
+use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource,
 };
 const BUTTON_MARGIN: f32 = 8.;
 

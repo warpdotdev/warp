@@ -6,19 +6,15 @@ use history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use session_sharing_protocol::common::ParticipantId;
 use warpui::{AppContext, SingletonEntity, View, ViewContext};
 
-use crate::ai::{
-    agent::{
-        conversation::AIConversationId, AIAgentExchange, AIAgentExchangeId, AIAgentInput,
-        AIAgentOutputStatus, FinishedAIAgentOutput, ServerOutputId, Shared,
-    },
-    blocklist::{
-        history_model,
-        model::{AIRequestType, PassiveRequestType},
-    },
-    llms::LLMId,
-};
-
 use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
+    ServerOutputId, Shared,
+};
+use crate::ai::blocklist::history_model;
+use crate::ai::blocklist::model::{AIRequestType, PassiveRequestType};
+use crate::ai::llms::LLMId;
 
 /// Standard [`AIBlock`] impl for live outputs corresponding to an `OutputStream`.
 pub struct AIBlockModelImpl<V> {

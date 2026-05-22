@@ -5,55 +5,47 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+use ai::diff_validation::DiffDelta;
 // TODO(vorporeal): Remove this re-export at some point.
 pub use ai::document::{AIDocumentId, AIDocumentVersion};
-use anyhow;
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
-
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
-use crate::auth::auth_state::AuthStateProvider;
-use crate::cloud_object::CloudObject;
-use crate::global_resource_handles::GlobalResourceHandlesProvider;
-use crate::persistence::ModelEvent;
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, AIAgentActionId},
-        blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-        execution_profiles::profiles::AIExecutionProfilesModel,
-    },
-    appearance::Appearance,
-    cloud_object::{model::persistence::CloudModel, CloudObjectEventEntrypoint, Owner},
-    drive::folders::CloudFolder,
-    notebooks::{
-        editor::{
-            model::{FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent},
-            rich_text_styles,
-        },
-        file::MarkdownDisplayMode,
-        post_process_notebook, CloudNotebookModel, NotebookId,
-    },
-    server::{
-        cloud_objects::update_manager::{
-            InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, ServerId, SyncId},
-    },
-    settings::FontSettings,
-    terminal::{
-        model::session::{active_session::ActiveSession, Session},
-        TerminalView,
-    },
-    throttle::throttle,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-use ai::diff_validation::DiffDelta;
-use warp_editor::{model::RichTextEditorModel, render::model::RichTextStyles};
-use warp_multi_agent_api as maa_api;
+use warp_editor::model::RichTextEditorModel;
+use warp_editor::render::model::RichTextStyles;
 use warpui::color::ColorU;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
+use {anyhow, warp_multi_agent_api as maa_api};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::appearance::Appearance;
+use crate::auth::auth_state::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
+use crate::drive::folders::CloudFolder;
+use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::notebooks::editor::model::{
+    FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
+};
+use crate::notebooks::editor::rich_text_styles;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::{
+    InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::settings::FontSettings;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::Session;
+use crate::terminal::TerminalView;
+use crate::throttle::throttle;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// The frequency at which we check for modifications and save the AI document to the server.
 /// Uses the same 2-second period as notebooks for consistency.
@@ -518,7 +510,7 @@ impl AIDocumentModel {
         doc.title = new_title.to_owned();
         let editor_handle = doc.editor.clone();
         editor_handle.update(ctx, |editor, editor_ctx| {
-            editor.update_to_new_markdown(&post_process_notebook(new_content), editor_ctx);
+            editor.update_to_new_markdown(new_content, editor_ctx);
         });
 
         ctx.emit(AIDocumentModelEvent::DocumentUpdated {
@@ -772,8 +764,7 @@ impl AIDocumentModel {
 
         log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
         doc.editor.update(ctx, |editor, editor_ctx| {
-            let processed = post_process_notebook(persisted_content);
-            editor.reset_with_markdown(&processed, editor_ctx);
+            editor.reset_with_markdown(persisted_content, editor_ctx);
         });
 
         // Mark as dirty so the updated plan is attached to the next agent query
@@ -827,9 +818,7 @@ impl AIDocumentModel {
 
             let content = content.into();
             if !content.is_empty() {
-                // Post-process the content to remove extra newlines
-                let processed_content = post_process_notebook(&content);
-                model.reset_with_markdown(&processed_content, ctx);
+                model.reset_with_markdown(&content, ctx);
             }
             model
         })
@@ -958,8 +947,7 @@ impl AIDocumentModel {
         if let Some(doc) = self.create_new_document_version(id, ctx) {
             let content = new_content.into();
             doc.editor.update(ctx, |editor, editor_ctx| {
-                let processed_content = post_process_notebook(&content);
-                editor.reset_with_markdown(&processed_content, editor_ctx);
+                editor.reset_with_markdown(&content, editor_ctx);
             });
             doc.created_at = created_at;
             ctx.emit(AIDocumentModelEvent::DocumentUpdated {

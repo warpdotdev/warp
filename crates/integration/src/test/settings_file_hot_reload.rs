@@ -4,17 +4,15 @@
 //! filesystem watcher and pushed into the in-memory setting models, on every
 //! platform where Warp watches `config_local_dir()`.
 
-use settings::Setting as _;
 use std::time::Duration;
-use warp::{
-    features::FeatureFlag,
-    integration_testing::{
-        step::new_step_with_default_assertions,
-        terminal::wait_until_bootstrapped_single_pane_for_tab,
-    },
-    settings::FontSettings,
-};
-use warpui::{async_assert_eq, integration::TestStep, SingletonEntity};
+
+use settings::Setting as _;
+use warp::features::FeatureFlag;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use warp::settings::FontSettings;
+use warpui::integration::TestStep;
+use warpui::{async_assert_eq, SingletonEntity};
 
 use super::{new_builder, Builder};
 

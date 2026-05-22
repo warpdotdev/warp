@@ -1,9 +1,7 @@
-use crate::{
-    error::UserFacingError,
-    full_source_code_embedding::{ContentHash, EmbeddingConfig, NodeHash, RepoMetadata},
-    request_context::RequestContext,
-    schema,
-};
+use crate::error::UserFacingError;
+use crate::full_source_code_embedding::{ContentHash, EmbeddingConfig, NodeHash, RepoMetadata};
+use crate::request_context::RequestContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetRelevantFragmentsVariables {

@@ -1,19 +1,21 @@
-use super::data_source::{Query, QueryResult};
-use crate::debounce::debounce;
-use crate::search::QueryFilter;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
-use async_channel::Sender;
-use async_trait::async_trait;
-use futures_util::stream::AbortHandle;
-use itertools::Itertools;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use async_channel::Sender;
+use async_trait::async_trait;
+use futures_util::stream::AbortHandle;
+use itertools::Itertools;
 use warpui::r#async::Timer;
 use warpui::{Action, AppContext, Entity, ModelContext};
+
+use super::data_source::{Query, QueryResult};
+use crate::debounce::debounce;
+use crate::search::QueryFilter;
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::TelemetryEvent;
 
 /// Maximum time to wait for matching data sources to return results before showing
 /// partial results.

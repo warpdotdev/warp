@@ -13,7 +13,6 @@ use std::cmp::Ordering;
 
 pub use lookup::*;
 pub use registry::*;
-
 use serde::{Deserialize, Serialize};
 use warp_js::TypedJsFunctionRef;
 

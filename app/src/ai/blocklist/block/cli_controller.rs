@@ -1,34 +1,29 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::blocklist::context_model::block_context_from_terminal_model;
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentActionId, AIAgentActionResultType,
-            AIAgentContext, CancellationReason, ReadShellCommandOutputResult,
-            RequestCommandOutputResult, TransferShellCommandControlToUserResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        blocklist::{
-            agent_view::{AgentViewController, AgentViewEntryOrigin},
-            BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController,
-            BlocklistAIHistoryEvent,
-        },
-    },
-    terminal::{
-        model::block::BlockId,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        TerminalModel,
-    },
-    BlocklistAIHistoryModel,
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentActionResultType, AIAgentContext, CancellationReason,
+    ReadShellCommandOutputResult, RequestCommandOutputResult,
+    TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
+use crate::ai::blocklist::context_model::block_context_from_terminal_model;
+use crate::ai::blocklist::{
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
+};
+use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::TerminalModel;
+use crate::BlocklistAIHistoryModel;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UserTakeOverReason {

@@ -6,20 +6,10 @@
 //! This lives in the app crate (not the onboarding crate) because it reuses
 //! `EditorView` for the text input, which the onboarding crate doesn't
 //! depend on.
-use crate::appearance::Appearance;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::auth_view_modal::AuthRedirectPayload;
-use crate::auth::login_failure_notification::LoginFailureReason;
-use crate::editor::{
-    EditorView, InteractionState, SingleLineEditorOptions, TextColors, TextOptions,
-};
-use crate::server::server_api::auth::UserAuthenticationError;
-use crate::themes::theme::Fill as ThemeFill;
-use crate::util::bindings::CustomAction;
-
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::ui::theme::color::internal_colors;
+use warpui::actions::StandardAction;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Fill,
     Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
@@ -30,9 +20,20 @@ use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::text_layout::TextAlignment;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    actions::StandardAction, AppContext, Element, Entity, FocusContext, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::auth_view_modal::AuthRedirectPayload;
+use crate::auth::login_failure_notification::LoginFailureReason;
+use crate::editor::{
+    EditorView, InteractionState, SingleLineEditorOptions, TextColors, TextOptions,
+};
+use crate::server::server_api::auth::UserAuthenticationError;
+use crate::themes::theme::Fill as ThemeFill;
+use crate::util::bindings::CustomAction;
 
 const MODAL_WIDTH: f32 = 460.;
 const AUTH_TOKEN_INPUT_BORDER_RADIUS: Radius = Radius::Pixels(4.);

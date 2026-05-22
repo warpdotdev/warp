@@ -10,21 +10,19 @@
 //! bulk of the sandbox-specific surface lives here so `shell.rs` can stay
 //! focused on the cross-shell abstraction.
 
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
 use futures::future::BoxFuture;
 use futures::FutureExt as _;
 use serde::{Deserialize, Serialize};
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
 use warpui::{AppContext, SingletonEntity as _};
 
 use super::shell::DirectShellStarter;
-use crate::{
-    terminal::shell::ShellType,
-    util::path::{resolve_executable, resolve_executable_in_path},
-};
-
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::shell::ShellType;
+use crate::util::path::{resolve_executable, resolve_executable_in_path};
 
 /// Default home directory for the sandbox user inside the shell template.
 /// Lives inside the container image and is shared across all sandboxes, so it

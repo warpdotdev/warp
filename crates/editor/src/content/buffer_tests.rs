@@ -11,13 +11,19 @@ use pathfinder_color::ColorU;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde_yaml::{Mapping, Value};
+use string_offset::{ByteOffset, CharOffset};
 use vec1::{Vec1, vec1};
+use warp_util::content_version::ContentVersion;
+use warpui::elements::ListIndentLevel;
+use warpui::text::point::Point;
 use warpui::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
+use super::{BufferEvent, EditResult, ToBufferCharOffset};
 use crate::content::buffer::{
-    AutoScrollBehavior, BufferEditAction, BufferSelectAction, EditOrigin, EmbeddedItemConversion,
-    InitialBufferState, SelectionOffsets, StyledBlockBoundaryBehavior, StyledBufferBlock,
-    StyledTextBlock, TabIndentation, ToBufferByteOffset, ToBufferPoint,
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
+    EmbeddedItemConversion, InitialBufferState, SelectionOffsets, StyledBlockBoundaryBehavior,
+    StyledBufferBlock, StyledBufferRun, StyledTextBlock, TabIndentation, ToBufferByteOffset,
+    ToBufferPoint,
 };
 use crate::content::core::{CoreEditorAction, CoreEditorActionType};
 use crate::content::cursor::BufferSumTree;
@@ -37,15 +43,6 @@ use crate::render::model::{
     EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat, LaidOutEmbeddedItem,
     RenderedSelectionSet,
 };
-use string_offset::ByteOffset;
-use string_offset::CharOffset;
-use warpui::elements::ListIndentLevel;
-use warpui::text::point::Point;
-
-use crate::content::buffer::{Buffer, StyledBufferRun};
-
-use super::{BufferEvent, EditResult, ToBufferCharOffset};
-use warp_util::content_version::ContentVersion;
 
 #[derive(Debug)]
 pub struct TestEmbeddedItem {

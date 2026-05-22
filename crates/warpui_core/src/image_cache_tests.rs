@@ -1,13 +1,11 @@
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
+use std::rc::Rc;
 
 use rust_embed::RustEmbed;
 
-use crate::{
-    r#async::executor::{Background, Foreground},
-    AssetProvider,
-};
-
 use super::*;
+use crate::r#async::executor::{Background, Foreground};
+use crate::AssetProvider;
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "test_data"]

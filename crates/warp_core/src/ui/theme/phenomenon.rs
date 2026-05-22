@@ -1,8 +1,7 @@
 use warpui::color::ColorU;
 
-use crate::ui::color::blend::Blend;
-
 use super::Fill;
+use crate::ui::color::blend::Blend;
 
 const PHENOMENON_BACKGROUND: u32 = 0x121212FF;
 const PHENOMENON_FOREGROUND: u32 = 0xFAF9F6FF;

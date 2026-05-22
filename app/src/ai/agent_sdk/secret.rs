@@ -1,36 +1,31 @@
-use std::{
-    fs,
-    io::{self, IsTerminal as _, Read},
-};
+use std::fs;
+use std::io::{self, IsTerminal as _, Read};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use inquire::{Confirm, InquireError, Password};
 use serde::Serialize;
-use warp_cli::{
-    agent::OutputFormat,
-    scope::ObjectScope,
-    secret::{
-        AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
-        ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
-    },
-    GlobalOptions,
+use warp_cli::agent::OutputFormat;
+use warp_cli::scope::ObjectScope;
+use warp_cli::secret::{
+    AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
+    ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
 };
+use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
-use warp_graphql::{
-    managed_secrets::{ManagedSecret, ManagedSecretType},
-    object::SpaceType,
-};
-use warp_managed_secrets::{client::SecretOwner, ManagedSecretManager, ManagedSecretValue};
-use warpui::{platform::TerminationMode, AppContext, SingletonEntity as _};
-
-use crate::{
-    auth::UserUid, cloud_object::Owner, server::ids::ServerId,
-    util::time_format::format_approx_duration_from_now_utc,
-};
+use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
+use warp_graphql::object::SpaceType;
+use warp_managed_secrets::client::SecretOwner;
+use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, SingletonEntity as _};
 
 use super::output::{self, TableFormat};
+use crate::auth::UserUid;
+use crate::cloud_object::Owner;
+use crate::server::ids::ServerId;
+use crate::util::time_format::format_approx_duration_from_now_utc;
 
 #[derive(Serialize)]
 struct SecretInfo {

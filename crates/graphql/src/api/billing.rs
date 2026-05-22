@@ -1,4 +1,6 @@
-use crate::{scalars::Time, schema, workspace::UgcCollectionEnablementSetting};
+use crate::scalars::Time;
+use crate::schema;
+use crate::workspace::UgcCollectionEnablementSetting;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct BillingMetadata {

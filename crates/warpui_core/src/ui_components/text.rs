@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
-use crate::elements::{Highlight, HighlightedRange, DEFAULT_UI_LINE_HEIGHT_RATIO};
-use crate::{
-    elements::{Container, Element, Text},
-    fonts::Properties,
-    ui_components::components::{UiComponent, UiComponentStyles},
-};
 use itertools::Itertools;
+
+use crate::elements::{
+    Container, Element, Highlight, HighlightedRange, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use crate::fonts::Properties;
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
 
 #[derive(Debug, Clone, Default)]
 pub struct WrappableText {

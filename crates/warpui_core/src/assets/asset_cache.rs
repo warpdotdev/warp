@@ -1,18 +1,22 @@
-use anyhow::anyhow;
-use anyhow::{Error, Result};
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use anyhow::{anyhow, Error, Result};
 use async_channel::{self, Receiver, Sender};
 use bytes::Bytes;
 use derivative::Derivative;
-use futures::FutureExt as _;
-use futures::{future::BoxFuture, Future};
-use std::any::{Any, TypeId};
-use std::pin::Pin;
-use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc, sync::Arc};
-
-use crate::image_cache::ImageCache;
-use crate::{r#async::executor, Entity, ModelContext, SingletonEntity};
+use futures::future::BoxFuture;
+use futures::{Future, FutureExt as _};
 
 use super::AssetProvider;
+use crate::image_cache::ImageCache;
+use crate::r#async::executor;
+use crate::{Entity, ModelContext, SingletonEntity};
 
 pub trait FetchAsset: crate::r#async::Spawnable + Future<Output = Result<Bytes>> {}
 impl<T: crate::r#async::Spawnable + Future<Output = Result<Bytes>> + ?Sized> FetchAsset for T {}

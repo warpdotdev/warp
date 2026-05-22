@@ -1,12 +1,11 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use fuzzy_match::{
     contains_wildcards, match_indices_case_insensitive, match_wildcard_pattern_case_insensitive,
     FuzzyMatchResult,
-};
-use std::sync::Arc;
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
 };
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 

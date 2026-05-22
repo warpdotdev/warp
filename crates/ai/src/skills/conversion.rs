@@ -1,12 +1,10 @@
 use std::path::PathBuf;
 
-use crate::{
-    agent::action_result::{AnyFileContent, FileContext},
-    skills::{ParsedSkill, SkillProvider, SkillScope},
-};
+use thiserror::Error;
 use warp_multi_agent_api as api;
 
-use thiserror::Error;
+use crate::agent::action_result::{AnyFileContent, FileContext};
+use crate::skills::{ParsedSkill, SkillProvider, SkillScope};
 
 #[derive(Error, Debug)]
 pub enum SkillConversionError {

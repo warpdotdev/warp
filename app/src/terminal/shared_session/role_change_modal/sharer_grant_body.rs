@@ -8,10 +8,9 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text::Span;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use super::{MODAL_PADDING, TEXT_FONT_SIZE};
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
-
-use super::{MODAL_PADDING, TEXT_FONT_SIZE};
 const BUTTON_HEIGHT: f32 = 40.;
 const BUTTON_WIDTH: f32 = 172.;
 

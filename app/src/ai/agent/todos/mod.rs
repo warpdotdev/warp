@@ -1,6 +1,5 @@
-use crate::ai::agent::AIAgentTodo;
-
 use super::AIAgentTodoId;
+use crate::ai::agent::AIAgentTodo;
 pub(crate) mod popup;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

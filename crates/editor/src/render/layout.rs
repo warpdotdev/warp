@@ -1,22 +1,22 @@
 //! Shared text-layout utilities needed throughout the editor implementation.
 
-#[cfg(test)]
-use markdown_parser::FormattedTextInline;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
+#[cfg(test)]
+use markdown_parser::FormattedTextInline;
+use warpui::color::ColorU;
 use warpui::fonts::TextLayoutSystem;
 #[cfg(test)]
 use warpui::fonts::{Style, Weight};
 use warpui::text_layout::{
-    ClipConfig, LayoutCache, Line, StyleAndFont, TextAlignment, TextBorder, TextStyle,
+    ClipConfig, LayoutCache, Line, StyleAndFont, TextAlignment, TextBorder, TextFrame, TextStyle,
 };
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{AppContext, LayoutContext};
-use warpui::{color::ColorU, text_layout::TextFrame};
 
 use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles};
+use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
 
 const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
 

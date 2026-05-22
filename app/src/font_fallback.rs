@@ -1,9 +1,9 @@
-use crate::ChannelState;
-use warpui::fonts::ExternalFontFamily;
-
 use std::sync::Arc;
 
 use lazy_static::lazy_static;
+use warpui::fonts::ExternalFontFamily;
+
+use crate::ChannelState;
 
 fn url_for_font(family_name: &str, font_file: &str) -> String {
     format!(

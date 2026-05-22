@@ -1,5 +1,6 @@
-use super::*;
 use unindent::Unindent;
+
+use super::*;
 
 const BLOCK: &str = "match BracketChar::try_from(c) {
         Ok(bracket) => todo!(),

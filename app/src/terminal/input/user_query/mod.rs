@@ -7,7 +7,6 @@ mod view;
 
 pub use data_source::SelectUserQuery;
 pub use view::{UserQueryMenuEvent, UserQueryMenuView};
-
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 

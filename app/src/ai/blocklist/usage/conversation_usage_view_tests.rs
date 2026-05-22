@@ -22,10 +22,11 @@
 //! framework's render path (which needs `Appearance` / theme singletons
 //! that aren't relevant to the handler's correctness).
 
-use super::*;
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::App;
+
+use super::*;
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {

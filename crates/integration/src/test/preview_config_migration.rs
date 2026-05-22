@@ -3,9 +3,8 @@ use std::path::PathBuf;
 
 use warpui::integration::{AssertionOutcome, TestStep};
 
-use crate::Builder;
-
 use super::wait_until_bootstrapped_single_pane_for_tab;
+use crate::Builder;
 
 /// Returns the current `$HOME` as a [`PathBuf`].
 /// In integration tests, `HOME` is overridden to a hermetic temp directory.

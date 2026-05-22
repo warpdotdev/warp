@@ -1,13 +1,3 @@
-use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::workspace::RestoreConversationLayout;
-use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -19,6 +9,16 @@ use super::{
     ConversationMetadata, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
     OwnerFilter, SessionStatus, SourceFilter, StatusFilter,
 };
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::workspace::RestoreConversationLayout;
+use crate::workspaces::user_profiles::UserProfiles;
 
 const SESSION_EXPIRATION_TIME: chrono::Duration = chrono::Duration::weeks(1);
 

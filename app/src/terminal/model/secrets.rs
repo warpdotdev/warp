@@ -1,22 +1,37 @@
 #![allow(dead_code)]
 
-use crate::ai::blocklist::TextLocation;
-use crate::terminal::model::index::Point;
-use anyhow::anyhow;
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use parking_lot::RwLock;
-use rangemap::{RangeInclusiveMap, StepLite};
 use std::collections::HashMap;
 use std::ops::{Not, RangeInclusive};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use anyhow::anyhow;
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use parking_lot::Mutex;
+use rangemap::{RangeInclusiveMap, StepLite};
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
 use super::grid::grid_handler::GridHandler;
 use super::grid::{Dimensions as _, RespectDisplayedOutput};
 use super::terminal_model::RangeInModel;
+use crate::ai::blocklist::TextLocation;
 use crate::terminal::model::find::RegexDFAs;
+use crate::terminal::model::index::Point;
+
+/// A regex pattern that can be used to detect secrets in text.
+pub struct SecretsRegex {
+    /// The regex pattern to match secrets in strings.  This is a meta::Regex which supports
+    /// multiple patterns.
+    pub regex: regex_automata::meta::Regex,
+
+    /// The DFAs used to search for secrets in the grid.
+    pub dfas: RegexDFAs,
+
+    /// Metadata about the regex pattern, including which secret levels it corresponds to.
+    pub level_metadata: RegexLevelMetadata,
+}
 
 /// Tracks counts to infer which regex patterns correspond to which secret levels
 #[derive(Debug, Clone)]
@@ -28,24 +43,23 @@ pub struct RegexLevelMetadata {
 }
 
 lazy_static! {
-    /// Used for secret redaction in the Grid.
-    /// Initially empty - will be populated with user-defined regexes when safe mode is enabled.
-    pub(in crate::terminal::model) static ref SECRETS_DFA: RwLock<RegexDFAs> = RwLock::new(
-        RegexDFAs::new_many(&[], true, true)
-            .expect("should be able to construct empty regex DFA")
-    );
-    /// Used for secret redaction in simple text strings (e.g.: rich content blocks).
-    /// Initially empty - will be populated with user-defined regexes when safe mode is enabled.
-    pub static ref SECRETS_REGEX: RwLock<regex_automata::meta::Regex> = RwLock::new(
-        regex_automata::meta::Regex::new_many(&[] as &[&str])
-            .expect("should be able to construct empty regex")
-    );
-    /// Tracks counts to infer which regex patterns correspond to which secret levels
-    pub static ref REGEX_LEVEL_METADATA: RwLock<RegexLevelMetadata> = RwLock::new(
-        RegexLevelMetadata {
-            enterprise_count: 0,
-            user_count: 0,
-        }
+    /// The information needed to search for secrets in strings or terminal grids.
+    ///
+    /// These are initially empty, and will be populated with regexes when safe mode is enabled.
+    ///
+    /// This is wrapped in an Arc so that readers can clone it cheaply to keep the critical section
+    /// short, allowing writers to set a new set of regexes for future readers without being blocked
+    /// on any users of the old patterns.
+    pub static ref SECRETS_REGEX: Mutex<Arc<SecretsRegex>> = Mutex::new(
+        Arc::new(SecretsRegex {
+            regex: regex_automata::meta::Regex::new_many(&[] as &[&str])
+                .expect("should be able to construct empty regex"),
+            dfas: RegexDFAs::new_many(&[], true, true).expect("should be able to construct empty regex DFA"),
+            level_metadata: RegexLevelMetadata {
+                enterprise_count: 0,
+                user_count: 0,
+            },
+        })
     );
 }
 
@@ -326,16 +340,17 @@ impl SecretMap {
     }
 }
 
-/// Updates secret scanning to separate user-defined regexes from enterprise ones.
-/// Ensures enterprise secrets are handled differently, maintaining separation from user settings.
-/// If the internal [`RegexDFAs`] can't be constructed from the new regexes for any reason,
-/// the current DFA is kept unchanged.
+/// Updates secret scanning with a new set of user-defined and enterprise regexes.
+///
+/// The implementation here ensures enterprise secrets are handled differently, maintaining separation
+/// from the user's configuration in their settings.
+///
+/// If the internal [`RegexDFAs`] or [`regex_automata::meta::Regex`] can't be constructed from the
+/// new regexes for any reason, the current regexes are kept unchanged.
 pub fn set_user_and_enterprise_secret_regexes<'a>(
     user_secrets: impl IntoIterator<Item = &'a regex::Regex>,
     enterprise_secrets: impl IntoIterator<Item = &'a regex::Regex>,
 ) {
-    let mut secrets = SECRETS_DFA.write();
-
     // Collect enterprise and user secrets into vectors to count them
     let enterprise_secrets_vec: Vec<&'a regex::Regex> = enterprise_secrets.into_iter().collect();
     let user_secrets_vec: Vec<&'a regex::Regex> = user_secrets.into_iter().collect();
@@ -356,29 +371,32 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
         .chain(filtered_user_secrets_vec.iter().map(|regex| regex.as_str()))
         .collect_vec();
 
-    // Update the metadata counts first to ensure it's ready when the new regexes are set
-    let mut metadata = REGEX_LEVEL_METADATA.write();
-    metadata.enterprise_count = enterprise_secrets_vec.len();
-    metadata.user_count = filtered_user_secrets_vec.len();
-
-    let mut secrets_regex = SECRETS_REGEX.write();
-    match regex_automata::meta::Regex::new_many(&all_secrets) {
-        Ok(regex) => {
-            *secrets_regex = regex;
-        }
-        Err(err) => {
-            log::error!("Failed to construct new Regex with combined secrets: {err:?}");
-        }
-    }
-
-    match RegexDFAs::new_many(&all_secrets, true, true) {
-        Ok(dfa) => {
-            *secrets = dfa;
-        }
+    // Make sure we can compile both the regex and the DFA before we attempt to replace the live
+    // ones.
+    let dfas = match RegexDFAs::new_many(&all_secrets, true, true) {
+        Ok(dfas) => dfas,
         Err(err) => {
             log::error!("Failed to construct new RegexDFA with combined secrets: {err:?}");
+            return;
         }
     };
+    let secrets_regex = match regex_automata::meta::Regex::new_many(&all_secrets) {
+        Ok(regex) => SecretsRegex {
+            regex,
+            dfas,
+            level_metadata: RegexLevelMetadata {
+                enterprise_count: enterprise_secrets_vec.len(),
+                user_count: filtered_user_secrets_vec.len(),
+            },
+        },
+        Err(err) => {
+            log::error!("Failed to construct new Regex with combined secrets: {err:?}");
+            return;
+        }
+    };
+
+    // Store a shareable reference to the new compiled regex, DFAs, and metadata.
+    *SECRETS_REGEX.lock() = Arc::new(secrets_regex);
 }
 
 /// A wrapper around a [`Point`] that implements [`StepLite`], allowing us to store it in a

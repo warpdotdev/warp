@@ -1,16 +1,16 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::mpsc};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::mpsc;
 
 use anyhow::Result;
 
-use crate::{
-    geometry::rect::RectF,
-    geometry::vector::{vec2f, Vector2F},
-    platform::{self, WindowOptions},
-    windowing::WindowCallbacks,
-    WindowId,
-};
-
 use super::event_loop::AppEvent;
+use crate::geometry::rect::RectF;
+use crate::geometry::vector::{vec2f, Vector2F};
+use crate::platform::{self, WindowOptions};
+use crate::windowing::WindowCallbacks;
+use crate::WindowId;
 
 pub struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,

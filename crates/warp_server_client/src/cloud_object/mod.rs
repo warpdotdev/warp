@@ -1,30 +1,38 @@
-use std::{borrow::Cow, fmt, str::FromStr};
+use std::borrow::Cow;
+use std::fmt;
+use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
-use warp_core::{
-    features::FeatureFlag,
-    ui::{Icon, appearance::Appearance, theme::Fill},
+use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_graphql::object_permissions::AccessLevel;
+use warp_graphql::scalars::time::ServerTimestamp;
+use warpui_core::Element;
+use warpui_core::elements::{
+    Align, ChildAnchor, ConstrainedBox, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
-use warp_graphql::{object_permissions::AccessLevel, scalars::time::ServerTimestamp};
-use warpui_core::{
-    Element,
-    elements::{
-        Align, ChildAnchor, ConstrainedBox, Hoverable, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
-    },
-    ui_components::components::UiComponent,
-};
+use warpui_core::ui_components::components::UiComponent;
 
-use crate::{
-    auth::UserUid,
-    drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind},
-    ids::{FolderId, ServerId, SyncId},
-};
+use crate::auth::UserUid;
+use crate::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
+use crate::ids::{FolderId, ServerId, SyncId};
 
+mod creation;
+mod generic_cloud_object;
+mod server_object;
+mod update;
+
+pub use creation::*;
+pub use generic_cloud_object::*;
+pub use server_object::*;
+pub use update::*;
 /// The type of object id each ObjectType corresponds to.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ObjectIdType {
@@ -132,6 +140,22 @@ pub const JSON_OBJECT_PREFIX: &str = "JSON_";
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum GenericStringObjectFormat {
     Json(JsonObjectType),
+}
+
+/// Represents a unique key for a generic string object. The server enforces that
+/// no two generic string objects have the same key.
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct GenericStringObjectUniqueKey {
+    /// The unique key. E.g. for cloud prefs this is the storage key of the pref.
+    pub key: String,
+
+    /// Whether this key is unique for all generic string objects, or unique per user.
+    pub unique_per: UniquePer,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum UniquePer {
+    User,
 }
 
 // Temporarily suppress clippy warnings about the `ToString` impl until we
@@ -784,6 +808,36 @@ pub enum CloudObjectEventEntrypoint {
     Unknown,
 }
 
+// A newtype for a serialized model that wraps a plain string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerializedModel(String);
+
+impl SerializedModel {
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    pub fn model_as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn take(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for SerializedModel {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevisionAndLastEditor {
+    pub revision: Revision,
+    pub last_editor_uid: Option<String>,
+}
+
 // GraphQL conversion impls.
 
 impl From<GenericStringObjectFormat>
@@ -836,6 +890,27 @@ impl From<CloudObjectEventEntrypoint> for warp_graphql::object::CloudObjectEvent
             CloudObjectEventEntrypoint::ImportModal => GraphQLEntrypoint::ImportModal,
             CloudObjectEventEntrypoint::Onboarding => GraphQLEntrypoint::Onboarding,
             CloudObjectEventEntrypoint::Unknown => GraphQLEntrypoint::Unknown,
+        }
+    }
+}
+
+impl From<GenericStringObjectUniqueKey>
+    for warp_graphql::generic_string_object::GenericStringObjectUniqueKey
+{
+    fn from(key: GenericStringObjectUniqueKey) -> Self {
+        use warp_graphql::generic_string_object::GenericStringObjectUniqueKey as GraphQLKey;
+        GraphQLKey {
+            key: key.key,
+            unique_per: key.unique_per.into(),
+        }
+    }
+}
+
+impl From<UniquePer> for warp_graphql::generic_string_object::UniquePer {
+    fn from(unique_per: UniquePer) -> Self {
+        use warp_graphql::generic_string_object::UniquePer as GraphQLUniquePer;
+        match unique_per {
+            UniquePer::User => GraphQLUniquePer::User,
         }
     }
 }
@@ -982,8 +1057,7 @@ impl TryFrom<warp_graphql::object::Space> for Owner {
 
 impl From<Owner> for warp_graphql::object_permissions::Owner {
     fn from(owner: Owner) -> Self {
-        use warp_graphql::object_permissions::Owner as GraphQLOwner;
-        use warp_graphql::object_permissions::OwnerType;
+        use warp_graphql::object_permissions::{Owner as GraphQLOwner, OwnerType};
         match owner {
             Owner::User { user_uid } => GraphQLOwner {
                 type_: OwnerType::User,

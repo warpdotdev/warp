@@ -1,4 +1,6 @@
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum FilePickerError {

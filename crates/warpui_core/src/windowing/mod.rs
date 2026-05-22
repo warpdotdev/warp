@@ -8,10 +8,9 @@ use pathfinder_geometry::rect::RectF;
 pub use state::{State, StateEvent, WindowManager};
 pub use system::{CreateWindowingSystemError, System};
 
-use crate::{
-    actions::StandardAction, platform::WindowContext, AppContext, AppContextRefMut, CursorInfo,
-    Event, Scene,
-};
+use crate::actions::StandardAction;
+use crate::platform::WindowContext;
+use crate::{AppContext, AppContextRefMut, CursorInfo, Event, Scene};
 
 /// Result of dispatching an event through the UI framework.
 #[derive(Debug, Clone, Copy, Default)]

@@ -2,33 +2,27 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex,
-        Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight::Bold},
-    platform::Cursor,
-    text_layout::ClipConfig,
-    AppContext, Element, EntityId, EventContext, SingletonEntity,
+use warpui::elements::{
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::fonts::Properties;
+use warpui::fonts::Weight::Bold;
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{
-            api::ServerConversationToken,
-            conversation::{AIConversation, AIConversationId},
-        },
-        agent_conversations_model::{
-            entry::AgentConversationEntryId, AgentConversationNavigationSubject,
-            AgentConversationsModel,
-        },
-        blocklist::BlocklistAIHistoryModel,
-    },
-    terminal::view::TerminalAction,
-    ui_components::{blended_colors, icons::Icon},
-    workspace::{RestoreConversationLayout, WorkspaceAction, WorkspaceRegistry},
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent_conversations_model::entry::AgentConversationEntryId;
+use crate::ai::agent_conversations_model::{
+    AgentConversationNavigationSubject, AgentConversationsModel,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::terminal::view::TerminalAction;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::workspace::{RestoreConversationLayout, WorkspaceAction, WorkspaceRegistry};
 
 pub(crate) fn conversation_id_for_agent_id(
     agent_id: &str,

@@ -1,25 +1,25 @@
-use crate::content::text::{FormattedTable, table_cell_offset_maps};
-use crate::{
-    content::text::{BufferBlockStyle, CodeBlockType},
-    render::model::{
-        BlockItem, COMMAND_SPACING, CellLayout, ImageBlockConfig, LaidOutTable, Location,
-        ParagraphBlock, RenderState, TableBlockConfig, TableStyle,
-        location::{HitTestBlockType, HitTestOptions, WrapDirection},
-        table_offset_map,
-        test_utils::{
-            TEST_STYLES, laid_out_paragraph, laid_out_unordered_lists, layout_paragraphs,
-        },
-    },
-};
-use pathfinder_color::ColorU;
-use std::{cell::Cell, sync::Arc};
-use string_offset::CharOffset;
+use std::cell::Cell;
+use std::sync::Arc;
 
+use pathfinder_color::ColorU;
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::fonts::FamilyId;
 use warpui::text_layout::{CaretPosition, TextFrame};
 use warpui::units::IntoPixels;
+
+use crate::content::text::{
+    BufferBlockStyle, CodeBlockType, FormattedTable, table_cell_offset_maps,
+};
+use crate::render::model::location::{HitTestBlockType, HitTestOptions, WrapDirection};
+use crate::render::model::test_utils::{
+    TEST_STYLES, laid_out_paragraph, laid_out_unordered_lists, layout_paragraphs,
+};
+use crate::render::model::{
+    BlockItem, COMMAND_SPACING, CellLayout, ImageBlockConfig, LaidOutTable, Location,
+    ParagraphBlock, RenderState, TableBlockConfig, TableStyle, table_offset_map,
+};
 
 fn test_table_layout() -> LaidOutTable {
     let source = "aaa\tbbb\nccc\tddd\n";
@@ -493,10 +493,10 @@ fn test_hit_scrolled() {
             &Default::default()
         ),
         Location::Text {
-            char_offset: 15.into(),
-            clamped: true,
-            wrap_direction: WrapDirection::Up,
-            block_start: 8.into(),
+            char_offset: 19.into(),
+            clamped: false,
+            wrap_direction: WrapDirection::Down,
+            block_start: 16.into(),
             link: None,
         }
     );
@@ -510,10 +510,10 @@ fn test_hit_scrolled() {
             &Default::default()
         ),
         Location::Text {
-            char_offset: 16.into(),
-            clamped: false,
+            char_offset: 21.into(),
+            clamped: true,
             wrap_direction: WrapDirection::Down,
-            block_start: 16.into(),
+            block_start: 21.into(),
             link: None,
         }
     );
@@ -586,18 +586,18 @@ fn test_hit_code_block() {
     model.set_content(tree);
 
     // Blocks by height:
-    // * 0-32: First paragraph
-    // * 32-56: Margin above code block
-    // * 56-66: First line of code
-    // * 66-76: Second line of code
-    // * 76-92: Margin below code block
+    // * 0-24: First paragraph
+    // * 24-48: Margin above code block
+    // * 48-58: First line of code
+    // * 58-68: Second line of code
+    // * 68-84: Margin below code block
     // The code block is inset by 16px.
 
     // Hits within the code block should have the right start location.
     assert_eq!(
         model.render_coordinates_to_location(
             30.0.into_pixels(),
-            70.0.into_pixels(),
+            62.0.into_pixels(),
             &Default::default()
         ),
         Location::Text {
@@ -615,7 +615,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             10.0.into_pixels(),
-            50.0.into_pixels(),
+            40.0.into_pixels(),
             &Default::default()
         ),
         Location::Block {
@@ -629,7 +629,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             8.0.into_pixels(),
-            60.0.into_pixels(),
+            52.0.into_pixels(),
             &Default::default()
         ),
         Location::Text {
@@ -643,7 +643,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             90.0.into_pixels(),
-            60.0.into_pixels(),
+            52.0.into_pixels(),
             &Default::default()
         ),
         Location::Text {
@@ -659,7 +659,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             (-4.).into_pixels(),
-            60.0.into_pixels(),
+            52.0.into_pixels(),
             &Default::default()
         ),
         Location::Text {
@@ -673,7 +673,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             1000.0.into_pixels(),
-            60.0.into_pixels(),
+            52.0.into_pixels(),
             &Default::default()
         ),
         Location::Text {
@@ -689,7 +689,7 @@ fn test_hit_code_block() {
     assert_eq!(
         model.render_coordinates_to_location(
             27.0.into_pixels(),
-            50.0.into_pixels(),
+            40.0.into_pixels(),
             &HitTestOptions {
                 force_text_selection: true
             }

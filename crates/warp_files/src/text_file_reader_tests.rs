@@ -2,9 +2,8 @@
 
 use std::io::Write as _;
 
-use crate::FileModel;
-
 use super::*;
+use crate::FileModel;
 
 fn make_accumulator(ranges: &[std::ops::Range<usize>], max_bytes: usize) -> TextFileAccumulator {
     TextFileAccumulator::new("test.txt".to_string(), None, ranges, max_bytes)

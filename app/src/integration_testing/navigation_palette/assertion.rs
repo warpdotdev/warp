@@ -1,14 +1,12 @@
-use warpui::integration::AssertionCallback;
-use warpui::{async_assert, integration::AssertionOutcome, App, ViewHandle, WindowId};
+use warpui::integration::{AssertionCallback, AssertionOutcome};
+use warpui::{async_assert, App, ViewHandle, WindowId};
 
-use crate::integration_testing::view_getters::workspace_view;
+use crate::integration_testing::view_getters::{command_palette_view, workspace_view};
 use crate::palette::PaletteMode;
 use crate::pane_group::{PaneId, PaneView};
-use crate::{
-    integration_testing::view_getters::command_palette_view,
-    search::{command_palette::ItemSummary, QueryFilter},
-    terminal::TerminalView,
-};
+use crate::search::command_palette::ItemSummary;
+use crate::search::QueryFilter;
+use crate::terminal::TerminalView;
 
 /// Used to determine which session should be the most recent in Navigation Palette integration tests.
 pub enum RecentSession {

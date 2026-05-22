@@ -7,6 +7,10 @@ use std::f32::consts::PI;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use instant::Instant;
+use rangemap::RangeMap;
+use string_offset::CharOffset;
+
 use crate::color::ColorU;
 pub use crate::elements::shimmering_text::config::ShimmerConfig;
 use crate::elements::shimmering_text::glyph_index::GlyphIndex;
@@ -19,9 +23,6 @@ use crate::text_layout::{
     ClipConfig, Line, PaintStyleOverride, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
 };
 use crate::{AppContext, Element, PaintContext, SizeConstraint};
-use instant::Instant;
-use rangemap::RangeMap;
-use string_offset::CharOffset;
 
 /// A key to determine whether we need to re-layout text to a given invocation of #layout to this
 /// element.

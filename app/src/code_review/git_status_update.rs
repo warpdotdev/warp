@@ -1,10 +1,9 @@
-use warpui::{Entity, SingletonEntity};
-
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
+
 #[cfg(feature = "local_fs")]
 use warpui::ModelContext;
-
+use warpui::{Entity, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use {
     crate::throttle::throttle,
