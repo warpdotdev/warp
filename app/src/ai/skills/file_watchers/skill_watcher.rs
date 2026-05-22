@@ -111,6 +111,12 @@ impl SkillWatcher {
         }
 
         // Subscribe to home directory skills via DirectoryWatcher.
+        // TODO: Migrate home/global skill watching onto RepoMetadataModel as well.
+        // Project skills have moved there first so local and remote project
+        // behavior share one path and avoid a separate local FileWatcher. Home
+        // provider directories and symlink target watches still use
+        // DirectoryWatcher/HomeDirectoryWatcher for now, but should eventually
+        // follow the same model for consistency.
         //
         // We watch each skills "parent directory" under the home directory (e.g., `~/.agents`,
         // `~/.claude`) rather than the entire home directory, to reduce watch overhead.
@@ -140,15 +146,6 @@ impl SkillWatcher {
             }
         }
 
-        RepoMetadataModel::handle(ctx).update(ctx, |repo_metadata, ctx| {
-            repo_metadata.register_ignored_path_interests(
-                SKILL_PROVIDER_DEFINITIONS
-                    .iter()
-                    .map(|provider| provider.skills_path.clone()),
-                ctx,
-            );
-        });
-
         // RepositoryMetadataEvent::RepositoryUpdated fires after the file tree is
         // built, so we can query it for skill files. Project skill updates
         // intentionally use RepoMetadataModel for both local and remote repos
@@ -157,13 +154,13 @@ impl SkillWatcher {
             use repo_metadata::wrapper_model::RepoMetadataEvent;
             match event {
                 RepoMetadataEvent::RepositoryUpdated { id } => {
-                    me.refresh_project_skills_for_repo(&id, ctx);
+                    me.refresh_project_skills_for_repo(id, ctx);
                 }
                 RepoMetadataEvent::FileTreeEntryUpdated { id } => {
-                    me.refresh_project_skills_for_repo(&id, ctx);
+                    me.refresh_project_skills_for_repo(id, ctx);
                 }
                 RepoMetadataEvent::RepositoryRemoved { id } => {
-                    me.remove_project_skills_for_repo(&id);
+                    me.remove_project_skills_for_repo(id);
                 }
                 RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
