@@ -187,6 +187,7 @@ fn setup_model(
         polling_handle: None,
         fetch_generation: 0,
         idle_due_to_no_children: false,
+        pending_session_id_poll_handle: None,
         metadata_fetch_dispatch_count: 0,
     };
 
@@ -311,6 +312,7 @@ fn skips_child_when_no_active_parent_conversation() {
             polling_handle: None,
             fetch_generation: 0,
             idle_due_to_no_children: false,
+            pending_session_id_poll_handle: None,
             metadata_fetch_dispatch_count: 0,
         };
         let model_handle = app.add_model(|_| model);
@@ -858,6 +860,185 @@ fn child_status_changed_refetches_metadata_while_session_id_is_pending() {
                 model.metadata_fetch_dispatch_count, 1,
                 "materialized child + session_id present ⇒ status-only writes; \
                  no additional refetch"
+            );
+        });
+    });
+}
+
+#[test]
+fn pending_session_id_poll_schedules_while_session_id_is_none() {
+    // Regression for the session_id-discovery latency case: when a child
+    // is first observed with session_id=None and no ChildStatusChanged
+    // event fires for many seconds, the pre-existing
+    // `handle_child_status_changed` refetch hook never gets a chance to
+    // run. `maybe_schedule_pending_session_id_poll` plugs that gap by
+    // periodically calling `spawn_task_metadata_fetch` until the entry
+    // is materialized.
+    //
+    // This test verifies the scheduling decision and the poll-tick
+    // dispatch decision without advancing the timer; we drive
+    // `run_pending_session_id_poll` directly (what the timer's callback
+    // would do).
+    App::test((), |mut app| async move {
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Register a pre-claim child (session_id=None).
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::Queued,
+                    "Worker",
+                    None,
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                model.has_pending_session_id_children(),
+                "sanity: pre-claim child should be pending materialization"
+            );
+            assert!(
+                model.pending_session_id_poll_handle.is_some(),
+                "register_child for a pre-claim child must schedule the polling timer"
+            );
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 0,
+                "direct register_child bypasses spawn_task_metadata_fetch; \
+                 the counter only increments on poll-tick dispatch"
+            );
+        });
+
+        // Simulate a timer tick by directly invoking the poll body. The
+        // tick should dispatch one metadata refetch and reschedule the
+        // timer because the child is still pending.
+        model_handle.update(&mut app, |model, ctx| {
+            model.run_pending_session_id_poll(ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 1,
+                "poll tick must dispatch one metadata refetch per pending child"
+            );
+            assert!(
+                model.pending_session_id_poll_handle.is_some(),
+                "poll tick must reschedule the timer while children remain pending"
+            );
+        });
+
+        // Simulate the refetch callback delivering a task with a session_id;
+        // the existing-entry branch of register_child flips
+        // pane_materialization_requested and the poll should self-cancel
+        // on the next tick.
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    Some(SESSION_A),
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                !model.has_pending_session_id_children(),
+                "materialized child must clear the pending gate"
+            );
+        });
+
+        // Drive the next tick: it should observe no pending children and
+        // NOT reschedule the timer.
+        model_handle.update(&mut app, |model, ctx| {
+            model.pending_session_id_poll_handle = None;
+            model.run_pending_session_id_poll(ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 1,
+                "poll tick with no pending children must dispatch zero refetches"
+            );
+            assert!(
+                model.pending_session_id_poll_handle.is_none(),
+                "poll tick with no pending children must NOT reschedule the timer"
+            );
+        });
+    });
+}
+
+#[test]
+fn pending_session_id_poll_does_not_schedule_when_no_children_pending() {
+    // Belt-and-braces: registering a child that already has a session_id
+    // should NOT schedule the polling timer at all, since there's nothing
+    // to discover. This bounds polling cost in the common case where the
+    // server has already claimed execution by the time we observe the
+    // child.
+    App::test((), |mut app| async move {
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.register_child(
+                make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    Some(SESSION_A),
+                ),
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                !model.has_pending_session_id_children(),
+                "sanity: post-claim child is not pending"
+            );
+            assert!(
+                model.pending_session_id_poll_handle.is_none(),
+                "post-claim child must NOT schedule the polling timer"
+            );
+        });
+    });
+}
+
+#[test]
+fn pending_session_id_poll_dispatches_per_pending_child() {
+    // Two pre-claim children → one timer; the tick should dispatch one
+    // refetch per pending child.
+    App::test((), |mut app| async move {
+        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        for child_id in [CHILD_A_TASK_ID, CHILD_B_TASK_ID] {
+            model_handle.update(&mut app, |model, ctx| {
+                model.register_child(
+                    make_task(child_id, AmbientAgentTaskState::Queued, "Worker", None),
+                    ctx,
+                );
+            });
+        }
+        model_handle.read(&app, |model, _| {
+            assert_eq!(model.children.len(), 2);
+            assert!(model.pending_session_id_poll_handle.is_some());
+            assert_eq!(model.metadata_fetch_dispatch_count, 0);
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.run_pending_session_id_poll(ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert_eq!(
+                model.metadata_fetch_dispatch_count, 2,
+                "poll tick must dispatch one refetch per pending child"
             );
         });
     });

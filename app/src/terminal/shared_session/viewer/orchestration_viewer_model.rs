@@ -59,6 +59,25 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// children.
 const STATUS_POLL_INTERVAL_IDLE: Duration = Duration::from_secs(30);
 
+/// Cadence for the per-child `session_id` discovery refetch used by the
+/// streamer-driven path. While at least one child is registered with
+/// `session_id = None` (or has never had its pane materialized), we
+/// periodically refetch its pill metadata via `get_ambient_agent_task`.
+///
+/// This is needed because lifecycle events (`ChildStatusChanged`) carry
+/// only the new status, not the claim-time `session_id`. If the server
+/// takes a long time to claim execution for a child (e.g. queued waiting
+/// for capacity) and no lifecycle transition fires in between, the
+/// `session_id` would never get back-filled by the existing
+/// `handle_child_status_changed` refetch hook and the user would stare at
+/// "Loading session..." indefinitely. A repro logged a 24s window of
+/// session_id pending; a 5s cadence comfortably catches that.
+///
+/// The timer self-cancels when every tracked child has both
+/// `session_id = Some(_)` and `pane_materialization_requested = true`,
+/// so cost is bounded by how long children stay pre-claim.
+const PENDING_SESSION_ID_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Per-child orchestration metadata, keyed by `AmbientAgentTaskId`.
 struct ChildAgentEntry {
     conversation_id: AIConversationId,
@@ -105,6 +124,15 @@ pub struct OrchestrationViewerModel {
     /// an `AppendedExchange` on the orchestrator before polling again.
     /// Distinct from the in-flight state (`polling_handle = None`).
     idle_due_to_no_children: bool,
+    /// Timer chain for the per-child `session_id` discovery refetch.
+    /// Scheduled by `maybe_schedule_pending_session_id_poll` whenever any
+    /// tracked child is still pending materialization
+    /// (`session_id.is_none() || !pane_materialization_requested`).
+    /// Reschedules itself on each tick until every child has materialized;
+    /// then stays `None` until the next pending child is registered.
+    /// Always `None` on the legacy polling path, which gets the same
+    /// late-bind behaviour for free via the full-list refetch.
+    pending_session_id_poll_handle: Option<SpawnedFutureHandle>,
     /// Test-only: increments each time `spawn_task_metadata_fetch` is
     /// invoked. Lets unit tests assert on the refetch dispatch decisions
     /// in `handle_child_spawned` and `handle_child_status_changed`
@@ -169,6 +197,7 @@ impl OrchestrationViewerModel {
                 polling_handle: None,
                 fetch_generation: 0,
                 idle_due_to_no_children: false,
+                pending_session_id_poll_handle: None,
                 #[cfg(test)]
                 metadata_fetch_dispatch_count: 0,
             };
@@ -197,6 +226,7 @@ impl OrchestrationViewerModel {
             polling_handle: None,
             fetch_generation: 0,
             idle_due_to_no_children: false,
+            pending_session_id_poll_handle: None,
             #[cfg(test)]
             metadata_fetch_dispatch_count: 0,
         };
@@ -533,6 +563,10 @@ impl OrchestrationViewerModel {
                 entry.pane_materialization_requested = true;
                 self.request_child_pane_materialization(conversation_id, sid, ctx);
             }
+            // Existing-entry branch may have transitioned the entry to
+            // fully-materialized; the helper short-circuits when no children
+            // remain pending, so this is safe to call unconditionally.
+            self.maybe_schedule_pending_session_id_poll(ctx);
             return;
         }
 
@@ -621,6 +655,101 @@ impl OrchestrationViewerModel {
         if let Some(sid) = session_id {
             self.request_child_pane_materialization(conversation_id, sid, ctx);
         }
+
+        // A freshly-registered entry with `session_id = None` (the most
+        // common case for the streamer path) needs the periodic refetch
+        // timer running so the claim-time session_id eventually flows in.
+        // No-ops on the legacy polling path (its full-list refetch already
+        // covers the same ground).
+        self.maybe_schedule_pending_session_id_poll(ctx);
+    }
+
+    // ---- Pending-session_id polling (streamer path) -------------------
+
+    /// Returns true iff at least one tracked child is still pending
+    /// materialization. Used by [`Self::maybe_schedule_pending_session_id_poll`]
+    /// as the timer's continuation gate.
+    fn has_pending_session_id_children(&self) -> bool {
+        self.children
+            .values()
+            .any(|entry| entry.session_id.is_none() || !entry.pane_materialization_requested)
+    }
+
+    /// Schedules the next [`PENDING_SESSION_ID_POLL_INTERVAL`] tick of the
+    /// streamer-path session_id discovery refetch, iff:
+    /// - the streamer flag is on (legacy path covers this via its full
+    ///   list refetch),
+    /// - no timer is currently in flight, and
+    /// - at least one tracked child is still pending materialization.
+    ///
+    /// Safe to call unconditionally; the early-return guards keep it cheap.
+    fn maybe_schedule_pending_session_id_poll(&mut self, ctx: &mut ModelContext<Self>) {
+        if !FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
+            return;
+        }
+        if self.pending_session_id_poll_handle.is_some() {
+            return;
+        }
+        if !self.has_pending_session_id_children() {
+            return;
+        }
+        let handle = ctx.spawn(
+            async {
+                Timer::after(PENDING_SESSION_ID_POLL_INTERVAL).await;
+            },
+            |me, _, ctx| {
+                me.pending_session_id_poll_handle = None;
+                me.run_pending_session_id_poll(ctx);
+            },
+        );
+        self.pending_session_id_poll_handle = Some(handle);
+    }
+
+    /// Body of the pending-session_id timer tick. Dispatches a metadata
+    /// refetch for every child whose `session_id` is still unknown or
+    /// whose pane has never been materialized, then reschedules the timer
+    /// if any pending children remain.
+    ///
+    /// Each refetch goes through [`Self::spawn_task_metadata_fetch`],
+    /// which routes the response into the existing-entry branch of
+    /// [`Self::register_child`]. That branch flips
+    /// `pane_materialization_requested` and emits
+    /// `EnsureSharedSessionViewerChildPane` once the server returns a
+    /// claim-time `session_id`.
+    fn run_pending_session_id_poll(&mut self, ctx: &mut ModelContext<Self>) {
+        let pending: Vec<AmbientAgentTaskId> = self
+            .children
+            .iter()
+            .filter(|(_, entry)| {
+                entry.session_id.is_none() || !entry.pane_materialization_requested
+            })
+            .map(|(task_id, _)| *task_id)
+            .collect();
+
+        if pending.is_empty() {
+            // The last tick's refetches already filled in session_id and
+            // flipped pane_materialization_requested for every tracked
+            // child; nothing left to do.
+            return;
+        }
+
+        log::info!(
+            "[orch-viewer-loading] PendingSessionIdPoll: refetching {} pending child(ren) \
+             parent_task_id={}",
+            pending.len(),
+            self.parent_task_id,
+        );
+
+        for task_id in pending {
+            self.spawn_task_metadata_fetch(task_id, "PendingSessionIdPoll", ctx);
+        }
+
+        // Reschedule the next tick. has_pending_session_id_children will
+        // return false (and the timer will stop) once every pending
+        // entry's refetch callback has completed and flipped
+        // pane_materialization_requested via register_child's
+        // existing-entry branch.
+        self.maybe_schedule_pending_session_id_poll(ctx);
     }
 
     // ---- Legacy polling path (FeatureFlag::OrchestrationViewerStreamer off)
