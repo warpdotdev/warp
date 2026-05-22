@@ -67,7 +67,9 @@ use crate::terminal::shared_session::shared_handlers::{
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
-use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
 use crate::terminal::CLIAgent;
 
@@ -628,6 +630,7 @@ fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_owner() {
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(restored_conversation),
                 true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
                 ctx,
             );
         });
@@ -712,6 +715,7 @@ fn restoring_existing_conversation_inline_enters_agent_view_without_duplicate_bl
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(restored_conversation),
                 false,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
                 ctx,
             );
 
@@ -782,7 +786,15 @@ fn clicking_old_banner_for_open_conversation_focuses_current_owner_without_trans
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(restored_conversation),
                 true,
+                RestoreConversationEntryBehavior::PreserveAgentViewState,
                 ctx,
+            );
+            assert_eq!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id(),
+                None
             );
             view.agent_view_controller().update(ctx, |controller, ctx| {
                 controller
@@ -899,6 +911,7 @@ fn appended_exchange_renders_in_current_owner_after_conversation_transfer() {
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(restored_conversation),
                 true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
                 ctx,
             );
         });

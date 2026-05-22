@@ -17,7 +17,9 @@ use crate::persistence::ModelEvent;
 use crate::server::telemetry::TelemetryAgentViewEntryOrigin;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::rich_content::RichContentType;
-use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
 use crate::terminal::view::{
     AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata,
 };
@@ -155,6 +157,7 @@ impl TerminalView {
             self.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(conversation),
                 false,
+                RestoreConversationEntryBehavior::PreserveAgentViewState,
                 ctx,
             );
             if let Err(e) = self.try_enter_agent_view(
@@ -212,6 +215,7 @@ impl TerminalView {
                 me.restore_conversation_and_directory_context(
                     conversation,
                     false,
+                    RestoreConversationEntryBehavior::PreserveAgentViewState,
                     on_restored,
                     ctx,
                 );
