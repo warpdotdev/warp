@@ -36,10 +36,11 @@ use super::keybindings::KeyBindingModifyingState;
 #[cfg(feature = "local_tty")]
 use super::settings_page::render_sub_sub_header;
 use super::settings_page::{
-    add_setting, build_reset_button, render_body_item, render_body_item_label,
-    render_dropdown_item, render_dropdown_item_label, render_local_only_icon, AdditionalInfo,
-    Category, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, ToggleState, CONTENT_FONT_SIZE, HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+    add_setting, build_reset_button, build_toggle_element, render_body_item,
+    render_body_item_label, render_dropdown_item, render_dropdown_item_label,
+    render_local_only_icon, AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, CONTENT_FONT_SIZE,
+    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
     features, flags, DisplayCount, SettingsAction, SettingsSection, ToggleSettingActionPair,
@@ -2521,12 +2522,10 @@ impl FeaturesPageView {
             general_widgets.push(Box::new(DefaultTerminalWidget::default()));
         }
 
-        // Gated behind the `AsyncFind` feature flag. The widget itself reads from
-        // `TerminalSettings::async_find_enabled`; both the flag and the setting must
-        // be on for async find to actually run (see `TerminalSettings::is_async_find_enabled`).
-        if FeatureFlag::AsyncFind.is_enabled() {
-            general_widgets.push(Box::new(AsyncFindWidget::default()));
-        }
+        // The widget is the opt-in surface for channels where `FeatureFlag::AsyncFind`
+        // is off. Channels with the flag on force the feature on and hide the toggle
+        // entirely; see `TerminalSettings::is_async_find_enabled`.
+        general_widgets.push(Box::new(AsyncFindWidget::default()));
 
         let app_editor_settings = AppEditorSettings::as_ref(ctx);
 
@@ -7289,7 +7288,7 @@ impl SettingsWidget for AsyncFindWidget {
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AsyncFind.is_enabled()
+        !FeatureFlag::AsyncFind.is_enabled()
     }
 
     fn render(
@@ -7299,8 +7298,10 @@ impl SettingsWidget for AsyncFindWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(
+
+        let label = render_body_item_label::<FeaturesPageAction>(
             "Asynchronous find".into(),
+            None,
             None,
             LocalOnlyIconState::for_setting(
                 AsyncFindEnabled::storage_key(),
@@ -7313,18 +7314,48 @@ impl SettingsWidget for AsyncFindWidget {
             ),
             ToggleState::Enabled,
             appearance,
-            ui_builder
-                .switch(self.switch_state.clone())
-                .check(*TerminalSettings::as_ref(app).async_find_enabled)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleAsyncFind);
-                })
-                .finish(),
+        );
+
+        let label_with_chip = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label)
+            .with_child(render_beta_chip(appearance))
+            .finish();
+
+        let switch = ui_builder
+            .switch(self.switch_state.clone())
+            .check(*TerminalSettings::as_ref(app).async_find_enabled)
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(FeaturesPageAction::ToggleAsyncFind);
+            })
+            .finish();
+
+        build_toggle_element(
+            label_with_chip,
+            switch,
+            appearance,
             Some(
                 "Run find on a background thread to keep the UI responsive on large outputs."
                     .into(),
             ),
         )
     }
+}
+
+/// Small inline pill rendered next to a settings label to mark a feature as beta.
+fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
+    Container::new(
+        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
+            .with_color(chip_color)
+            .finish(),
+    )
+    .with_background(theme.surface_3())
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+    .with_horizontal_padding(4.)
+    .with_vertical_padding(1.)
+    .with_margin_left(8.)
+    .finish()
 }
