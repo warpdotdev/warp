@@ -3480,6 +3480,10 @@ impl PaneGroup {
         child_session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
+        log::info!(
+            "[orch-viewer-loading] ensure_shared_session_viewer_child_pane: entering for \
+             conversation_id={child_conversation_id:?} session_id={child_session_id}"
+        );
         // Race recovery: a pill click before materialization had a
         // `session_id` falls through to `create_hidden_child_agent_pane`,
         // which leaves a loading placeholder in `child_agent_panes`. The
@@ -3493,6 +3497,11 @@ impl PaneGroup {
             .filter(|pane_id| self.has_pane_id(*pane_id))
         {
             let anchor = self.panes.original_pane_for_replacement(prior_pane_id);
+            log::info!(
+                "[orch-viewer-loading] ensure_shared_session_viewer_child_pane: discarding prior \
+                 fallback pane for conversation_id={child_conversation_id:?} \
+                 prior_pane_id={prior_pane_id:?} anchor={anchor:?}"
+            );
             self.discard_child_agent_pane_for_conversation(child_conversation_id, ctx);
             anchor
         } else {
@@ -3583,6 +3592,11 @@ impl PaneGroup {
         if let Some(anchor) = fallback_was_swapped_anchor {
             self.swap_active_pane_to_conversation(anchor, child_conversation_id, ctx);
         }
+        log::info!(
+            "[orch-viewer-loading] ensure_shared_session_viewer_child_pane: attached viewer pane \
+             conversation_id={child_conversation_id:?} session_id={child_session_id} \
+             new_pane_id={new_pane_id:?} (pane will sit in ViewPending until Network::start_websocket completes)"
+        );
     }
 
     /// Helper that creates the initial [`PaneData`] and [`InitialFocus`] given a terminal view.

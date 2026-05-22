@@ -907,6 +907,13 @@ impl TerminalManager {
                 });
             }
             NetworkEvent::FailedToJoin { reason } => {
+                let session_id = network.as_ref(ctx).session_id();
+                log::warn!(
+                    "[orch-viewer-loading] viewer TerminalManager: NetworkEvent::FailedToJoin \
+                     session_id={session_id} reason={reason:?} — showing toast and leaving pane \
+                     in SharedSessionStatus::ViewPending. The 'Loading session...' UI will not \
+                     clear without a manual retry or a fresh ensure_shared_session_viewer_child_pane."
+                );
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };

@@ -855,6 +855,12 @@ impl OrchestrationViewerModel {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
+        let child_task_id = self.children_by_run_id.iter().find_map(|(_, task_id)| {
+            self.children
+                .get(task_id)
+                .filter(|entry| entry.conversation_id == conversation_id)
+                .map(|_| *task_id)
+        });
         let Some(view) = self.terminal_view.upgrade(ctx) else {
             log::warn!(
                 "[orch-viewer] cannot request child pane materialization for conv={conversation_id:?}: \
@@ -862,6 +868,13 @@ impl OrchestrationViewerModel {
             );
             return;
         };
+        log::info!(
+            "[orch-viewer-loading] dispatching EnsureSharedSessionViewerChildPane \
+             conversation_id={conversation_id:?} session_id={session_id} \
+             child_task_id={child_task_id:?} parent_task_id={} terminal_view_id={:?}",
+            self.parent_task_id,
+            self.terminal_view_id,
+        );
         view.update(ctx, |_view, ctx| {
             ctx.emit(TerminalViewEvent::EnsureSharedSessionViewerChildPane {
                 conversation_id,
