@@ -160,7 +160,7 @@ winget install -e --id JRSoftware.InnoSetup
 # protoc (Protocol Buffers compiler) is required by prost-build.
 winget install -e --id Google.Protobuf
 if (-not (Get-Command -Name protoc -Type Application -ErrorAction SilentlyContinue)) {
-    $env:PATH += ";$env:ProgramFiles\protobuf\bin"
+    $env:PATH += ";$env:LOCALAPPDATA\Microsoft\WinGet\Links"
 }
 
 # LLVM provides libclang, which is required by bindgen.
