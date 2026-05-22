@@ -613,8 +613,8 @@ jobs:
         run:
           cargo metadata --locked --format-version=1 > ${{ matrix.null_device }} || (echo "::error::Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
 
-      - name: Run cargo fmt
-        run: cargo fmt --check
+      - name: Run ./script/format
+        run: ./script/format --check
 
       - name: Run cargo clippy
         shell: bash
@@ -724,8 +724,8 @@ jobs:
         run:
           cargo metadata --locked --format-version=1 >/dev/null || (echo "::error::Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
 
-      - name: Run cargo fmt
-        run: cargo fmt --check
+      - name: Run ./script/format
+        run: ./script/format --check
 
       - name: Run cargo clippy
         run: |

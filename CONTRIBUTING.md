@@ -171,7 +171,7 @@ Run unit tests with `cargo nextest run`.
 
 ## Code Style
 
-- `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
+- `./script/format --check` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
 - Prefer imports over path qualifiers, inline format args (`println!("{x}")`), and exhaustive `match` over `_` wildcards.
 - See [WARP.md](WARP.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
 
