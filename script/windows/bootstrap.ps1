@@ -46,7 +46,7 @@ function Show-BootstrapPreview {
     Write-Output 'It will:'
     Write-Output '  - Check for Git for Windows.'
     Write-Output '  - Install Rust if cargo is unavailable.'
-    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, InnoSetup, and gcloud as needed.'
+    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, InnoSetup, protoc, LLVM, and gcloud as needed.'
     Write-Output '  - Install Cargo test dependencies.'
 
     if (-not $InstallCommonSkills) {
@@ -156,6 +156,12 @@ winget install -e --id Kitware.CMake
 
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup
+
+# protoc (Protocol Buffers compiler) is required by prost-build.
+winget install protobuf
+
+# LLVM provides libclang, which is required by bindgen.
+winget install -e --id LLVM.LLVM
 
 # If we don't see gcloud command, try adding the install location to the PATH.
 if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
