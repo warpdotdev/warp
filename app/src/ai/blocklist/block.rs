@@ -6607,35 +6607,42 @@ impl TypedActionView for AIBlock {
                 });
             }
             AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
-                let submitted_images = self
+                let decoded_images = self
                     .model
                     .inputs_to_render(ctx)
                     .iter()
                     .filter_map(|input| input.context())
                     .flat_map(|contexts| contexts.iter())
                     .filter_map(|context| match context {
-                        AIAgentContext::Image(image) => Some(image.clone()),
+                        AIAgentContext::Image(image) => Some(image),
                         _ => None,
+                    })
+                    .enumerate()
+                    .filter_map(|(submitted_image_index, image)| {
+                        let image_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                                Ok(image_bytes) => image_bytes,
+                                Err(error) => {
+                                    log::warn!(
+                                        "Failed to decode submitted image attachment for lightbox: {error}"
+                                    );
+                                    return None;
+                                }
+                            };
+
+                        Some((submitted_image_index, image_bytes, image.file_name.clone()))
                     })
                     .collect_vec();
                 let mut images = Vec::new();
                 let mut initial_index = None;
-                for (submitted_image_index, image) in submitted_images.iter().enumerate() {
-                    let image_bytes =
-                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                            Ok(image_bytes) => image_bytes,
-                            Err(error) => {
-                                log::warn!(
-                                "Failed to decode submitted image attachment for lightbox: {error}"
-                            );
-                                continue;
-                            }
-                        };
-
+                for (submitted_image_index, image_bytes, file_name) in decoded_images {
                     let asset_id = format!(
                         "submitted-attachment-lightbox-{}-{submitted_image_index}",
                         self.client_ids.client_exchange_id
                     );
+                    // Raw assets are keyed by exchange/image index, so repeated opens replace the
+                    // same cache entry. `AssetCache` also enforces its raw-asset size cap when
+                    // inserting, so no lightbox-specific cleanup is needed here.
                     AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                         asset_cache.insert_raw_asset_bytes::<ImageType>(
                             asset_id.clone(),
@@ -6653,7 +6660,7 @@ impl TypedActionView for AIBlock {
                                 id: asset_id,
                             },
                         },
-                        description: Some(image.file_name.clone()),
+                        description: Some(file_name),
                     });
                 }
 
