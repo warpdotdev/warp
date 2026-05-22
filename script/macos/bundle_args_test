@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUNDLE_SCRIPT="$REPO_ROOT/script/macos/bundle"
+TMP_DIR="$(mktemp -d)"
+WORK_DIR="$TMP_DIR/work"
+BIN_DIR="$TMP_DIR/bin"
+CALL_LOG="$TMP_DIR/calls.log"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+mkdir -p "$WORK_DIR/app" "$WORK_DIR/script" "$BIN_DIR"
+: > "$CALL_LOG"
+
+write_stub() {
+  local name="$1"
+  local body="$2"
+  local path="$BIN_DIR/$name"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf '%s\n' "$body"
+  } > "$path"
+  chmod +x "$path"
+}
+
+write_stub rustc 'printf '\''target_arch="aarch64"\n'\'''
+write_stub rustup 'printf '\''rustup %s\n'\'' "$*" >> "$CALL_LOG"'
+write_stub cargo 'printf '\''cargo %s\n'\'' "$*" >> "$CALL_LOG"'
+write_stub install_name_tool 'printf '\''install_name_tool %s\n'\'' "$*" >> "$CALL_LOG"'
+write_stub hdiutil 'exit 0'
+write_stub plutil 'printf '\''plutil %s\n'\'' "$*" >> "$CALL_LOG"'
+write_stub lipo 'printf '\''lipo %s\n'\'' "$*" >> "$CALL_LOG"'
+
+for helper in update_plist prepare_bundled_resources compile_icon; do
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'printf %q "$0 $*" >> %q\n' 'helper ${*}' "$CALL_LOG"
+  } > "$WORK_DIR/script/$helper"
+  chmod +x "$WORK_DIR/script/$helper"
+done
+
+run_bundle() {
+  (
+    cd "$WORK_DIR"
+    PATH="$BIN_DIR:$PATH" CALL_LOG="$CALL_LOG" "$BUNDLE_SCRIPT" "$@"
+  )
+}
+
+assert_contains() {
+  local needle="$1"
+  local haystack="$2"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    echo "Expected output to contain: $needle" >&2
+    echo "Actual output:" >&2
+    echo "$haystack" >&2
+    exit 1
+  fi
+}
+
+assert_not_contains() {
+  local needle="$1"
+  local haystack_file="$2"
+  if grep -q "$needle" "$haystack_file"; then
+    echo "Expected $haystack_file not to contain: $needle" >&2
+    cat "$haystack_file" >&2
+    exit 1
+  fi
+}
+
+output="$(run_bundle --help 2>&1)"
+assert_contains "Usage:" "$output"
+assert_not_contains "cargo" "$CALL_LOG"
+assert_not_contains "rustup" "$CALL_LOG"
+
+set +e
+output="$(run_bundle --channel oss --check-only 2>&1)"
+status=$?
+set -e
+if [[ "$status" -eq 0 ]]; then
+  echo "Expected missing platform selector to fail" >&2
+  exit 1
+fi
+assert_contains "must specify exactly one platform" "$output"
+
+: > "$CALL_LOG"
+run_bundle --channel oss --check-only --arch aarch64 >/dev/null
+assert_contains "--target aarch64-apple-darwin" "$(cat "$CALL_LOG")"
+assert_not_contains "rustup target add" "$CALL_LOG"
+
+: > "$CALL_LOG"
+set +e
+output="$(run_bundle --channel oss --check-only --nouniversal 2>&1)"
+status=$?
+set -e
+if [[ "$status" -eq 0 ]]; then
+  echo "Expected --nouniversal to fail" >&2
+  exit 1
+fi
+assert_contains "--nouniversal no longer selects a platform" "$output"
+assert_not_contains "cargo" "$CALL_LOG"
+
+: > "$CALL_LOG"
+run_bundle --channel oss --check-only --universal >/dev/null
+call_log="$(cat "$CALL_LOG")"
+assert_contains "rustup target add x86_64-apple-darwin" "$call_log"
+assert_contains "--target aarch64-apple-darwin" "$call_log"
+assert_contains "--target x86_64-apple-darwin" "$call_log"
+
+echo "bundle_args_test passed"

@@ -39,6 +39,35 @@ set -e
 # Determine the repository root directory
 WORKSPACE_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+usage() {
+  cat <<'EOF'
+Usage: script/macos/bundle (--arch <aarch64|x86_64> | --universal) [options]
+
+Build or check a macOS Warper bundle.
+
+Platform selection:
+  --arch <aarch64|x86_64>  Build for one explicit macOS architecture.
+  --universal             Build a universal app bundle for aarch64 and x86_64.
+
+Options:
+  --help, -h              Show this help message.
+  --debug                 Use the dev Cargo profile.
+  --check-only            Run cargo check without producing a bundle.
+  --skip-build            Skip building the binary.
+  --nosign                Skip code signing.
+  --selfsign              Sign with a local Apple Development cert, or ad-hoc.
+  --dmg-name-suffix NAME  Append NAME to the generated DMG filename.
+  -o, --open              Open the parent directory after bundling.
+  -c, --channel CHANNEL   Release channel. Warper only supports oss.
+  --release-tag TAG       Set GIT_RELEASE_TAG for the build.
+  --read-passwords-from-env
+                           Read codesigning passwords from environment variables.
+  --features FEATURES     Add comma-separated Cargo features.
+  --artifact <app|cli>    Build the app bundle or standalone CLI.
+
+EOF
+}
+
 # This is used to set the minimum deployment target for mac
 # https://cmake.org/cmake/help/latest/envvar/MACOSX_DEPLOYMENT_TARGET.html
 # If unset, it uses the system one, but we want to build for older versions
@@ -53,11 +82,22 @@ INTEL_ARCH="x86_64"
 INTEL_TARGET="$INTEL_ARCH-apple-darwin"
 ARM_ARCH="aarch64"
 ARM_TARGET="$ARM_ARCH-apple-darwin"
-DEFAULT_ARCH="$(rustc --print cfg | grep target_arch)"
+
+set_platform() {
+  if [[ -n "$PLATFORM_SELECTION" ]]; then
+    echo "Error: must specify exactly one platform: --arch aarch64, --arch x86_64, or --universal." >&2
+    exit 1
+  fi
+  PLATFORM_SELECTION="$1"
+}
 
 # Function to clean up temporary DMG files
 cleanup_dmg_files() {
-    local target_dir="$1"
+    local target_dir="${1:-}"
+    if [ -z "$target_dir" ]; then
+        return
+    fi
+
     if [ -d "$target_dir" ]; then
         echo "Cleaning up temporary DMG files in $target_dir"
         find "$target_dir" -name "*.dmg" -type f -delete
@@ -87,9 +127,10 @@ function relpath() {
 }
 
 # Defaults for command-line flags.
-UNIVERSAL_BINARY=true
+UNIVERSAL_BINARY=false
 BUILD_BINARY=true
 TARGET_ARCH=""
+PLATFORM_SELECTION=""
 DMG_NAME_SUFFIX=""
 # By default we build local-first OSS Warper bundles.
 RELEASE_CHANNEL="oss"
@@ -105,6 +146,10 @@ READ_PASSWORDS_FROM_ENV=false
 PARAMS=""
 while (( "$#" )); do
   case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
     # Speed up compilation time by only compiling a debug version of the app,
     # rather than a release version
     --debug)
@@ -141,14 +186,20 @@ while (( "$#" )); do
       ;;
     # Build only for the default target architecture instead of universal binary
     --nouniversal)
-      echo "Only building for default target $DEFAULT_TARGET, not a universal binary."
-      UNIVERSAL_BINARY=false
+      echo "Error: --nouniversal no longer selects a platform; use --arch aarch64, --arch x86_64, or --universal." >&2
+      exit 1
+      ;;
+    # Build a universal binary for both supported macOS architectures.
+    --universal)
+      set_platform "universal"
+      UNIVERSAL_BINARY=true
       shift
       ;;
     # Build only for a specific architecture (implies --nouniversal)
     --arch)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
         if [ "$2" = "x86_64" -o "$2" = "aarch64" ]; then
+          set_platform "arch"
           echo "Building for specific architecture: $2"
           TARGET_ARCH=$2
           UNIVERSAL_BINARY=false
@@ -242,6 +293,11 @@ if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
   exit 1
 fi
 
+if [[ -z "$PLATFORM_SELECTION" ]]; then
+  echo "Error: must specify exactly one platform: --arch aarch64, --arch x86_64, or --universal." >&2
+  exit 1
+fi
+
 # Infer a cargo profile from the bundle configuration.
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
@@ -317,9 +373,25 @@ fi
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
 DOCK_TILE_PLUGIN_DIR="target/$TARGET_PROFILE_DIR/WarpDockTilePlugin.docktileplugin"
 
-# Handle specific architecture targeting
+# Set artifact-specific configuration.
+if [[ "$ARTIFACT" == cli ]]; then
+  if [[ $UNIVERSAL_BINARY = true ]]; then
+    echo "Error: --universal is only supported for app bundles; use --arch for CLI builds." >&2
+    exit 1
+  fi
+  UNIVERSAL_BINARY=false
+  OPEN_AFTER_BUNDLE=false
+  FEATURES="$FEATURES,standalone"
+elif [[ "$ARTIFACT" == app ]]; then
+  FEATURES="$FEATURES,gui,nld_improvements"
+fi
+
+if [[ $UNIVERSAL_BINARY = true ]]; then
+    DEFAULT_ARCH="$(rustc --print cfg | grep target_arch)"
+fi
+
+# Handle specific architecture targeting.
 if [[ -n "$TARGET_ARCH" ]]; then
-    # Building for a specific architecture
     if [[ "$TARGET_ARCH" == "$INTEL_ARCH" ]]; then
         echo "Building specifically for $INTEL_TARGET"
         DEFAULT_TARGET="$INTEL_TARGET"
@@ -330,7 +402,8 @@ if [[ -n "$TARGET_ARCH" ]]; then
         BUNDLE_DIR="target/$ARM_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
     fi
 else
-    # Auto-detect default target based on current architecture
+    # Auto-detect the native target that cargo-bundle should create, then build
+    # the other macOS target separately for the universal executable.
     if [[ "$DEFAULT_ARCH" == *"$INTEL_ARCH"* ]]; then
         echo "Default target is $INTEL_TARGET"
         DEFAULT_TARGET="$INTEL_TARGET"
@@ -342,15 +415,6 @@ else
         ADDITIONAL_TARGET="$INTEL_TARGET"
         BUNDLE_DIR="target/$ARM_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
     fi
-fi
-
-# Set artifact-specific configuration.
-if [[ "$ARTIFACT" == cli ]]; then
-  UNIVERSAL_BINARY=false
-  OPEN_AFTER_BUNDLE=false
-  FEATURES="$FEATURES,standalone"
-elif [[ "$ARTIFACT" == app ]]; then
-  FEATURES="$FEATURES,gui,nld_improvements"
 fi
 
 # If we're building a universal bundle for the app artifact, make sure the additional target is available.
