@@ -120,6 +120,8 @@ pub enum CodeEditorEvent {
     },
     /// Emitted when a diff hunk is reverted
     DiffReverted,
+    /// Emitted when the inline comment editor is opened.
+    CommentEditorOpened,
     HiddenSectionExpanded,
     /// Emitted when a comment is saved. This gets propagated up so that it
     /// can be augmented with the file and repo paths and saved to the comment model.
@@ -2108,6 +2110,7 @@ impl CodeEditorView {
         self.model.update(ctx, |editor_model, ctx| {
             editor_model.reopen_comment_line(id, location, comment_text, origin, ctx);
         });
+        ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
         ctx.notify();
     }

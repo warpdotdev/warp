@@ -728,11 +728,9 @@ impl TerminalManager {
                 participant_list,
                 input_replica_id,
                 universal_developer_input_context,
-                source_type,
+                source,
             } => {
-                model
-                    .lock()
-                    .set_shared_session_source_type(source_type.clone());
+                model.lock().set_shared_session_source(source.clone());
 
                 Self::handle_active_prompt_update(
                     model.clone(),
@@ -770,15 +768,12 @@ impl TerminalManager {
                     return;
                 };
 
-                let ambient_task_id: Option<AmbientAgentTaskId> = match &source_type {
-                    SessionSourceType::AmbientAgent { task_id } => {
-                        task_id.as_deref().and_then(|s| s.parse().ok())
-                    }
-                    _ => None,
-                };
+                let ambient_task_id: Option<AmbientAgentTaskId> = source
+                    .orchestrator_task_id()
+                    .and_then(|s| s.parse().ok());
 
                 // Mark terminal view as a shared ambient agent session view.
-                if matches!(&source_type, SessionSourceType::AmbientAgent { .. }) {
+                if matches!(&source.source_type, SessionSourceType::AmbientAgent { .. }) {
                     let terminal_view_id = view.id();
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
                         history.mark_terminal_view_as_ambient_agent_session_view(terminal_view_id);
@@ -789,26 +784,27 @@ impl TerminalManager {
                         ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
                             model.register_ambient_session(terminal_view_id, task_id, ctx);
                         });
+                    }
+                }
 
-                        // Spin up the orchestration viewer model on first
-                        // join (`is_none()` guards against reconnect dupes).
-                        if enable_orchestration_polling
-                            && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
-                            && orchestration_viewer_model.lock().is_none()
-                        {
-                            let weak_view_handle_for_orch = weak_view_handle.clone();
-                            let orchestration_viewer_model_slot =
-                                orchestration_viewer_model.clone();
-                            let handle = ctx.add_model(|model_ctx| {
-                                OrchestrationViewerModel::new(
-                                    task_id,
-                                    terminal_view_id,
-                                    weak_view_handle_for_orch,
-                                    model_ctx,
-                                )
-                            });
-                            *orchestration_viewer_model_slot.lock() = Some(handle);
-                        }
+                if enable_orchestration_polling
+                    && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
+                    && orchestration_viewer_model.lock().is_none()
+                {
+                    if let Some(task_id) = ambient_task_id {
+                        let terminal_view_id = view.id();
+                        let weak_view_handle_for_orch = weak_view_handle.clone();
+                        let orchestration_viewer_model_slot =
+                            orchestration_viewer_model.clone();
+                        let model = ctx.add_model(|model_ctx| {
+                            OrchestrationViewerModel::new(
+                                task_id,
+                                terminal_view_id,
+                                weak_view_handle_for_orch,
+                                model_ctx,
+                            )
+                        });
+                        *orchestration_viewer_model_slot.lock() = Some(model);
                     }
                 }
 
@@ -834,7 +830,7 @@ impl TerminalManager {
                         input_replica_id.clone(),
                         participant_list.clone(),
                         session_id,
-                        source_type.clone(),
+                        source.source_type.clone(),
                         ctx,
                     );
                 });

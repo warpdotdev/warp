@@ -51,6 +51,8 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
+#[cfg(feature = "local_fs")]
+use repo_metadata::RemoteRepositoryIdentifier;
 #[cfg(all(target_os = "macos", feature = "crash_reporting"))]
 use sentry::protocol::{Attachment, AttachmentType};
 use serde_json;
@@ -70,6 +72,8 @@ use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_util::path::{user_friendly_path, LineAndColumnArg};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warp_util::standardized_path::StandardizedPath;
 use warpui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
@@ -160,8 +164,6 @@ use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -169,9 +171,9 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEd
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    derive_touched_workspace, extract_paths_from_conversation,
-};
+use crate::ai::blocklist::handoff;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::touched_repos::extract_paths_from_conversation;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
@@ -383,11 +385,11 @@ use crate::terminal::session_settings::{
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
-    AmbientAgentViewModel, HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
+    HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
 };
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
@@ -4237,39 +4239,8 @@ impl Workspace {
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default("Remote control link copied.".to_string())
-                .with_object_id(Self::shared_session_qr_toast_id(session_id))
-                .with_link(
-                    ToastLink::new("View QR code".to_string()).with_onclick_action(
-                        WorkspaceAction::OpenSharedSessionQrCode {
-                            session_id: *session_id,
-                        },
-                    ),
-                );
+            let toast = DismissibleToast::default("Remote control link copied.".to_string());
             toast_stack.add_ephemeral_toast(toast, ctx);
-        });
-    }
-    fn shared_session_qr_toast_id(session_id: &SharedSessionId) -> String {
-        format!("shared_session_qr_code:{session_id}")
-    }
-
-    fn open_shared_session_qr_code(
-        &mut self,
-        session_id: &SharedSessionId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let Some(terminal_view) = terminal::shared_session::manager::Manager::as_ref(ctx)
-            .shared_view_by_session_id(session_id, ctx)
-        else {
-            return;
-        };
-        let toast_id = Self::shared_session_qr_toast_id(session_id);
-        self.toast_stack.update(ctx, |toast_stack, ctx| {
-            toast_stack.dismiss_older_toasts(&toast_id, ctx);
-        });
-
-        terminal_view.update(ctx, |terminal_view, ctx| {
-            terminal_view.open_shared_session_qr_code(ctx);
         });
     }
 
@@ -5756,7 +5727,7 @@ impl Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -5837,7 +5808,7 @@ impl Workspace {
     #[cfg(not(feature = "local_fs"))]
     pub fn open_file_with_target(
         &mut self,
-        _path: LocalOrRemotePath,
+        _path: PathBuf,
         _target: FileTarget,
         _line_col: Option<LineAndColumnArg>,
         _code_source: CodeSource,
@@ -5848,121 +5819,107 @@ impl Workspace {
     #[cfg(feature = "local_fs")]
     pub fn open_file_with_target(
         &mut self,
-        path: LocalOrRemotePath,
+        path: PathBuf,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
         code_source: CodeSource,
         ctx: &mut ViewContext<Self>,
     ) {
         // Handle directories for CodeEditor(NewTab) target by opening a new terminal tab
-        if let LocalOrRemotePath::Local(ref local_path) = path {
-            if local_path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab))
-            {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                        initial_directory: Some(local_path.clone()),
-                        hide_homepage: true,
-                        ..Default::default()
-                    })),
-                    Arc::new(HashMap::new()),
-                    None,
-                    ctx,
-                );
-                return;
-            }
+        if path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab)) {
+            self.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    initial_directory: Some(path.clone()),
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            return;
         }
 
         match target {
             FileTarget::MarkdownViewer(layout) => {
                 let session = self.get_active_session(ctx);
-                self.open_file_notebook(path, session, layout, ctx);
+
+                self.open_file_notebook(
+                    LocalOrRemotePath::Local(path.clone()),
+                    session,
+                    layout,
+                    ctx,
+                );
+            }
+            FileTarget::EnvEditor => {
+                let editor_value: Option<String> = self
+                    .get_active_session(ctx)
+                    .and_then(|session| session.editor().map(|s| s.to_string()));
+
+                if let Some(ref editor_env) = editor_value {
+                    if let Ok(editor) = Editor::try_from(editor_env.as_str()) {
+                        crate::util::file::open_file_path_with_editor(
+                            line_col,
+                            path.clone(),
+                            Some(editor),
+                            ctx,
+                        );
+                        return;
+                    }
+
+                    // If we have an editor string but it's not a known Editor, we try to run it in a new pane
+                    let new_pane_id =
+                        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                            pane_group.add_terminal_pane(
+                                Direction::Right,
+                                None, /*chosen_shell*/
+                                ctx,
+                            )
+                        });
+
+                    if let Some(terminal_view_handle) = self
+                        .active_tab_pane_group()
+                        .as_ref(ctx)
+                        .terminal_view_from_pane_id(new_pane_id, ctx)
+                    {
+                        let editor_ref = Some(editor_env.as_str());
+                        let path_clone = path.clone();
+                        terminal_view_handle.update(ctx, |terminal, ctx| {
+                            let editor_command =
+                                crate::util::file::external_editor::generate_editor_command(
+                                    &path_clone,
+                                    line_col,
+                                    editor_ref,
+                                );
+                            terminal.set_pending_command(&editor_command, ctx);
+                        });
+                        return;
+                    } else {
+                        log::error!(
+                            "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
+                        );
+                    }
+                }
+
+                crate::util::file::open_file_path_in_external_editor(line_col, path.clone(), ctx);
             }
             FileTarget::CodeEditor(layout) => {
                 let open_as_preview = false;
                 self.open_code(code_source, layout, line_col, open_as_preview, &[], ctx);
             }
-            // The remaining targets only apply to local files.
-            _ => {
-                let Some(local_path) = path.to_local_path().map(Path::to_path_buf) else {
-                    log::warn!("FileTarget::{target:?} is not supported for remote files");
-                    return;
-                };
-                match target {
-                    FileTarget::EnvEditor => {
-                        let editor_value: Option<String> = self
-                            .get_active_session(ctx)
-                            .and_then(|session| session.editor().map(|s| s.to_string()));
-
-                        if let Some(ref editor_env) = editor_value {
-                            if let Ok(editor) = Editor::try_from(editor_env.as_str()) {
-                                crate::util::file::open_file_path_with_editor(
-                                    line_col,
-                                    local_path.clone(),
-                                    Some(editor),
-                                    ctx,
-                                );
-                                return;
-                            }
-
-                            // If we have an editor string but it's not a known Editor, we try to run it in a new pane
-                            let new_pane_id =
-                                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                                    pane_group.add_terminal_pane(
-                                        Direction::Right,
-                                        None, /*chosen_shell*/
-                                        ctx,
-                                    )
-                                });
-
-                            if let Some(terminal_view_handle) = self
-                                .active_tab_pane_group()
-                                .as_ref(ctx)
-                                .terminal_view_from_pane_id(new_pane_id, ctx)
-                            {
-                                let editor_ref = Some(editor_env.as_str());
-                                let path_clone = local_path.clone();
-                                terminal_view_handle.update(ctx, |terminal, ctx| {
-                                    let editor_command =
-                                        crate::util::file::external_editor::generate_editor_command(
-                                            &path_clone,
-                                            line_col,
-                                            editor_ref,
-                                        );
-                                    terminal.set_pending_command(&editor_command, ctx);
-                                });
-                                return;
-                            } else {
-                                log::error!(
-                                    "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
-                                );
-                            }
-                        }
-
-                        crate::util::file::open_file_path_in_external_editor(
-                            line_col, local_path, ctx,
-                        );
-                    }
-                    FileTarget::ExternalEditor(editor) => {
-                        crate::util::file::open_file_path_with_editor(
-                            line_col,
-                            local_path,
-                            Some(editor),
-                            ctx,
-                        );
-                    }
-                    FileTarget::SystemDefault => {
-                        crate::util::file::open_file_path_with_editor(
-                            line_col, local_path, None, ctx,
-                        );
-                    }
-                    FileTarget::SystemGeneric => {
-                        ctx.open_file_path(&local_path);
-                    }
-                    // Already handled in the outer match above.
-                    FileTarget::MarkdownViewer(_) | FileTarget::CodeEditor(_) => {
-                        log::error!("FileTarget::{target:?} should have been handled before entering local-only branch");
-                    }
-                }
+            FileTarget::ExternalEditor(editor) => {
+                crate::util::file::open_file_path_with_editor(
+                    line_col,
+                    path.clone(),
+                    Some(editor),
+                    ctx,
+                );
+            }
+            FileTarget::SystemDefault => {
+                crate::util::file::open_file_path_with_editor(line_col, path.clone(), None, ctx);
+            }
+            FileTarget::SystemGeneric => {
+                ctx.open_file_path(&path);
             }
         }
     }
@@ -5984,13 +5941,28 @@ impl Workspace {
                 let code_source = CodeSource::FileTree {
                     location: location.clone(),
                 };
-                self.open_file_with_target(
-                    location.clone(),
-                    target.clone(),
-                    *line_col,
-                    code_source,
-                    ctx,
-                );
+                match location {
+                    LocalOrRemotePath::Local(path) => {
+                        self.open_file_with_target(
+                            path.clone(),
+                            target.clone(),
+                            *line_col,
+                            code_source,
+                            ctx,
+                        );
+                    }
+                    LocalOrRemotePath::Remote(_) => {
+                        #[cfg(feature = "local_fs")]
+                        self.open_code(
+                            code_source,
+                            crate::util::openable_file_type::EditorLayout::SplitPane,
+                            None,
+                            false,
+                            &[],
+                            ctx,
+                        );
+                    }
+                }
             }
             LeftPanelEvent::NewConversationInNewTab => {
                 self.add_terminal_tab_with_new_agent_view(ctx);
@@ -6033,7 +6005,7 @@ impl Workspace {
                 }
 
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target,
                     line_col,
                     CodeSource::Link {
@@ -6579,7 +6551,7 @@ impl Workspace {
         );
         send_telemetry_from_ctx!(TabConfigsTelemetryEvent::MenuCreateNewTabConfigClicked, ctx);
         self.open_file_with_target(
-            LocalOrRemotePath::Local(path.clone()),
+            path.clone(),
             target,
             None,
             CodeSource::Link {
@@ -6615,7 +6587,7 @@ impl Workspace {
                     None,
                 );
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target,
                     None,
                     CodeSource::Link {
@@ -8304,6 +8276,10 @@ impl Workspace {
                 }
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::PaneOpened {
+                        is_local: panel_update_params
+                            .review_pane_context
+                            .and_then(|context| context.repo_path.as_ref())
+                            .map(LocalOrRemotePath::is_local),
                         entrypoint: panel_update_params.entrypoint.unwrap_or_default(),
                         is_code_mode_v2: true,
                         cli_agent: panel_update_params.cli_agent.map(Into::into),
@@ -9131,7 +9107,7 @@ impl Workspace {
                 line_col,
             } => {
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target.clone(),
                     *line_col,
                     CodeSource::Link {
@@ -13202,19 +13178,19 @@ impl Workspace {
         let code_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
             .code_view_paths(ctx)
-            .filter_map(|(id, path)| path.map(|p| (id, p)))
+            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
         let code_diff_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
             .code_diff_view_paths(ctx)
-            .filter_map(|(id, path)| path.map(|p| (id, p)))
+            .filter_map(|(id, cwd)| cwd.map(|c| (id, c)))
             .collect();
         let notebook_paths: Vec<(EntityId, LocalOrRemotePath)> = pane_group
             .as_ref(ctx)
             .file_notebook_paths(ctx)
             .filter_map(|(id, path)| path.map(|p| (id, p)))
             .collect();
-        let editor_paths: Vec<(EntityId, LocalOrRemotePath)> = code_paths
+        let local_paths: Vec<(EntityId, LocalOrRemotePath)> = code_paths
             .into_iter()
             .chain(notebook_paths)
             .chain(code_diff_paths)
@@ -13230,7 +13206,7 @@ impl Workspace {
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 terminal_cwds,
-                editor_paths,
+                local_paths,
                 focused_terminal_id,
                 ctx,
             );
@@ -13501,80 +13477,6 @@ impl Workspace {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn maybe_auto_submit_handoff(
-        _target_view: &ViewHandle<TerminalView>,
-        model_handle: &ModelHandle<AmbientAgentViewModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let launch = model_handle.update(ctx, |model, ctx| model.maybe_auto_submit_handoff(ctx));
-        let Some(launch) = launch else {
-            return;
-        };
-        model_handle.update(ctx, |model, ctx| {
-            model.submit_handoff(launch.prompt, launch.attachments.request_attachments, ctx);
-        });
-    }
-
-    /// Spawns the async snapshot upload pipeline for a handoff pane. Derives the
-    /// touched workspace from `paths`, uploads repo patches + orphan files, sets
-    /// environment overlap, and settles the snapshot status on the model. Shared
-    /// by both the conversation-fork and fresh-launch handoff paths.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn spawn_handoff_snapshot_upload(
-        paths: Vec<PathBuf>,
-        pane_view: ViewHandle<TerminalView>,
-        model_handle: ModelHandle<AmbientAgentViewModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let server_api_provider = ServerApiProvider::as_ref(ctx);
-        let ai_client = server_api_provider.get_ai_client();
-        let http = server_api_provider.get_http_client();
-        ctx.spawn(
-            async move {
-                let workspace = derive_touched_workspace(paths).await;
-                let repo_paths: Vec<_> =
-                    workspace.repos.iter().map(|r| r.git_root.clone()).collect();
-                let upload_result = upload_snapshot_for_handoff(
-                    repo_paths,
-                    workspace.orphan_files.clone(),
-                    ai_client,
-                    http.as_ref(),
-                )
-                .await;
-                (workspace, upload_result)
-            },
-            move |_workspace, (derived_workspace, upload_result), ctx| {
-                model_handle.update(ctx, |model, model_ctx| {
-                    if !model.is_local_to_cloud_handoff() {
-                        return;
-                    }
-                    model.set_pending_handoff_workspace(derived_workspace, model_ctx);
-                    match upload_result {
-                        Ok(Some(initial_snapshot_token)) => {
-                            model.set_pending_handoff_snapshot_upload(
-                                SnapshotUploadStatus::Uploaded(initial_snapshot_token),
-                                model_ctx,
-                            );
-                        }
-                        Ok(None) => {
-                            model.set_pending_handoff_snapshot_upload(
-                                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                                model_ctx,
-                            );
-                        }
-                        Err(err) => {
-                            log::warn!("Handoff snapshot upload failed: {err:#}");
-                            model
-                                .record_handoff_snapshot_upload_failed(format!("{err}"), model_ctx);
-                        }
-                    }
-                });
-                Self::maybe_auto_submit_handoff(&pane_view, &model_handle, ctx);
-            },
-        );
-    }
-
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn show_handoff_success_toast(ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -13652,7 +13554,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let handoff_target = self.prepare_handoff_target(&source_view, ctx);
-        let Some((new_pane_view, model_handle)) =
+        let Some((_new_pane_view, model_handle)) =
             handoff_target.update(ctx, |view, view_ctx| view.start_cloud_mode(None, view_ctx))
         else {
             log::warn!(
@@ -13695,9 +13597,19 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-        let paths: Vec<PathBuf> = source_pwd.into_iter().collect();
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, ctx);
+        let source_pwd = source_view.as_ref(ctx).pwd();
+        let session_id = source_view
+            .as_ref(ctx)
+            .active_block_session_id()
+            .unwrap_or_default();
+        let mut paths: Vec<StandardizedPath> = Vec::new();
+        if let Some(ref pwd) = source_pwd {
+            if let Ok(sp) = StandardizedPath::try_new(pwd) {
+                paths.push(sp);
+            }
+        }
+        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
+        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
     }
 
     /// Opens a local-to-cloud handoff pane in place over the active local pane.
@@ -14108,18 +14020,19 @@ impl Workspace {
             model.queue_handoff_auto_submit(ctx);
         });
 
-        let source_pwd = source_view.as_ref(ctx).active_session_path_if_local(ctx);
-        // Derive touched repos and upload the initial snapshot off the UI thread.
-        // The paths list is built from the conversation's write actions plus the
-        // source pane's pwd (so the current repo is always captured).
-        let paths = {
-            let mut p = extract_paths_from_conversation(&source_conversation);
-            if let Some(pwd) = source_pwd {
-                p.push(pwd);
+        let source_pwd = source_view.as_ref(ctx).pwd();
+        let session_id = source_view
+            .as_ref(ctx)
+            .active_block_session_id()
+            .unwrap_or_default();
+        let mut paths = extract_paths_from_conversation(&source_conversation);
+        if let Some(ref pwd) = source_pwd {
+            if let Ok(sp) = StandardizedPath::try_new(pwd) {
+                paths.push(sp);
             }
-            p
-        };
-        Self::spawn_handoff_snapshot_upload(paths, new_pane_view, model_handle, ctx);
+        }
+        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
+        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
     }
 
     pub(crate) fn handle_file_tree_event(
@@ -14657,12 +14570,30 @@ impl Workspace {
                     }
                 }
             }
-            // Remote repo navigation is handled entirely through
-            // refresh_working_directories_for_pane_group, which inserts
-            // remote paths into the unified `pane_groups` set. The
-            // resulting `DirectoriesChanged` event carries both local
-            // and remote dirs, so the left panel subscriber forwards
-            // them to `set_remote_root_directories` on the file tree.
+            #[cfg(feature = "local_fs")]
+            pane_group::Event::RemoteRepoNavigated { remote_path } => {
+                let remote_id = RemoteRepositoryIdentifier::new(
+                    remote_path.host_id.clone(),
+                    remote_path.path.clone(),
+                );
+                let pane_group_id = pane_group.id();
+                if let Some(file_tree_view) = self
+                    .working_directories_model
+                    .as_ref(ctx)
+                    .get_file_tree_view(pane_group_id)
+                {
+                    file_tree_view.update(ctx, |view, ctx| {
+                        view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);
+                    });
+                }
+
+                // Remote repos now enter repository_roots through
+                // refresh_working_directories_for_pane_group (via
+                // pwd_as_local_or_remote). No need to register here —
+                // doing so would race with refresh and prevent stale
+                // DiffStateModels from being dropped.
+            }
+            #[cfg(not(feature = "local_fs"))]
             pane_group::Event::RemoteRepoNavigated { .. } => {}
             pane_group::Event::OpenChildAgentInNewTab { conversation_id } => {
                 // Move the existing child pane into a new tab so the live
@@ -15178,7 +15109,7 @@ impl Workspace {
                 line_col,
             } => {
                 self.open_file_with_target(
-                    LocalOrRemotePath::Local(path.clone()),
+                    path.clone(),
                     target.clone(),
                     *line_col,
                     CodeSource::Link {
@@ -21247,7 +21178,7 @@ impl TypedActionView for Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -21298,7 +21229,7 @@ impl TypedActionView for Workspace {
                         None,
                     );
                     self.open_file_with_target(
-                        LocalOrRemotePath::Local(path.clone()),
+                        path.clone(),
                         target,
                         None,
                         CodeSource::Link {
@@ -22276,7 +22207,13 @@ impl TypedActionView for Workspace {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
             }
             OpenSharedSessionQrCode { session_id } => {
-                self.open_shared_session_qr_code(session_id, ctx)
+                use terminal::shared_session::manager::Manager;
+                let manager = Manager::as_ref(ctx);
+                if let Some(terminal_view) = manager.shared_view_by_session_id(session_id, ctx) {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.open_shared_session_qr_code(ctx);
+                    });
+                }
             }
             AddWindow => {
                 ctx.dispatch_global_action("root_view:open_new", ());

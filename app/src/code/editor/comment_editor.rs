@@ -424,8 +424,8 @@ impl View for CommentEditor {
                     )
                     .with_child(
                         Container::new(footer_row)
-                            .with_vertical_padding(8.)
-                            .with_horizontal_padding(8.)
+                            .with_vertical_padding(4.)
+                            .with_horizontal_padding(4.)
                             .with_border(Border::top(1.).with_border_fill(border_color))
                             .finish(),
                     )

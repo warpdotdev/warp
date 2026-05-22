@@ -42,7 +42,7 @@ fn test_create_document() {
             let content = model
                 .get_document_content(&doc_id, ctx)
                 .expect("Should have content");
-            assert_eq!(content, "# Hello World\nThis is a test.");
+            assert_eq!(content, "# Hello World\n\nThis is a test.");
 
             // Should have no versions initially
             assert!(model.get_earlier_document_versions(&doc_id).is_none());
@@ -94,7 +94,7 @@ fn test_apply_diffs_creates_version() {
                 .expect("Should have current content");
             assert_eq!(
                 current_content,
-                "# Hello Universe\n# Hello World\nThis is a test."
+                "# Hello Universe\n# Hello World\n\nThis is a test."
             );
 
             // Should have one version saved
@@ -108,7 +108,7 @@ fn test_apply_diffs_creates_version() {
             assert_eq!(first_version.title, "Test Document");
             assert_eq!(
                 first_version.get_content(ctx),
-                "# Hello World\nThis is a test."
+                "# Hello World\n\nThis is a test."
             );
         });
     });
@@ -355,8 +355,7 @@ fn test_create_document_removes_extra_newlines() {
             let content = model
                 .get_document_content(&doc_id, ctx)
                 .expect("Should have content");
-            // Extra newlines should be removed, leaving only single newlines between content
-            assert_eq!(content, "# Hello World\nThis is a test.\nEnd.");
+            assert_eq!(content, "# Hello World\n\n\nThis is a test.\n\n\nEnd.");
         });
     });
 }

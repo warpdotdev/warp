@@ -36,9 +36,9 @@ use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, Singl
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 #[cfg(not(any(test, feature = "integration_tests")))]
 use {
+    crate::terminal::shared_session::SharedSessionSource,
     crate::{report_error, server::telemetry::telemetry_context},
     session_sharing_protocol::common::{Scrollback, TelemetryContext},
-    session_sharing_protocol::sharer::SessionSourceType,
     session_sharing_protocol::sharer::{InitPayload, Lifetime},
 };
 
@@ -224,7 +224,7 @@ impl Network {
         terminal_view_id: warpui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
@@ -291,7 +291,7 @@ impl Network {
                 terminal_view_id,
                 universal_developer_input_context,
                 lifetime,
-                source_type,
+                source,
                 ctx,
             );
         }
@@ -587,7 +587,7 @@ impl Network {
         terminal_view_id: warpui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
@@ -640,7 +640,8 @@ impl Network {
                             ..universal_developer_input_context
                         }),
                         lifetime,
-                        source_type,
+                        source_type: source.source_type,
+                        source_task_id: source.source_task_id,
                         feature_support: FeatureSupport {
                             supports_agent_view: FeatureFlag::AgentView.is_enabled(),
                             supports_full_role: true,

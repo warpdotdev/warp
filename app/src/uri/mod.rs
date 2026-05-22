@@ -1255,13 +1255,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
                 if let Some(workspace) = workspaces.into_iter().next() {
                     workspace.update(ctx, |workspace, ctx| {
                         let source = CodeSource::Finder { path: path.clone() };
-                        workspace.open_file_with_target(
-                            crate::code::buffer_location::LocalOrRemotePath::Local(path),
-                            target,
-                            None,
-                            source,
-                            ctx,
-                        );
+                        workspace.open_file_with_target(path, target, None, source, ctx);
                     });
                 }
             }

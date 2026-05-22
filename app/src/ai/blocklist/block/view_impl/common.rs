@@ -1787,6 +1787,9 @@ fn load_renderable_image_asset(
 
     #[cfg(not(feature = "local_fs"))]
     let asset_source = blocklist_image_asset_source(&image.source, current_working_directory)?;
+    if !should_load_blocklist_image_asset(&asset_source) {
+        return None;
+    }
     let asset_state = AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone());
     if matches!(asset_state, AssetState::FailedToLoad(_)) {
         return None;
@@ -1811,6 +1814,16 @@ fn can_render_blocklist_image(
         app,
     )
     .is_some()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn should_load_blocklist_image_asset(asset_source: &AssetSource) -> bool {
+    !matches!(asset_source, AssetSource::LocalFile { .. })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_load_blocklist_image_asset(_: &AssetSource) -> bool {
+    true
 }
 
 fn render_image_section<A: Action>(

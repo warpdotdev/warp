@@ -14449,7 +14449,7 @@ impl Input {
         chip: &AttachmentChip,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let chip_index = chip.index;
+        let delete_chip_index = chip.index;
         let close_button = appearance
             .ui_builder()
             .close_button(
@@ -14458,7 +14458,9 @@ impl Input {
             )
             .build()
             .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(TerminalAction::DeleteAttachment { index: chip_index });
+                ctx.dispatch_typed_action(TerminalAction::DeleteAttachment {
+                    index: delete_chip_index,
+                });
             })
             .finish();
 
@@ -14467,7 +14469,7 @@ impl Input {
             AttachmentType::File => Icon::File,
         };
 
-        Chip::new(
+        let attachment_chip = Chip::new(
             chip.file_name.clone(),
             UiComponentStyles {
                 margin: Some(Coords {
@@ -14492,8 +14494,21 @@ impl Input {
             blended_colors::text_main(appearance.theme(), appearance.theme().background()).into(),
         ))
         .with_close_button(close_button)
-        .build()
-        .finish()
+        .build();
+
+        if matches!(chip.attachment_type, AttachmentType::Image) {
+            let preview_chip_index = chip.index;
+            EventHandler::new(attachment_chip.finish())
+                .on_left_mouse_down(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(TerminalAction::OpenAttachmentLightbox {
+                        index: preview_chip_index,
+                    });
+                    DispatchEventResult::StopPropagation
+                })
+                .finish()
+        } else {
+            attachment_chip.finish()
+        }
     }
 
     fn render_input_box(
