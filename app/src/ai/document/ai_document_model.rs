@@ -34,7 +34,7 @@ use crate::notebooks::editor::model::{
 };
 use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::file::MarkdownDisplayMode;
-use crate::notebooks::{post_process_notebook, CloudNotebookModel, NotebookId};
+use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::{
     InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
@@ -510,7 +510,7 @@ impl AIDocumentModel {
         doc.title = new_title.to_owned();
         let editor_handle = doc.editor.clone();
         editor_handle.update(ctx, |editor, editor_ctx| {
-            editor.update_to_new_markdown(&post_process_notebook(new_content), editor_ctx);
+            editor.update_to_new_markdown(new_content, editor_ctx);
         });
 
         ctx.emit(AIDocumentModelEvent::DocumentUpdated {
@@ -764,8 +764,7 @@ impl AIDocumentModel {
 
         log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
         doc.editor.update(ctx, |editor, editor_ctx| {
-            let processed = post_process_notebook(persisted_content);
-            editor.reset_with_markdown(&processed, editor_ctx);
+            editor.reset_with_markdown(persisted_content, editor_ctx);
         });
 
         // Mark as dirty so the updated plan is attached to the next agent query
@@ -819,9 +818,7 @@ impl AIDocumentModel {
 
             let content = content.into();
             if !content.is_empty() {
-                // Post-process the content to remove extra newlines
-                let processed_content = post_process_notebook(&content);
-                model.reset_with_markdown(&processed_content, ctx);
+                model.reset_with_markdown(&content, ctx);
             }
             model
         })
@@ -950,8 +947,7 @@ impl AIDocumentModel {
         if let Some(doc) = self.create_new_document_version(id, ctx) {
             let content = new_content.into();
             doc.editor.update(ctx, |editor, editor_ctx| {
-                let processed_content = post_process_notebook(&content);
-                editor.reset_with_markdown(&processed_content, editor_ctx);
+                editor.reset_with_markdown(&content, editor_ctx);
             });
             doc.created_at = created_at;
             ctx.emit(AIDocumentModelEvent::DocumentUpdated {

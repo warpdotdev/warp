@@ -10,7 +10,6 @@ use repo_metadata::CanonicalizedPath;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use session_sharing_protocol::common::SessionId;
-use session_sharing_protocol::sharer::SessionSourceType;
 #[cfg(feature = "local_fs")]
 use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -70,7 +69,9 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
+use crate::terminal::shared_session::{
+    SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
@@ -599,7 +600,7 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
         view.attempt_to_share_session(
             SharedSessionScrollbackType::All,
             None,
-            SessionSourceType::default(),
+            SharedSessionSource::user(None),
             false,
             ctx,
         );
@@ -1068,7 +1069,7 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
                     terminal.attempt_to_share_session(
                         SharedSessionScrollbackType::None,
                         None,
-                        SessionSourceType::default(),
+                        SharedSessionSource::user(None),
                         false,
                         ctx,
                     );
@@ -1756,7 +1757,7 @@ fn test_stop_sharing_all_sessions_in_tab() {
                             terminal_view.attempt_to_share_session(
                                 SharedSessionScrollbackType::None,
                                 None,
-                                SessionSourceType::default(),
+                                SharedSessionSource::user(None),
                                 false,
                                 ctx,
                             );
@@ -1774,7 +1775,7 @@ fn test_stop_sharing_all_sessions_in_tab() {
                             terminal_view.attempt_to_share_session(
                                 SharedSessionScrollbackType::None,
                                 None,
-                                SessionSourceType::default(),
+                                SharedSessionSource::user(None),
                                 false,
                                 ctx,
                             );

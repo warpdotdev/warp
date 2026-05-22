@@ -7,6 +7,7 @@ mod context_model;
 mod controller;
 pub(crate) mod handoff;
 
+pub(crate) mod local_shared_session_link_model;
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;

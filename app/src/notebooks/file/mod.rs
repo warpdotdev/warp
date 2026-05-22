@@ -41,8 +41,6 @@ use crate::editor::InteractionState;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
-#[cfg(feature = "local_fs")]
-use crate::notebooks::post_process_notebook;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::pane::view::header::components::{
@@ -447,8 +445,7 @@ impl FileNotebookView {
                     }
                     match event {
                         FileModelEvent::FileLoaded { content, .. } => {
-                            let cleaned = post_process_notebook(content);
-                            me.set_content(&cleaned, ctx);
+                            me.set_content(content, ctx);
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::OpenNotebook(me.open_telemetry_metadata(ctx)),
                                 ctx
@@ -489,8 +486,7 @@ impl FileNotebookView {
                             ctx.notify();
                         }
                         FileModelEvent::FileUpdated { content, .. } => {
-                            let cleaned = post_process_notebook(content);
-                            me.set_content(&cleaned, ctx);
+                            me.set_content(content, ctx);
                         }
                         FileModelEvent::FileSaved { .. } | FileModelEvent::FailedToSave { .. } => {}
                     }

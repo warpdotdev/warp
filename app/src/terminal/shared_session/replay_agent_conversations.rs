@@ -132,8 +132,16 @@ pub fn reconstruct_response_events_from_conversations(
             ));
         }
 
-        // Finish this exchange
-        events.push(create_finished_event_from_conversation(conversation));
+        // Finish this exchange — but ONLY if it actually finished. If an
+        // exchange is still in-flight when the scrollback is built, emitting a
+        // synthetic Finished here corrupts the late-joining viewer's stream:
+        // the viewer clears `current_response_id` and then drops every live
+        // ClientAction that arrives for the same in-flight stream. Skipping
+        // the synthetic Finished lets the live wire's real Finished close the
+        // stream naturally for the viewer.
+        if exchange.output_status.is_finished() {
+            events.push(create_finished_event_from_conversation(conversation));
+        }
     }
 
     events
