@@ -86,12 +86,16 @@ fn make_item_fields<A: Action + Clone>(
         .custom_llm_info_for_id(&llm.id)
         .is_some();
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+    let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
     let leading_icon = if is_using_bedrock {
         Icon::Aws
-    } else if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
-        Icon::Key
     } else {
         llm.provider.icon().unwrap_or(Icon::Oz)
+    };
+    let trailing_credential_icon = if !is_using_bedrock && is_using_api_key {
+        Some(Icon::Key)
+    } else {
+        None
     };
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
@@ -128,6 +132,20 @@ fn make_item_fields<A: Action + Clone>(
                 )
                 .finish();
                 item_row.add_child(Shrinkable::new(4., text).finish());
+                if let Some(icon) = trailing_credential_icon {
+                    let credential_icon = Container::new(
+                        ConstrainedBox::new(
+                            icon.to_warpui_icon(appearance.theme().disabled_ui_text_color())
+                                .finish(),
+                        )
+                        .with_height(appearance.ui_font_size())
+                        .with_width(appearance.ui_font_size())
+                        .finish(),
+                    )
+                    .with_margin_left(6.)
+                    .finish();
+                    item_row.add_child(credential_icon);
+                }
                 SavePosition::new(item_row.finish(), &position_id).finish()
             }),
             None,

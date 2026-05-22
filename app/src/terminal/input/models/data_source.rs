@@ -45,7 +45,7 @@ use super::model_spec_scores::{
     REASONING_LEVEL_TITLE,
 };
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the resolved model supports it; otherwise it may use Warp-hosted inference.";
+const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -241,6 +241,7 @@ struct ModelSearchItem {
     provider: LLMProvider,
     spec: Option<LLMSpec>,
     leading_icon: Icon,
+    credential_icon: Option<Icon>,
     display_text: String,
     is_selected: bool,
     is_custom_endpoint: bool,
@@ -275,16 +276,20 @@ impl ModelSearchItem {
             is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
-        } else if is_using_api_key {
-            Icon::Key
         } else {
             llm.provider.icon().unwrap_or(Icon::Oz)
+        };
+        let credential_icon = if !is_using_bedrock && is_using_api_key {
+            Some(Icon::Key)
+        } else {
+            None
         };
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
             spec: llm.spec.clone(),
             leading_icon,
+            credential_icon,
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
@@ -377,6 +382,18 @@ impl SearchItem for ModelSearchItem {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
+        if let Some(icon) = self.credential_icon {
+            let credential_icon =
+                ConstrainedBox::new(icon.to_warpui_icon(secondary_text_color).finish())
+                    .with_width(font_size)
+                    .with_height(font_size)
+                    .finish();
+            row = row.with_child(
+                Container::new(credential_icon)
+                    .with_margin_left(6.)
+                    .finish(),
+            );
+        }
 
         if self.is_selected {
             let selected_label = "(selected)";
