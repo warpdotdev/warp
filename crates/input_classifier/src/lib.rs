@@ -14,12 +14,12 @@ pub use input_type::InputType;
 #[cfg(feature = "onnx")]
 pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
-/// Sources produced by the NLD pipeline.
+/// Sources produced by the input classifier pipeline.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NldDecision {
-    NldClassifier,
-    NldClassifierFallbackHeuristic,
-    NldClassifierFallbackCurrentInput,
+pub enum InputClassifierDecisionSource {
+    InputClassifier,
+    InputClassifierFallbackHeuristic,
+    InputClassifierFallbackCurrentInput,
     OneOffWhitelist,
     ShellHeuristic,
 }
@@ -33,7 +33,7 @@ pub trait InputClassifier: 'static + Send + Sync {
         &self,
         input: warp_completer::ParsedTokensSnapshot,
         context: &Context,
-    ) -> (InputType, NldDecision);
+    ) -> (InputType, InputClassifierDecisionSource);
 
     async fn classify_input(
         &self,
@@ -49,11 +49,11 @@ pub struct ClassificationResult {
     /// The probability that the input is a natural language query to AI.
     p_ai: f32,
     /// The classifier source that produced this classification.
-    pub source: NldDecision,
+    pub source: InputClassifierDecisionSource,
 }
 
 impl ClassificationResult {
-    fn pure_ai(source: NldDecision) -> Self {
+    fn pure_ai(source: InputClassifierDecisionSource) -> Self {
         Self {
             p_shell: 0.0,
             p_ai: 1.0,
@@ -61,7 +61,7 @@ impl ClassificationResult {
         }
     }
 
-    fn pure_shell(source: NldDecision) -> Self {
+    fn pure_shell(source: InputClassifierDecisionSource) -> Self {
         Self {
             p_shell: 1.0,
             p_ai: 0.0,

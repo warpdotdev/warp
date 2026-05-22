@@ -11,7 +11,7 @@ use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
 
 use crate::{
-    ClassificationResult, Context, InputClassifier, InputType, NldDecision,
+    ClassificationResult, Context, InputClassifier, InputType, InputClassifierDecisionSource,
     parser::parse_query_into_tokens,
     util::{
         is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
@@ -94,7 +94,7 @@ impl InputClassifier for OnnxClassifier {
         &self,
         input: ParsedTokensSnapshot,
         context: &Context,
-    ) -> (InputType, NldDecision) {
+    ) -> (InputType, InputClassifierDecisionSource) {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
 
         let total_word_token_count = word_tokens.len();
@@ -105,18 +105,18 @@ impl InputClassifier for OnnxClassifier {
 
             // If the input is a single word and the word is one of a specific set of words, classify it as AI
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
-                return (InputType::AI, NldDecision::OneOffWhitelist);
+                return (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist);
             }
 
             // If the first token is one of a specific set of shell command keywords (e.g.: echo or sudo),
             // we should classify it as shell.
             if is_one_off_shell_command_keyword(&first_word) {
-                return (InputType::Shell, NldDecision::ShellHeuristic);
+                return (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic);
             }
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
-            return (InputType::Shell, NldDecision::ShellHeuristic);
+            return (InputType::Shell, InputClassifierDecisionSource::ShellHeuristic);
         }
 
         // Otherwise, defer all decision-making to the model.
@@ -125,7 +125,7 @@ impl InputClassifier for OnnxClassifier {
             .map(|classification| (classification.to_input_type(), classification.source))
             .unwrap_or((
                 context.current_input_type,
-                NldDecision::NldClassifierFallbackCurrentInput,
+                InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
             ))
     }
 
@@ -269,7 +269,7 @@ mod tests {
                 decision,
                 (
                     InputType::AI,
-                    NldDecision::NldClassifierFallbackCurrentInput
+                    InputClassifierDecisionSource::InputClassifierFallbackCurrentInput
                 )
             );
         });

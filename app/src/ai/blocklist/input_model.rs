@@ -17,13 +17,13 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::{InputType, NldDecision};
+pub use input_classifier::{InputType, InputClassifierDecisionSource};
 
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputTypeAutoDetectionSource {
-    /// Decision produced by the NLD classifier pipeline.
-    NldDecision(NldDecision),
+    /// Decision produced by the input classifier pipeline.
+    InputClassifierDecisionSource(InputClassifierDecisionSource),
     /// User explicitly toggled the input type via cmd + I.
     ManualToggle,
     /// `!` shell prefix force-locked the input to Shell mode.
@@ -80,9 +80,9 @@ pub enum InputTypeAutoDetectionSource {
     AtContextMenuInsert,
 }
 
-impl From<NldDecision> for InputTypeAutoDetectionSource {
-    fn from(value: NldDecision) -> Self {
-        Self::NldDecision(value)
+impl From<InputClassifierDecisionSource> for InputTypeAutoDetectionSource {
+    fn from(value: InputClassifierDecisionSource) -> Self {
+        Self::InputClassifierDecisionSource(value)
     }
 }
 
@@ -801,7 +801,7 @@ impl BlocklistAIInputModel {
                     if matches!(current_input_type, InputType::AI)
                         && is_one_off_natural_language_word(first_token_str.to_lowercase().as_str())
                     {
-                        return (InputType::AI, NldDecision::OneOffWhitelist.into());
+                        return (InputType::AI, InputClassifierDecisionSource::OneOffWhitelist.into());
                     }
 
                     // If this is clearly intended to be a follow-up to an AI block, classify it as AI.
@@ -838,12 +838,11 @@ impl BlocklistAIInputModel {
                         current_input_type,
                         is_agent_follow_up,
                     };
-                    let (input_type, nld_decision) =
+                    let (input_type, input_classifier_decision_source) =
                         classifier.detect_input_type(input.clone(), &context).await;
 
                     futures_lite::future::yield_now().await;
-
-                    (input_type, nld_decision.into())
+                    (input_type, input_classifier_decision_source.into())
                 },
                 move |me, (new_input_type, decision_source), ctx| {
                     // In theory, we shouldn't need to check this, as we only run autodetection if the input

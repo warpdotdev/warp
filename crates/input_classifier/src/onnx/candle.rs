@@ -8,7 +8,7 @@ use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
 
 use super::{ClassificationResult, Model};
-use crate::NldDecision;
+use crate::InputClassifierDecisionSource;
 
 pub struct InferenceRunner {
     model: ModelProto,
@@ -95,7 +95,7 @@ impl super::InferenceRunner for InferenceRunner {
         Ok(ClassificationResult {
             p_ai: probabilities[0],
             p_shell: probabilities[1],
-            source: NldDecision::NldClassifier,
+            source: InputClassifierDecisionSource::InputClassifier,
         })
     }
 }
