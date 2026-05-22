@@ -3,8 +3,9 @@
 //! is gated by `FeatureFlag::OrchestrationViewerPillBar` so each case
 //! must override it explicitly.
 
-use super::*;
 use uuid::Uuid;
+
+use super::*;
 
 fn new_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
