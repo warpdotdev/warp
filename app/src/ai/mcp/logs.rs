@@ -1,6 +1,6 @@
-use simple_logger::manager::resolve_log_path;
 use std::path::PathBuf;
 
+use simple_logger::manager::resolve_log_path;
 use uuid::Uuid;
 
 pub fn relative_log_file_path_from_uuid(uuid: &Uuid) -> PathBuf {

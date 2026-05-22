@@ -1,5 +1,6 @@
 use ai::skills::SkillReference;
 use input_classifier::InputType;
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -10,7 +11,6 @@ use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::slash_commands::SlashCommandDataSource;
 use crate::terminal::model::session::active_session::ActiveSession;
-use settings::Setting as _;
 
 /// Event emitted by the slash command model when its entry state is updated.
 #[derive(Debug, Clone)]

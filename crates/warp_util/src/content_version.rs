@@ -18,8 +18,22 @@ impl ContentVersion {
     pub fn as_i32(&self) -> i32 {
         self.0 as i32
     }
+
+    /// Reconstructs a `ContentVersion` from a raw value received over the wire.
+    ///
+    /// This bypasses the global atomic counter and should only be used at
+    /// protocol deserialization boundaries (e.g. converting a `u64` from a
+    /// proto message back into a `ContentVersion`).
+    pub fn from_raw(val: usize) -> Self {
+        ContentVersion(val)
+    }
+
+    /// Returns the underlying value as a `u64` for wire serialization.
+    pub fn as_u64(&self) -> u64 {
+        self.0 as u64
+    }
 }
 
 #[cfg(test)]
-#[path = "content_version_test.rs"]
+#[path = "content_version_tests.rs"]
 mod tests;

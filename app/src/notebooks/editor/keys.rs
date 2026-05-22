@@ -2,9 +2,9 @@
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
-    util::bindings::{custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction},
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::util::bindings::{
+    custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction,
 };
 
 pub const RUN_COMMANDS_KEYBINDING_NAME: &str = "editor_view:run_commands";

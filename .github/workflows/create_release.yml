@@ -1646,20 +1646,83 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Obtain a GitHub App Installation Access Token
+      # Stable releases use the Oz changelog-draft agent for higher-quality,
+      # human-reviewable output. Non-stable channels (dev/preview/beta) use the
+      # legacy generate-changelog action to avoid spending Oz agent tokens on
+      # daily dev cuts and preview RCs.
+      - name: Generate changelog via Oz (stable only)
+        if: inputs.channel == 'stable'
+        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        with:
+          prompt: |
+            Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
+
+            Output directory: ${{ runner.temp }}/changelog-draft
+
+            Follow the workflow in .agents/skills/changelog-draft/SKILL.md exactly.
+            Make sure to produce both output files: changelog-draft.md and changelog-draft.json.
+            The release workflow may run from warpdotdev/warp-internal. When fetching PR data, pass the checked-out repository ("${{ github.repository }}") to fetch_prs.py and rely on the script's repo-sync normalization to resolve public warpdotdev/warp PR numbers, URLs, and authors. The script intentionally omits non-repo-sync PRs from warp-internal because they are private internal changes. Do not infer or synthesize public PR links manually.
+
+            After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
+
+            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
+          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          share: team
+
+      - name: Convert draft JSON to release format (stable only)
+        if: inputs.channel == 'stable'
+        shell: bash
+        run: |
+          python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
+            --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
+            --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
+
+      - name: Obtain a GitHub App Installation Access Token (non-stable only)
+        if: inputs.channel != 'stable'
         id: github_app_auth
         run: |
           TOKEN="$(npx obtain-github-app-installation-access-token ci ${{ secrets.GH_APP_CREDENTIALS_TOKEN }})"
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Generate changelog
-        uses: warpdotdev/generate-changelog@main
-        id: generate_changelog
+      - name: Generate changelog via legacy action (non-stable only)
+        if: inputs.channel != 'stable'
+        id: legacy_changelog
+        uses: warpdotdev/generate-changelog@70f534c1e030dafb45046ae57e4aa4d43a2f5c84 # main
         with:
           channel: ${{ inputs.channel }}
           github_auth_token: ${{ steps.github_app_auth.outputs.token }}
           version: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Load changelog into step output
+        id: generate_changelog
+        shell: bash
+        env:
+          LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
+        run: |
+          # Bridge step: picks whichever generator ran for this channel and
+          # re-emits the changelog as outputs.changelog so downstream Slack/GCS
+          # steps work unchanged.
+          if [[ "${{ inputs.channel }}" == "stable" ]]; then
+            CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
+            if [ ! -f "$CHANGELOG_FILE" ]; then
+              echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
+              exit 1
+            fi
+            jq empty "$CHANGELOG_FILE"
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              cat "$CHANGELOG_FILE"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "$LEGACY_CHANGELOG" | jq empty
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              printf '%s\n' "$LEGACY_CHANGELOG"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
+          fi
 
       - name: Build Slack changelog payload
         id: build_slack_payload
@@ -1745,7 +1808,7 @@ jobs:
           NEW_FEATURES=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "New features"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           IMPROVEMENTS=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "Improvements"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           # Extract the image URL from the list, and use the latest URL even if there are multiple
-          IMAGE=$(echo $CHANGELOG | jq -r '.image | if length > 0 then .[-1] else "" end')
+          IMAGE=$(echo $CHANGELOG | jq -r '.images | if length > 0 then .[-1] else "" end')
           # Extract Oz updates as a JSON array
           OZ_UPDATES=$(echo $CHANGELOG | jq -c '.oz_updates // []')
           # Tweak the structure of the JSON, add in a top-level date field, and add in the markdown_sections field

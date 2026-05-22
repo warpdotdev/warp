@@ -1,15 +1,14 @@
-use std::{collections::HashSet, ops::Range};
+use std::collections::HashSet;
+use std::ops::Range;
 
 use lazy_static::lazy_static;
 use regex::Regex;
-use settings::{macros::define_settings_group, Setting, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{Setting, SupportedPlatforms, SyncToCloud};
 use string_offset::ByteOffset;
 use warpui::elements::SmartSelectFn;
-
-use warpui::text::{
-    word_boundaries::WordBoundariesPolicy,
-    words::{is_default_word_boundary, DEFAULT_WORD_BOUNDARY_CHARS},
-};
+use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::text::words::{is_default_word_boundary, DEFAULT_WORD_BOUNDARY_CHARS};
 
 /// Upper limit for how many characters in either direction we'll search for patterns. Need to
 /// limit this to avoid running regex on absurdly long words
@@ -219,5 +218,5 @@ impl SemanticSelection {
 
 #[cfg(test)]
 #[cfg(feature = "test-util")]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

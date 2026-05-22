@@ -8,9 +8,7 @@
 /// that spin up multiple connections.
 pub(super) fn build_test_http_client() -> http_client::Client {
     let builder = reqwest::ClientBuilder::new()
-        .tls_built_in_native_certs(false)
-        .tls_built_in_root_certs(false)
-        .tls_built_in_webpki_certs(false)
+        .tls_certs_only([])
         .no_proxy()
         .pool_max_idle_per_host(0);
     http_client::Client::from_client_builder(builder)

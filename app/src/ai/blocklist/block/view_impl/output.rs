@@ -1,116 +1,43 @@
 //! Renders the AI output portion of the AI block.
 //!
 //! This includes text, code snippets, suggested commands, and interactive inline action UX.
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{
-    AIAgentInput, CreateDocumentsResult, EditDocumentsResult, ReadFilesResult, SubagentCall,
-    SubagentType, TodoOperation, UploadArtifactResult,
-};
-use crate::util::truncation::truncate_from_end;
-use ai::agent::file_locations::group_file_contexts_for_display;
-
-use crate::ai::blocklist::block::view_impl::common::{
-    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
-};
-use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
-use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
-use crate::ai::blocklist::secret_redaction::SecretRedactionState;
-use crate::ai::blocklist::view_util::format_credits;
-use crate::ai::skills::SkillOpenOrigin;
-use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path,
-};
-
-use crate::code::editor_management::CodeSource;
-use crate::terminal::shared_session::SharedSessionStatus;
-use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
-};
-use crate::AIAgentTodoList;
-
+use std::cell::OnceCell;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::skills::SkillReference;
+use indexmap::IndexMap;
+use itertools::Itertools;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 #[allow(unused_imports)]
 use warp_util::path::{common_path, CleanPathResult};
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
-    ChildAnchor, NewScrollable, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack,
+    Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable,
+    MainAxisAlignment, MainAxisSize, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap,
 };
-use warpui::EntityId;
-
-use crate::ai::blocklist::block::{
-    CollapsibleElementState, CollapsibleExpansionState, FinishReason, ImportedCommentGroup,
+use warpui::keymap::Keystroke;
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{RadioButtonItem, RadioButtonLayout};
+use warpui::{
+    Action, AppContext, Element, EntityId, ModelHandle, SingletonEntity, View, ViewHandle,
 };
-use indexmap::IndexMap;
-use std::{cell::OnceCell, cmp::Ordering, collections::HashMap, rc::Rc, sync::Arc};
-
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
-use crate::{
-    ai::{
-        agent::{
-            icons::{self, gray_stop_icon, yellow_stop_icon},
-            AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-            AIAgentActionType, AIAgentCitation, AIAgentOutputMessage, AIAgentOutputMessageType,
-            AIAgentText, AIAgentTextSection, MessageId, ReadFilesRequest,
-            RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-            SuggestNewConversationResult, SummarizationType,
-        },
-        blocklist::{
-            action_model::AIActionStatus,
-            block::{
-                model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus},
-                AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons,
-                AutonomySettingSpeedbump, EmbeddedCodeEditorView, RequestedEdit, TextLocation,
-                TodoListElementState,
-            },
-            history_model::BlocklistAIHistoryModel,
-            inline_action::{
-                ask_user_question_view::AskUserQuestionView,
-                inline_action_header::{
-                    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-                    INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::{self, icon_size},
-                requested_action::{
-                    render_requested_action_body_text, render_requested_action_row_for_text,
-                    RenderableAction,
-                },
-                requested_command::RequestedCommand,
-                search_codebase::SearchCodebaseView,
-                suggested_unit_tests::SuggestedUnitTestsView,
-                web_fetch::WebFetchView,
-                web_search::WebSearchView,
-            },
-            keyboard_navigable_buttons::KeyboardNavigableButtons,
-            AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView,
-        },
-        paths::shell_native_absolute_path,
-        skills::SkillManager,
-    },
-    appearance::Appearance,
-    code::diff_viewer::DisplayMode,
-    settings_view::SettingsSection,
-    terminal::ShellLaunchData,
-    ui_components::{blended_colors, buttons::icon_button, icons::Icon},
-    view_components::action_button::ActionButton,
-    workspace::WorkspaceAction,
-    FeatureFlag,
-};
-use itertools::Itertools;
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::channel::ChannelState;
 
 use super::common::{
     format_elapsed_seconds, render_debug_footer, render_failed_output, render_informational_footer,
@@ -119,29 +46,82 @@ use super::common::{
     STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
 };
 use super::imported_comments::render_imported_comments;
-use super::orchestration;
-use super::todos::render_todos;
-use super::CONTENT_HORIZONTAL_PADDING;
+use super::todos::{render_completed_todo_items, render_todos};
 use super::{
-    add_highlights_to_rich_text, render_autonomy_checkbox_setting_speedbump_footer,
-    render_citation_chips, todos::render_completed_todo_items, WithContentItemSpacing,
+    add_highlights_to_rich_text, orchestration, render_autonomy_checkbox_setting_speedbump_footer,
+    render_citation_chips, WithContentItemSpacing, CONTENT_HORIZONTAL_PADDING,
     CONTENT_ITEM_VERTICAL_MARGIN,
 };
-use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
-        MainAxisSize, ParentElement, Radius, Shrinkable, Text, Wrap,
-    },
-    keymap::Keystroke,
-    platform::{Cursor, OperatingSystem},
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        radio_buttons::{RadioButtonItem, RadioButtonLayout},
-    },
-    Action, AppContext, Element, ModelHandle, SingletonEntity, View, ViewHandle,
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::comment::ReviewComment;
+use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CreateDocumentsResult,
+    EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::AIActionStatus;
+use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus};
+use crate::ai::blocklist::block::view_impl::common::{
+    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
+    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+};
+use crate::ai::blocklist::block::{
+    AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
+    CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView, FinishReason,
+    ImportedCommentGroup, RequestedEdit, TextLocation, TodoListElementState,
+};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestionView;
+use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
+use crate::ai::blocklist::inline_action::requested_action::{
+    render_requested_action_body_text, render_requested_action_row_for_text, RenderableAction,
+};
+use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
+use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
+use crate::ai::blocklist::inline_action::search_codebase::SearchCodebaseView;
+use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
+use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
+use crate::ai::blocklist::inline_action::web_search::WebSearchView;
+use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
+use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
+use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
+use crate::ai::paths::shell_native_absolute_path;
+use crate::ai::skills::{
+    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path, SkillManager,
+    SkillOpenOrigin,
+};
+use crate::appearance::Appearance;
+use crate::code::diff_viewer::DisplayMode;
+use crate::code::editor_management::CodeSource;
+use crate::settings_view::SettingsSection;
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::ShellLaunchData;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::action_button::ActionButton;
+use crate::view_components::compactible_action_button::{
+    CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
+};
+use crate::workspace::WorkspaceAction;
+use crate::{AIAgentTodoList, FeatureFlag};
 
 const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upload this artifact?";
 
@@ -225,6 +205,24 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     let is_conversation_in_progress = conversation_status.is_some_and(|s| s.is_in_progress());
 
     let status = props.model.status(app);
+    let has_expanded_last_requested_command = status.output_to_render().is_some_and(|output| {
+        let output = output.get();
+        output.messages.last().is_some_and(|message| {
+            let AIAgentOutputMessageType::Action(action) = &message.message else {
+                return false;
+            };
+
+            matches!(
+                &action.action,
+                AIAgentActionType::RequestCommandOutput { .. }
+            ) && props
+                .requested_commands
+                .get(&action.id)
+                .is_some_and(|requested_command| {
+                    requested_command.view.as_ref(app).is_header_expanded()
+                })
+        })
+    });
     match status {
         // Ignore errors if the response is not yet complete-- it could be a deserialization
         // error that corrects itself when more output is streamed in.
@@ -243,7 +241,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // when the entire response is complete to avoid intermediate states.
                 let mut should_render_references_section = is_complete && request_type.is_active();
                 let mut should_render_suggestions = is_complete
-                    && props.model.is_latest_non_passive_exchange_in_root_task(app)
+                    && props.model.is_latest_visible_exchange_in_root_task(app)
+                    && !has_expanded_last_requested_command
                     && !is_conversation_in_progress
                     && !is_output_for_static_prompt_suggestions
                     && request_type.is_active();
@@ -253,8 +252,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     request_type.is_passive_code_diff() && props.has_accepted_edits;
 
                 let mut should_render_footer =
-                    (props.model.is_latest_non_passive_exchange_in_root_task(app)
+                    (props.model.is_latest_visible_exchange_in_root_task(app)
                         || requires_special_footer)
+                        && !has_expanded_last_requested_command
                         && !is_output_for_static_prompt_suggestions
                         && !is_conversation_in_progress
                         && request_type.is_active()
@@ -769,7 +769,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 },
                             id,
                             ..
-                        }) if FeatureFlag::Orchestration.is_enabled() => {
+                        }) if FeatureFlag::OrchestrationV2.is_enabled() => {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             output_items.add_child(orchestration::render_start_agent(
@@ -788,17 +788,14 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ..
                         }) if FeatureFlag::RunAgentsTool.is_enabled() => {
                             // Embed the per-action `RunAgentsCardView`
-                            // via `ChildView`. The view itself handles
-                            // the streaming gate and in-flight dispatch
-                            // states (a card is mid-dispatch when its
-                            // `is_spawning()` getter returns true).
+                            // via `ChildView`. The view renders a
+                            // "Configuring agents..." placeholder while
+                            // streaming, then transitions to the full
+                            // confirmation card once complete.
                             should_render_footer = false;
                             should_render_suggestions = false;
                             if let Some(card_view) = props.run_agents_card_views.get(id) {
-                                let is_spawning = card_view.as_ref(app).is_spawning();
-                                if !status.is_streaming() || is_spawning {
-                                    output_items.add_child(ChildView::new(card_view).finish());
-                                }
+                                output_items.add_child(ChildView::new(card_view).finish());
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
@@ -810,7 +807,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 },
                             id,
                             ..
-                        }) if FeatureFlag::Orchestration.is_enabled() => {
+                        }) if FeatureFlag::OrchestrationV2.is_enabled() => {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             output_items.add_child(orchestration::render_send_message(
@@ -898,14 +895,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::MessagesReceivedFromAgents { messages }
-                            if FeatureFlag::Orchestration.is_enabled() =>
+                            if FeatureFlag::OrchestrationV2.is_enabled() =>
                         {
                             output_items.add_child(
                                 orchestration::render_messages_received_from_agents(
-                                    messages,
-                                    props,
-                                    &output_message.id,
-                                    app,
+                                    messages, props, app,
                                 ),
                             );
                         }
@@ -926,6 +920,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 SubagentType::ConversationSearch {
                                     ref query,
                                     ref conversation_id,
+                                    ref agent_run_id,
                                 },
                             task_id: subagent_task_id,
                         }) => {
@@ -954,13 +949,12 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 icons::yellow_running_icon(appearance)
                             };
 
-                            // Resolve which conversation is being searched. If
-                            // conversation_id is set and differs from the current
-                            // conversation, try to resolve a display name from
-                            // the history model; otherwise label it "this
-                            // conversation".
-                            let conversation_label =
-                                conversation_id.as_ref().and_then(|target_id| {
+                            // Resolve which conversation is being searched. Conversation IDs use
+                            // conversation history titles; agent run IDs use ambient task titles
+                            // once fetched. If neither target exists, label it "this conversation".
+                            let target_label = conversation_id
+                                .as_ref()
+                                .and_then(|target_id| {
                                     let history = BlocklistAIHistoryModel::as_ref(app);
                                     let token = ServerConversationToken::new(target_id.clone());
                                     let local_id =
@@ -978,7 +972,25 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     let title = target_conversation
                                         .and_then(|c| c.title())
                                         .map(|q| truncate_from_end(&q, 40));
-                                    Some(title.unwrap_or_else(|| target_id.clone()))
+                                    Some((
+                                        "conversation",
+                                        title.unwrap_or_else(|| target_id.clone()),
+                                    ))
+                                })
+                                .or_else(|| {
+                                    let target_id = agent_run_id.as_ref()?;
+                                    let title = target_id
+                                        .parse::<AmbientAgentTaskId>()
+                                        .ok()
+                                        .and_then(|task_id| {
+                                            AgentConversationsModel::as_ref(app)
+                                                .get_task_data(&task_id)
+                                        })
+                                        .map(|task| truncate_from_end(&task.title, 40));
+                                    Some((
+                                        "agent run",
+                                        title.unwrap_or_else(|| truncate_from_end(target_id, 40)),
+                                    ))
                                 });
 
                             let done = is_finished || is_cancelled;
@@ -986,10 +998,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
                             let mut fragments: Vec<FormattedTextFragment> =
                                 vec![FormattedTextFragment::plain_text(format!("{verb} "))];
-                            match &conversation_label {
-                                Some(name) => {
-                                    fragments
-                                        .push(FormattedTextFragment::plain_text("conversation "));
+                            match &target_label {
+                                Some((target_kind, name)) => {
+                                    fragments.push(FormattedTextFragment::plain_text(format!(
+                                        "{target_kind} "
+                                    )));
                                     fragments.push(FormattedTextFragment::weighted(
                                         name.as_str(),
                                         Some(markdown_parser::weight::CustomWeight::Bold),
@@ -1139,7 +1152,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .finish(),
             );
 
-            if props.model.is_latest_non_passive_exchange_in_root_task(app)
+            if props.model.is_latest_visible_exchange_in_root_task(app)
+                && !has_expanded_last_requested_command
                 && !props.model.is_restored()
                 && !error.is_invalid_api_key()
             {
@@ -3231,10 +3245,25 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         return Empty::new().finish();
     };
 
+    // Optional orchestration credit rollup. When the conversation has at
+    // least one locally-loaded descendant with credits spent, the pill's
+    // headline number and "has any usage" suppression check both switch
+    // over to the orchestration total (PRODUCT invariants 11, 11b). The
+    // `(+N)` last-block annotation below stays bound to the
+    // orchestrator's own credits. The rollup helper returns `None` for
+    // conversations with no descendants, so callers that aren't
+    // orchestrators pay only the cost of one descendant-index probe.
+    let rollup =
+        compute_orchestration_rollup(conversation.id(), BlocklistAIHistoryModel::as_ref(app));
+
     // If this conversation has no usage metadata (e.g. a forked conversation from
     // mid-way through a prior conversation where the server did not send
     // ConversationUsageMetadata), avoid rendering the usage button entirely.
-    let has_any_usage = conversation.credits_spent() > 0.0
+    let headline_credits = rollup
+        .as_ref()
+        .map(|r| r.total_credits)
+        .unwrap_or_else(|| conversation.credits_spent());
+    let has_any_usage = headline_credits > 0.0
         || conversation.credits_spent_for_last_block().is_some()
         || !conversation.token_usage().is_empty()
         || conversation.tool_usage_metadata().total_tool_calls() > 0;
@@ -3251,7 +3280,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         Icon::ChevronRight
     };
 
-    let total_credits_spent = conversation.credits_spent();
+    let total_credits_spent = headline_credits;
     let mut credit_usage_text = format_credits(total_credits_spent);
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent

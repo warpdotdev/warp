@@ -1,8 +1,6 @@
-use std::{
-    io,
-    path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::io;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(thiserror::Error, Debug)]
 pub enum FileSaveError {

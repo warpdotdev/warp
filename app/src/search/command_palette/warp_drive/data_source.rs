@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
 use super::notebook_search_item::NotebookSearchItem;
 use super::workflow_search_item::WorkflowSearchItem;
@@ -18,8 +22,6 @@ use crate::search::QueryFilter;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
-use std::collections::HashMap;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 /// Datasource that searches against all Warp Drive objects
 pub struct DataSource {
@@ -541,6 +543,11 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
 mod full_text_searcher {
     use std::sync::Arc;
 
+    use fuzzy_match::FuzzyMatchResult;
+    use itertools::Itertools;
+    use warpui::r#async::executor::Background;
+    use warpui::{AppContext, SingletonEntity};
+
     use crate::cloud_object::model::persistence::CloudModel;
     use crate::cloud_object::{
         CloudObject, CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, ObjectType,
@@ -562,10 +569,6 @@ mod full_text_searcher {
     use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
     use crate::server::ids::ObjectUid;
     use crate::workflows::CloudWorkflow;
-    use fuzzy_match::FuzzyMatchResult;
-    use itertools::Itertools;
-    use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
 
     /// Memory budget for the search index of warp drive.
     /// Warp could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB

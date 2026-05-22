@@ -3,22 +3,19 @@ pub(crate) mod mobile_detection;
 pub(crate) mod soft_keyboard;
 
 use gloo::events::{EventListener, EventListenerOptions};
-use wasm_bindgen::{JsCast, UnwrapThrowExt};
-
-use crate::{keymap::Keystroke, windowing::winit::app::CustomEvent};
-
 pub use hidden_input::{HiddenInput, HiddenInputEvent, InputCallback};
 pub use mobile_detection::{is_mobile_device, is_mobile_user_agent};
 pub use soft_keyboard::{SoftKeyboardInput, SoftKeyboardManager, SoftKeyboardState};
+// Re-export the functions from the core crate.
+pub use warpui_core::platform::wasm::*;
+use wasm_bindgen::{JsCast, UnwrapThrowExt};
 
+use super::KEYS_TO_IGNORE;
+use crate::keymap::Keystroke;
 // Re-export a couple winit types and modules as the concrete implementations
 // for the wasm platform.
 pub use crate::windowing::winit::app::App;
-
-// Re-export the functions from the core crate.
-pub use warpui_core::platform::wasm::*;
-
-use super::KEYS_TO_IGNORE;
+use crate::windowing::winit::app::CustomEvent;
 
 fn get_visual_viewport_dimensions() -> Option<(f32, f32)> {
     let window = gloo::utils::window();

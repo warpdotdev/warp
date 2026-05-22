@@ -1,18 +1,3 @@
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentConversationEntryId, AgentConversationProvenance,
-};
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
-use crate::appearance::Appearance;
-use crate::drive::sharing::dialog::SharingDialog;
-use crate::menu::Menu;
-use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
-use crate::ui_components::icon_with_status::render_icon_with_status;
-use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
-use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::util::truncation::truncate_from_end;
-use crate::workspace::view::conversation_list::view::ConversationListViewAction;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
@@ -29,6 +14,22 @@ use warpui::platform::Cursor;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, SingletonEntity, ViewHandle};
+
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationEntryId, AgentConversationProvenance,
+};
+use crate::ai::conversation_status_ui::STATUS_ELEMENT_PADDING;
+use crate::appearance::Appearance;
+use crate::drive::sharing::dialog::SharingDialog;
+use crate::menu::Menu;
+use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
+use crate::ui_components::icon_with_status::render_icon_with_status;
+use crate::ui_components::icons::Icon;
+use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::util::truncation::truncate_from_end;
+use crate::workspace::view::conversation_list::view::ConversationListViewAction;
 
 /// Maximum length for tooltip text before truncation
 const MAX_TOOLTIP_LENGTH: usize = 80;
@@ -213,24 +214,13 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     }
 
     let status_element_size = font_size + STATUS_ELEMENT_PADDING * 2.;
-    // Prefer the unified agent icon-with-status circle (brand color + cloud lobe for
-    // ambient runs) so the row matches the vertical tab / pane header. Fall back to the
-    // plain status-only icon when the helper can't produce an agent variant (never today,
-    // but keeps the surface future-proof).
-    let icon_element: Box<dyn Element> = match agent_conversation_entry_icon_variant(conversation) {
-        Some(variant) => render_icon_with_status(
-            variant,
-            LIST_ITEM_AGENT_SIZE,
-            LIST_ITEM_OVERLAY_EXTRA_OVERHANG,
-            theme,
-            theme.background(),
-        ),
-        None => render_status_element(
-            &conversation.display.status.to_conversation_status(),
-            font_size,
-            appearance,
-        ),
-    };
+    let icon_element = render_icon_with_status(
+        agent_conversation_entry_icon_variant(conversation),
+        LIST_ITEM_AGENT_SIZE,
+        LIST_ITEM_OVERLAY_EXTRA_OVERHANG,
+        theme,
+        theme.background(),
+    );
 
     let icon_and_title_row = Shrinkable::new(
         1.0,

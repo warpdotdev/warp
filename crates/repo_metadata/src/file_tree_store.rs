@@ -1,11 +1,13 @@
 mod file_tree_state;
 
-use crate::file_tree_store::file_tree_state::FileTreeMapStore;
-use crate::{BuildTreeError, Entry, FileId, FileMetadata, Repository};
-use ignore::gitignore::Gitignore;
 use std::sync::Arc;
+
+use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::ModelHandle;
+
+use crate::file_tree_store::file_tree_state::FileTreeMapStore;
+use crate::{BuildTreeError, Entry, FileId, FileMetadata, Repository};
 
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {

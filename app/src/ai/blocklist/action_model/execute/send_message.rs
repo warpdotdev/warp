@@ -1,17 +1,22 @@
 #[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+#[cfg(not(target_family = "wasm"))]
 use anyhow::anyhow;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
-use futures::{future::BoxFuture, FutureExt};
-#[cfg(not(target_family = "wasm"))]
-use std::time::Duration;
+use futures::FutureExt;
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
-    conversation::AIConversationId, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
-    SendMessageToAgentResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, SendMessageToAgentResult,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -23,10 +28,6 @@ use crate::ai::blocklist::telemetry::{
 };
 use crate::server::server_api::ai::{SendAgentMessageRequest, SendAgentMessageResponse};
 use crate::server::server_api::ServerApiProvider;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 #[cfg(not(target_family = "wasm"))]
 const SEND_AGENT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -229,6 +230,8 @@ impl SendMessageToAgentExecutor {
             .into();
         }
 
+        // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path once all
+        // agent-to-agent messages use the v2 server API.
         let result = OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.send_message(conversation_id, &addresses, subject, message_body, ctx)
         });

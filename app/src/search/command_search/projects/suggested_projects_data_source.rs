@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
 use chrono::{Duration, NaiveDateTime, Utc};
 use fuzzy_match::match_indices_case_insensitive;
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::search::command_palette::mixer::CommandPaletteItemAction;

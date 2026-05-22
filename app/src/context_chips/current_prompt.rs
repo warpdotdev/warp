@@ -1,61 +1,50 @@
-use crate::features::FeatureFlag;
-use crate::report_if_error;
-use crate::settings::{InputSettings, WarpPromptSeparator};
-use crate::terminal::event::{BlockType, UserBlockCompleted};
-use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionsEvent};
-use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::{
-    debounce::debounce,
-    editor::EditorView,
-    menu::{MenuItem, MenuItemFields},
-    terminal::{
-        model::{
-            block::{Block, BlockMetadata},
-            session::Sessions,
-        },
-        session_settings::{
-            GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
-            ToolbarChipSelection,
-        },
-        view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction},
-    },
-};
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash as _, Hasher as _};
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
 use settings::Setting as _;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::user_preferences::GetUserPreferences;
-
-use super::ChipResult;
-use super::{
-    chips_to_string,
-    context_chip::{
-        ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
-        ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
-        RefreshConfig, ShellCommandGenerator,
-    },
-    logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger},
-    prompt::Prompt,
-    ChipValue, ContextChipKind,
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+#[cfg(feature = "local_fs")]
+use warpui::WeakModelHandle;
+use warpui::{
+    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
 };
+
+use super::context_chip::{
+    ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
+    ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
+    RefreshConfig, ShellCommandGenerator,
+};
+use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
+use super::prompt::Prompt;
+use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::context_chips::display_chip::GitLineChanges;
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash as _, Hasher as _};
-use std::sync::Arc;
-use std::time::Duration;
-#[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
-use warpui::{
-    r#async::{SpawnedFutureHandle, Timer},
-    AppContext, ViewHandle,
+use crate::debounce::debounce;
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::report_if_error;
+use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::terminal::event::{BlockType, UserBlockCompleted};
+use crate::terminal::model::block::{Block, BlockMetadata};
+use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::session_settings::{
+    GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
+    ToolbarChipSelection,
 };
-use warpui::{Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
+use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
 
 #[cfg(test)]
-#[path = "current_prompt_test.rs"]
+#[path = "current_prompt_tests.rs"]
 mod tests;
 
 const PROMPT_DEBOUNCE_PERIOD: Duration = Duration::from_millis(50);
@@ -518,9 +507,21 @@ impl CurrentPrompt {
             return false;
         };
 
+        // A retryable failure (`Error`, `TimedOut`) is not a usable cached
+        // result: `last_fingerprint` is recorded before the command runs, and
+        // such failures intentionally do not populate `last_failure_fingerprint`.
+        // Without this guard, the next periodic tick would treat the failed
+        // attempt as a cache hit and never retry. Deterministic failures
+        // continue to be suppressed via `last_failure_fingerprint`.
         let should_skip = self
             .states
             .get(chip_kind)
+            .filter(|state| {
+                !matches!(
+                    state.update_status,
+                    ChipUpdateStatus::Error | ChipUpdateStatus::TimedOut
+                )
+            })
             .and_then(|state| state.last_fingerprint.as_ref())
             .is_some_and(|existing| existing == &new_fingerprint);
 
@@ -619,26 +620,7 @@ impl CurrentPrompt {
         &self,
         values_opt: Option<Vec<String>>,
     ) -> Option<Vec<String>> {
-        values_opt.map(|values| {
-            let mut trimmed: Vec<String> = values
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // We want to sort the branches so the current branch is first (denoted by *).
-            // The rest of the branches maintain their relative order.
-            trimmed.sort_by(|a, b| {
-                let a_starts_with_star = a.starts_with('*');
-                let b_starts_with_star = b.starts_with('*');
-                b_starts_with_star.cmp(&a_starts_with_star)
-            });
-
-            trimmed
-                .into_iter()
-                .map(|s| s.trim_start_matches('*').trim().to_string())
-                .collect()
-        })
+        super::git_branch_on_click::filter_git_branch_on_click_values(values_opt)
     }
 
     /// Perform a single update of the given chip.
@@ -780,6 +762,16 @@ impl CurrentPrompt {
                             output: value.as_ref(),
                             timed_out,
                         });
+                        // GitDiffStats has two value sources that can race when entering a repo:
+                        // this shell fallback (`git diff --shortstat HEAD`, tracked changes only)
+                        // and a repo-status watcher that also counts untracked files. If the
+                        // watcher attached while this fallback was in flight, drop the fallback's
+                        // result
+                        if matches!(chip_kind, ContextChipKind::GitDiffStats)
+                            && me.is_updated_externally(&chip_kind)
+                        {
+                            return;
+                        }
 
                         if timed_out {
                             if suppress_on_failure
@@ -1001,7 +993,7 @@ impl CurrentPrompt {
                     chip_kind_clone
                 },
                 |me, chip_kind, ctx| {
-                    me.fetch_chip_value_at_interval(&chip_kind, None, None, false, ctx);
+                    me.fetch_chip_value_at_interval(&chip_kind, None, None, true, ctx);
                 },
             );
 
@@ -1438,56 +1430,76 @@ impl CurrentPrompt {
             }
         }
 
+        // Repo detached, clear GitDiffStats.
+        if handle.is_none() {
+            if let Some(state) = self.states.get_mut(&ContextChipKind::GitDiffStats) {
+                state.clear_abort_handlers();
+                state.clear_cache();
+            }
+            let _ = self.update_tx.try_send(());
+            return;
+        }
+
         if let Some(weak) = handle {
             if let Some(strong) = weak.upgrade(ctx) {
                 self.git_repo_status = Some(weak);
                 ctx.subscribe_to_model(&strong, |me, event, ctx| match event {
                     GitRepoStatusEvent::MetadataChanged => {
-                        let metadata = me
-                            .git_repo_status
-                            .as_ref()
-                            .and_then(|w| w.upgrade(ctx))
-                            .and_then(|h| h.as_ref(ctx).metadata().cloned());
-
-                        let Some(metadata) = metadata else {
-                            return;
-                        };
-
-                        // Update ShellGitBranch.
-                        let new_branch = ChipValue::Text(metadata.current_branch_name.clone());
-                        let current_branch = me
-                            .latest_chip_value(&ContextChipKind::ShellGitBranch)
-                            .cloned();
-                        if current_branch.as_ref() != Some(&new_branch) {
-                            me.update_chip_value(
-                                &ContextChipKind::ShellGitBranch,
-                                Some(new_branch),
-                            );
-                            // Refresh the branch dropdown so it stays in sync.
-                            let chip_kind = ContextChipKind::ShellGitBranch;
-                            if let Some(chip) = chip_kind.to_chip() {
-                                if let Some(on_click_gen) = chip.on_click_generator().cloned() {
-                                    me.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
-                                }
-                            }
-                        }
-
-                        // Update GitDiffStats with structured data directly.
-                        let new_diff_stats = ChipValue::GitDiffStats(
-                            GitLineChanges::from_diff_stats(&metadata.stats_against_head),
-                        );
-                        let current_diff_stats = me
-                            .latest_chip_value(&ContextChipKind::GitDiffStats)
-                            .cloned();
-                        if current_diff_stats.as_ref() != Some(&new_diff_stats) {
-                            me.update_chip_value(
-                                &ContextChipKind::GitDiffStats,
-                                Some(new_diff_stats),
-                            );
-                        }
+                        me.apply_git_repo_metadata(ctx);
                     }
                 });
+
+                // Eagerly populate chips if metadata is already available (the
+                // initial `refresh_metadata` in `GitRepoStatusModel::new` may
+                // have completed before we subscribed). If it hasn't finished
+                // yet, the subscription above will catch the `MetadataChanged`
+                // event when it does.
+                if strong.as_ref(ctx).metadata().is_some() {
+                    self.apply_git_repo_metadata(ctx);
+                }
             }
+        }
+    }
+
+    /// Read the current `GitRepoStatusModel` metadata and push it into the
+    /// `ShellGitBranch` and `GitDiffStats` chip states.
+    #[cfg(feature = "local_fs")]
+    fn apply_git_repo_metadata(&mut self, ctx: &mut ModelContext<Self>) {
+        let metadata = self
+            .git_repo_status
+            .as_ref()
+            .and_then(|w| w.upgrade(ctx))
+            .and_then(|h| h.as_ref(ctx).metadata().cloned());
+
+        let Some(metadata) = metadata else {
+            return;
+        };
+
+        // Update ShellGitBranch.
+        let new_branch = ChipValue::Text(metadata.current_branch_name.clone());
+        let current_branch = self
+            .latest_chip_value(&ContextChipKind::ShellGitBranch)
+            .cloned();
+        if current_branch.as_ref() != Some(&new_branch) {
+            self.update_chip_value(&ContextChipKind::ShellGitBranch, Some(new_branch));
+            // Refresh the branch dropdown so it stays in sync.
+            let chip_kind = ContextChipKind::ShellGitBranch;
+            if let Some(chip) = chip_kind.to_chip() {
+                if let Some(on_click_gen) = chip.on_click_generator().cloned() {
+                    self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
+                }
+            }
+        }
+
+        // Update GitDiffStats with structured data directly.
+        let new_diff_stats = ChipValue::GitDiffStats(GitLineChanges::from_diff_stats(
+            &metadata.stats_against_head,
+        ));
+        let current_diff_stats = self
+            .latest_chip_value(&ContextChipKind::GitDiffStats)
+            .cloned();
+        if current_diff_stats.as_ref() != Some(&new_diff_stats) {
+            self.update_chip_value(&ContextChipKind::GitDiffStats, Some(new_diff_stats));
         }
     }
 

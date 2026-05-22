@@ -1,23 +1,19 @@
 use std::collections::HashMap;
 
-use warp_core::ui::{appearance::Appearance, Icon};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon;
+use warpui::elements::ParentElement;
+use warpui::prelude::{
+    ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,
+};
 use warpui::{
-    elements::ParentElement,
-    prelude::{
-        ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle,
-        Text,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::blocklist::{
-        agent_view::{agent_view_bg_color, AgentViewController},
-        inline_action::inline_action_icons,
-        BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    },
-    terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-};
+use crate::ai::blocklist::agent_view::{agent_view_bg_color, AgentViewController};
+use crate::ai::blocklist::inline_action::inline_action_icons;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SetupCommandGroupId(u64);
@@ -74,6 +70,11 @@ impl SetupCommandState {
 
     pub fn is_running(&self, group_id: SetupCommandGroupId) -> bool {
         self.running_group_id == Some(group_id)
+    }
+
+    pub fn should_suppress_input_sync_for_current_group(&self) -> bool {
+        self.current_group_id != SetupCommandGroupId::initial()
+            && self.is_running(self.current_group_id)
     }
 
     pub fn start_new_group(&mut self) -> SetupCommandGroupId {
@@ -218,6 +219,7 @@ impl View for CloudModeSetupTextBlock {
             &self.ambient_agent_view_model,
             app,
         )
+        .with_margin_top(8.)
         .finish()
     }
 }

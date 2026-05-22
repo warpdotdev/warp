@@ -1,29 +1,27 @@
-use super::{
-    buffer::{Buffer, EditOrigin, EditResult},
-    cursor::BufferSumTree,
-    edit::EditDelta,
-    text::{
-        BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
-        TextStyles, TextStylesWithMetadata,
-    },
-    undo::{ReversibleEditorAction, UndoArg},
-};
-use crate::content::{
-    anchor::{Anchor, AnchorSide, AnchorUpdate},
-    buffer::{StyledBlockBoundaryBehavior, ToBufferByteOffset, ToBufferPoint},
-    cursor::BufferCursor,
-    edit::PreciseDelta,
-    text::{
-        BlockHeaderSize, BlockLineBreakBehavior, BufferBlockItem, BufferBlockStyle, BufferText,
-        StyleSummary,
-    },
-};
+use std::ops::Range;
+
 use enum_iterator::all;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use std::ops::Range;
 use string_offset::CharOffset;
 use sum_tree::SumTree;
 use warpui::elements::ListIndentLevel;
+
+use super::buffer::{Buffer, EditOrigin, EditResult};
+use super::cursor::BufferSumTree;
+use super::edit::EditDelta;
+use super::text::{
+    BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
+    TextStyles, TextStylesWithMetadata,
+};
+use super::undo::{ReversibleEditorAction, UndoArg};
+use crate::content::anchor::{Anchor, AnchorSide, AnchorUpdate};
+use crate::content::buffer::{StyledBlockBoundaryBehavior, ToBufferByteOffset, ToBufferPoint};
+use crate::content::cursor::BufferCursor;
+use crate::content::edit::PreciseDelta;
+use crate::content::text::{
+    BlockHeaderSize, BlockLineBreakBehavior, BufferBlockItem, BufferBlockStyle, BufferText,
+    StyleSummary,
+};
 
 #[derive(Debug, Clone)]
 pub struct CoreEditorAction {

@@ -16,9 +16,9 @@ use warp_core::command::ExitCode;
 use warp_util::path::{EscapeChar, ShellFamily};
 use warpui::platform::OperatingSystem;
 
-use crate::{completer::TopLevelCommandCaseSensitivity, signatures::CommandRegistry};
-
 use super::engine::EngineDirEntry;
+use crate::completer::TopLevelCommandCaseSensitivity;
+use crate::signatures::CommandRegistry;
 
 /// This trait may be implemented to configure behavior of the completions engine.
 pub trait CompletionContext: Send + Sync {
@@ -163,6 +163,11 @@ pub trait PathCompletionContext: Send + Sync {
     ///
     /// This is used to expand '~' and '$HOME' in user input.
     fn home_directory(&self) -> Option<&str>;
+
+    /// `CDPATH`/`cdpath` from the shell, colon-separated. Used to extend `cd` argument completions.
+    fn cdpath(&self) -> Option<&str> {
+        None
+    }
 
     fn shell_family(&self) -> ShellFamily;
 

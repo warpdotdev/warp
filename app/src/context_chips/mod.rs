@@ -6,6 +6,7 @@ pub mod directory_fetcher;
 pub mod display;
 pub mod display_chip;
 pub mod display_menu;
+pub(crate) mod git_branch_on_click;
 pub(crate) mod logging;
 pub mod node_version_popup;
 pub mod prompt;
@@ -20,23 +21,21 @@ use std::time::Duration;
 use context_chip::PromptGenerator;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use warpui::{
-    color::ColorU,
-    elements::Text,
-    fonts::{Properties, Weight},
-};
-
-use crate::ui_components::{blended_colors, icons::Icon};
-use crate::{appearance::Appearance, features::FeatureFlag, themes::theme::PromptColors};
+use warpui::color::ColorU;
+use warpui::elements::Text;
+use warpui::fonts::{Properties, Weight};
 
 #[allow(unused_imports)]
 pub use self::context_chip::{
     ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ExternalCommandsAvailability,
 };
-use self::{
-    context_chip::{ChipFingerprintInput, ChipRuntimePolicy, ContextChip, RefreshConfig},
-    renderer::RendererStyles,
-};
+use self::context_chip::{ChipFingerprintInput, ChipRuntimePolicy, ContextChip, RefreshConfig};
+use self::renderer::RendererStyles;
+use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
+use crate::themes::theme::PromptColors;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 /// The value of a context chip. Most chips produce plain text, but some
 /// (like `GitDiffStats`) carry structured data to avoid string round-trips.

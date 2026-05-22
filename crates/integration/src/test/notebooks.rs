@@ -1,25 +1,20 @@
-use warp::{
-    cmd_or_ctrl_shift,
-    features::FeatureFlag,
-    integration_testing::{
-        command_palette::open_command_palette_and_run_action,
-        notebook::{
-            assert_notebook_contents, assert_notebook_id, assert_notebook_not_open,
-            assert_notebook_open, assert_notebook_renders_mermaid_diagram,
-            assert_open_in_warp_banner_open, create_a_personal_notebook,
-            enter_notebook_edit_mode_and_set_markdown, move_notebook_cursor_to_offset,
-            open_notebook,
-        },
-        step::new_step_with_default_assertions,
-        tab::{assert_pane_title, assert_tab_title},
-        terminal::{
-            assert_single_terminal_in_tab_bootstrapped, execute_command_for_single_terminal_in_tab,
-            util::ExpectedExitStatus, wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::terminal_view,
-        window::{add_and_save_window, close_window, save_active_window_id},
-    },
+use warp::cmd_or_ctrl_shift;
+use warp::features::FeatureFlag;
+use warp::integration_testing::command_palette::open_command_palette_and_run_action;
+use warp::integration_testing::notebook::{
+    assert_notebook_contents, assert_notebook_id, assert_notebook_not_open, assert_notebook_open,
+    assert_open_in_warp_banner_open, create_a_personal_notebook,
+    enter_notebook_edit_mode_and_set_markdown, move_notebook_cursor_to_offset, open_notebook,
 };
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::tab::{assert_pane_title, assert_tab_title};
+use warp::integration_testing::terminal::util::ExpectedExitStatus;
+use warp::integration_testing::terminal::{
+    assert_single_terminal_in_tab_bootstrapped, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
+};
+use warp::integration_testing::view_getters::terminal_view;
+use warp::integration_testing::window::{add_and_save_window, close_window, save_active_window_id};
 use warpui::integration::TestStep;
 
 use super::{new_builder, Builder};
@@ -177,14 +172,11 @@ pub fn test_open_in_warp_banner() -> Builder {
         )
 }
 
-pub fn test_backspace_inside_rendered_mermaid_block_is_atomic() -> Builder {
+pub fn test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block() -> Builder {
     FeatureFlag::MarkdownMermaid.set_enabled(true);
     FeatureFlag::EditableMarkdownMermaid.set_enabled(true);
 
     let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
-    let mermaid_block_start = markdown
-        .find("```mermaid")
-        .expect("Mermaid block should exist");
     let cursor_offset = markdown
         .find("graph TD")
         .expect("Mermaid source should exist")
@@ -203,18 +195,20 @@ pub fn test_backspace_inside_rendered_mermaid_block_is_atomic() -> Builder {
                 ),
         )
         .with_step(
+            // Mermaid blocks now default to Raw mode; diagram rendering requires
+            // the user to click the Rendered toggle. This step only verifies the
+            // markdown content was set correctly.
             enter_notebook_edit_mode_and_set_markdown(0, 0, markdown)
-                .add_assertion(assert_notebook_contents(0, 0, markdown))
-                .add_assertion(assert_notebook_renders_mermaid_diagram(
-                    0,
-                    0,
-                    mermaid_block_start,
-                )),
+                .add_assertion(assert_notebook_contents(0, 0, markdown)),
         )
         .with_step(move_notebook_cursor_to_offset(0, 0, cursor_offset))
         .with_step(
-            TestStep::new("Backspace from inside rendered Mermaid")
+            TestStep::new("Backspace from inside raw Mermaid")
                 .with_keystrokes(&["backspace"])
-                .add_assertion(assert_notebook_contents(0, 0, "Before\nAfter")),
+                .add_assertion(assert_notebook_contents(
+                    0,
+                    0,
+                    "Before\n```mermaid\ngraph TD\nA -> B\n```\nAfter",
+                )),
         )
 }

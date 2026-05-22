@@ -1,14 +1,13 @@
-use warpui::{elements::MouseStateHandle, AppContext, Element};
-
-use crate::{
-    appearance::Appearance,
-    cloud_object::CloudObjectMetadata,
-    drive::{index::DriveIndexAction, DriveObjectType},
-    server::ids::ClientId,
-    themes::theme::Fill,
-};
+use warpui::elements::MouseStateHandle;
+use warpui::{AppContext, Element};
 
 use super::{WarpDriveItem, WarpDriveItemId};
+use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectMetadata;
+use crate::drive::index::DriveIndexAction;
+use crate::drive::DriveObjectType;
+use crate::server::ids::ClientId;
+use crate::themes::theme::Fill;
 
 #[derive(Clone)]
 pub struct WarpDriveMCPServerCollection {

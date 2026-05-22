@@ -1,3 +1,10 @@
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
+use ai::index::full_source_code_embedding::{
+    self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
@@ -7,154 +14,142 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use prost::Message;
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
 use warp_core::channel::ChannelState;
-use warp_core::{features::FeatureFlag, report_error};
+use warp_core::features::FeatureFlag;
+use warp_core::report_error;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::client::Operation;
+use warp_graphql::mutations::confirm_file_artifact_upload::{
+    ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
+    ConfirmFileArtifactUploadVariables,
+};
+use warp_graphql::mutations::create_agent_task::{
+    CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
+};
+use warp_graphql::mutations::create_file_artifact_upload_target::{
+    CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
+    CreateFileArtifactUploadTargetResult, CreateFileArtifactUploadTargetVariables,
+};
+use warp_graphql::mutations::delete_ai_conversation::{
+    DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
+    DeleteConversationResult,
+};
+use warp_graphql::mutations::generate_code_embeddings::{
+    GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
+    GenerateCodeEmbeddingsVariables,
+};
+use warp_graphql::mutations::generate_commands::{
+    GenerateCommands, GenerateCommandsInput, GenerateCommandsResult, GenerateCommandsStatus,
+    GenerateCommandsVariables,
+};
+use warp_graphql::mutations::generate_dialogue::{
+    GenerateDialogue, GenerateDialogueInput,
+    GenerateDialogueResult as GenerateDialogueResultGraphql, GenerateDialogueStatus,
+    GenerateDialogueVariables, TranscriptPart as TranscriptPartGraphql,
+};
+use warp_graphql::mutations::generate_metadata_for_command::{
+    GenerateMetadataForCommand, GenerateMetadataForCommandInput, GenerateMetadataForCommandResult,
+    GenerateMetadataForCommandStatus, GenerateMetadataForCommandVariables,
+};
+use warp_graphql::mutations::populate_merkle_tree_cache::{
+    PopulateMerkleTreeCache, PopulateMerkleTreeCacheResult, PopulateMerkleTreeCacheVariables,
+};
+use warp_graphql::mutations::request_bonus::{
+    ProvideNegativeFeedbackResponseForAiConversation,
+    ProvideNegativeFeedbackResponseForAiConversationInput,
+    ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
+};
+use warp_graphql::mutations::update_agent_task::{
+    AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskResult,
+    UpdateAgentTaskVariables,
+};
+use warp_graphql::mutations::update_merkle_tree::{
+    MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
+    UpdateMerkleTreeVariables,
+};
+use warp_graphql::queries::codebase_context_config::{
+    CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
+};
+use warp_graphql::queries::free_available_models::{
+    FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
+    FreeAvailableModelsVariables,
+};
+use warp_graphql::queries::get_available_harnesses::{
+    GetAvailableHarnesses, GetAvailableHarnessesVariables,
+};
+use warp_graphql::queries::get_feature_model_choices::{
+    GetFeatureModelChoices, GetFeatureModelChoicesVariables,
+};
+use warp_graphql::queries::get_relevant_fragments::{
+    GetRelevantFragmentsQuery, GetRelevantFragmentsResult, GetRelevantFragmentsVariables,
+};
+#[cfg(not(feature = "agent_mode_evals"))]
+use warp_graphql::queries::get_request_limit_info::{
+    GetRequestLimitInfo, GetRequestLimitInfoVariables,
+};
+use warp_graphql::queries::get_scheduled_agent_history::{
+    GetScheduledAgentHistory, GetScheduledAgentHistoryVariables, ScheduledAgentHistory,
+    ScheduledAgentHistoryInput, ScheduledAgentHistoryResult,
+};
+use warp_graphql::queries::rerank_fragments::{
+    RerankFragments, RerankFragmentsResult, RerankFragmentsVariables,
+};
+use warp_graphql::queries::sync_merkle_tree::{
+    SyncMerkleTree, SyncMerkleTreeInput, SyncMerkleTreeResult, SyncMerkleTreeVariables,
+};
+use warp_graphql::queries::task_attachments::{
+    Task as TaskAttachmentsQuery, TaskInput, TaskResult, TaskVariables,
+};
+use warp_graphql::queries::task_git_credentials::{
+    TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
+    TaskGitCredentialsVariables,
+};
 use warp_multi_agent_api::ConversationData;
 
 use super::auth::AuthClient;
-use super::harness_support::UploadTarget;
+use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentConversationFormat, AIAgentHarness, AIAgentSerializedBlockFormat,
     ServerAIConversationMetadata,
 };
+pub use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+// Re-export ambient agent types for backwards compatibility
+pub use crate::ai::ambient_agents::{
+    task::{AttachmentInput, TaskAttachment},
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+};
 use crate::ai::artifacts::Artifact;
 use crate::ai::generate_code_review_content::api::{
     GenerateCodeReviewContentRequest, GenerateCodeReviewContentResponse,
+};
+use crate::ai::harness_availability::HarnessAvailability;
+use crate::ai::llms::{
+    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMSpec,
+    LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::ai::BonusGrant;
-use crate::ai::{agent::api::ServerConversationToken, harness_availability::HarnessAvailability};
+use crate::ai::RequestUsageInfo;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::requests::GenerateDialogueResult;
+use crate::ai_assistant::utils::TranscriptPart;
+use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError};
+use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
+use crate::server::graphql::{
+    default_request_options, get_request_context, get_user_facing_error_message,
+};
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
     ai::request_usage_model::BonusGrantScope,
     server::ids::ServerId,
     workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
-};
-use crate::{
-    ai::{
-        llms::{
-            AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider,
-            LLMSpec, LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
-        },
-        RequestUsageInfo,
-    },
-    ai_assistant::{
-        execution_context::WarpAiExecutionContext, requests::GenerateDialogueResult,
-        utils::TranscriptPart, AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError,
-    },
-    drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError},
-    server::graphql::{
-        default_request_options, get_request_context, get_user_facing_error_message,
-    },
-};
-use ai::index::full_source_code_embedding::{
-    self,
-    store_client::{IntermediateNode, StoreClient},
-    CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
-};
-use warp_graphql::client::Operation;
-#[cfg(not(feature = "agent_mode_evals"))]
-use warp_graphql::queries::get_request_limit_info::{
-    GetRequestLimitInfo, GetRequestLimitInfoVariables,
-};
-use warp_graphql::{
-    ai::{AgentTaskState, PlatformErrorCode},
-    mutations::{
-        confirm_file_artifact_upload::{
-            ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput,
-            ConfirmFileArtifactUploadResult, ConfirmFileArtifactUploadVariables,
-        },
-        create_agent_task::{
-            CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
-        },
-        create_file_artifact_upload_target::{
-            CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
-            CreateFileArtifactUploadTargetResult, CreateFileArtifactUploadTargetVariables,
-        },
-        delete_ai_conversation::{
-            DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
-            DeleteConversationResult,
-        },
-        generate_code_embeddings::{
-            GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
-            GenerateCodeEmbeddingsVariables,
-        },
-        generate_commands::{
-            GenerateCommands, GenerateCommandsInput, GenerateCommandsResult,
-            GenerateCommandsStatus, GenerateCommandsVariables,
-        },
-        generate_dialogue::{
-            GenerateDialogue, GenerateDialogueInput,
-            GenerateDialogueResult as GenerateDialogueResultGraphql, GenerateDialogueStatus,
-            GenerateDialogueVariables, TranscriptPart as TranscriptPartGraphql,
-        },
-        generate_metadata_for_command::{
-            GenerateMetadataForCommand, GenerateMetadataForCommandInput,
-            GenerateMetadataForCommandResult, GenerateMetadataForCommandStatus,
-            GenerateMetadataForCommandVariables,
-        },
-        populate_merkle_tree_cache::{
-            PopulateMerkleTreeCache, PopulateMerkleTreeCacheResult,
-            PopulateMerkleTreeCacheVariables,
-        },
-        request_bonus::{
-            ProvideNegativeFeedbackResponseForAiConversation,
-            ProvideNegativeFeedbackResponseForAiConversationInput,
-            ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
-        },
-        update_agent_task::{
-            AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput,
-            UpdateAgentTaskResult, UpdateAgentTaskVariables,
-        },
-        update_merkle_tree::{
-            MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
-            UpdateMerkleTreeVariables,
-        },
-    },
-    queries::task_git_credentials::{
-        TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
-        TaskGitCredentialsVariables,
-    },
-    queries::{
-        codebase_context_config::{
-            CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
-        },
-        free_available_models::{
-            FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
-            FreeAvailableModelsVariables,
-        },
-        get_available_harnesses::{GetAvailableHarnesses, GetAvailableHarnessesVariables},
-        get_feature_model_choices::{GetFeatureModelChoices, GetFeatureModelChoicesVariables},
-        get_relevant_fragments::{
-            GetRelevantFragmentsQuery, GetRelevantFragmentsResult, GetRelevantFragmentsVariables,
-        },
-        get_scheduled_agent_history::{
-            GetScheduledAgentHistory, GetScheduledAgentHistoryVariables, ScheduledAgentHistory,
-            ScheduledAgentHistoryInput, ScheduledAgentHistoryResult,
-        },
-        rerank_fragments::{RerankFragments, RerankFragmentsResult, RerankFragmentsVariables},
-        sync_merkle_tree::{
-            SyncMerkleTree, SyncMerkleTreeInput, SyncMerkleTreeResult, SyncMerkleTreeVariables,
-        },
-        task_attachments::{Task as TaskAttachmentsQuery, TaskInput, TaskResult, TaskVariables},
-    },
-};
-
-pub use crate::ai::agent::UserQueryMode;
-// Re-export ambient agent types for backwards compatibility
-pub use crate::ai::ambient_agents::{
-    task::{AttachmentInput, TaskAttachment},
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
 };
 
 const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
@@ -213,6 +208,9 @@ pub struct SpawnAgentRequest {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<bool>,
+    /// Agent identity UID to use as the execution principal for the run.
+    #[serde(rename = "agent_identity_uid", skip_serializing_if = "Option::is_none")]
+    pub agent_identity_uid: Option<String>,
     /// Use a Claude-compatible skill as the base prompt.
     /// Format: "repo:skill_name" or just "skill_name".
     /// The skill is resolved at runtime in the agent environment.
@@ -242,6 +240,10 @@ pub struct SpawnAgentRequest {
     /// queued execution input and resolves the prefix in place at rehydration time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_snapshot_token: Option<InitialSnapshotToken>,
+    /// When `Some(true)`, the cloud agent skips the end-of-run snapshot upload.
+    /// Set by the client when cloud conversation storage is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_disabled: Option<bool>,
 }
 
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch
@@ -282,6 +284,13 @@ pub struct UploadLocalHandoffSnapshotResponse {
     pub initial_snapshot_token: InitialSnapshotToken,
     pub expires_at: String,
     pub uploads: Vec<UploadTarget>,
+}
+
+/// Request body for `POST /agent/conversations/{conversation_id}/fork`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ForkConversationRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 /// Response body for `POST /agent/conversations/{conversation_id}/fork`. The returned id is sent
@@ -570,6 +579,8 @@ pub struct FileArtifactUploadTargetInfo {
     pub url: String,
     pub method: String,
     pub headers: Vec<FileArtifactUploadHeaderInfo>,
+    /// Ordered multipart form fields for presigned POST uploads.
+    pub fields: Vec<UploadField>,
 }
 
 #[derive(Debug, Clone)]
@@ -837,6 +848,21 @@ struct ListAgentsResponse {
     agents: Vec<AgentListItem>,
 }
 
+#[derive(Clone, serde::Deserialize, Debug, PartialEq, Eq)]
+pub struct ConnectedSelfHostedWorker {
+    pub worker_host: String,
+    pub connection_count: u32,
+    pub connected_at: String,
+    pub last_seen_at: String,
+}
+
+#[derive(Clone, serde::Deserialize, Debug, PartialEq, Eq)]
+pub struct ListConnectedSelfHostedWorkersResponse {
+    pub workers: Vec<ConnectedSelfHostedWorker>,
+}
+
+pub(crate) const CONNECTED_SELF_HOSTED_WORKERS_PATH: &str = "agent/connected-self-hosted-workers";
+
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -864,6 +890,9 @@ pub trait AIClient: 'static + Send + Sync {
     async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error>;
 
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
+    async fn list_connected_self_hosted_workers(
+        &self,
+    ) -> Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error>;
 
     /// Fetches the free-tier available models without requiring authentication.
     /// Used during pre-login onboarding so logged-out users see an accurate model list
@@ -926,6 +955,7 @@ pub trait AIClient: 'static + Send + Sync {
     async fn fork_conversation(
         &self,
         conversation_id: String,
+        title: Option<String>,
     ) -> anyhow::Result<ForkConversationResponse, anyhow::Error>;
 
     async fn list_ambient_agent_tasks(
@@ -1178,6 +1208,34 @@ impl ServerApi {
     }
 }
 
+/// Convert a cynic `FileArtifactUploadField` into the shared [`UploadField`]
+/// domain type. Unknown variants bubble as an error rather than being silently
+/// dropped, because a server-provided field we can't represent will almost certainly
+/// cause the upload to fail.
+fn convert_upload_field(
+    field: warp_graphql::mutations::create_file_artifact_upload_target::FileArtifactUploadField,
+) -> anyhow::Result<UploadField> {
+    use warp_graphql::mutations::create_file_artifact_upload_target::FileArtifactUploadFieldValue;
+
+    let value = match field.value {
+        FileArtifactUploadFieldValue::StaticUploadFieldValue(v) => {
+            UploadFieldValue::Static { value: v.value }
+        }
+        FileArtifactUploadFieldValue::ContentCRC32CFieldValue(_) => UploadFieldValue::ContentCrc32C,
+        FileArtifactUploadFieldValue::ContentDataFieldValue(_) => UploadFieldValue::ContentData,
+        FileArtifactUploadFieldValue::Unknown => {
+            return Err(anyhow!(
+                "Unknown UploadFieldValue variant for field '{}'; update client GraphQL types",
+                field.name
+            ));
+        }
+    };
+    Ok(UploadField {
+        name: field.name,
+        value,
+    })
+}
+
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
@@ -1412,6 +1470,15 @@ impl AIClient for ServerApi {
                         harness: convert_harness(h.harness).into(),
                         display_name: h.display_name,
                         enabled: h.enabled,
+                        available_models: h
+                            .available_models
+                            .into_iter()
+                            .map(|m| crate::ai::harness_availability::HarnessModelInfo {
+                                id: m.id.into_inner(),
+                                display_name: m.display_name,
+                                reasoning_level: m.reasoning_level,
+                            })
+                            .collect(),
                     })
                     .collect())
             }
@@ -1647,6 +1714,13 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
+    async fn list_connected_self_hosted_workers(
+        &self,
+    ) -> anyhow::Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error> {
+        self.get_public_api(CONNECTED_SELF_HOSTED_WORKERS_PATH)
+            .await
+    }
+
     async fn upload_local_handoff_snapshot(
         &self,
         request: UploadLocalHandoffSnapshotRequest,
@@ -1660,9 +1734,11 @@ impl AIClient for ServerApi {
     async fn fork_conversation(
         &self,
         conversation_id: String,
+        title: Option<String>,
     ) -> anyhow::Result<ForkConversationResponse, anyhow::Error> {
+        let request = ForkConversationRequest { title };
         let response: ForkConversationResponse = self
-            .post_public_api(&build_fork_conversation_url(&conversation_id), &())
+            .post_public_api(&build_fork_conversation_url(&conversation_id), &request)
             .await?;
         Ok(response)
     }
@@ -2023,20 +2099,28 @@ impl AIClient for ServerApi {
 
         match response.create_file_artifact_upload_target {
             CreateFileArtifactUploadTargetResult::CreateFileArtifactUploadTargetOutput(output) => {
+                let headers = output
+                    .upload_target
+                    .headers
+                    .into_iter()
+                    .map(|header| FileArtifactUploadHeaderInfo {
+                        name: header.name,
+                        value: header.value,
+                    })
+                    .collect();
+                let fields = output
+                    .upload_target
+                    .fields
+                    .into_iter()
+                    .map(convert_upload_field)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 Ok(CreateFileArtifactUploadResponse {
                     artifact: into_file_artifact_record(output.artifact),
                     upload_target: FileArtifactUploadTargetInfo {
                         url: output.upload_target.url,
                         method: output.upload_target.method,
-                        headers: output
-                            .upload_target
-                            .headers
-                            .into_iter()
-                            .map(|header| FileArtifactUploadHeaderInfo {
-                                name: header.name,
-                                value: header.value,
-                            })
-                            .collect(),
+                        headers,
+                        fields,
                     },
                 })
             }
@@ -2421,6 +2505,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::AwsBedrock => {
                 LLMModelHost::AwsBedrock
+            }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
+                LLMModelHost::CustomEndpoint
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
                 report_error!(anyhow!(
@@ -2859,5 +2946,5 @@ impl StoreClient for ServerApi {
 }
 
 #[cfg(test)]
-#[path = "ai_test.rs"]
+#[path = "ai_tests.rs"]
 mod tests;

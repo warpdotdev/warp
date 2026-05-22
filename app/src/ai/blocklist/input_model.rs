@@ -9,37 +9,29 @@ use std::sync::Arc;
 
 use futures::stream::AbortHandle;
 use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_language_word};
+pub use input_classifier::InputType;
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{InputMode, InputType as ProtocolInputType};
 use settings::Setting as _;
+use warp_completer::completer::CompletionContext;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-pub use input_classifier::InputType;
-
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::BlocklistAIContextModel;
+use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::input_classifier::InputClassifierModel;
+use crate::settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use crate::PrivacySettings;
-use warp_completer::completer::CompletionContext;
-
-use crate::{
-    input_classifier::InputClassifierModel,
-    report_if_error, send_telemetry_from_ctx,
-    settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings},
-    terminal::{
-        input::decorations::ParsedTokensSnapshot,
-        model::{rich_content::RichContentType, session::SessionId},
-        History, TerminalModel,
-    },
-    TelemetryEvent,
-};
-
-use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::terminal::input::decorations::ParsedTokensSnapshot;
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::{History, TerminalModel};
+use crate::{report_if_error, send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
 
 /// Cutoff score for deciding an user input matches a history command entry.
 const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;
@@ -149,8 +141,8 @@ pub struct BlocklistAIInputModel {
 
     agent_view_controller: ModelHandle<AgentViewController>,
 
-    /// Handle to the per-pane context model. Used to read pending attachments / blocks when
-    /// deciding whether to force-lock the input to AI mode (see
+    /// Handle to the per-pane context model. Used to read pending image / file attachments
+    /// when deciding whether to force-lock the input to AI mode (see
     /// [`BlocklistAIContextModel::has_locking_attachment`]).
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
 
@@ -276,10 +268,9 @@ impl BlocklistAIInputModel {
                         );
                     } else if me.has_locking_attachment(ctx) {
                         // Interaction patterns that should fully bypass NLD on
-                        // entry: image / file attachment in progress / attached, or block
-                        // already in pending context. Force-lock to AI regardless of the
-                        // user's NLD setting so the classifier never gets a chance to drop
-                        // the buffer back to shell.
+                        // entry: image / file attachment in progress / attached.
+                        // Force-lock to AI regardless of the user's NLD setting so the
+                        // classifier never gets a chance to drop the buffer back to shell.
                         me.set_input_config_internal(
                             InputConfig {
                                 input_type: InputType::AI,
@@ -514,10 +505,10 @@ impl BlocklistAIInputModel {
             return false;
         }
 
-        // Defense in depth: while there is a pending attachment (image / file) or block,
-        // the classifier must never have a chance to flip the input back to shell mode, even
-        // per-keystroke. The `EnteredAgentView` subscriber and `set_input_mode_agent` already
-        // lock at entry; this guard protects the window if any future caller forgets.
+        // Defense in depth: while there is a pending image / file attachment, the classifier
+        // must never have a chance to flip the input back to shell mode, even per-keystroke.
+        // The `EnteredAgentView` subscriber and `set_input_mode_agent` already lock at entry;
+        // this guard protects the window if any future caller forgets.
         if self.has_locking_attachment(app) {
             return false;
         }
@@ -713,7 +704,6 @@ impl BlocklistAIInputModel {
 
                     // If we have history entries (i.e., a live session), check for
                     // close matches to short-circuit as shell input.
-                    // TODO(vorporeal): decide if we still want to do this with NldImprovements.
                     if let Some(history_entries) = history_entries {
                         if has_any_close_matches(
                             &buffer_cloned,

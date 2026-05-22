@@ -5,20 +5,19 @@ pub(crate) mod opencode;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fmt;
-use std::io;
 use std::path::PathBuf;
+use std::{fmt, io};
 
 use async_trait::async_trait;
+use claude::ClaudeCodePluginManager;
+use codex::CodexPluginManager;
+use gemini::GeminiPluginManager;
+use opencode::OpenCodePluginManager;
 
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 use crate::terminal::CLIAgent;
-use claude::ClaudeCodePluginManager;
-use codex::CodexPluginManager;
-use gemini::GeminiPluginManager;
-use opencode::OpenCodePluginManager;
 
 /// Distinguishes whether the plugin instructions modal should show install or update steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +262,7 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Pi
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
+        | CLIAgent::Hermes
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Unknown => None,

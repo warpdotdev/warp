@@ -1,32 +1,29 @@
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+};
+use warpui::geometry::vector::vec2f;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
 use super::dropdown::{
     DropdownAction, DropdownItem, MenuHeaderTextFormatter, DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT,
     TOP_MENU_BAR_MAX_WIDTH,
 };
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant},
-    ui_components::icons,
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
 };
-use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
-    },
-    geometry::vector::vec2f,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant};
+use crate::ui_components::icons;
 
 const EMPTY_DROPDOWN_HEIGHT: f32 = 50.0;
 
@@ -73,6 +70,7 @@ pub struct FilterableDropdown<A: Action + Clone> {
     /// picker) that need to render in the parent's Normal layer
     /// instead of an overlay.
     use_overlay_layer: bool,
+    match_menu_width_to_top_bar: bool,
 }
 
 impl<A> FilterableDropdown<A>
@@ -131,6 +129,7 @@ where
             vertical_margin: DROPDOWN_PADDING,
             top_bar_height: TOP_MENU_BAR_HEIGHT,
             use_overlay_layer: true,
+            match_menu_width_to_top_bar: false,
         }
     }
 
@@ -329,6 +328,22 @@ where
         })
     }
 
+    /// When enabled, the open menu sizes itself to the last rendered width of
+    /// the dropdown's top bar. This is useful for flexible dropdowns whose
+    /// trigger width is determined by parent layout rather than a fixed max.
+    pub fn set_match_menu_width_to_top_bar(
+        &mut self,
+        match_width: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.match_menu_width_to_top_bar = match_width;
+        let top_bar_label = self.top_bar_label();
+        self.dropdown.update(ctx, |menu, _ctx| {
+            menu.set_width_match_position_id(match_width.then_some(top_bar_label));
+        });
+        ctx.notify();
+    }
+
     pub fn set_disabled(&mut self, ctx: &mut ViewContext<Self>) {
         self.disabled = true;
         ctx.notify();
@@ -397,6 +412,11 @@ where
     pub(crate) fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
+            if self.match_menu_width_to_top_bar {
+                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
+                    self.set_menu_width(bounds.width(), ctx);
+                }
+            }
             ctx.focus(&self.filter_editor);
             ctx.emit(FilterableDropdownEvent::ToggleExpanded);
         }
@@ -554,7 +574,7 @@ where
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .finish(),
         )
-        .with_max_width(self.top_bar_max_width)
+        .with_max_width(self.menu_width.unwrap_or(self.top_bar_max_width))
         .with_height(EMPTY_DROPDOWN_HEIGHT)
         .finish();
 

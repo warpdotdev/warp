@@ -1,20 +1,17 @@
 //! WASM-only view functions for the Workspace.
 
+use warp_core::channel::ChannelState;
 use warpui::elements::{ChildView, Element};
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
-use warp_core::channel::ChannelState;
-
-use crate::uri::browser_url_handler::parse_current_url;
-
 use super::PanelPosition;
-
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
 use crate::terminal::TerminalView;
 use crate::ui_components::icons;
+use crate::uri::browser_url_handler::parse_current_url;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
 };
@@ -190,6 +187,19 @@ impl Workspace {
                 });
                 if let Some(task) = task {
                     let details = ConversationDetailsData::from_task(&task, None, None, ctx);
+                    panel.set_conversation_details(details, ctx);
+                    ctx.notify();
+                    return;
+                }
+
+                // Task not yet available - check if the fetch failed and show error state
+                if let Some(error_message) = conversations_model_handle
+                    .as_ref(ctx)
+                    .task_fetch_error(&task_id)
+                    .map(str::to_owned)
+                {
+                    let details =
+                        ConversationDetailsData::from_task_id(task_id, Some(error_message));
                     panel.set_conversation_details(details, ctx);
                     ctx.notify();
                     return;

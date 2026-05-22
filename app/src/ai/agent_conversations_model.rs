@@ -1,49 +1,25 @@
 #[allow(dead_code)]
 pub mod entry;
 
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 pub use entry::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationNavigationSubject,
     AgentConversationProvenance,
 };
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::{
-    format_credits, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-};
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
-use crate::server::ids::{ServerId, SyncId};
-use crate::server::retry_strategies::{
-    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
-};
-use crate::server::server_api::{ai::TaskListFilter, ServerApiProvider};
-use crate::settings::AISettings;
-use crate::ui_components::icons::Icon;
-use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
-use crate::workspaces::user_profiles::UserProfiles;
-use chrono::{DateTime, Utc};
-use clap::ValueEnum;
 use futures::stream::AbortHandle;
 use instant::Instant;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use session_sharing_protocol::common::SessionId;
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
-use warp_core::ui::theme::{color::internal_colors, WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
 use warpui::color::ColorU;
 use warpui::r#async::Timer;
 use warpui::windowing::{StateEvent, WindowManager};
@@ -52,8 +28,35 @@ use warpui::{
     SingletonEntity, WindowId,
 };
 
-const SESSION_EXPIRATION_TIME: chrono::Duration = chrono::Duration::weeks(1);
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::AuthStateProvider;
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::retry_strategies::{
+    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
+};
+use crate::server::server_api::ai::TaskListFilter;
+use crate::server::server_api::ServerApiProvider;
+use crate::settings::AISettings;
+use crate::ui_components::icons::Icon;
+use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
+
 const POLLING_INTERVAL: Duration = Duration::from_secs(30);
+const RTC_TASK_REFRESH_THROTTLE: Duration = Duration::from_secs(5);
 const INITIAL_TASK_AMOUNT: i32 = 100;
 
 /// How long to skip refetching a task that just failed with a transient error
@@ -80,10 +83,40 @@ enum TaskFetchState {
     /// The fetch returned a permanent (non-transient) HTTP error such as 401/403/404; remember
     /// when it failed so we can back off for [`PERMANENT_FETCH_FAILURE_COOLDOWN`] before
     /// retrying. We don't refuse forever in case permissions change mid-session.
-    PermanentlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    PermanentlyFailed { at: Instant, message: String },
     /// The retry chain just exhausted on a transient error; remember when it failed so we
     /// can back off for [`TRANSIENT_FETCH_FAILURE_COOLDOWN`] before retrying.
-    TransientlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    TransientlyFailed { at: Instant, message: String },
+}
+
+/// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
+/// the earliest timestamp in the burst because `updated_after` is a lower bound; using the
+/// latest timestamp could skip tasks that changed earlier in the same window.
+#[derive(Default)]
+enum RtcTaskRefreshThrottleState {
+    #[default]
+    Idle,
+    CoolingDown {
+        pending_timestamp: Option<DateTime<Utc>>,
+        timer_abort_handle: AbortHandle,
+    },
+}
+
+fn record_earliest_rtc_task_refresh_timestamp(
+    pending_timestamp: &mut Option<DateTime<Utc>>,
+    timestamp: DateTime<Utc>,
+) {
+    match pending_timestamp {
+        Some(existing_timestamp) if timestamp < *existing_timestamp => {
+            *existing_timestamp = timestamp;
+        }
+        None => {
+            *pending_timestamp = Some(timestamp);
+        }
+        Some(_) => {}
+    }
 }
 
 /// Protected eviction: we'll always keep at least 200 personal tasks in the model.
@@ -239,16 +272,6 @@ impl AgentManagementFilters {
             || self.environment != EnvironmentFilter::default()
             || self.harness != HarnessFilter::default()
     }
-}
-
-/// Preference for which type of link/action to use for a conversation or task.
-enum LinkPreference {
-    /// Use session link/action
-    Session,
-    /// Use conversation link/action
-    Conversation,
-    /// No link/action available
-    None,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -460,425 +483,6 @@ pub struct ConversationMetadata {
     pub nav_data: ConversationNavigationData,
 }
 
-/// ConversationOrTask is a wrapper around either conversation
-/// or task data stored in the `AgentConversationsModel`.
-///
-/// It provides a unified interface for reading data related to tasks and conversations.
-pub enum ConversationOrTask<'a> {
-    Task(&'a AmbientAgentTask),
-    Conversation(&'a ConversationMetadata),
-}
-
-#[allow(dead_code)]
-impl ConversationOrTask<'_> {
-    pub fn title(&self, app: &AppContext) -> String {
-        match self {
-            ConversationOrTask::Task(task) => task.title.clone(),
-            ConversationOrTask::Conversation(metadata) => {
-                // We try to read the title from the history model first (that's the most up-to-date),
-                // but fall back to the one stored in the navigation data.
-                let history_model = BlocklistAIHistoryModel::as_ref(app);
-                history_model
-                    .conversation(&metadata.nav_data.id)
-                    .and_then(|conv| conv.title().clone())
-                    .unwrap_or(metadata.nav_data.title.clone())
-            }
-        }
-    }
-
-    /// Map to conversation status for the UI status display
-    pub fn status(&self, app: &AppContext) -> ConversationStatus {
-        match self {
-            ConversationOrTask::Task(task) => match &task.state {
-                AmbientAgentTaskState::Queued
-                | AmbientAgentTaskState::Pending
-                | AmbientAgentTaskState::Claimed
-                | AmbientAgentTaskState::InProgress => ConversationStatus::InProgress,
-                AmbientAgentTaskState::Succeeded => ConversationStatus::Success,
-                AmbientAgentTaskState::Cancelled => ConversationStatus::Cancelled,
-                AmbientAgentTaskState::Blocked => ConversationStatus::Blocked {
-                    blocked_action: task
-                        .status_message
-                        .as_ref()
-                        .map(|m| m.message.clone())
-                        .unwrap_or_else(|| "Task blocked".to_string()),
-                },
-                AmbientAgentTaskState::Failed
-                | AmbientAgentTaskState::Error
-                | AmbientAgentTaskState::Unknown => ConversationStatus::Error,
-            },
-            ConversationOrTask::Conversation(metadata) => {
-                let history_model = BlocklistAIHistoryModel::as_ref(app);
-                history_model
-                    .conversation(&metadata.nav_data.id)
-                    .map(|conv| conv.status().clone())
-                    .unwrap_or(ConversationStatus::Success)
-            }
-        }
-    }
-
-    pub fn display_status(&self, app: &AppContext) -> AgentRunDisplayStatus {
-        match self {
-            ConversationOrTask::Task(task) => AgentRunDisplayStatus::from_task(task, app),
-            ConversationOrTask::Conversation(metadata) => {
-                let history_model = BlocklistAIHistoryModel::as_ref(app);
-                history_model
-                    .conversation(&metadata.nav_data.id)
-                    .map(|conv| AgentRunDisplayStatus::from_conversation_status(conv.status()))
-                    .unwrap_or(AgentRunDisplayStatus::ConversationSucceeded)
-            }
-        }
-    }
-
-    /// Grab the creator name from the task, or from the auth state if it is a conversation
-    pub fn creator_name(&self, app: &AppContext) -> Option<String> {
-        match self {
-            ConversationOrTask::Task(task) => task.creator_display_name().or_else(|| {
-                // Fallback to the cached users in the UserProfiles singleton
-                let uid = task.creator.as_ref().map(|c| &c.uid)?;
-                let user_profiles = UserProfiles::as_ref(app);
-                user_profiles.displayable_identifier_for_uid(UserUid::new(uid))
-            }),
-            ConversationOrTask::Conversation(_) => {
-                AuthStateProvider::as_ref(app).get().username_for_display()
-            }
-        }
-    }
-
-    /// Grab the creator UID from the task, or from the auth state if it is a conversation
-    pub fn creator_uid(&self, app: &AppContext) -> Option<String> {
-        match self {
-            ConversationOrTask::Task(task) => task.creator.as_ref().map(|c| c.uid.clone()),
-            ConversationOrTask::Conversation(_) => AuthStateProvider::as_ref(app)
-                .get()
-                .user_id()
-                .map(|uid| uid.to_string()),
-        }
-    }
-
-    /// Returns the request usage for the task or conversation
-    pub(super) fn request_usage(&self, app: &AppContext) -> Option<f32> {
-        match self {
-            ConversationOrTask::Task(task) => task.credits_used(),
-            ConversationOrTask::Conversation(metadata) => {
-                let history_model = BlocklistAIHistoryModel::as_ref(app);
-                history_model
-                    .conversation(&metadata.nav_data.id)
-                    .map(|conv| conv.credits_spent())
-                    .or_else(|| {
-                        history_model
-                            .get_conversation_metadata(&metadata.nav_data.id)
-                            .and_then(|m| m.credits_spent)
-                    })
-            }
-        }
-    }
-
-    /// Formats the request usage for display.
-    pub fn display_request_usage(&self, app: &AppContext) -> Option<String> {
-        self.request_usage(app).map(format_credits)
-    }
-
-    pub fn last_updated(&self) -> DateTime<Utc> {
-        match self {
-            ConversationOrTask::Task(task) => task.updated_at,
-            ConversationOrTask::Conversation(metadata) => metadata.nav_data.last_updated.into(),
-        }
-    }
-
-    pub fn created_at(&self) -> DateTime<Utc> {
-        match self {
-            ConversationOrTask::Task(task) => task.created_at,
-            ConversationOrTask::Conversation(metadata) => metadata.nav_data.last_updated.into(),
-        }
-    }
-
-    /// Returns the session ID for tasks, if we have one.
-    pub fn session_id(&self) -> Option<SessionId> {
-        match self {
-            ConversationOrTask::Task(task) => {
-                task.session_id.as_deref().and_then(entry::parse_session_id)
-            }
-            ConversationOrTask::Conversation(_) => None,
-        }
-    }
-
-    /// Returns the navigation data for local conversations, used for emitting the Navigate event.
-    pub fn navigation_data(&self) -> Option<&ConversationNavigationData> {
-        match self {
-            ConversationOrTask::Task(_) => None,
-            ConversationOrTask::Conversation(metadata) => Some(&metadata.nav_data),
-        }
-    }
-
-    pub fn run_time(&self) -> Option<String> {
-        match self {
-            // TODO this should really be done server-side
-            ConversationOrTask::Task(task) => {
-                let Some(duration) = task.run_time() else {
-                    return Some("Not started".to_string());
-                };
-                if duration.num_minutes() < 1 {
-                    Some(format!("{} seconds", duration.num_seconds()))
-                } else {
-                    Some(format!("{} minutes", duration.num_minutes()))
-                }
-            }
-            // Local conversations don't currently track run time
-            ConversationOrTask::Conversation(_) => None,
-        }
-    }
-
-    pub fn source(&self) -> Option<&AgentSource> {
-        match self {
-            ConversationOrTask::Task(task) => task.source.as_ref(),
-            ConversationOrTask::Conversation(_) => Some(&AgentSource::Interactive),
-        }
-    }
-
-    pub fn environment_id(&self) -> Option<&str> {
-        match self {
-            ConversationOrTask::Task(task) => task
-                .agent_config_snapshot
-                .as_ref()
-                .and_then(|s| s.environment_id.as_deref()),
-            ConversationOrTask::Conversation(_) => None,
-        }
-    }
-
-    /// Resolve the effective execution harness for this run.
-    pub fn harness(&self, app: &AppContext) -> Option<Harness> {
-        match self {
-            ConversationOrTask::Task(task) => {
-                task.agent_config_snapshot.as_ref().and_then(|config| {
-                    config
-                        .harness
-                        .as_ref()
-                        .map(|h| h.harness_type)
-                        .or(Some(Harness::Oz))
-                })
-            }
-            ConversationOrTask::Conversation(metadata) => BlocklistAIHistoryModel::as_ref(app)
-                .get_server_conversation_metadata(&metadata.nav_data.id)
-                .map(|m| Harness::from(m.harness))
-                .or(Some(Harness::Oz)),
-        }
-    }
-
-    /// Returns artifacts for the task or conversation.
-    pub fn artifacts(&self, app: &AppContext) -> Vec<Artifact> {
-        match self {
-            ConversationOrTask::Task(task) => task.artifacts.clone(),
-            ConversationOrTask::Conversation(metadata) => {
-                let history_model = BlocklistAIHistoryModel::as_ref(app);
-                history_model
-                    .conversation(&metadata.nav_data.id)
-                    .map(|conv| conv.artifacts().to_vec())
-                    .or_else(|| {
-                        history_model
-                            .get_conversation_metadata(&metadata.nav_data.id)
-                            .map(|m| m.artifacts.clone())
-                    })
-                    .unwrap_or_default()
-            }
-        }
-    }
-
-    /// Returns the preferred link type based on cloud conversations and session state.
-    fn link_preference(&self) -> LinkPreference {
-        match self {
-            ConversationOrTask::Task(task) => {
-                // Always open session link if there's a live session.
-                // Without cloud conversations, also open session link as long as it's not expired.
-                // With cloud conversations, even if the link is not expired, we load conversation
-                // data from graphql as long as the session isn't live.
-                if task.has_active_execution()
-                    || (!FeatureFlag::CloudConversations.is_enabled()
-                        && self.get_session_status() != Some(SessionStatus::Expired))
-                {
-                    LinkPreference::Session
-                } else if FeatureFlag::CloudConversations.is_enabled() {
-                    LinkPreference::Conversation
-                } else {
-                    LinkPreference::None
-                }
-            }
-            ConversationOrTask::Conversation(_) => LinkPreference::Conversation,
-        }
-    }
-
-    /// Get a link to a session or conversation, depending on whether the cloud agent is running
-    pub fn session_or_conversation_link(&self, app: &AppContext) -> Option<String> {
-        match self.link_preference() {
-            LinkPreference::Session => match self {
-                ConversationOrTask::Task(task) => task
-                    .active_run_execution()
-                    .session_link
-                    .map(ToString::to_string),
-                ConversationOrTask::Conversation(_) => None,
-            },
-            LinkPreference::Conversation => match self {
-                ConversationOrTask::Task(task) => task
-                    .conversation_id()
-                    .map(|id| ServerConversationToken::new(id.to_string()).conversation_link()),
-                ConversationOrTask::Conversation(conversation) => {
-                    let history_model = BlocklistAIHistoryModel::as_ref(app);
-                    history_model
-                        .conversation(&conversation.nav_data.id)
-                        .and_then(|c| c.server_conversation_token())
-                        .map(|t| t.conversation_link())
-                        .or_else(|| {
-                            history_model
-                                .get_conversation_metadata(&conversation.nav_data.id)
-                                .and_then(|m| m.server_conversation_token.as_ref())
-                                .map(|t| t.conversation_link())
-                        })
-                }
-            },
-            LinkPreference::None => None,
-        }
-    }
-
-    pub fn get_session_status(&self) -> Option<SessionStatus> {
-        // With cloud conversations, as long as the session link is populated, it is available
-        // If it's not, it's unavailable (no live session link and no conversation data in GCS)
-        if FeatureFlag::CloudConversations.is_enabled() {
-            return match self {
-                ConversationOrTask::Task(task) => {
-                    if task.active_run_execution().session_link.is_some() {
-                        Some(SessionStatus::Available)
-                    } else {
-                        Some(SessionStatus::Unavailable)
-                    }
-                }
-                ConversationOrTask::Conversation(_) => None,
-            };
-        }
-        match self {
-            ConversationOrTask::Task(task) => {
-                if task.active_run_execution().session_id.is_some() {
-                    Some(SessionStatus::Available)
-                } else if (Utc::now() - task.created_at) > SESSION_EXPIRATION_TIME {
-                    Some(SessionStatus::Expired)
-                } else {
-                    Some(SessionStatus::Unavailable)
-                }
-            }
-            ConversationOrTask::Conversation(_) => None,
-        }
-    }
-
-    /// Check if this item matches the current status filter.
-    fn matches_status(&self, status_filter: &StatusFilter, app: &AppContext) -> bool {
-        match status_filter {
-            StatusFilter::All => true,
-            StatusFilter::Working | StatusFilter::Done | StatusFilter::Failed => {
-                self.display_status(app).status_filter() == *status_filter
-            }
-        }
-    }
-
-    /// Check if this item matches the artifact filter.
-    fn matches_artifact(&self, artifact_filter: &ArtifactFilter, app: &AppContext) -> bool {
-        artifacts_match_filter(&self.artifacts(app), artifact_filter)
-    }
-
-    /// Check if this item matches the harness filter.
-    fn matches_harness(&self, harness_filter: &HarnessFilter, app: &AppContext) -> bool {
-        match harness_filter {
-            HarnessFilter::All => true,
-            HarnessFilter::Specific(h) => self.harness(app) == Some(*h),
-        }
-    }
-
-    /// Check if this item matches the owner and creator filters.
-    fn matches_owner_and_creator(
-        &self,
-        owner_filter: &OwnerFilter,
-        creator_filter: &CreatorFilter,
-        app: &AppContext,
-    ) -> bool {
-        let current_user_id = AuthStateProvider::as_ref(app)
-            .get()
-            .user_id()
-            .map(|uid| uid.as_string());
-
-        // First check owner filter
-        let passes_owner = match owner_filter {
-            OwnerFilter::All => true,
-            OwnerFilter::PersonalOnly => match self {
-                ConversationOrTask::Task(_) => self.creator_uid(app) == current_user_id,
-                // Local conversations are always owned by the current user
-                ConversationOrTask::Conversation(_) => true,
-            },
-        };
-
-        if !passes_owner {
-            return false;
-        }
-
-        // We don't want to apply the creator filter if we are in the personal only view.
-        if matches!(owner_filter, OwnerFilter::PersonalOnly) {
-            return true;
-        }
-
-        // Then check creator filter (only relevant when owner is "All")
-        match creator_filter {
-            CreatorFilter::All => true,
-            CreatorFilter::Specific { name, .. } => self.creator_name(app).as_ref() == Some(name),
-        }
-    }
-
-    /// Returns the appropriate `WorkspaceAction` to dispatch when opening this item.
-    /// This encapsulates the decision logic for opening ambient agent sessions vs loading
-    /// cloud conversation data vs navigating to local conversations.
-    pub fn get_open_action(
-        &self,
-        restore_layout: Option<RestoreConversationLayout>,
-        app: &AppContext,
-    ) -> Option<WorkspaceAction> {
-        match self.link_preference() {
-            LinkPreference::Session => match self {
-                ConversationOrTask::Task(task) => {
-                    self.session_id()
-                        .map(|session_id| WorkspaceAction::OpenAmbientAgentSession {
-                            session_id,
-                            task_id: task.run_id(),
-                        })
-                }
-                ConversationOrTask::Conversation(_) => None,
-            },
-            LinkPreference::Conversation => match self {
-                ConversationOrTask::Task(task) => task.conversation_id().map(|id| {
-                    WorkspaceAction::OpenConversationTranscriptViewer {
-                        conversation_id: ServerConversationToken::new(id.to_string()),
-                        ambient_agent_task_id: Some(task.run_id()),
-                    }
-                }),
-                ConversationOrTask::Conversation(metadata) => {
-                    let is_active = ActiveAgentViewsModel::as_ref(app)
-                        .is_conversation_open(metadata.nav_data.id, app);
-                    let nav_data = &metadata.nav_data;
-                    Some(WorkspaceAction::RestoreOrNavigateToConversation {
-                        conversation_id: nav_data.id,
-                        window_id: nav_data.window_id,
-                        // Only try to navigate to the pane if the conversation is actually active.
-                        //
-                        // Otherwise, we should open in a new tab or pane according to the user's
-                        // setting.
-                        pane_view_locator: is_active
-                            .then_some(nav_data.pane_view_locator)
-                            .flatten(),
-                        terminal_view_id: nav_data.terminal_view_id,
-                        restore_layout,
-                    })
-                }
-            },
-            LinkPreference::None => None,
-        }
-    }
-}
-
 pub(crate) fn artifacts_match_filter(
     artifacts: &[Artifact],
     artifact_filter: &ArtifactFilter,
@@ -923,6 +527,7 @@ pub struct AgentConversationsModel {
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
     /// and are absent from this map.
     task_fetch_state: HashMap<AmbientAgentTaskId, TaskFetchState>,
+    rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -947,6 +552,8 @@ pub enum ConversationUpdateKind {
         prev_filter: StatusFilter,
         new_filter: StatusFilter,
     },
+    /// Conversation metadata or capabilities changed.
+    MetadataChanged,
 }
 
 impl Entity for AgentConversationsModel {
@@ -967,6 +574,7 @@ impl AgentConversationsModel {
                 active_data_consumers_per_window: HashMap::new(),
                 has_finished_initial_load: true,
                 task_fetch_state: HashMap::new(),
+                rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             };
         }
 
@@ -1004,6 +612,7 @@ impl AgentConversationsModel {
             active_data_consumers_per_window: HashMap::new(),
             has_finished_initial_load: false,
             task_fetch_state: HashMap::new(),
+            rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -1070,7 +679,58 @@ impl AgentConversationsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         if let UpdateManagerEvent::AmbientTaskUpdated { timestamp } = event {
-            self.fetch_tasks_updated_after(*timestamp, ctx);
+            match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
+                RtcTaskRefreshThrottleState::Idle => {
+                    self.fetch_tasks_updated_after(*timestamp, ctx);
+                    self.start_rtc_task_refresh_throttle_timer(ctx);
+                }
+                RtcTaskRefreshThrottleState::CoolingDown {
+                    mut pending_timestamp,
+                    timer_abort_handle,
+                } => {
+                    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, *timestamp);
+                    self.rtc_task_refresh_throttle_state =
+                        RtcTaskRefreshThrottleState::CoolingDown {
+                            pending_timestamp,
+                            timer_abort_handle,
+                        };
+                }
+            }
+        }
+    }
+
+    fn start_rtc_task_refresh_throttle_timer(&mut self, ctx: &mut ModelContext<Self>) {
+        let future_handle = ctx.spawn(
+            async move {
+                Timer::after(RTC_TASK_REFRESH_THROTTLE).await;
+            },
+            |model, _, ctx| {
+                let pending_timestamp =
+                    match std::mem::take(&mut model.rtc_task_refresh_throttle_state) {
+                        RtcTaskRefreshThrottleState::Idle => None,
+                        RtcTaskRefreshThrottleState::CoolingDown {
+                            pending_timestamp, ..
+                        } => pending_timestamp,
+                    };
+
+                if let Some(timestamp) = pending_timestamp {
+                    model.fetch_tasks_updated_after(timestamp, ctx);
+                    model.start_rtc_task_refresh_throttle_timer(ctx);
+                }
+            },
+        );
+        self.rtc_task_refresh_throttle_state = RtcTaskRefreshThrottleState::CoolingDown {
+            pending_timestamp: None,
+            timer_abort_handle: future_handle.abort_handle(),
+        };
+    }
+
+    fn abort_rtc_task_refresh_throttle(&mut self) {
+        if let RtcTaskRefreshThrottleState::CoolingDown {
+            timer_abort_handle, ..
+        } = std::mem::take(&mut self.rtc_task_refresh_throttle_state)
+        {
+            timer_abort_handle.abort();
         }
     }
 
@@ -1458,19 +1118,7 @@ impl AgentConversationsModel {
         }
     }
 
-    fn conversation_ids_shadowed_by_tasks(&self, app: &AppContext) -> HashSet<AIConversationId> {
-        let history_model = BlocklistAIHistoryModel::as_ref(app);
-        self.tasks
-            .values()
-            .filter_map(|task| entry::conversation_id_shadowed_by_task(task, history_model))
-            .collect()
-    }
-
     /// Returns normalized, owned entries for agent management/navigation surfaces.
-    ///
-    /// This projection keeps task, local conversation, and cloud metadata identity together while
-    /// leaving the current `ConversationOrTask` call sites unchanged.
-    #[allow(dead_code)]
     pub fn get_entries(
         &self,
         filters: &AgentManagementFilters,
@@ -1603,6 +1251,29 @@ impl AgentConversationsModel {
         let active_views_model = ActiveAgentViewsModel::as_ref(app);
 
         if let Some(task_id) = entry.identity.ambient_agent_task_id {
+            match self
+                .tasks
+                .get(&task_id)
+                .map(AmbientAgentTask::active_live_session_state)
+            {
+                Some(AmbientAgentLiveSessionState::Attachable { session_id }) => {
+                    return Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                        session_id,
+                        task_id,
+                    });
+                }
+                Some(AmbientAgentLiveSessionState::ActiveUnattachable) => {
+                    return active_views_model
+                        .get_terminal_view_id_for_ambient_task(task_id)
+                        .map(
+                            |terminal_view_id| WorkspaceAction::FocusTerminalViewInWorkspace {
+                                terminal_view_id,
+                            },
+                        );
+                }
+                Some(AmbientAgentLiveSessionState::Inactive) | None => {}
+            }
+
             if let Some(terminal_view_id) =
                 active_views_model.get_terminal_view_id_for_ambient_task(task_id)
             {
@@ -1636,27 +1307,14 @@ impl AgentConversationsModel {
             }
         }
 
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(session_id) = self
-                .tasks
-                .get(&task_id)
-                .and_then(AmbientAgentTask::active_execution_session_id)
-                .and_then(entry::parse_session_id)
-            {
-                return Some(WorkspaceAction::OpenAmbientAgentSession {
-                    session_id,
-                    task_id,
-                });
-            }
-        }
-
         if let Some(conversation_id) = entry.identity.local_conversation_id {
             let nav_data = self
                 .conversations
                 .get(&conversation_id)
                 .map(|metadata| &metadata.nav_data);
-            if entry.backing.has_loaded_conversation
+            if !entry.backing.has_cloud_data
                 || entry.backing.has_local_persisted_data
+                || entry.backing.has_loaded_conversation
                 || nav_data.is_some()
             {
                 return Some(WorkspaceAction::RestoreOrNavigateToConversation {
@@ -1816,94 +1474,35 @@ impl AgentConversationsModel {
             // doesn't change any ConversationNavigationData fields (title comes from
             // UpdateTaskDescription, last_updated uses exchange.start_time which is set at append time).
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
-            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
-            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+
+            BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
+                ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
+                    kind: ConversationUpdateKind::MetadataChanged,
+                });
+            }
         }
-    }
-
-    /// Returns an iterator with all tasks and conversations with filters applied, sorted with the
-    /// most recently updated items first.
-    #[allow(dead_code)]
-    pub fn get_tasks_and_conversations(
-        &self,
-        filters: &AgentManagementFilters,
-        app: &AppContext,
-    ) -> impl Iterator<Item = ConversationOrTask<'_>> {
-        let conversation_ids_shadowed_by_tasks = self.conversation_ids_shadowed_by_tasks(app);
-        let owner_creator_filter = move |t: &ConversationOrTask| {
-            t.matches_owner_and_creator(&filters.owners, &filters.creator, app)
-        };
-
-        let status_filter = move |t: &ConversationOrTask| t.matches_status(&filters.status, app);
-
-        let source_filter = move |t: &ConversationOrTask| match &filters.source {
-            SourceFilter::All => true,
-            SourceFilter::Specific(s) => t.source() == Some(s),
-        };
-
-        let now = Utc::now();
-        let created_cutoff = match filters.created_on {
-            CreatedOnFilter::All => None,
-            CreatedOnFilter::Last24Hours => Some(now - chrono::Duration::hours(24)),
-            CreatedOnFilter::Past3Days => Some(now - chrono::Duration::days(3)),
-            CreatedOnFilter::LastWeek => Some(now - chrono::Duration::days(7)),
-        };
-
-        let created_on_filter = move |t: &ConversationOrTask| match created_cutoff {
-            Some(cutoff) => t.created_at() >= cutoff,
-            None => true,
-        };
-
-        let artifact_filter_value = filters.artifact;
-        let artifact_filter =
-            move |t: &ConversationOrTask| t.matches_artifact(&artifact_filter_value, app);
-
-        let environment_filter = move |t: &ConversationOrTask| match &filters.environment {
-            EnvironmentFilter::All => true,
-            EnvironmentFilter::NoEnvironment => t.environment_id().is_none(),
-            EnvironmentFilter::Specific(id) => t.environment_id() == Some(id.as_str()),
-        };
-
-        let harness_filter_value = filters.harness;
-        let harness_filter =
-            move |t: &ConversationOrTask| t.matches_harness(&harness_filter_value, app);
-
-        let tasks_iter = self.tasks.values().map(ConversationOrTask::Task);
-        let conversations_iter = self
-            .conversations
-            .values()
-            .filter(move |conversation| {
-                // Prefer rendering the task row when both representations exist for the same local
-                // run. Task entries preserve task-specific affordances like source, runtime,
-                // session status, and ambient-session open behavior that the conversation row
-                // cannot express.
-                !conversation_ids_shadowed_by_tasks.contains(&conversation.nav_data.id)
-            })
-            .map(ConversationOrTask::Conversation);
-
-        tasks_iter
-            .chain(conversations_iter)
-            .filter(owner_creator_filter)
-            .filter(status_filter)
-            .filter(source_filter)
-            .filter(created_on_filter)
-            .filter(artifact_filter)
-            .filter(environment_filter)
-            .filter(harness_filter)
-            .sorted_by(|a, b| b.last_updated().cmp(&a.last_updated()))
-    }
-
-    /// Get a task by its task ID
-    #[allow(dead_code)]
-    pub fn get_task(&self, task_id: &AmbientAgentTaskId) -> Option<ConversationOrTask<'_>> {
-        self.tasks.get(task_id).map(ConversationOrTask::Task)
     }
 
     /// Get raw task data by task ID
     pub fn get_task_data(&self, task_id: &AmbientAgentTaskId) -> Option<AmbientAgentTask> {
         self.tasks.get(task_id).cloned()
+    }
+
+    /// Returns the error message when the most recent fetch for `task_id` ended in a
+    /// permanent or transient failure and the cooldown has not yet elapsed. The caller
+    /// can use this to display an error state in the details panel.
+    pub fn task_fetch_error(&self, task_id: &AmbientAgentTaskId) -> Option<&str> {
+        match self.task_fetch_state.get(task_id) {
+            Some(
+                TaskFetchState::PermanentlyFailed { message, .. }
+                | TaskFetchState::TransientlyFailed { message, .. },
+            ) => Some(message),
+            _ => None,
+        }
     }
 
     /// Get raw task data by task ID, fetching from server if not in memory.
@@ -1934,15 +1533,15 @@ impl AgentConversationsModel {
         // one applies to a given id.
         match self.task_fetch_state.get(task_id) {
             Some(TaskFetchState::InFlight) => return None,
-            Some(TaskFetchState::PermanentlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
+            Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
+                if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
                     return None;
                 }
                 // Cooldown has elapsed; clear the entry and fall through to fetch again.
                 self.task_fetch_state.remove(task_id);
             }
-            Some(TaskFetchState::TransientlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
+            Some(TaskFetchState::TransientlyFailed { at, .. }) => {
+                if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
                     return None;
                 }
                 self.task_fetch_state.remove(task_id);
@@ -1952,11 +1551,11 @@ impl AgentConversationsModel {
 
         // Opportunistically purge other expired entries so the map doesn't grow unbounded.
         self.task_fetch_state.retain(|_, state| match state {
-            TaskFetchState::TransientlyFailedAt(failed_at) => {
-                failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::TransientlyFailed { at, .. } => {
+                at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
             }
-            TaskFetchState::PermanentlyFailedAt(failed_at) => {
-                failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::PermanentlyFailed { at, .. } => {
+                at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
             }
             TaskFetchState::InFlight => true,
         });
@@ -1986,13 +1585,17 @@ impl AgentConversationsModel {
                 }
                 RequestState::RequestFailed(e) => {
                     let now = Instant::now();
+                    let message = format!("{e}");
                     let new_state = if is_transient_http_error(&e) {
-                        TaskFetchState::TransientlyFailedAt(now)
+                        TaskFetchState::TransientlyFailed { at: now, message }
                     } else {
-                        TaskFetchState::PermanentlyFailedAt(now)
+                        TaskFetchState::PermanentlyFailed { at: now, message }
                     };
                     model.task_fetch_state.insert(task_id_clone, new_state);
                     report_error!(e);
+
+                    // On failure, this still emits an update event so that the details panel can re-render with the error message.
+                    ctx.emit(AgentConversationsModelEvent::TasksUpdated);
                 }
                 RequestState::RequestFailedRetryPending(_) => {
                     // Wait for a terminal outcome before updating dedup/backoff state.
@@ -2003,16 +1606,6 @@ impl AgentConversationsModel {
         None
     }
 
-    /// Get a conversation by its AIConversationId
-    pub fn get_conversation(
-        &self,
-        conversation_id: &AIConversationId,
-    ) -> Option<ConversationOrTask<'_>> {
-        self.conversations
-            .get(conversation_id)
-            .map(ConversationOrTask::Conversation)
-    }
-
     /// Returns all (name, uid) pairs for creators of tasks in the model.
     ///
     /// We use this function to populate the available creator filter list
@@ -2021,10 +1614,9 @@ impl AgentConversationsModel {
         let mut creators: Vec<(String, String)> = self
             .tasks
             .values()
-            .filter_map(|t| {
-                let wrapper = ConversationOrTask::Task(t);
-                let name = wrapper.creator_name(app)?;
-                let uid = wrapper.creator_uid(app)?;
+            .filter_map(|task| {
+                let name = entry::task_creator_name(task, app)?;
+                let uid = entry::task_creator_uid(task)?;
                 Some((name, uid))
             })
             .collect();
@@ -2235,6 +1827,7 @@ impl AgentConversationsModel {
         self.tasks.clear();
         self.conversations.clear();
         self.abort_existing_poll();
+        self.abort_rtc_task_refresh_throttle();
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
         // Reset the initial load flag so that we can retry the initial sync with the new logged in user

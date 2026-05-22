@@ -51,5 +51,5 @@ impl CommandRegistry {
 }
 
 #[cfg(test)]
-#[path = "registry_test.rs"]
+#[path = "registry_tests.rs"]
 mod test;

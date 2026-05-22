@@ -3,18 +3,15 @@ use instant::Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use warpui::{id, keymap::ContextPredicate, AppContext};
+use warpui::keymap::ContextPredicate;
+use warpui::{id, AppContext};
 
-use crate::{
-    channel::{Channel, ChannelState},
-    editor::{InteractionState, ReplicaId},
-    features::FeatureFlag,
-};
-
-use super::{
-    model::{block::SerializedBlock, terminal_model::BlockIndex},
-    GridType, TerminalModel,
-};
+use super::model::block::SerializedBlock;
+use super::model::terminal_model::BlockIndex;
+use super::{GridType, TerminalModel};
+use crate::channel::{Channel, ChannelState};
+use crate::editor::{InteractionState, ReplicaId};
+use crate::features::FeatureFlag;
 
 pub mod ai_agent;
 pub mod manager;
@@ -173,11 +170,11 @@ impl SharedSessionStatus {
 /// Note: currently, these options only encode the point at which
 /// scrollback _starts_. We do not yet support more
 /// selective scrollback (e.g. a closed range).
-/// The active block is always included in scrollback for the prompt.
+/// The active block is included for the prompt when it is scrollback-eligible.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedSessionScrollbackType {
     /// Do not include any scrollback in this shared session.
-    /// Note the active block is still sent as part of scrollback for the prompt.
+    /// The active block can still be sent as part of scrollback for the prompt.
     /// TODO(suraj): consider renaming this to "from active block" or encapsulating
     /// this with the `FromBlock` variant with the block_index equal to the
     /// active block index.
@@ -195,7 +192,7 @@ impl SharedSessionScrollbackType {
     /// Note that some blocks might not actually be included in the scrollback
     /// even if they were specified as part of the scrollback type.
     /// For example, if the [`Self::All]` variant is used, restored blocks
-    /// _won't_ be included in scrollback.
+    /// _won't_ be included in scrollback, and neither will hidden active blocks.
     fn to_scrollback(self, model: &TerminalModel) -> Scrollback {
         let first_block_index = self.first_block_index(model);
         let blocks = model
@@ -248,8 +245,9 @@ impl SharedSessionScrollbackType {
 
 #[cfg(not(test))]
 pub fn max_session_size(ctx: &AppContext) -> Byte {
-    use crate::workspaces::user_workspaces::UserWorkspaces;
     use warpui::SingletonEntity;
+
+    use crate::workspaces::user_workspaces::UserWorkspaces;
 
     UserWorkspaces::as_ref(ctx)
         .current_team()
@@ -418,5 +416,5 @@ pub(crate) fn decode_scrollback(scrollback: &Scrollback) -> Vec<SerializedBlock>
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

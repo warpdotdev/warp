@@ -1,21 +1,55 @@
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{Cache, FamilyId, Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, EntityId, Gradient, ModelHandle, SingletonEntity, TypedActionView,
+    View, ViewContext, ViewHandle,
+};
+
+use super::directory_fetcher::{
+    DirectoryFetcher, DirectoryFetcherEvent, DirectoryItem, DirectoryType,
+};
+use super::display_menu::{
+    ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
+};
+use super::{
+    agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
+    ContextChipKind,
+};
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
-use crate::ai::{
-    blocklist::{BlocklistAIContextModel, BlocklistAIInputModel},
-    document::ai_document_model::{AIDocumentId, AIDocumentVersion},
-};
+use crate::ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputModel};
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::code_review::code_review_view::CODE_REVIEW_TOOLTIP_TEXT;
 use crate::code_review::diff_state::DiffStats;
+use crate::completer::SessionContext;
+use crate::context_chips::git_branch_on_click::{
+    is_plausible_new_branch_name, GitBranchOnClickValue,
+};
 use crate::context_chips::node_version_popup::{NodeVersionPopupEvent, NodeVersionPopupView};
 use crate::context_chips::spacing;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
+use crate::terminal::model::session::SessionType;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::blended_colors;
@@ -24,40 +58,8 @@ use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::truncation::truncate_from_beginning;
 use crate::view_components::action_button::{ActionButtonTheme, NakedTheme};
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::path::PathBuf;
-use warp_core::ui::theme::Fill;
-use warp_core::{features::FeatureFlag, ui::theme::color::internal_colors};
-use warpui::elements::Empty;
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::ui_components::components::{Coords, UiComponent};
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    fonts::{Cache, FamilyId, Properties, Weight},
-    AppContext, Element, Entity, EntityId, Gradient, ModelHandle, SingletonEntity, TypedActionView,
-    View, ViewContext, ViewHandle,
-};
-
-use crate::appearance::Appearance;
-use crate::completer::SessionContext;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
-
-use super::{
-    agent_view_chip_color,
-    directory_fetcher::{DirectoryFetcher, DirectoryFetcherEvent, DirectoryItem, DirectoryType},
-    display_menu::{
-        ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
-    },
-    github_pr_display_text_from_url, render_text_from_kind, ChipResult, ContextChipKind,
-};
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Helper function to render git diff stats content (file icon or +- icons, file count, bullet, +/- counts)
 /// Used by both the context chips and the AI control panel
@@ -443,17 +445,71 @@ pub struct DisplayChipConfig {
 #[derive(Debug, Clone)]
 pub struct GitBranch(String);
 
+impl GitBranch {
+    fn command(&self) -> String {
+        format_git_branch_command(&self.0)
+    }
+
+    fn icon_for_menu(&self) -> Icon {
+        let branch = GitBranchOnClickValue::decode(&self.0);
+        if branch.is_linked_worktree {
+            Icon::Dataflow02
+        } else {
+            Icon::GitBranch
+        }
+    }
+}
+
 impl GenericMenuItem for GitBranch {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn name(&self) -> String {
-        self.0.clone()
+        GitBranchOnClickValue::decode(&self.0).branch_name
     }
 
     fn icon(&self, _app: &AppContext) -> Option<Icon> {
-        Some(Icon::GitBranch)
+        Some(self.icon_for_menu())
+    }
+
+    fn action_data(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// Synthetic menu entry shown in the branch switcher when the user types a
+/// query that does not match any existing branch. Selecting it runs
+/// `git checkout -b <branch>` so the user can create the branch they were
+/// about to switch to without leaving the picker.
+#[derive(Debug, Clone)]
+pub(crate) struct CreateGitBranch(String);
+
+impl CreateGitBranch {
+    pub(crate) fn new(branch_name: String) -> Self {
+        Self(branch_name.trim().to_string())
+    }
+
+    pub(crate) fn branch_name(&self) -> &str {
+        &self.0
+    }
+
+    fn command(&self) -> String {
+        format_create_git_branch_command(&self.0)
+    }
+}
+
+impl GenericMenuItem for CreateGitBranch {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> String {
+        format!("Create new branch \"{}\"", self.0)
+    }
+
+    fn icon(&self, _app: &AppContext) -> Option<Icon> {
+        Some(Icon::Plus)
     }
 
     fn action_data(&self) -> String {
@@ -544,21 +600,34 @@ impl DisplayChip {
                         ChipMenuType::Branches,
                         ctx,
                     )
+                    .with_create_item_from_query(Arc::new(|query: &str| {
+                        if !is_plausible_new_branch_name(query) {
+                            return None;
+                        }
+                        let create_branch = CreateGitBranch::new(query.to_string());
+                        let arc: Arc<dyn GenericMenuItem> = Arc::new(create_branch);
+                        Some(arc)
+                    }))
                 });
                 ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
                     PromptDisplayMenuEvent::MenuAction(generic_event) => {
-                        let Some(git_branch) = generic_event
-                            .action_item
-                            .as_any()
-                            .downcast_ref::<GitBranch>()
-                        else {
-                            log::warn!("MenuAction event should contain ActionItem action item");
-                            return;
-                        };
+                        let action_item = generic_event.action_item.as_any();
+                        let command =
+                            if let Some(git_branch) = action_item.downcast_ref::<GitBranch>() {
+                                git_branch.command()
+                            } else if let Some(create_branch) =
+                                action_item.downcast_ref::<CreateGitBranch>()
+                            {
+                                create_branch.command()
+                            } else {
+                                log::warn!(
+                                "MenuAction event should contain a GitBranch or CreateGitBranch \
+                                 action item"
+                            );
+                                return;
+                            };
 
-                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
-                            format_git_branch_command(&git_branch.name()),
-                        ));
+                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(command));
                         me.close_git_branch_menu(ctx);
                         ctx.notify();
                     }
@@ -1143,13 +1212,21 @@ impl DisplayChip {
             appearance,
         );
 
-        let is_local_session = self
+        // Code review is only supported on local sessions and
+        // on remote sessions with a connected host ID.
+        let supports_code_review = self
             .session_context
             .as_ref()
-            .map(|ctx| ctx.session.is_local())
-            .unwrap_or(true);
+            .map(|ctx| match ctx.session.session_type() {
+                SessionType::Local => true,
+                SessionType::WarpifiedRemote { host_id: Some(_) } => {
+                    FeatureFlag::RemoteCodeReview.is_enabled()
+                }
+                SessionType::WarpifiedRemote { host_id: None } => false,
+            })
+            .unwrap_or(false);
 
-        let diff_stats_display = if is_local_session {
+        let diff_stats_display = if supports_code_review {
             // Get the keybinding for the tooltip
             let code_review_keybinding = self.code_review_keybinding.clone().unwrap_or_default();
 
@@ -1189,7 +1266,6 @@ impl DisplayChip {
             .with_cursor(Cursor::PointingHand)
             .finish()
         } else {
-            // Remote session: chip is non-interactive (no tooltip, no click handler)
             Container::new(git_diff_stats_content)
                 .with_vertical_padding(2.)
                 .with_horizontal_padding(4.)
@@ -1774,12 +1850,39 @@ impl ActionButtonTheme for EnterAgentViewButton {
     }
 }
 
-fn format_change_directory_command(dir_name: &str) -> String {
-    format!("cd '{}'", dir_name.replace("'", "'\\'''"))
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace("'", "'\\''"))
 }
 
-pub fn format_git_branch_command(branch_name: &str) -> String {
-    format!("git checkout {branch_name}")
+fn format_change_directory_command(dir_name: &str) -> String {
+    format!("cd {}", shell_single_quote(dir_name))
+}
+
+pub fn format_git_branch_command(encoded_git_branch_on_click_value: &str) -> String {
+    let branch = GitBranchOnClickValue::decode(encoded_git_branch_on_click_value);
+    if let Some(worktree_path) = branch.worktree_path {
+        return format_change_directory_command(&worktree_path);
+    }
+
+    if branch.is_linked_worktree {
+        return format!(
+            "echo {}",
+            shell_single_quote(&format!(
+                "Branch '{}' is already checked out in another worktree, but Warp couldn't find its path.",
+                branch.branch_name
+            ))
+        );
+    }
+
+    format!("git checkout {}", shell_single_quote(&branch.branch_name))
+}
+
+/// Format a `git checkout -b <branch>` command for the given (already-trimmed)
+/// branch name. The trailing `--` ensures the branch name is treated as a
+/// positional argument rather than a flag if it happens to contain unusual
+/// characters that survived our front-end validation.
+pub fn format_create_git_branch_command(branch_name: &str) -> String {
+    format!("git checkout -b {} --", shell_single_quote(branch_name))
 }
 
 pub(crate) fn chip_container(
@@ -1881,5 +1984,5 @@ pub fn udi_icon_size(appearance: &Appearance, app: &AppContext) -> f32 {
 }
 
 #[cfg(test)]
-#[path = "display_chip_test.rs"]
+#[path = "display_chip_tests.rs"]
 mod tests;

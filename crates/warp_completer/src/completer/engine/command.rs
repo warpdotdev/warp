@@ -1,15 +1,11 @@
 use itertools::Itertools;
 
-use crate::completer::{
-    context::CompletionContext,
-    engine, get_path_separators,
-    matchers::MatchStrategy,
-    suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType},
-    TopLevelCommandCaseSensitivity,
-};
-use crate::parsers::ParsedToken;
-
 use super::path::{sorted_directories_relative_to, sorted_paths_relative_to};
+use crate::completer::context::CompletionContext;
+use crate::completer::matchers::MatchStrategy;
+use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
+use crate::completer::{engine, get_path_separators, TopLevelCommandCaseSensitivity};
+use crate::parsers::ParsedToken;
 
 /// Generates top-level completion results based on the fragment of text that is entered into the
 /// buffer. We use the following algorithm to generate suggestions, which is also the same as ZSH:

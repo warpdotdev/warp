@@ -1,24 +1,18 @@
 //! End-to-end editor tests.
 
+use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui::{App, ModelHandle, ReadModel};
 
-use crate::content::{
-    buffer::{
-        AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
-        InitialBufferState,
-    },
-    selection_model::BufferSelectionModel,
-    text::{BlockType, BufferBlockItem, IndentBehavior, TextStyles},
-    version::BufferVersion,
+use super::model::test_utils::{TEST_STYLES, init_logging};
+use super::model::{BlockItem, RenderEvent, RenderState};
+use crate::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
+    InitialBufferState, ShouldAutoscroll,
 };
-use string_offset::CharOffset;
-
-use super::model::{
-    BlockItem, RenderEvent, RenderState,
-    test_utils::{TEST_STYLES, init_logging},
-};
-use crate::content::buffer::ShouldAutoscroll;
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::{BlockType, BufferBlockItem, IndentBehavior, TextStyles};
+use crate::content::version::BufferVersion;
 
 #[test]
 fn test_simple_edit() {

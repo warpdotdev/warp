@@ -1,9 +1,10 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, Weak},
-};
+use std::collections::HashMap;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
 
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
 use crate::terminal::model::session::Session;
@@ -28,8 +29,8 @@ struct WindowActiveSession {
     /// The [`Session`] model for the active session. This is a weak reference so that it doesn't
     /// prevent cleaning up the session when it closes, in case no other session is activated.
     session: Option<Weak<Session>>,
-    /// The active session's working directory, if it's local.
-    path_if_local: Option<PathBuf>,
+    /// The active session's working directory (local or remote).
+    working_directory: Option<LocalOrRemotePath>,
     /// The [`EntityId`]` for the [`TerminalView`] for the active session, if there is one.
     terminal_view_id: Option<EntityId>,
 }
@@ -52,8 +53,17 @@ impl ActiveSession {
     pub fn path_if_local(&self, window_id: WindowId) -> Option<&Path> {
         self.window_sessions
             .get(&window_id)?
-            .path_if_local
-            .as_deref()
+            .working_directory
+            .as_ref()
+            .and_then(|wd| wd.to_local_path())
+    }
+
+    /// The current working directory of the active session (local or remote).
+    pub fn working_directory(&self, window_id: WindowId) -> Option<&LocalOrRemotePath> {
+        self.window_sessions
+            .get(&window_id)?
+            .working_directory
+            .as_ref()
     }
 
     /// Set the current session, for use in tests.
@@ -69,7 +79,7 @@ impl ActiveSession {
         self.set_session_state(
             window_id,
             Some(session),
-            path_if_local.map(Into::into),
+            path_if_local.map(|p| LocalOrRemotePath::Local(p.into())),
             terminal_view_id,
             ctx,
         );
@@ -79,7 +89,7 @@ impl ActiveSession {
         &mut self,
         window_id: WindowId,
         session: Option<Arc<Session>>,
-        path_if_local: Option<PathBuf>,
+        working_directory: Option<LocalOrRemotePath>,
         terminal_view_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -100,8 +110,8 @@ impl ActiveSession {
             }
         }
 
-        if window_state.path_if_local != path_if_local {
-            window_state.path_if_local = path_if_local;
+        if window_state.working_directory != working_directory {
+            window_state.working_directory = working_directory;
             ctx.notify();
         }
 

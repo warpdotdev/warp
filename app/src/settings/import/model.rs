@@ -1,21 +1,17 @@
 use std::collections::HashMap;
 
-use crate::interval_timer::IntervalTimer;
-use crate::settings::import::config::{Config, ConfigError};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
-
 use serde::Serialize;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::features::FeatureFlag;
-use warpui::Entity;
-use warpui::ModelContext;
-use warpui::SingletonEntity;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[cfg(target_os = "macos")]
 use super::config::HotkeyError;
-use super::config::SettingType;
-use super::config::ThemeType;
+use super::config::{SettingType, ThemeType};
+use crate::interval_timer::IntervalTimer;
+use crate::settings::import::config::{Config, ConfigError};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 #[derive(Clone, Copy, Debug, EnumDiscriminants, Eq, Hash, PartialEq)]
 #[strum_discriminants(derive(EnumIter, Hash, Serialize))]
@@ -45,8 +41,9 @@ impl ImportedConfigModel {
 
     #[cfg(feature = "local_fs")]
     pub fn search_for_settings_to_import(&mut self, ctx: &mut ModelContext<Self>) {
-        use itertools::Itertools;
         use std::sync::Arc;
+
+        use itertools::Itertools;
         use strum::IntoEnumIterator;
         self.started = true;
 

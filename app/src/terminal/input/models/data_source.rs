@@ -11,12 +11,18 @@ use warpui::elements::{
     MouseStateHandle, Radius, Text,
 };
 use warpui::fonts::{Properties, Style, Weight};
-use warpui::platform::Cursor;
+use warpui::keymap::Keystroke;
+use warpui::platform::{Cursor, OperatingSystem};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
+use super::model_spec_scores::{
+    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
+    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+};
+use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
     is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
     LLMSpec,
@@ -29,19 +35,12 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    default_navigation_message_items, styles as inline_styles, DetailsRenderConfig,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
 };
-use crate::terminal::input::inline_menu::{styles as inline_styles, DetailsRenderConfig};
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
-
-use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
-};
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -136,6 +135,31 @@ impl ModelSelectorDataSource {
     pub fn new(terminal_view_id: EntityId) -> Self {
         Self { terminal_view_id }
     }
+
+    fn order_model_choices<'a>(
+        llm_preferences: &LLMPreferences,
+        choices: Vec<&'a LLMInfo>,
+    ) -> Vec<&'a LLMInfo> {
+        let mut auto_choices = Vec::new();
+        let mut custom_choices = Vec::new();
+        let mut other_choices = Vec::new();
+
+        for llm in choices {
+            if is_auto(llm) {
+                auto_choices.push(llm);
+            } else if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
+                custom_choices.push(llm);
+            } else {
+                other_choices.push(llm);
+            }
+        }
+
+        auto_choices
+            .into_iter()
+            .chain(custom_choices)
+            .chain(other_choices)
+            .collect()
+    }
 }
 
 impl SyncDataSource for ModelSelectorDataSource {
@@ -161,13 +185,14 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .clone()
         };
 
-        let choices: Vec<&LLMInfo> = if is_full_terminal {
-            llm_preferences.get_cli_agent_llm_choices().collect_vec()
+        let choices = if is_full_terminal {
+            llm_preferences.get_cli_agent_llm_choices(app).collect_vec()
         } else {
             llm_preferences
-                .get_base_llm_choices_for_agent_mode()
+                .get_base_llm_choices_for_agent_mode(app)
                 .collect_vec()
         };
+        let choices = Self::order_model_choices(llm_preferences, choices);
 
         let query_text = query.text.trim().to_lowercase();
 
@@ -213,6 +238,7 @@ struct ModelSearchItem {
     provider_icon: Option<Icon>,
     display_text: String,
     is_selected: bool,
+    is_custom_endpoint: bool,
     disable_reason: Option<DisableReason>,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
@@ -232,6 +258,9 @@ impl ModelSearchItem {
         } else {
             llm.disable_reason.clone()
         };
+        let is_custom_endpoint = LLMPreferences::as_ref(app)
+            .custom_llm_info_for_id(&llm.id)
+            .is_some();
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
@@ -239,6 +268,7 @@ impl ModelSearchItem {
             provider_icon: llm.provider.icon(),
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
+            is_custom_endpoint,
             disable_reason,
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
@@ -330,7 +360,7 @@ impl SearchItem for ModelSearchItem {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
 
-        if is_using_api_key_for_provider(&self.provider, app) {
+        if self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app) {
             let key_icon =
                 ConstrainedBox::new(Icon::Key.to_warpui_icon(secondary_text_color).finish())
                     .with_width(font_size)
@@ -424,7 +454,8 @@ impl SearchItem for ModelSearchItem {
         };
         let header = render_model_spec_header(title, description, app);
 
-        let is_using_api_key = is_using_api_key_for_provider(&self.provider, app);
+        let is_using_api_key =
+            self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app);
         let cost_row = if is_using_api_key {
             let manage_button = appearance
                 .ui_builder()
@@ -493,7 +524,7 @@ impl SearchItem for ModelSearchItem {
 
             // Show a BYOK option when the user's tier supports it and the provider
             // is one that accepts user-supplied API keys.
-            let byok_available = UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+            let byok_available = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
                 && matches!(
                     self.provider,
                     LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google

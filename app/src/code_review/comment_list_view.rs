@@ -1,61 +1,61 @@
 use std::borrow::Cow;
 
-use crate::ai::AIRequestUsageModel;
-use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
-use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
-use crate::code_review::comment_rendering::CommentViewCard;
-use crate::code_review::comments::{
-    AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin,
-    ReviewCommentBatch, ReviewCommentBatchEvent,
-};
-use crate::code_review::CodeReviewTelemetryEvent;
-use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
-use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
-use crate::send_telemetry_from_ctx;
-use crate::settings::AISettings;
-use crate::view_components::action_button::{
-    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, SecondaryTheme,
-};
-use crate::{
-    appearance::Appearance, code_review::code_review_view::CodeReviewView,
-    ui_components::icons::Icon, workspace::view::right_panel::ReviewDestination,
-};
 use indexmap::IndexMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::path::PathBuf;
 use string_offset::CharOffset;
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::color::blend::Blend;
-use warp_editor::model::CoreEditorModel;
-
 use warp_core::ui::theme::color::internal_colors::{
     accent_overlay_2, accent_overlay_3, neutral_1, neutral_3, neutral_4, neutral_6, text_main,
     text_sub,
 };
 use warp_core::ui::theme::Fill;
+use warp_editor::model::CoreEditorModel;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
+use warpui::elements::resizable::{
+    resizable_state_handle, DragBarSide, Resizable, ResizableStateHandle,
+};
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, Element, Empty, EventHandler,
+    Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds,
+    Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack,
+    Text,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonTooltipPosition, ButtonVariant};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig},
-        resizable::{resizable_state_handle, DragBarSide, Resizable, ResizableStateHandle},
-        Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, Element, Empty,
-        EventHandler, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds,
-        Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
-        Stack, Text,
-    },
-    platform::Cursor,
-    ui_components::{
-        button::{ButtonTooltipPosition, ButtonVariant},
-        components::{UiComponent, UiComponentStyles},
-    },
-    units::Pixels,
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };
+
+use crate::ai::AIRequestUsageModel;
+use crate::appearance::Appearance;
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::code_review::comment_rendering::CommentViewCard;
+use crate::code_review::comments::{
+    AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin,
+    ReviewCommentBatch, ReviewCommentBatchEvent,
+};
+use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
+use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
+use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
+use crate::send_telemetry_from_ctx;
+use crate::settings::AISettings;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, SecondaryTheme,
+};
+use crate::workspace::view::right_panel::ReviewDestination;
 
 /// Header text for the outdated section when there is exactly one outdated comment.
 const OUTDATED_SECTION_HEADER_SINGULAR: &str = "1 comment will be omitted because it is outdated.";
@@ -183,7 +183,7 @@ pub struct CommentListView {
 
     /// Set once the user has manually collapsed or expanded the outdated section.
     is_outdated_section_collapsed: Option<bool>,
-    repo_path: PathBuf,
+    repo_path: Option<LocalOrRemotePath>,
     view_state: ViewState,
     /// The best available destination for sending review comments.
     /// Pushed down from RightPanelView.
@@ -196,7 +196,7 @@ pub struct CommentListView {
 
 impl CommentListView {
     pub fn new(
-        initial_repo_path: Option<PathBuf>,
+        initial_repo_path: Option<LocalOrRemotePath>,
         parent: WeakViewHandle<CodeReviewView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -224,7 +224,7 @@ impl CommentListView {
             comments_by_id: IndexMap::new(),
             is_collapsed: true,
             is_outdated_section_collapsed: None,
-            repo_path: initial_repo_path.unwrap_or_default(),
+            repo_path: initial_repo_path,
             view_state: ViewState::default(),
             overflow_menu: menu,
             review_destination: ReviewDestination::None,
@@ -278,6 +278,10 @@ impl CommentListView {
             self.review_destination = destination;
             ctx.notify();
         }
+    }
+
+    fn repo_is_local(&self) -> Option<bool> {
+        self.repo_path.as_ref().map(LocalOrRemotePath::is_local)
     }
 
     pub fn debug_state(&self, ctx: &AppContext) -> CommentListDebugState {
@@ -367,7 +371,7 @@ impl CommentListView {
             let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
                 existing
                     .card
-                    .update_source(comment, Some(&self.repo_path), ctx);
+                    .update_source(comment, self.repo_path.as_ref(), ctx);
                 existing
             } else {
                 let card = CommentViewCard::new(
@@ -375,7 +379,7 @@ impl CommentListView {
                     false, /* always_use_static_diff */
                     false, /* disable_scrolling */
                     Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
-                    Some(&self.repo_path),
+                    self.repo_path.as_ref(),
                     ctx,
                 );
 
@@ -436,14 +440,6 @@ impl CommentListView {
         }
 
         self.recompute_comment_button_label(ctx);
-        ctx.notify();
-    }
-
-    pub fn set_repo_path(&mut self, repo_path: PathBuf, ctx: &mut ViewContext<Self>) {
-        self.repo_path = repo_path;
-        for state in self.comments_by_id.values_mut() {
-            state.card.update_title(Some(&self.repo_path));
-        }
         ctx.notify();
     }
 
@@ -1187,6 +1183,7 @@ impl TypedActionView for CommentListView {
                     // Telemetry: comment list view expanded.
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::CommentListExpanded {
+                            is_local: self.repo_is_local(),
                             comment_count: self.comments_by_id.len(),
                         },
                         ctx
@@ -1275,7 +1272,12 @@ impl TypedActionView for CommentListView {
                 self.close_overflow_menu(ctx);
             }
             CommentListAction::JumpToCommentLocation(comment_id) => {
-                send_telemetry_from_ctx!(CodeReviewTelemetryEvent::CommentListItemClicked, ctx);
+                send_telemetry_from_ctx!(
+                    CodeReviewTelemetryEvent::CommentListItemClicked {
+                        is_local: self.repo_is_local(),
+                    },
+                    ctx
+                );
                 ctx.emit(CommentListEvent::JumpToCommentLocation(*comment_id));
             }
         }

@@ -1,5 +1,3 @@
-use crate::appearance::Appearance;
-use crate::notebooks::file::MarkdownDisplayMode;
 use warpui::elements::{CornerRadius, Fill as UiFill, Radius};
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::UiComponentStyles;
@@ -9,6 +7,9 @@ use warpui::ui_components::segmented_control::{
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::notebooks::file::MarkdownDisplayMode;
 
 #[derive(Debug, Clone)]
 pub enum MarkdownToggleEvent {

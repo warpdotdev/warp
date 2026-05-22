@@ -15,20 +15,14 @@
 mod execute;
 mod preprocess;
 
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{
-    AIAgentActionResultType, AIAgentActionType, AIAgentExchange, CancellationReason,
-    CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
-};
-use crate::ai::{
-    agent::AIAgentInput,
-    blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use chrono::Local;
-pub(crate) use execute::apply_edits;
-pub(crate) use execute::coerce_integer_args;
-pub(crate) use execute::FileReadResult;
-pub(crate) use execute::MalformedFinalLineProxyEvent;
+pub(crate) use execute::{
+    apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
+};
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
@@ -39,41 +33,32 @@ pub use execute::{
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
-
 use futures::future::{join_all, BoxFuture};
-use preprocess::{PendingPreprocessedActions, PreprocessId};
-
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
-    sync::Arc,
-};
-
-use crate::ai::agent::conversation::AIConversationId;
 use itertools::Itertools;
 use parking_lot::FairMutex;
+use preprocess::{PendingPreprocessedActions, PreprocessId};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{AIAgentAction, AIAgentActionId, AIAgentActionResult},
-        get_relevant_files::controller::GetRelevantFilesController,
-    },
-    terminal::{
-        model::session::active_session::ActiveSession, model_events::ModelEventDispatcher,
-        TerminalModel,
-    },
-};
-
+use self::execute::ask_user_question::AskUserQuestionExecutor;
+use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
-    ask_user_question::AskUserQuestionExecutor, search_codebase::SearchCodebaseExecutor,
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
     RunningActionPhase, TryExecuteResult,
 };
-
 use super::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
+    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+};
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::TerminalModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// The status of an action from an AI output.
@@ -691,12 +676,10 @@ impl BlocklistAIActionModel {
         request: ai::agent::action::RunAgentsRequest,
         ctx: &mut ModelContext<Self>,
     ) {
-        let mut found: Option<(AIConversationId, AIAgentAction)> = None;
+        let mut found = None;
         for (conv_id, queue) in self.pending_actions.iter_mut() {
-            if let Some(idx) = queue.iter().position(|a| &a.id == action_id) {
-                if let Some(action) = queue.remove(idx) {
-                    found = Some((*conv_id, action));
-                }
+            if let Some(action) = queue.iter_mut().find(|action| &action.id == action_id) {
+                found = Some((*conv_id, action));
                 break;
             }
         }
@@ -708,33 +691,12 @@ impl BlocklistAIActionModel {
         };
         if !matches!(action.action, AIAgentActionType::RunAgents(_)) {
             log::warn!(
-                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents; re-queueing"
+                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents"
             );
-            self.pending_actions
-                .entry(conversation_id)
-                .or_default()
-                .push_front(action);
             return;
         }
-        let task_id = action.task_id.clone();
-        let action_id_clone = action_id.clone();
-
-        self.executor.update(ctx, |executor, exec_ctx| {
-            executor.execute_run_agents(
-                action_id_clone,
-                request,
-                conversation_id,
-                task_id,
-                exec_ctx,
-            );
-        });
-
-        self.update_conversation_in_progress_status(conversation_id, ctx);
-        self.add_running_action(
-            conversation_id,
-            action_id.clone(),
-            RunningActionPhase::Serial,
-        );
+        action.action = AIAgentActionType::RunAgents(request);
+        self.execute_action(action_id, conversation_id, ctx);
     }
 
     /// Removes a pending `RunAgents` action and records a `Denied`
@@ -1099,6 +1061,13 @@ impl BlocklistAIActionModel {
             return;
         };
         for action in actions_to_cancel.drain(..).collect_vec() {
+            log::info!(
+                "Canceling pending action of type {:?} conversation_id={conversation_id:?} action_id={:?}, reason={:?}, backtrace=\n{}",
+                AIAgentActionTypeDiscriminants::from(&action.action),
+                action.id,
+                reason,
+                std::backtrace::Backtrace::force_capture()
+            );
             self.cancel_pending_action(conversation_id, action, reason, ctx);
         }
     }
