@@ -86,7 +86,7 @@ use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
-    SharedSessionStatus,
+    SharedSessionSource, SharedSessionStatus,
 };
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
@@ -2277,7 +2277,7 @@ fn test_stop_shared_session() {
                         terminal_view.attempt_to_share_session(
                             SharedSessionScrollbackType::None,
                             None,
-                            SessionSourceType::default(),
+                            SharedSessionSource::user(None),
                             false,
                             ctx,
                         );
@@ -2376,6 +2376,59 @@ fn test_navigation_skips_hidden_closed_panes() {
 
             // And next from A should skip B and go to C
             assert_eq!(panes.next_pane_id(a), Some(c));
+        })
+    });
+}
+
+/// Regression test: closing a host pane on the non-undo `close_pane` branch
+/// must clear its entry from `transitively_shared_child_panes`. The undo
+/// branch relies on `cleanup_closed_pane` to call
+/// `forget_transitively_shared_pane`, but the non-undo branch destroys the
+/// pane directly and previously skipped that cleanup, leaking stale entries.
+#[test]
+fn test_close_pane_clears_transitively_shared_child_entry_on_non_undo_branch() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let host_pane_id = get_newly_created_pane_id(panes, &[]);
+
+            // Add a sibling terminal so the host close does not trip the
+            // `pane_count() == 1` early return in `close_pane`'s non-undo
+            // branch.
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+
+            // Cascade an off-tree transitively-shared child onto the host
+            // pane id; this populates `transitively_shared_child_panes`.
+            let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
+                host_pane_id,
+                HashMap::new(),
+                IsSharedSessionCreator::Yes {
+                    source: SharedSessionSource::user(Some("host-task".to_string())),
+                },
+                ctx,
+            );
+
+            assert!(
+                panes
+                    .transitively_shared_child_panes
+                    .get(&host_pane_id)
+                    .is_some_and(|children| children.contains(&child_pane_id.into())),
+                "setup precondition: host should track its transitively-shared child"
+            );
+
+            // Close the host via the non-undo branch.
+            panes.close_pane(host_pane_id, ctx);
+
+            assert!(
+                !panes
+                    .transitively_shared_child_panes
+                    .contains_key(&host_pane_id),
+                "host entry must be cleared after close_pane on the non-undo branch"
+            );
         })
     });
 }

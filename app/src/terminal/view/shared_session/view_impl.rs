@@ -57,8 +57,8 @@ use crate::terminal::shared_session::role_change_modal::{
 };
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
-    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
-    COPY_LINK_TEXT,
+    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus, COPY_LINK_TEXT,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
@@ -511,8 +511,8 @@ impl TerminalView {
     pub fn attempt_to_share_session(
         &mut self,
         scrollback_type: SharedSessionScrollbackType,
-        source: Option<SharedSessionActionSource>,
-        source_type: SessionSourceType,
+        action_source: Option<SharedSessionActionSource>,
+        source: SharedSessionSource,
         bypass_conversation_guard: bool,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -548,7 +548,7 @@ impl TerminalView {
 
         self.set_show_pane_accent_border(false, ctx);
 
-        self.pending_share_source = source;
+        self.pending_share_source = action_source;
 
         self.model
             .lock()
@@ -557,16 +557,16 @@ impl TerminalView {
 
         ctx.emit(Event::StartSharingCurrentSession {
             scrollback_type,
-            source_type,
+            source,
         });
-        if let Some(source) = source {
+        if let Some(action_source) = action_source {
             send_telemetry_from_ctx!(
                 TelemetryEvent::StartedSharingCurrentSession {
                     includes_scrollback: !matches!(
                         scrollback_type,
                         SharedSessionScrollbackType::None
                     ),
-                    source,
+                    source: action_source,
                 },
                 ctx
             );
@@ -574,6 +574,7 @@ impl TerminalView {
     }
 
     /// Sets the PresenceManager and decorates the view accordingly when a shared session has been started.
+    #[allow(clippy::too_many_arguments)]
     pub fn on_session_share_started(
         &mut self,
         sharer_id: ParticipantId,
