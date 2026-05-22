@@ -1,28 +1,19 @@
-use warp::{
-    integration_testing::{
-        agent_mode::AgentViewState,
-        step::new_step_with_default_assertions,
-        terminal::{
-            assert_active_block_output_for_single_terminal_in_tab, assert_input_editor_contents,
-            assert_long_running_block_executing_for_single_terminal_in_tab,
-            assert_no_visible_background_blocks, util::current_shell_starter_and_version,
-            wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::single_terminal_view_for_tab,
-    },
-    terminal::{
-        model::terminal_model::BlockIndex,
-        shell::{Shell, ShellType},
-    },
+use warp::integration_testing::agent_mode::AgentViewState;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::util::current_shell_starter_and_version;
+use warp::integration_testing::terminal::{
+    assert_active_block_output_for_single_terminal_in_tab, assert_input_editor_contents,
+    assert_long_running_block_executing_for_single_terminal_in_tab,
+    assert_no_visible_background_blocks, wait_until_bootstrapped_single_pane_for_tab,
 };
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionOutcome, TestStep},
-};
-
-use crate::util::skip_if_powershell_core_2303;
+use warp::integration_testing::view_getters::single_terminal_view_for_tab;
+use warp::terminal::model::terminal_model::BlockIndex;
+use warp::terminal::shell::{Shell, ShellType};
+use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui::{async_assert, async_assert_eq};
 
 use super::{new_builder, Builder};
+use crate::util::skip_if_powershell_core_2303;
 
 pub fn test_typeahead() -> Builder {
     new_builder()
@@ -210,12 +201,14 @@ pub fn test_input_reporting_powershell() -> Builder {
 /// This tests UNIX-specific signal handling.
 #[cfg(not(windows))]
 pub fn test_background_output() -> Builder {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::prelude::OpenOptionsExt;
+
     use regex::Regex;
-    use std::{fs::OpenOptions, io::Write, os::unix::prelude::OpenOptionsExt};
-    use warp::integration_testing::{
-        block::assert_background_output,
-        terminal::{execute_command_for_single_terminal_in_tab, util::ExpectedExitStatus},
-    };
+    use warp::integration_testing::block::assert_background_output;
+    use warp::integration_testing::terminal::execute_command_for_single_terminal_in_tab;
+    use warp::integration_testing::terminal::util::ExpectedExitStatus;
 
     let (starter, _) = current_shell_starter_and_version();
     let (spawn_command, kill_command) = match starter.shell_type() {

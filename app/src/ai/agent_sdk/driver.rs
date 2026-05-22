@@ -1,62 +1,82 @@
-use std::{
-    borrow::Cow,
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    ffi::OsString,
-    future::Future,
-    io::{self, Write},
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    thread,
-    time::Duration,
-};
-
-use anyhow::{anyhow, Context as _};
-use futures::{
-    channel::oneshot,
-    future::{self, join_all, Either},
-    FutureExt as _,
-};
-use itertools::Itertools as _;
-use oneshot::{Canceled, Receiver, Sender};
-use repo_metadata::{local_model::IndexedRepoState, RepoMetadataModel, RepositoryIdentifier};
-use uuid::Uuid;
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::future::Future;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
+use anyhow::{anyhow, Context as _};
+use futures::channel::oneshot;
+use futures::future::{self, join_all, Either};
+use futures::FutureExt as _;
+use itertools::Itertools as _;
+use oneshot::{Canceled, Receiver, Sender};
+use repo_metadata::local_model::IndexedRepoState;
+use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
+use uuid::Uuid;
 use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
-use warp_core::{
-    features::FeatureFlag, report_error, report_if_error, safe_debug, safe_error, safe_info,
-};
+use warp_core::features::FeatureFlag;
+use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
-use warpui::{
-    r#async::{FutureExt, TimeoutError},
-    AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
-};
+use warpui::r#async::{FutureExt, TimeoutError};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, CancellationReason,
+    RenderableAIError, RequestFileEditsResult,
+};
+use crate::ai::agent_sdk::driver::harness::{
+    harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind, HarnessRunner,
+    ResumePayload, SavePoint, ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent,
+};
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::{
+    conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
+};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    register_agent_event_consumer, unregister_agent_event_consumer,
+};
 use crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
+};
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo,
+};
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::ai::mcp::{JSONMCPServer, MCPServerState};
+use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
+use crate::ai::mcp::parsing::{normalize_mcp_json, resolve_json, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
+use crate::ai::mcp::{
+    JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
+};
 use crate::ai::skills::{
     filter_skills_by_spec, read_skills_from_directories, resolve_skill_repos, SkillManager,
     SkillWatcher,
 };
-use crate::ai::{
-    agent::conversation::AIConversationId,
-    agent_sdk::driver::harness::{
-        harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind,
-        HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness,
-        ThirdPartyHarnessTelemetryEvent,
-    },
-};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::CloudObject;
 use crate::send_telemetry_from_app_ctx;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::harness_support::{
+    HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
+};
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     plugin_manager_for, CliAgentPluginManager,
 };
@@ -64,46 +84,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
-use crate::{
-    ai::{
-        agent::{
-            AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput,
-            CancellationReason, RenderableAIError, RequestFileEditsResult,
-        },
-        ambient_agents::{
-            conversation_output_status_from_conversation, task::HarnessModelConfig,
-            AmbientAgentTaskId, AmbientConversationStatus,
-        },
-        blocklist::{
-            agent_view::AgentViewEntryOrigin,
-            orchestration_event_streamer::{
-                register_agent_event_consumer, unregister_agent_event_consumer,
-            },
-            BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
-        },
-        cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo},
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        mcp::{
-            file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent},
-            parsing::{normalize_mcp_json, resolve_json, ParsedTemplatableMCPServerResult},
-            templatable_manager::TemplatableMCPServerManagerEvent,
-            TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-        },
-    },
-    auth::AuthStateProvider,
-    cloud_object::CloudObject,
-    server::{
-        ids::{ServerId, SyncId},
-        server_api::{
-            ai::AIClient,
-            harness_support::{
-                HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
-            },
-            ServerApiProvider,
-        },
-    },
-    terminal::view::ConversationRestorationInNewPaneType,
-};
+use crate::terminal::view::ConversationRestorationInNewPaneType;
 
 pub(crate) mod attachments;
 pub(crate) mod cloud_provider;

@@ -1,27 +1,27 @@
+use std::any::Any;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+
+use async_channel::{Receiver, Sender, TrySendError};
+use parking_lot::FairMutex;
+use pathfinder_geometry::vector::Vector2F;
+use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
+
 use crate::ai::blocklist::InputConfig;
 use crate::context_chips::prompt_type::PromptType;
 use crate::pane_group::TerminalViewResources;
 use crate::persistence::ModelEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::session::Sessions;
+use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::remote_tty::event_loop::EventLoop;
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, wire_up_pty_controller_with_view,
 };
-use crate::terminal::ShellLaunchState;
-use std::any::Any;
-
-use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::writeable_pty::{self, Message};
-use crate::terminal::{terminal_manager, SizeInfo, TerminalModel, TerminalView};
-use async_channel::{Receiver, Sender, TrySendError};
-use parking_lot::FairMutex;
-use pathfinder_geometry::vector::Vector2F;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
+use crate::terminal::{terminal_manager, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
 
 type PtyController = writeable_pty::PtyController<Sender<Message>>;
 

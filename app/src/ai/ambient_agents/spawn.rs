@@ -1,19 +1,20 @@
 //! Stream-based API for spawning and monitoring ambient agents.
 #![cfg_attr(target_family = "wasm", expect(dead_code))]
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use futures::{select, FutureExt, Stream, StreamExt};
 use session_sharing_protocol::common::SessionId;
 
-use super::AmbientAgentTaskId;
-use super::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::{
-    server::retry_strategies::with_bounded_retry,
-    server::server_api::ai::{AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage},
-    terminal::shared_session,
+use super::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::server::retry_strategies::with_bounded_retry;
+use crate::server::server_api::ai::{
+    AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
 };
+use crate::terminal::shared_session;
 
 /// How long to poll for the agent to be ready.
 /// This should be long enough that the shared session will be joinable.

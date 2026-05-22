@@ -1,8 +1,9 @@
 #[cfg(test)]
+use std::sync::atomic::{AtomicI64, Ordering};
+
+#[cfg(test)]
 use chrono::TimeZone;
 use chrono::{DateTime, Utc};
-#[cfg(test)]
-use std::sync::atomic::{AtomicI64, Ordering};
 
 #[cfg(not(test))]
 pub fn get_current_time() -> DateTime<Utc> {

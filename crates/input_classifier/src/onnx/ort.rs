@@ -1,9 +1,9 @@
 use anyhow::{Result, ensure};
 use itertools::Itertools as _;
-use ort::{
-    execution_providers::CPUExecutionProvider, session::Session, tensor::ArrayExtensions as _,
-    value::Value,
-};
+use ort::execution_providers::CPUExecutionProvider;
+use ort::session::Session;
+use ort::tensor::ArrayExtensions as _;
+use ort::value::Value;
 use parking_lot::Mutex;
 use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;

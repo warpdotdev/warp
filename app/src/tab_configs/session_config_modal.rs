@@ -8,22 +8,20 @@ use warpui::elements::{
 };
 use warpui::fonts::Weight;
 use warpui::keymap::macros::id;
-use warpui::keymap::FixedBinding;
-use warpui::keymap::Keystroke;
+use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::platform::file_picker::FilePickerConfiguration;
-use warpui::FocusContext;
 use warpui::{
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
+use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
+use super::session_config_rendering;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
-
-use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
-use super::session_config_rendering;
 
 pub fn init(app: &mut warpui::AppContext) {
     app.register_fixed_bindings([FixedBinding::new(

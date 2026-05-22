@@ -1,21 +1,18 @@
 use anyhow::anyhow;
-use warp_terminal::model::{grid::Dimensions, Point};
-
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, task::TaskId, AIAgentActionId},
-        blocklist::block::cli_controller::{LongRunningCommandControlState, UserTakeOverReason},
-    },
-    terminal::{
-        event::Event,
-        model::{
-            grid::{grid_handler::GridHandler, RespectDisplayedOutput},
-            RespectObfuscatedSecrets,
-        },
-    },
-};
+use warp_terminal::model::grid::Dimensions;
+use warp_terminal::model::Point;
 
 use super::{Block, SerializedAIMetadata};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::blocklist::block::cli_controller::{
+    LongRunningCommandControlState, UserTakeOverReason,
+};
+use crate::terminal::event::Event;
+use crate::terminal::model::grid::grid_handler::GridHandler;
+use crate::terminal::model::grid::RespectDisplayedOutput;
+use crate::terminal::model::RespectObfuscatedSecrets;
 
 impl Block {
     /// `true` if the command is executing and the user has opened the agent mode input.

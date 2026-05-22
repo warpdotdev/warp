@@ -1,10 +1,9 @@
 use prost::Message;
 
+use super::*;
 use crate::proto::{
     client_message, server_message, ClientMessage, Initialize, InitializeResponse, ServerMessage,
 };
-
-use super::*;
 
 #[tokio::test]
 async fn round_trip_client_message() {

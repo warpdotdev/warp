@@ -463,6 +463,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WarpifyFooter,
         #[cfg(feature = "solo_user_byok")]
         FeatureFlag::SoloUserByok,
+        #[cfg(feature = "billing_and_usage_page_v2")]
+        FeatureFlag::BillingAndUsagePageV2,
         #[cfg(feature = "skip_firebase_anonymous_user")]
         FeatureFlag::SkipFirebaseAnonymousUser,
         #[cfg(feature = "hoa_onboarding_flow")]
@@ -487,6 +489,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GitCredentialRefresh,
         #[cfg(feature = "remote_code_review")]
         FeatureFlag::RemoteCodeReview,
+        #[cfg(feature = "custom_inference_endpoints")]
+        FeatureFlag::CustomInferenceEndpoints,
     ]);
 
     flags

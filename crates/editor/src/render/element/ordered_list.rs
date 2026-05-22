@@ -1,21 +1,17 @@
 use std::sync::Arc;
 
-use crate::{
-    content::text::BufferBlockStyle,
-    extract_block,
-    render::{
-        layout::TextLayout,
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
 use warpui::elements::ListIndentLevel;
-use warpui::{geometry::vector::vec2f, text_layout::TextFrame};
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::TextFrame;
 
-use super::{
-    RenderableBlock,
-    paint::RenderContext,
-    placeholder::{self, BlockPlaceholder},
-};
+use super::RenderableBlock;
+use super::paint::RenderContext;
+use super::placeholder::{self, BlockPlaceholder};
+use crate::content::text::BufferBlockStyle;
+use crate::extract_block;
+use crate::render::layout::TextLayout;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 pub struct RenderableOrderedListItem {
     viewport_item: ViewportItem,

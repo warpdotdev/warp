@@ -1,55 +1,51 @@
-use crate::features::FeatureFlag;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use async_channel::TryRecvError;
 use parking_lot::Mutex;
-use std::{path::PathBuf, sync::Arc};
 use string_offset::CharOffset;
 use tempfile::tempdir;
-use warp_editor::{
-    content::mermaid_diagram::mermaid_asset_source,
-    render::{
-        element::RichTextAction,
-        model::{
-            BlockItem, BlockSpacing, HitTestBlockType, ImageBlockConfig, Location, RenderEvent,
-        },
-    },
+use warp_editor::content::mermaid_diagram::mermaid_asset_source;
+use warp_editor::render::element::RichTextAction;
+use warp_editor::render::model::{
+    BlockItem, BlockSpacing, HitTestBlockType, ImageBlockConfig, Location, RenderEvent,
 };
 use warp_util::user_input::UserInput;
 use warpui::assets::asset_cache::{AssetCache, AssetState};
-
 use warpui::event::ModifiersState;
 use warpui::image_cache::ImageType;
+use warpui::platform::WindowStyle;
+use warpui::presenter::ChildView;
 use warpui::r#async::block_on;
 use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
-use warpui::{platform::WindowStyle, presenter::ChildView, App, Element, Entity, View, ViewHandle};
-use warpui::{SingletonEntity, TypedActionView, WindowId};
+use warpui::{App, Element, Entity, SingletonEntity, TypedActionView, View, ViewHandle, WindowId};
 
 use super::{EditorViewAction, LayoutAffectingAssetLoad, RichTextEditorConfig, RichTextEditorView};
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::link_editor::LinkEditorAction;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::link::{LinkEvent, NotebookLinks, SessionSource};
+use crate::search::files::model::FileSearchModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-
 use crate::settings::FontSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
-
-use crate::auth::AuthStateProvider;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::terminal::{model::session::Session, shell::ShellType, ShellLaunchData};
+use crate::terminal::model::session::Session;
+use crate::terminal::shell::ShellType;
+use crate::terminal::ShellLaunchData;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::ActiveSession;
-use crate::UserWorkspaces;
-use crate::{
-    cloud_object::model::persistence::CloudModel, search::files::model::FileSearchModel,
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, UserWorkspaces};
 
 /// Container for a [`RichTextEditorView`] in unit tests.
 struct TestView {

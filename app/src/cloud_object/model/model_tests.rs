@@ -1,67 +1,52 @@
-use chrono::Utc;
-use lazy_static::lazy_static;
-use settings::{RespectUserSyncSetting, SyncToCloud};
-use warpui::{App, ModelHandle};
-
-use crate::auth::auth_manager::AuthManager;
-use crate::auth::user::TEST_USER_UID;
-use crate::auth::AuthStateProvider;
-use crate::auth::UserUid;
-use crate::cloud_object::model::actions::ObjectActions;
-use crate::cloud_object::model::generic_string_model::GenericStringModel;
-use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::model::view::EditorState;
-use crate::cloud_object::model::view::UpdateTimestamp;
-use crate::cloud_object::model::view::EDITOR_TIMEOUT_DURATION_MINUTES;
-use crate::cloud_object::CloudObjectMetadata;
-use crate::cloud_object::CloudObjectPermissions;
-use crate::cloud_object::CloudObjectStatuses;
-use crate::cloud_object::CloudObjectSyncStatus;
-use crate::cloud_object::NumInFlightRequests;
-use crate::cloud_object::ObjectIdType;
-use crate::cloud_object::Owner;
-use crate::cloud_object::ServerMetadata;
-use crate::cloud_object::ServerPermissions;
-use crate::drive::folders::CloudFolderModel;
-use crate::drive::folders::FolderId;
-use crate::drive::DriveIndexVariant;
-use crate::features::FeatureFlag;
-use crate::notebooks::CloudNotebookModel;
-use crate::notebooks::NotebookId;
-use crate::server::cloud_objects::listener::ObjectUpdateMessage;
-use crate::server::cloud_objects::update_manager::InitialLoadResponse;
-use crate::server::ids::ServerId;
-use crate::server::ids::ServerIdAndType;
-use crate::server::server_api::object::ObjectClient;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::sync_queue::SyncQueue;
-use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::init_and_register_user_preferences;
-use crate::settings::Preference;
-use crate::system::SystemStats;
-use crate::workspaces::team::Team;
-use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::Workspace;
-
-use crate::workflows::CloudWorkflowModel;
-use crate::workspaces::workspace::WorkspaceUid;
-use crate::NetworkStatus;
-use crate::UpdateManager;
-use mockall::Sequence;
-use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::*;
+use chrono::Utc;
+use lazy_static::lazy_static;
+use mockall::Sequence;
+use rand::Rng;
+use settings::{RespectUserSyncSetting, SyncToCloud};
+use warpui::{App, ModelHandle};
 
+use super::*;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::user::TEST_USER_UID;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::generic_string_model::GenericStringModel;
+use crate::cloud_object::model::view::{
+    CloudViewModel, EditorState, UpdateTimestamp, EDITOR_TIMEOUT_DURATION_MINUTES,
+};
+use crate::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
+    NumInFlightRequests, ObjectIdType, Owner, ServerMetadata, ServerPermissions,
+};
+use crate::drive::folders::{CloudFolderModel, FolderId};
+use crate::drive::DriveIndexVariant;
+use crate::features::FeatureFlag;
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::server::cloud_objects::listener::ObjectUpdateMessage;
+use crate::server::cloud_objects::update_manager::InitialLoadResponse;
+use crate::server::ids::{ServerId, ServerIdAndType};
 #[cfg(test)]
 use crate::server::server_api::object::MockObjectClient;
+use crate::server::server_api::object::ObjectClient;
 #[cfg(test)]
 use crate::server::server_api::team::MockTeamClient;
 #[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::{init_and_register_user_preferences, Preference};
+use crate::system::SystemStats;
+use crate::workflows::CloudWorkflowModel;
+use crate::workspaces::team::Team;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
+use crate::{NetworkStatus, UpdateManager};
 
 fn create_cloud_model(
     app: &mut App,

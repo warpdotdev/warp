@@ -2,26 +2,26 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, Local};
 use session_sharing_protocol::common::SessionId;
-use warp_core::{channel::ChannelState, ui::appearance::Appearance};
-use warpui::{
-    color::ColorU,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, SingletonEntity, WeakViewHandle,
-};
+use warp_core::channel::ChannelState;
+use warp_core::ui::appearance::Appearance;
+use warpui::color::ColorU;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, SingletonEntity, WeakViewHandle};
 
-use crate::{
-    ai::{agent::conversation::AIConversationId, blocklist::BlocklistAIHistoryModel},
-    cloud_object::model::persistence::CloudModel,
-    server::{ids::ServerId, server_api::object::GuestIdentifier},
-    terminal::{shared_session::join_link, TerminalView},
-    ui_components::{
-        avatar::{Avatar, AvatarContent},
-        icons::Icon,
-    },
-    workspaces::{user_profiles::UserProfiles, user_workspaces::UserWorkspaces},
-};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::server::ids::ServerId;
+use crate::server::server_api::object::GuestIdentifier;
+use crate::terminal::shared_session::join_link;
+use crate::terminal::TerminalView;
+use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::icons::Icon;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub mod dialog;
+mod qr_code;
 mod style;
 
 // Re-export types from warp_server_client.

@@ -1,32 +1,23 @@
 use std::ops::Range;
+
 use string_offset::CharOffset;
-use warpui::{
-    AppContext, ClipBounds, Event, EventContext,
-    elements::{
-        Axis, CornerRadius, DEFAULT_SCROLL_WHEEL_PIXELS_PER_LINE, Radius, ScrollData,
-        ScrollbarAppearance, ScrollbarGeometry, ScrollbarWidth, compute_scrollbar_geometry,
-        project_scroll_delta_by_sensitivity, scroll_delta_for_pointer_movement,
-    },
-    event::DispatchedEvent,
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    units::{IntoPixels, Pixels},
+use warpui::elements::{
+    Axis, CornerRadius, DEFAULT_SCROLL_WHEEL_PIXELS_PER_LINE, Radius, ScrollData,
+    ScrollbarAppearance, ScrollbarGeometry, ScrollbarWidth, compute_scrollbar_geometry,
+    project_scroll_delta_by_sensitivity, scroll_delta_for_pointer_movement,
 };
+use warpui::event::DispatchedEvent;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, ClipBounds, Event, EventContext};
 
+use super::paint::{CursorData, CursorDisplayType};
+use super::{RenderContext, RenderableBlock};
+use crate::extract_block;
 use crate::render::model::table_offset_map::CellAtOffset;
-use crate::{
-    extract_block,
-    render::model::{
-        BlockItem, LaidOutTable, RenderState, RenderedSelection, TableStyle, viewport::ViewportItem,
-    },
-};
-
-use super::{
-    RenderContext, RenderableBlock,
-    paint::{CursorData, CursorDisplayType},
-};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, LaidOutTable, RenderState, RenderedSelection, TableStyle};
 
 const TABLE_BORDER_WIDTH: f32 = 1.0;
 const TABLE_SCROLL_SENSITIVITY: f32 = 1.0;

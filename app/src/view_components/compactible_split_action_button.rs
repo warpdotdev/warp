@@ -3,15 +3,13 @@ use std::sync::Arc;
 use warpui::elements::{ChildView, Flex, ParentElement, SavePosition};
 use warpui::{Action, Element, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::view_components::action_button::AdjoinedSide;
-use crate::view_components::compactible_action_button::RenderCompactibleActionButton;
-use crate::{
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryRightBiasedTheme,
-        PrimaryTheme,
-    },
-    view_components::compactible_action_button::CompactibleActionButton,
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme, PrimaryRightBiasedTheme,
+    PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::{
+    CompactibleActionButton, RenderCompactibleActionButton,
 };
 
 /// A split button composed of a primary CompactibleActionButton and a trailing

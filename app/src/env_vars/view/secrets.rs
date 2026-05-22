@@ -1,34 +1,28 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, Empty, Fill, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Shrinkable, Stack,
+};
+use warpui::fonts::Weight;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
-use warpui::{
-    elements::{
-        ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, Empty, Fill, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Shrinkable, Stack,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{UiComponent, UiComponentStyles},
-    },
-    Element, ViewContext,
-};
+use warpui::{Element, ViewContext};
 
 use super::env_var_collection::{
     EnvVarCollectionAction, EnvVarCollectionView, VariableRowIndex, CORE_MAX_WIDTH, ROW_SPACING,
 };
-
-use crate::{
-    drive::sharing::ContentEditability,
-    env_vars::{active_env_var_collection_data::SavingStatus, EnvVarValue},
-    external_secrets::{ExternalSecretManager, SecretManager},
-    search::external_secrets::{
-        searcher::ExternalSecretSearchItemAction, view::ExternalSecretsMenuEvent,
-    },
-    ui_components::icons::Icon,
-};
+use crate::drive::sharing::ContentEditability;
+use crate::env_vars::active_env_var_collection_data::SavingStatus;
+use crate::env_vars::EnvVarValue;
+use crate::external_secrets::{ExternalSecretManager, SecretManager};
+use crate::search::external_secrets::searcher::ExternalSecretSearchItemAction;
+use crate::search::external_secrets::view::ExternalSecretsMenuEvent;
+use crate::ui_components::icons::Icon;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use crate::{
     terminal::local_shell::LocalShellState,

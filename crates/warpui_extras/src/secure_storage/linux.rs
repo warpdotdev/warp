@@ -1,14 +1,14 @@
 //! Implementation of the [`SecureStorage`] service for the Linux platform.
 
-use std::{cell::OnceCell, collections::HashMap, path::PathBuf};
+use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
 use rand::RngCore;
 use ring::aead;
-use secret_service::{
-    blocking::{Item, SecretService},
-    EncryptionType,
-};
+use secret_service::blocking::{Item, SecretService};
+use secret_service::EncryptionType;
 
 use super::Error;
 

@@ -1,18 +1,20 @@
 //! Interoperability traits for interaction between the generic rendering/content layers and parent
 //! editor layers.
 
-use std::{any::Any, cell::Ref, ops::Range};
+use std::any::Any;
+use std::cell::Ref;
+use std::ops::Range;
 
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
 use rangemap::{RangeMap, RangeSet};
-use warpui::{
-    Action, AppContext, Element, TypedActionView, View, elements::Border,
-    text_layout::PaintStyleOverride,
-};
-
-use crate::{content::version::BufferVersion, render::element::RichTextAction};
 use string_offset::CharOffset;
+use warpui::elements::Border;
+use warpui::text_layout::PaintStyleOverride;
+use warpui::{Action, AppContext, Element, TypedActionView, View};
+
+use crate::content::version::BufferVersion;
+use crate::render::element::RichTextAction;
 
 /// Interface between a `RichTextElement` and its containing editor view.
 pub trait EditorView

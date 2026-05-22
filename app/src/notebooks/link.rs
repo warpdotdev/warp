@@ -1,33 +1,26 @@
 //! Link-opening behavior for notebooks.
-use std::{
-    borrow::Cow,
-    fmt,
-    future::{self, Future},
-    net::IpAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::borrow::Cow;
+use std::fmt;
+use std::future::{self, Future};
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use futures_util::future::Either;
 use url::Url;
 use warp_util::path::{CleanPathResult, LineAndColumnArg};
-use warpui::{
-    r#async::SpawnedFutureHandle, AppContext, Entity, ModelContext, ModelHandle, SingletonEntity,
-    WindowId,
-};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
+use super::file::is_markdown_file;
+use crate::drive::OpenWarpDriveObjectArgs;
+use crate::terminal::model::session::Session;
+use crate::uri::parse_url_paths::{get_item_data_from_warp_link, WarpWebLink};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{is_supported_image_file, resolve_file_target, FileTarget};
-use crate::{
-    drive::OpenWarpDriveObjectArgs,
-    terminal::model::session::Session,
-    uri::parse_url_paths::{get_item_data_from_warp_link, WarpWebLink},
-    workspace::ActiveSession,
-};
-
-use super::file::is_markdown_file;
+use crate::workspace::ActiveSession;
 
 #[cfg(test)]
 #[path = "link_tests.rs"]

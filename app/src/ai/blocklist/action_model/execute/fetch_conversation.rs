@@ -1,17 +1,14 @@
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::agent::conversation_yaml;
-use crate::ai::agent::AIAgentActionResultType;
-use crate::ai::blocklist::history_model::CloudConversationData;
 use ai::agent::action_result::FetchConversationResult;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::AIAgentActionType;
-use crate::BlocklistAIHistoryModel;
-
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::{conversation_yaml, AIAgentActionResultType, AIAgentActionType};
+use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::BlocklistAIHistoryModel;
 
 pub struct FetchConversationExecutor;
 

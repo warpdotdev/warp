@@ -2,37 +2,36 @@ use std::cell::OnceCell;
 use std::sync::Arc;
 use std::{fmt, vec};
 
-use crate::safe_triangle::SafeTriangle;
-use crate::themes::theme::Fill;
-use crate::util::time_format::format_approx_duration_from_now_sentence_case;
-use crate::{appearance::Appearance, ui_components::icons};
 use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::ui::color::blend::Blend;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, DropShadow, OffsetPositioning,
-    ParentAnchor, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
-    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Stack,
+    Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult,
+    DropShadow, Element, EventHandler, Flex, Hoverable, Icon, Image, MainAxisAlignment,
+    MainAxisSize, MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
+    Radius, Rect, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
+    Stack, Text,
 };
+use warpui::fonts::{FamilyId, Properties};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
-use warpui::WindowId;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    assets::asset_cache::AssetSource,
-    elements::{
-        Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Dismiss, DispatchEventResult, Element, EventHandler, Flex, Hoverable, Icon, Image,
-        MainAxisAlignment, MainAxisSize, MouseInBehavior, MouseStateHandle, ParentElement, Radius,
-        Rect, SavePosition, Shrinkable, Text,
-    },
-    fonts::{FamilyId, Properties},
-    keymap::FixedBinding,
-    platform::Cursor,
-    ui_components::components::UiComponent,
-    Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WindowId,
 };
+
+use crate::appearance::Appearance;
+use crate::safe_triangle::SafeTriangle;
+use crate::themes::theme::Fill;
+use crate::ui_components::icons;
+use crate::util::time_format::format_approx_duration_from_now_sentence_case;
 
 pub const CHEVRON_RIGHT_ALIGN_SVG_PATH: &str = "bundled/svg/chevron-right-align.svg";
 

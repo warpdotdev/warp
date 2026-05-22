@@ -1,28 +1,23 @@
 //! This module implements terminal find functionality for the blocklist.
-use std::{collections::HashMap, iter, ops::RangeInclusive};
+use std::collections::HashMap;
+use std::iter;
+use std::ops::RangeInclusive;
 
 use itertools::Itertools;
-use warpui::{units::Lines, AppContext, EntityId};
+use warpui::units::Lines;
+use warpui::{AppContext, EntityId};
 
-use crate::terminal::{
-    model::{
-        block::Block,
-        blocks::{
-            BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem,
-            TotalIndex,
-        },
-        find::{FindConfig, RegexDFAs},
-        index::Point,
-        terminal_model::{BlockIndex, BlockSortDirection},
-    },
-    GridType,
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
+use super::FindOptions;
+use crate::terminal::model::block::Block;
+use crate::terminal::model::blocks::{
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+use crate::terminal::model::find::{FindConfig, RegexDFAs};
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
+use crate::terminal::GridType;
 use crate::view_components::find::FindDirection;
-
-use super::{
-    rich_content::{FindableRichContentHandle, RichContentMatchId},
-    FindOptions,
-};
 
 /// Runs a find operation on the blocklist using the given `options` and returns a
 /// `BlockListFindRun` with the results.

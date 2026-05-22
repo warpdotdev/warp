@@ -1,12 +1,7 @@
-use crate::appearance::Appearance;
-use crate::search::mixer::SearchMixer;
-use crate::search::search_bar::{
-    CreateQueryResultRendererFn, SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering,
-};
-use crate::search::QueryFilter;
-use itertools::Itertools;
 use std::marker::PhantomData;
 use std::ops::Range;
+
+use itertools::Itertools;
 use warpui::elements::{
     ConstrainedBox, Container, Empty, Flex, ParentElement, SavePosition, ScrollStateHandle,
     Scrollable, ScrollableElement, ScrollbarWidth, Text, UniformList, UniformListState,
@@ -18,6 +13,12 @@ use warpui::{
 };
 
 use super::styles::{ESTIMATED_RESULT_HEIGHT, MAX_DISPLAYED_RESULT_COUNT};
+use crate::appearance::Appearance;
+use crate::search::mixer::SearchMixer;
+use crate::search::search_bar::{
+    CreateQueryResultRendererFn, SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering,
+};
+use crate::search::QueryFilter;
 
 const HEADER_HORIZONTAL_PADDING: f32 = 16.;
 const HEADER_VERTICAL_PADDING: f32 = 4.;

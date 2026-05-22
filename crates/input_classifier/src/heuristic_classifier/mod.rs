@@ -5,13 +5,13 @@ use itertools::Itertools as _;
 use natural_language_detection::natural_language_words_score;
 use warp_completer::ParsedTokensSnapshot;
 
+use crate::parser::parse_query_into_tokens;
+use crate::util::{
+    is_installed_binary, is_likely_shell_command, is_one_off_natural_language_word_or_prefix,
+};
 use crate::{
     ClassificationResult, Context, InputClassificationResult, InputClassifier,
     InputClassifierDecisionSource, InputType,
-    parser::parse_query_into_tokens,
-    util::{
-        is_installed_binary, is_likely_shell_command, is_one_off_natural_language_word_or_prefix,
-    },
 };
 
 /// Minimum number of tokens users' input should have before kicking off input detection

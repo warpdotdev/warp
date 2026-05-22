@@ -1,6 +1,7 @@
 //! Iterator implementations for FileTreeSnapshot.
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
+use std::sync::Arc;
 
 use sum_tree::{Cursor, SeekBias};
 

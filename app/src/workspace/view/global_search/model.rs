@@ -1,15 +1,17 @@
-use crate::workspace::view::global_search::view::GlobalSearchEvent;
-use crate::workspace::view::global_search::SearchConfig;
+use std::path::PathBuf;
+
 use anyhow::Result;
 use futures::StreamExt as _;
 use instant::Instant;
 use num_traits::SaturatingSub;
 use regex::escape;
-use std::path::PathBuf;
 use string_offset::ByteOffset;
 use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelSpawner};
+
+use crate::workspace::view::global_search::view::GlobalSearchEvent;
+use crate::workspace::view::global_search::SearchConfig;
 
 const START_BATCH_AFTER_COUNT: usize = 50;
 const MAX_BATCH_SIZE: usize = 512;

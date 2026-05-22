@@ -1,32 +1,22 @@
-use super::styles::{HEADER_BORDER, HEADER_ROW_HEIGHT};
-use settings::Setting as _;
 use std::collections::HashMap;
+
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warpui::{
-    units::{IntoPixels, Pixels},
-    AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId,
-};
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
-use crate::settings::InputSettings;
-use crate::terminal::input::{
-    inline_menu::{
-        message_bar::INLINE_MENU_BORDER_WIDTH,
-        styles::{CONTENT_BORDER_WIDTH, CONTENT_VERTICAL_PADDING},
-        view::QUERY_RESULT_RENDERER_STYLES,
-        InlineMenuType,
-    },
-    message_bar::common::standard_message_bar_height,
-};
-
-use crate::{
-    ai::blocklist::agent_view::AgentViewController,
-    appearance::Appearance,
-    settings::InputModeSettings,
-    terminal::{
-        block_list_viewport::InputMode, element_size_at_last_frame,
-        input::suggestions_mode_model::InputSuggestionsModeModel, SizeInfo,
-    },
-};
+use super::styles::{HEADER_BORDER, HEADER_ROW_HEIGHT};
+use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::appearance::Appearance;
+use crate::settings::{InputModeSettings, InputSettings};
+use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::input::inline_menu::message_bar::INLINE_MENU_BORDER_WIDTH;
+use crate::terminal::input::inline_menu::styles::{CONTENT_BORDER_WIDTH, CONTENT_VERTICAL_PADDING};
+use crate::terminal::input::inline_menu::view::QUERY_RESULT_RENDERER_STYLES;
+use crate::terminal::input::inline_menu::InlineMenuType;
+use crate::terminal::input::message_bar::common::standard_message_bar_height;
+use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
+use crate::terminal::{element_size_at_last_frame, SizeInfo};
 
 const DEFAULT_VISIBLE_RESULT_COUNT: f32 = 9.;
 const MIN_VISIBLE_RESULT_COUNT: f32 = 3.;

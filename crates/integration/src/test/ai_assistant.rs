@@ -1,15 +1,14 @@
-use crate::Builder;
-use warp::integration_testing::{
-    step::new_step_with_default_assertions,
-    terminal::{
-        assert_selected_block_index_is_last_renderable, execute_command_for_single_terminal_in_tab,
-        util::ExpectedExitStatus, wait_until_bootstrapped_single_pane_for_tab,
-    },
-    view_getters::ai_assistant_panel_view,
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::util::ExpectedExitStatus;
+use warp::integration_testing::terminal::{
+    assert_selected_block_index_is_last_renderable, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
+use warp::integration_testing::view_getters::ai_assistant_panel_view;
 use warpui::async_assert;
 
 use super::new_builder;
+use crate::Builder;
 
 /// Checks if the Ask Warp AI keybinding works correctly when a block is selected.
 /// This is a regression test: https://linear.app/warpdotdev/issue/WAR-6758/warp-ai-ask-from-block-keybinding-doesnt-work-as-expected.

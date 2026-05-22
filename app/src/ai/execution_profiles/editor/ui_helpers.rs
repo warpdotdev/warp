@@ -1,30 +1,23 @@
-use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
-use crate::editor::EditorView;
-use crate::settings::AISettings;
-use crate::ui_components::icons::Icon;
-use crate::view_components::FilterableDropdown;
-use crate::view_components::{Dropdown, SubmittableTextInput};
-use crate::Appearance;
-use crate::TemplatableMCPServerManager;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
-use warpui::elements::Dismiss;
-use warpui::elements::Hoverable;
-use warpui::elements::MouseStateHandle;
 use warpui::elements::{
-    ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
-    MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable,
-    Stack, Text,
+    ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Dismiss, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::AppContext;
-use warpui::{Element, SingletonEntity, ViewHandle};
+use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 
-use super::ExecutionProfileEditorView;
-use super::ExecutionProfileEditorViewAction;
+use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
+use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
+use crate::editor::EditorView;
+use crate::settings::AISettings;
+use crate::ui_components::icons::Icon;
+use crate::view_components::{Dropdown, FilterableDropdown, SubmittableTextInput};
+use crate::{Appearance, TemplatableMCPServerManager};
 
 const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
 const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
@@ -550,6 +543,17 @@ pub fn render_permissions_section(
         !ai_settings.is_ask_user_question_permissions_editable(app),
         view.tooltip_mouse_state_handles
             .ask_user_question_tooltip_mouse_state
+            .clone(),
+    ));
+    column.add_child(render_permission_row(
+        appearance,
+        Icon::Atom,
+        "Run orchestrated agents",
+        &view.run_agents_dropdown,
+        profile_data.run_agents.description(),
+        !ai_settings.is_run_agents_permissions_editable(app),
+        view.tooltip_mouse_state_handles
+            .run_agents_tooltip_mouse_state
             .clone(),
     ));
 

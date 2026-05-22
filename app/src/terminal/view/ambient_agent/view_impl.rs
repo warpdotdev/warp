@@ -2,39 +2,41 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use warp_cli::agent::Harness;
-use warp_terminal::model::BlockId;
 
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::display_user_query_with_mode;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::agent_sdk::driver::harness::auth_check_command_for;
-use crate::ai::AIRequestUsageModel;
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warpui::prelude::{Empty, Vector2F};
-use warpui::{ModelHandle, ViewHandle};
-
-use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
-use crate::ai::blocklist::{agent_view::AgentViewEntryOrigin, BlocklistAIHistoryModel};
-use crate::ai::conversation_details_panel::ConversationDetailsData;
-use crate::pane_group::TerminalViewResources;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::view::rich_content::{RichContentInsertionPosition, RichContentMetadata};
-use crate::terminal::view::{ConversationDetailsPanelAutoOpenPolicy, TerminalView};
-use crate::terminal::CLIAgent;
-use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use warp_core::ui::appearance::Appearance;
+use warp_terminal::model::BlockId;
 use warpui::elements::Align;
-use warpui::{AppContext, Element, EntityId, SingletonEntity, ViewContext};
+use warpui::prelude::{Empty, Vector2F};
+use warpui::{
+    AppContext, Element, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle,
+};
 
 use super::loading_screen::{
     render_cloud_mode_cancelled_screen, render_cloud_mode_error_screen,
     render_cloud_mode_github_auth_required_screen, render_cloud_mode_loading_screen,
 };
 use super::{AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::terminal::view::Event as TerminalViewEvent;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::display_user_query_with_mode;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::driver::harness::auth_check_command_for;
+use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::conversation_details_panel::ConversationDetailsData;
+use crate::ai::AIRequestUsageModel;
+use crate::pane_group::TerminalViewResources;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::view::rich_content::{RichContentInsertionPosition, RichContentMetadata};
+use crate::terminal::view::{
+    ConversationDetailsPanelAutoOpenPolicy, Event as TerminalViewEvent, TerminalView,
+};
+use crate::terminal::CLIAgent;
+use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION: &str =
     "GitHub authentication required before starting the child agent.";

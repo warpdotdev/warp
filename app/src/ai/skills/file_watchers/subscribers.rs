@@ -1,10 +1,10 @@
 use std::pin::Pin;
 
-use futures::Future;
-
 use ai::skills::{read_skills, ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
 use async_channel::Sender;
-use repo_metadata::{repository::RepositorySubscriber, Repository, RepositoryUpdate};
+use futures::Future;
+use repo_metadata::repository::RepositorySubscriber;
+use repo_metadata::{Repository, RepositoryUpdate};
 use warpui::ModelContext;
 
 /// Messages sent from [`RepositorySubscriber`]s to [`SkillManager`].

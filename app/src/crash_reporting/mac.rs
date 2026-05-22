@@ -1,9 +1,7 @@
 #![allow(deprecated)]
 
-use cocoa::{
-    base::{id, nil, BOOL},
-    foundation::NSAutoreleasePool,
-};
+use cocoa::base::{id, nil, BOOL};
+use cocoa::foundation::NSAutoreleasePool;
 use warpui::platform::mac::make_nsstring;
 
 use super::*;

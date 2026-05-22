@@ -1,68 +1,56 @@
+use std::ops::Not;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use chrono::{DateTime, Local};
+use itertools::Itertools;
+use prost::Message;
 use vec1::Vec1;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warpui::{EntityId, ViewContext};
+use warp_multi_agent_api as api;
+use warpui::units::IntoPixels;
+use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
 
 use super::blocklist_filter::exchanges_for_blocklist;
+use super::DEFAULT_AI_BLOCK_HEIGHT;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, AIAgentExchange, AIAgentExchangeId,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
+    CreateDocumentsResult, EditDocumentsResult,
+};
+use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
-use crate::ai::blocklist::history_model::{CLIAgentConversation, CloudConversationData};
-use crate::ai::blocklist::BlocklistAIContextModel;
-use crate::terminal::input::message_bar::Message as InputMessage;
-use crate::terminal::input::message_bar::MessageItem;
+use crate::ai::blocklist::history_model::{
+    BlocklistAIHistoryModel, CLIAgentConversation, CloudConversationData,
+};
+use crate::ai::blocklist::model::AIBlockModelImpl;
+use crate::ai::blocklist::{
+    AIBlock, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    ClientIdentifiers,
+};
+use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::persistence::model::AgentConversationData;
+use crate::terminal::find::TerminalFindModel;
+use crate::terminal::input::message_bar::{Message as InputMessage, MessageItem};
 use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::model::blocks::RichContentItem;
 use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::view::{
+    AIBlockMetadata, Event, RichContent, RichContentInsertionPosition, RichContentMetadata,
+    TerminalView,
+};
 use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use chrono::{DateTime, Local};
-use itertools::Itertools;
-use prost::Message;
-use std::ops::Not;
-
-use super::DEFAULT_AI_BLOCK_HEIGHT;
-
-use crate::ai::agent::AIAgentActionResultType;
-use crate::ai::agent::CreateDocumentsRequest;
-use crate::ai::agent::{
-    AIAgentAction, AIAgentActionType, AIAgentOutputMessage, AIAgentOutputMessageType,
-    CreateDocumentsResult, EditDocumentsResult,
-};
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
-use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::{
-    ai::{
-        agent::{
-            conversation::{AIConversation, AIConversationId},
-            AIAgentExchange, AIAgentExchangeId, AIAgentOutput,
-        },
-        blocklist::{
-            history_model::BlocklistAIHistoryModel, model::AIBlockModelImpl, AIBlock,
-            BlocklistAIActionModel, BlocklistAIController, ClientIdentifiers,
-        },
-        get_relevant_files::controller::GetRelevantFilesController,
-    },
-    persistence::model::AgentConversationData,
-    terminal::{
-        find::TerminalFindModel,
-        model::{
-            blocks::RichContentItem, session::active_session::ActiveSession,
-            terminal_model::BlockIndex,
-        },
-        view::{
-            AIBlockMetadata, Event, RichContent, RichContentInsertionPosition, RichContentMetadata,
-            TerminalView,
-        },
-    },
-};
-use warp_core::channel::ChannelState;
-use warp_multi_agent_api as api;
-use warpui::units::IntoPixels;
-use warpui::{ModelHandle, SingletonEntity};
 
 /// Describes restore-context setup state for directory reconciliation and hinting.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -943,6 +931,7 @@ impl TerminalView {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,

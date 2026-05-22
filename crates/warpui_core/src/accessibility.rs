@@ -45,9 +45,10 @@
 //!   keybinding to access it;
 //! - If there’s a video/GIF in the user docs, make sure that its content is also reflected in text.
 
-use crate::Action;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+
+use crate::Action;
 
 #[derive(Debug, Clone)]
 /// Main structure describing the content VoiceOver (or other screen reading software) will receive.

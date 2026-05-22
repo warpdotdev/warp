@@ -1,13 +1,18 @@
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
+use std::collections::HashMap;
+
 use chrono::Utc;
 use pathfinder_geometry::vector::vec2f;
 use persistence::model::ConversationUsageMetadata;
 use session_sharing_protocol::sharer::SessionSourceType;
-use std::collections::HashMap;
 use warp_multi_agent_api::{self as api, client_action as api_client_action};
+use warpui::platform::WindowStyle;
+use warpui::{App, EntityId, TypedActionView, ViewHandle};
 
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use super::*;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, ConversationStatus, ServerAIConversationMetadata,
+};
 use crate::ai::agent::AIAgentInput;
 use crate::ai::agent_conversations_model::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentRunDisplayStatus,
@@ -19,13 +24,9 @@ use crate::ai::ambient_agents::{
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
-use crate::server::ids::ServerId;
-use warpui::platform::WindowStyle;
-use warpui::{App, EntityId, TypedActionView, ViewHandle};
-
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
-
+use crate::server::ids::ServerId;
 use crate::terminal::model::blocks::{ToTotalIndex as _, INLINE_BANNER_HEIGHT};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
@@ -37,8 +38,6 @@ use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::{assert_lines_approx_eq, FeatureFlag};
-
-use super::*;
 
 #[test]
 fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {

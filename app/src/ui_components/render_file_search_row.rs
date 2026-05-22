@@ -12,20 +12,20 @@
 //!   leading `…` when the row is too narrow to fit the full path. This is the
 //!   default for callers that pass `max_combined_length: None`.
 
-use fuzzy_match::FuzzyMatchResult;
 use std::path::Path;
+
+use fuzzy_match::FuzzyMatchResult;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, Highlight, MainAxisSize, ParentElement, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::{ClipConfig, ClipDirection, ClipStyle};
-use warpui::{AppContext, Element};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::safe_truncate;
 use crate::search::ItemHighlightState;
-use warpui::SingletonEntity;
 
 pub const MAX_COMBINED_LENGTH: usize = 55;
 

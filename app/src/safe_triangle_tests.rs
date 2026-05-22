@@ -1,6 +1,7 @@
-use super::*;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+
+use super::*;
 
 #[test]
 fn no_target_rect_does_not_suppress() {

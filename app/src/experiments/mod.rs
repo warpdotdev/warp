@@ -8,24 +8,24 @@
 mod block_onboarding_layer;
 mod login_layer;
 mod rendering;
-pub use block_onboarding_layer::{BlockOnboarding, BLOCK_ONBOARDING_LAYER};
-pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
-pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
-use warp_core::user_preferences::GetUserPreferences as _;
-
-use crate::auth::auth_state::AuthStateProvider;
-use crate::channel::{Channel, ChannelState};
-use anyhow::Result;
-use dashmap::DashMap;
-use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hasher;
 use std::marker::Copy;
 use std::ops::Range;
 use std::str::FromStr;
-use std::{collections::HashMap, hash::Hasher};
 
+use anyhow::Result;
+pub use block_onboarding_layer::{BlockOnboarding, BLOCK_ONBOARDING_LAYER};
+use dashmap::DashMap;
+pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
+use lazy_static::lazy_static;
+pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
+use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::auth::auth_state::AuthStateProvider;
+use crate::channel::{Channel, ChannelState};
 use crate::send_telemetry_sync_from_app_ctx;
 
 /// Number of buckets we are using to partition user traffic. The largest valid

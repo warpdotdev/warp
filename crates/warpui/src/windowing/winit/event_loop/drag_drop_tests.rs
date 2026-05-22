@@ -1,6 +1,8 @@
-use super::*;
 use std::path::PathBuf;
+
 use winit::window::WindowId as WinitWindowId;
+
+use super::*;
 
 #[test]
 fn test_drag_drop_debouncing_single_file() {

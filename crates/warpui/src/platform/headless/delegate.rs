@@ -1,18 +1,14 @@
-use parking_lot::Mutex;
-
-use crate::{
-    clipboard::InMemoryClipboard,
-    notification::{NotificationSendError, RequestPermissionsOutcome},
-    platform::{self, Cursor},
-};
-
 use std::mem::ManuallyDrop;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 
+use parking_lot::Mutex;
+
 use super::event_loop::AppEvent;
+use crate::clipboard::InMemoryClipboard;
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
+use crate::platform::{self, Cursor};
 
 /// Stores the ID of the application's main thread, which we can reference
 /// to determine if a given thread is the main thread or not.

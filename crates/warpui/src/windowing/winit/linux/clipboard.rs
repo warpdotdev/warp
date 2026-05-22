@@ -5,7 +5,8 @@ use arboard::{
 };
 use zbus::zvariant::NoneValue;
 
-use crate::{clipboard::ClipboardContent, Clipboard};
+use crate::clipboard::ClipboardContent;
+use crate::Clipboard;
 
 pub struct LinuxClipboard {
     inner: LinuxClipboardInner,

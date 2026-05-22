@@ -1,4 +1,30 @@
+use std::collections::HashMap;
+
+use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use ai::project_context::model::ProjectContextModel;
+use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
+#[cfg(feature = "local_fs")]
+use repo_metadata::CanonicalizedPath;
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
+use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::sharer::SessionSourceType;
+#[cfg(feature = "local_fs")]
+use tempfile::TempDir;
+use terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use terminal::view::ActiveSessionState;
+use warp_editor::editor::NavigationKey;
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App, ViewHandle};
+use watcher::HomeDirectoryWatcher;
+
 use super::*;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::agent_tips::AITipModel;
+use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -6,6 +32,9 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
+use crate::ai::mcp::gallery::MCPGalleryManager;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
@@ -23,71 +52,40 @@ use crate::pane_group::{Direction, PaneGroupAction, PaneId};
 use crate::pricing::PricingInfoModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
-use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
-#[cfg(feature = "local_fs")]
-use crate::user_config::tab_configs_dir;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
-#[cfg(feature = "local_fs")]
-use repo_metadata::CanonicalizedPath;
-#[cfg(feature = "local_fs")]
-use repo_metadata::RepoMetadataModel;
-use session_sharing_protocol::sharer::SessionSourceType;
-use std::collections::HashMap;
-#[cfg(feature = "local_fs")]
-use tempfile::TempDir;
-use watcher::HomeDirectoryWatcher;
-
-use crate::server::cloud_objects::{listener::Listener, update_manager::UpdateManager};
+use crate::resource_center::Tip;
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
-
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
+use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::undo_close::UndoCloseSettings;
+#[cfg(feature = "local_fs")]
+use crate::user_config::tab_configs_dir;
 #[cfg(windows)]
 use crate::util::traffic_lights::windows::RendererState;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::agent_tips::AITipModel;
-use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
-use crate::ai::mcp::{
-    gallery::MCPGalleryManager, templatable_manager::TemplatableMCPServerManager,
-    FileBasedMCPManager, FileMCPWatcher,
+use crate::{
+    experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
 };
-use crate::resource_center::Tip;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::test_util::settings::initialize_settings_for_tests;
-use crate::undo_close::UndoCloseSettings;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use crate::workflows::local_workflows::LocalWorkflows;
-use crate::{experiments, workspace, GlobalResourceHandlesProvider};
-use crate::{AgentNotificationsModel, ObjectActions};
-
-use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
-use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-use ai::project_context::model::ProjectContextModel;
-use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
-use session_sharing_protocol::common::SessionId;
-use terminal::shared_session::permissions_manager::SessionPermissionsManager;
-use terminal::view::ActiveSessionState;
-use warp_editor::editor::NavigationKey;
-use warpui::AddSingletonModel;
-use warpui::{platform::WindowStyle, App, ViewHandle};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

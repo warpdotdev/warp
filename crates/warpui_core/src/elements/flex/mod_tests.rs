@@ -1,14 +1,10 @@
 use std::collections::HashSet;
 
 use super::*;
-use crate::elements::{Align, SavePosition, Stack};
+use crate::elements::{Align, ConstrainedBox, ParentElement, Rect, SavePosition, Stack};
 use crate::geometry::rect::RectF;
-
 use crate::platform::WindowStyle;
-use crate::{
-    elements::{ConstrainedBox, ParentElement, Rect},
-    App, Entity, Presenter, TypedActionView, WindowId, WindowInvalidation,
-};
+use crate::{App, Entity, Presenter, TypedActionView, WindowId, WindowInvalidation};
 
 type RenderFn = dyn Fn(&AppContext) -> Box<dyn Element> + 'static;
 

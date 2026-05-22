@@ -1,8 +1,9 @@
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use crate::model::grid::{cell::Flags, row::Row};
-
-use super::{grapheme::Grapheme, FlatStorage};
+use super::grapheme::Grapheme;
+use super::FlatStorage;
+use crate::model::grid::cell::Flags;
+use crate::model::grid::row::Row;
 
 pub fn assert_rows_equal(actual: &[Row], expected: &[Row]) {
     assert_eq!(

@@ -4,28 +4,27 @@ use std::sync::Arc;
 
 use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
 use pathfinder_color::ColorU;
-use warp_core::ui::{builder::CHECK_SVG_PATH, theme::color::internal_colors};
-use warp_editor::{
-    content::text::{
-        BlockHeaderSize, BlockType as ContentBlockType, BufferBlockStyle, CodeBlockType,
-    },
-    render::model::{
-        BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle, InlineCodeStyle,
-        ParagraphStyles, RichTextStyles, TableStyle, PARAGRAPH_MIN_HEIGHT,
-    },
+use warp_core::ui::builder::CHECK_SVG_PATH;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::text::{
+    BlockHeaderSize, BlockType as ContentBlockType, BufferBlockStyle, CodeBlockType,
+};
+use warp_editor::render::model::{
+    BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle, InlineCodeStyle,
+    ParagraphStyles, RichTextStyles, TableStyle, PARAGRAPH_MIN_HEIGHT,
 };
 use warp_util::user_input::UserInput;
-use warpui::{elements::Border, fonts::FamilyId, ui_components::checkbox::HOVER_BACKGROUND_COLOR};
+use warpui::elements::Border;
+use warpui::fonts::FamilyId;
+use warpui::ui_components::checkbox::HOVER_BACKGROUND_COLOR;
 
-use crate::{
-    appearance::Appearance,
-    notebooks::editor::embedded_item::EmbeddedWorkflow,
-    settings::{derived_notebook_font_size, FontSettings},
-    themes::theme::Fill,
-    ui_components::icons::Icon,
-    util::color::{ContrastingColor, MinimumAllowedContrast},
-    workflows::{CloudWorkflow, WorkflowSource, WorkflowType},
-};
+use crate::appearance::Appearance;
+use crate::notebooks::editor::embedded_item::EmbeddedWorkflow;
+use crate::settings::{derived_notebook_font_size, FontSettings};
+use crate::themes::theme::Fill;
+use crate::ui_components::icons::Icon;
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
+use crate::workflows::{CloudWorkflow, WorkflowSource, WorkflowType};
 
 mod block_insertion_menu;
 mod embedded_item;

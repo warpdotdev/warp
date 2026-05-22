@@ -1661,6 +1661,7 @@ jobs:
 
             Follow the workflow in .agents/skills/changelog-draft/SKILL.md exactly.
             Make sure to produce both output files: changelog-draft.md and changelog-draft.json.
+            The release workflow may run from warpdotdev/warp-internal. When fetching PR data, pass the checked-out repository ("${{ github.repository }}") to fetch_prs.py and rely on the script's repo-sync normalization to resolve public warpdotdev/warp PR numbers, URLs, and authors. The script intentionally omits non-repo-sync PRs from warp-internal because they are private internal changes. Do not infer or synthesize public PR links manually.
 
             After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
 

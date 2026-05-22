@@ -1,14 +1,15 @@
-use super::{Element, Point};
-use crate::{
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    event::DispatchedEvent,
-    image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache},
-    AfterLayoutContext, AppContext, EventContext, LayoutContext, PaintContext, SingletonEntity,
-    SizeConstraint,
-};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+
+use super::{Element, Point};
+use crate::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use crate::event::DispatchedEvent;
+use crate::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
+use crate::{
+    AfterLayoutContext, AppContext, EventContext, LayoutContext, PaintContext, SingletonEntity,
+    SizeConstraint,
+};
 
 /// An element that renders a monochrome icon. This differs from `Svg` in that it sets the color dynamically
 /// instead of statically from the SVG itself.

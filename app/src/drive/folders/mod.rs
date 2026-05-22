@@ -1,28 +1,23 @@
 use std::sync::Arc;
 
+use anyhow::Result;
+use async_trait::async_trait;
+// Re-exported from warp_server_client.
+pub use warp_server_client::ids::FolderId;
+
 use super::items::folder::WarpDriveFolder;
 use super::items::WarpDriveItem;
 use super::CloudObjectTypeAndId;
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    appearance::Appearance,
-    cloud_object::{
-        CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Revision, Space,
-        UpdateCloudObjectResult,
-    },
-    persistence::ModelEvent,
-    server::{
-        ids::{ServerId, SyncId},
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
+use crate::appearance::Appearance;
+use crate::cloud_object::{
+    CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
+    GenericCloudObject, GenericServerObject, ObjectType, Revision, Space, UpdateCloudObjectResult,
 };
-use anyhow::Result;
-use async_trait::async_trait;
-
-// Re-exported from warp_server_client.
-pub use warp_server_client::ids::FolderId;
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
 
 /// The model for a `CloudFolder`.
 #[derive(Clone, Debug, PartialEq)]

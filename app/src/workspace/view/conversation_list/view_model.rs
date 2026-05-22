@@ -1,10 +1,11 @@
+use fuzzy_match::match_indices_case_insensitive;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ArtifactFilter, CreatedOnFilter,
     CreatorFilter, OwnerFilter, SourceFilter, StatusFilter,
 };
-use fuzzy_match::match_indices_case_insensitive;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 pub struct ConversationListViewModelEvent;
 
