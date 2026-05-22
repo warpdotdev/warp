@@ -7,6 +7,10 @@ use editing::sort_entries_for_file_tree;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+use remote_upload::{
+    build_local_upload_manifest, upload_manifest, FileTreeLocalFileDropTarget, LocalUploadManifest,
+    RemoteUploadTarget,
+};
 use render::RenderState;
 use repo_metadata::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntryState, FileTreeFileMetadata,
@@ -20,6 +24,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::{send_telemetry_from_ctx, HostId};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
@@ -31,6 +36,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
+use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
 use warpui::{
@@ -51,6 +57,7 @@ use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
 use crate::ui_components::icons::Icon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
+use crate::util::bindings::CustomAction;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::{
@@ -64,6 +71,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 mod editing;
+mod remote_upload;
 mod render;
 
 const REMOTE_TEXT: &str = "The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.";
@@ -139,6 +147,15 @@ pub enum FileTreeAction {
         id: FileTreeIdentifier,
         terminal_view: WeakViewHandle<TerminalView>,
     },
+    PasteLocalFiles,
+    LocalFilesDragged {
+        id: FileTreeIdentifier,
+    },
+    LocalFileDragExited,
+    LocalFilesDropped {
+        id: FileTreeIdentifier,
+        paths: Vec<String>,
+    },
 }
 
 pub fn init(app: &mut AppContext) {
@@ -166,6 +183,24 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new(
             "enter",
             FileTreeAction::ExecuteSelectedItem,
+            id!(FileTreeView::ui_name()),
+        ),
+        FixedBinding::custom(
+            CustomAction::Paste,
+            FileTreeAction::PasteLocalFiles,
+            "Paste",
+            id!(FileTreeView::ui_name()),
+        ),
+        FixedBinding::standard(
+            StandardAction::Paste,
+            FileTreeAction::PasteLocalFiles,
+            id!(FileTreeView::ui_name()),
+        ),
+        #[cfg(windows)]
+        FixedBinding::custom(
+            CustomAction::WindowsPaste,
+            FileTreeAction::PasteLocalFiles,
+            "Paste",
             id!(FileTreeView::ui_name()),
         ),
     ]);
@@ -288,6 +323,8 @@ pub struct FileTreeView {
     /// the target is selected by the user or when the target root stops
     /// being displayed.
     pending_focus_target: Option<PendingFocusTarget>,
+    /// Remote file-tree item currently highlighted as a local OS file drop target.
+    local_file_drop_target: Option<FileTreeIdentifier>,
 }
 
 /// Directory the file tree wants to focus once its entry becomes available.
@@ -703,6 +740,7 @@ impl FileTreeView {
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
+            local_file_drop_target: None,
         };
 
         picker
@@ -1179,7 +1217,7 @@ impl FileTreeView {
             self.pending_focus_target = None;
             return false;
         }
-        let Some(id) = self.find_directory_header_id(&target.root, &target.path) else {
+        let Some(id) = self.find_item_id_by_path(&target.root, &target.path) else {
             return false;
         };
         self.selected_item = Some(id.clone());
@@ -1236,18 +1274,17 @@ impl FileTreeView {
         }
     }
 
-    /// Finds the `FileTreeIdentifier` for the directory header at
-    /// `directory_path` inside `root`, if it exists in the root's
-    /// flattened items.
-    fn find_directory_header_id(
+    fn find_item_id_by_path(
         &self,
         root: &StandardizedPath,
-        directory_path: &StandardizedPath,
+        path: &StandardizedPath,
     ) -> Option<FileTreeIdentifier> {
         let root_dir = self.root_directories.get(root)?;
-        let (index, _) = root_dir.items.iter().enumerate().find(|(_, item)| {
-            matches!(item, FileTreeItem::DirectoryHeader { .. }) && item.path() == directory_path
-        })?;
+        let (index, _) = root_dir
+            .items
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.path() == path)?;
         Some(FileTreeIdentifier {
             root: root.clone(),
             index,
@@ -1977,7 +2014,8 @@ impl FileTreeView {
             return Empty::new().finish();
         };
 
-        let is_selected = self.selected_item.as_ref() == Some(id);
+        let is_drop_target = self.local_file_drop_target.as_ref() == Some(id);
+        let is_selected = self.selected_item.as_ref() == Some(id) || is_drop_target;
         let is_expanded = self.is_item_expanded(&id.root, item);
         let render_state = item.to_render_state(is_expanded, appearance);
 
@@ -1999,7 +2037,11 @@ impl FileTreeView {
         let id_for_drop = id.clone();
         let id_for_drag = id.clone();
         let hoverable = Hoverable::new(render_state.mouse_state.clone(), move |mouse_state| {
-            let item_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
+            let item_highlight_state = if is_drop_target {
+                ItemHighlightState::Selected
+            } else {
+                ItemHighlightState::new(is_selected, mouse_state)
+            };
             Self::render_item_with_hover(
                 render_state,
                 appearance,
@@ -2078,7 +2120,13 @@ impl FileTreeView {
             .with_keep_original_visible(true)
             .finish();
 
-        SavePosition::new(draggable, item_position_id.as_str()).finish()
+        let local_file_drop_target = Box::new(FileTreeLocalFileDropTarget::new(
+            draggable,
+            id.clone(),
+            self.is_remote_upload_drop_candidate(id),
+        ));
+
+        SavePosition::new(local_file_drop_target, item_position_id.as_str()).finish()
     }
 
     fn selected_item_std_path(&self) -> Option<StandardizedPath> {
@@ -2097,6 +2145,277 @@ impl FileTreeView {
         item.path()
             .strip_prefix(&repository_root)
             .map(PathBuf::from)
+    }
+
+    fn remote_upload_target_directory_for_id(
+        &self,
+        id: &FileTreeIdentifier,
+    ) -> Option<StandardizedPath> {
+        let root_dir = self.root_directories.get(&id.root)?;
+        if !root_dir.is_remote() {
+            return None;
+        }
+        let item = root_dir.items.get(id.index)?;
+        match item {
+            FileTreeItem::DirectoryHeader { directory, .. } => Some((*directory.path).clone()),
+            FileTreeItem::File { metadata, .. } => metadata.path.parent(),
+        }
+    }
+
+    fn is_remote_upload_drop_candidate(&self, id: &FileTreeIdentifier) -> bool {
+        FeatureFlag::SshRemoteServer.is_enabled()
+            && self.remote_upload_target_directory_for_id(id).is_some()
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn remote_upload_target_for_id(
+        &self,
+        id: &FileTreeIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<RemoteUploadTarget> {
+        use crate::remote_server::manager::RemoteServerManager;
+
+        if !FeatureFlag::SshRemoteServer.is_enabled() {
+            return None;
+        }
+
+        let root_dir = self.root_directories.get(&id.root)?;
+        let host_id = root_dir.remote_host_id.clone()?;
+        let target_dir = self.remote_upload_target_directory_for_id(id)?;
+        let sessions = RemoteServerManager::as_ref(ctx).sessions_for_host(&host_id)?;
+        let session_id = *sessions.iter().next()?;
+
+        Some(RemoteUploadTarget {
+            host_id,
+            session_id,
+            root: id.root.clone(),
+            repo_root: root_dir.entry.root_directory().to_string(),
+            target_dir,
+        })
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn paste_local_files_to_remote(&mut self, ctx: &mut ViewContext<Self>) {
+        let paths = ctx.clipboard().read().paths.unwrap_or_default();
+        if paths.is_empty() {
+            return;
+        }
+
+        let Some(id) = self.selected_item.clone() else {
+            return;
+        };
+
+        self.begin_remote_upload_from_paths(id, paths, ctx);
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn paste_local_files_to_remote(&mut self, _ctx: &mut ViewContext<Self>) {}
+
+    #[cfg(feature = "local_fs")]
+    fn begin_remote_upload_from_paths(
+        &mut self,
+        id: FileTreeIdentifier,
+        paths: Vec<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::manager::RemoteServerManager;
+
+        let Some(target) = self.remote_upload_target_for_id(&id, ctx) else {
+            return;
+        };
+        let Some(client) = RemoteServerManager::as_ref(ctx)
+            .client_for_host(&target.host_id)
+            .cloned()
+        else {
+            Self::show_remote_upload_error_toast("Remote server is not connected.", ctx);
+            return;
+        };
+
+        self.select_id(&id, ctx);
+        let local_paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        Self::show_remote_upload_status_toast("Preparing remote upload...", ctx);
+
+        let target_for_preflight = target.clone();
+        ctx.spawn(
+            async move {
+                let manifest = build_local_upload_manifest(local_paths)?;
+                let preflight = client
+                    .preflight_remote_upload(
+                        target_for_preflight.repo_root.clone(),
+                        target_for_preflight.target_dir.to_string(),
+                        manifest.proto_entries(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>((client, target_for_preflight, manifest, preflight.conflicts))
+            },
+            move |view, result, ctx| match result {
+                Ok((client, target, manifest, conflicts)) if conflicts.is_empty() => {
+                    view.start_prepared_remote_upload(client, target, manifest, false, ctx);
+                }
+                Ok((client, target, manifest, conflicts)) => {
+                    view.confirm_remote_upload_replacement(
+                        client, target, manifest, conflicts, ctx,
+                    );
+                }
+                Err(message) => {
+                    Self::show_remote_upload_error_toast(&message, ctx);
+                }
+            },
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn begin_remote_upload_from_paths(
+        &mut self,
+        _id: FileTreeIdentifier,
+        _paths: Vec<String>,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn confirm_remote_upload_replacement(
+        &mut self,
+        client: Arc<remote_server::client::RemoteServerClient>,
+        target: RemoteUploadTarget,
+        manifest: LocalUploadManifest,
+        conflicts: Vec<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conflict_count = conflicts.len();
+        let sample = conflicts
+            .iter()
+            .take(5)
+            .map(|path| format!("• {path}"))
+            .join("\n");
+        let more = conflict_count
+            .checked_sub(5)
+            .filter(|count| *count > 0)
+            .map(|count| format!("\n…and {count} more"))
+            .unwrap_or_default();
+        let info_text = format!(
+            "{conflict_count} item(s) already exist in the remote folder. Replacing will overwrite matching files and merge directories.\n\n{sample}{more}"
+        );
+
+        ctx.show_native_platform_modal(AlertDialogWithCallbacks::for_view(
+            "Replace existing remote files?",
+            info_text,
+            vec![
+                ModalButton::for_view("Replace", move |view: &mut FileTreeView, ctx| {
+                    view.start_prepared_remote_upload(client, target, manifest, true, ctx);
+                }),
+                ModalButton::for_view("Cancel", |_view, _ctx| {}),
+            ],
+            |_view, _ctx| {},
+        ));
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn start_prepared_remote_upload(
+        &mut self,
+        client: Arc<remote_server::client::RemoteServerClient>,
+        target: RemoteUploadTarget,
+        manifest: LocalUploadManifest,
+        overwrite: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let upload_id = uuid::Uuid::new_v4().to_string();
+        let first_relative_path = manifest.first_relative_path().map(ToOwned::to_owned);
+        let file_count = manifest.file_count;
+        let directory_count = manifest.directory_count;
+        let total_bytes = manifest.total_bytes;
+        let failure_count = manifest.failure_count();
+        Self::show_remote_upload_status_toast(
+            &format!(
+                "Uploading {file_count} file(s), {directory_count} folder(s) ({})...",
+                format_upload_bytes(total_bytes)
+            ),
+            ctx,
+        );
+
+        let target_for_refresh = target.clone();
+        ctx.spawn(
+            async move { upload_manifest(client, upload_id, target, manifest, overwrite).await },
+            move |view, result, ctx| match result {
+                Ok(result) => {
+                    view.refresh_remote_upload_target(
+                        &target_for_refresh,
+                        first_relative_path.as_deref(),
+                        ctx,
+                    );
+                    Self::show_remote_upload_status_toast(
+                        &format!(
+                            "Uploaded {} file(s), {} folder(s) to the remote project.{}",
+                            result.file_count,
+                            result.directory_count,
+                            if failure_count == 0 {
+                                String::new()
+                            } else {
+                                format!(" {failure_count} item(s) could not be uploaded.")
+                            }
+                        ),
+                        ctx,
+                    );
+                }
+                Err(message) => {
+                    Self::show_remote_upload_error_toast(&message, ctx);
+                }
+            },
+        );
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn refresh_remote_upload_target(
+        &mut self,
+        target: &RemoteUploadTarget,
+        first_relative_path: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::manager::RemoteServerManager;
+
+        if let Some(root_dir) = self.root_directories.get_mut(&target.root) {
+            root_dir.expanded_folders.insert(target.target_dir.clone());
+        }
+        if let Some(first_relative_path) = first_relative_path {
+            self.pending_focus_target = Some(PendingFocusTarget {
+                root: target.root.clone(),
+                path: target.target_dir.join(first_relative_path),
+                scrolled: false,
+            });
+        }
+
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.load_remote_repo_metadata_directory(
+                target.session_id,
+                target.repo_root.clone(),
+                target.target_dir.to_string(),
+                ctx,
+            );
+        });
+        ctx.notify();
+    }
+
+    fn show_remote_upload_status_toast(message: &str, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(message.to_string()),
+                window_id,
+                ctx,
+            );
+        });
+    }
+
+    fn show_remote_upload_error_toast(message: &str, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(message.to_string()),
+                window_id,
+                ctx,
+            );
+        });
     }
 
     /// Selects the first item if no item is selected.
@@ -3171,8 +3490,47 @@ impl TypedActionView for FileTreeView {
                     view.handle_file_tree_drop_on_active_command(&file_path, ctx);
                 });
             }
+            FileTreeAction::PasteLocalFiles => {
+                self.paste_local_files_to_remote(ctx);
+            }
+            FileTreeAction::LocalFilesDragged { id } => {
+                if self.is_remote_upload_drop_candidate(id) {
+                    self.local_file_drop_target = Some(id.clone());
+                    ctx.notify();
+                }
+            }
+            FileTreeAction::LocalFileDragExited => {
+                if self.local_file_drop_target.take().is_some() {
+                    ctx.notify();
+                }
+            }
+            FileTreeAction::LocalFilesDropped { id, paths } => {
+                self.local_file_drop_target = None;
+                self.begin_remote_upload_from_paths(id.clone(), paths.clone(), ctx);
+            }
         }
     }
 }
+
+fn format_upload_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.;
+    const MB: f64 = KB * 1024.;
+    const GB: f64 = MB * 1024.;
+
+    let bytes = bytes as f64;
+    if bytes >= GB {
+        let value = bytes / GB;
+        format!("{value:.1} GB")
+    } else if bytes >= MB {
+        let value = bytes / MB;
+        format!("{value:.1} MB")
+    } else if bytes >= KB {
+        let value = bytes / KB;
+        format!("{value:.1} KB")
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
 #[cfg(test)]
 mod view_tests;

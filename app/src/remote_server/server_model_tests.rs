@@ -5,9 +5,14 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
-use super::super::proto::{Authenticate, Initialize};
+use super::super::proto::{
+    Authenticate, BeginRemoteUpload, Initialize, RemoteUploadManifestEntry, UploadRemoteFileChunk,
+};
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{PendingFileOps, ServerModel};
+use super::{
+    append_remote_upload_chunk, build_remote_upload_session, complete_remote_upload_session,
+    remote_upload_preflight, PendingFileOps, ServerModel,
+};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
@@ -21,6 +26,7 @@ fn test_model(app: &mut App) -> ServerModel {
         host_id: "test-host-id".to_string(),
         executors: HashMap::new(),
         pending_file_ops: PendingFileOps::new(),
+        remote_upload_sessions: HashMap::new(),
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
         buffers: ServerBufferTracker::new(),
         diff_states: app.add_model(|_| RemoteDiffStateManager::new()),
@@ -183,4 +189,180 @@ fn diff_states_starts_empty() {
         });
         assert!(empty);
     });
+}
+
+#[test]
+fn remote_upload_preflight_reports_file_conflicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let target = repo.join("src");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("main.bin"), [1, 2, 3]).unwrap();
+
+    let result = remote_upload_preflight(
+        repo.to_str().unwrap(),
+        target.to_str().unwrap(),
+        &[RemoteUploadManifestEntry {
+            relative_path: "main.bin".to_string(),
+            is_directory: false,
+            size: 4,
+            unix_mode: None,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(result.conflicts, vec!["main.bin"]);
+    assert_eq!(result.file_count, 1);
+    assert_eq!(result.total_bytes, 4);
+}
+
+#[test]
+fn remote_upload_preflight_rejects_path_traversal() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+
+    let error = remote_upload_preflight(
+        repo.to_str().unwrap(),
+        repo.to_str().unwrap(),
+        &[RemoteUploadManifestEntry {
+            relative_path: "../outside.bin".to_string(),
+            is_directory: false,
+            size: 1,
+            unix_mode: None,
+        }],
+    )
+    .expect_err("path traversal should be rejected");
+
+    assert!(error.contains("cannot escape"));
+}
+
+#[tokio::test]
+async fn remote_upload_writes_binary_chunks_and_cleans_staging_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let target = repo.join("src");
+    std::fs::create_dir_all(&target).unwrap();
+
+    let upload_id = "upload-test".to_string();
+    let (_upload_id, session) = build_remote_upload_session(BeginRemoteUpload {
+        upload_id: upload_id.clone(),
+        repo_path: repo.to_str().unwrap().to_string(),
+        target_dir: target.to_str().unwrap().to_string(),
+        entries: vec![RemoteUploadManifestEntry {
+            relative_path: "nested/main.bin".to_string(),
+            is_directory: false,
+            size: 4,
+            unix_mode: None,
+        }],
+        overwrite: false,
+    })
+    .await
+    .unwrap();
+
+    let temp_dir = session.temp_dir.clone();
+    append_remote_upload_chunk(
+        session.clone(),
+        UploadRemoteFileChunk {
+            upload_id,
+            relative_path: "nested/main.bin".to_string(),
+            offset: 0,
+            data: vec![0, 159],
+        },
+    )
+    .await
+    .unwrap();
+    append_remote_upload_chunk(
+        session.clone(),
+        UploadRemoteFileChunk {
+            upload_id: "upload-test".to_string(),
+            relative_path: "nested/main.bin".to_string(),
+            offset: 2,
+            data: vec![146, 150],
+        },
+    )
+    .await
+    .unwrap();
+
+    let result = complete_remote_upload_session(session).await.unwrap();
+
+    assert_eq!(result.file_count, 1);
+    assert_eq!(
+        std::fs::read(target.join("nested/main.bin")).unwrap(),
+        vec![0, 159, 146, 150]
+    );
+    assert!(!temp_dir.exists());
+}
+
+#[tokio::test]
+async fn remote_upload_replace_flow_overwrites_existing_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let target = repo.join("src");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("main.bin"), [9]).unwrap();
+
+    let upload_id = "replace-test".to_string();
+    let (_upload_id, session) = build_remote_upload_session(BeginRemoteUpload {
+        upload_id: upload_id.clone(),
+        repo_path: repo.to_str().unwrap().to_string(),
+        target_dir: target.to_str().unwrap().to_string(),
+        entries: vec![RemoteUploadManifestEntry {
+            relative_path: "main.bin".to_string(),
+            is_directory: false,
+            size: 1,
+            unix_mode: None,
+        }],
+        overwrite: true,
+    })
+    .await
+    .unwrap();
+
+    append_remote_upload_chunk(
+        session.clone(),
+        UploadRemoteFileChunk {
+            upload_id,
+            relative_path: "main.bin".to_string(),
+            offset: 0,
+            data: vec![7],
+        },
+    )
+    .await
+    .unwrap();
+
+    let result = complete_remote_upload_session(session).await.unwrap();
+
+    assert_eq!(result.file_count, 1);
+    assert_eq!(std::fs::read(target.join("main.bin")).unwrap(), vec![7]);
+}
+
+#[tokio::test]
+async fn remote_upload_creates_empty_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let target = repo.join("src");
+    std::fs::create_dir_all(&target).unwrap();
+
+    let (_upload_id, session) = build_remote_upload_session(BeginRemoteUpload {
+        upload_id: "empty-file-test".to_string(),
+        repo_path: repo.to_str().unwrap().to_string(),
+        target_dir: target.to_str().unwrap().to_string(),
+        entries: vec![RemoteUploadManifestEntry {
+            relative_path: "empty.bin".to_string(),
+            is_directory: false,
+            size: 0,
+            unix_mode: None,
+        }],
+        overwrite: false,
+    })
+    .await
+    .unwrap();
+
+    let result = complete_remote_upload_session(session).await.unwrap();
+
+    assert_eq!(result.file_count, 1);
+    assert_eq!(
+        std::fs::read(target.join("empty.bin")).unwrap(),
+        Vec::<u8>::new()
+    );
 }

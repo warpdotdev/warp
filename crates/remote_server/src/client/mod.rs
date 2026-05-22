@@ -15,16 +15,18 @@ use crate::codebase_index_proto::{
 };
 use crate::proto::{
     client_message, get_branches_response, get_fragment_metadata_from_hash_response,
-    server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    CodebaseIndexLimits, CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta,
+    server_message, Abort, Authenticate, BeginRemoteUpload, BeginRemoteUploadSuccess, BranchInfo,
+    BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseResyncMode,
+    CompleteRemoteUpload, CompleteRemoteUploadSuccess, DeleteFile, DiffMode, DiffStateFileDelta,
     DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode,
     FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
     IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, PreflightRemoteUpload,
+    PreflightRemoteUploadSuccess, ReadFileContextRequest, ReadFileContextResponse,
+    RemoteUploadManifestEntry, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
     ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
-    UploadHandoffSnapshotResponse, WriteFile,
+    UploadHandoffSnapshotResponse, UploadRemoteFileChunk, UploadRemoteFileChunkSuccess, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -657,6 +659,192 @@ impl RemoteServerClient {
                 safe_error!(
                     safe: ("Remote server unexpected response for WriteFile"),
                     full: ("Remote server unexpected response for WriteFile: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Checks whether a remote upload would replace existing files.
+    pub async fn preflight_remote_upload(
+        &self,
+        repo_path: String,
+        target_dir: String,
+        entries: Vec<RemoteUploadManifestEntry>,
+    ) -> Result<PreflightRemoteUploadSuccess, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::PreflightRemoteUpload(
+                PreflightRemoteUpload {
+                    repo_path,
+                    target_dir,
+                    entries,
+                },
+            )),
+        };
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::RemoteUpload,
+            )
+            .await?;
+        match response.message {
+            Some(server_message::Message::PreflightRemoteUploadResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::preflight_remote_upload_response::Result::Success(
+                        success,
+                    )) => Ok(success),
+                    Some(crate::proto::preflight_remote_upload_response::Result::Error(e)) => {
+                        Err(ClientError::FileOperationFailed(e.message))
+                    }
+                    None => Err(ClientError::UnexpectedResponse),
+                }
+            }
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for PreflightRemoteUpload"),
+                    full: ("Remote server unexpected response for PreflightRemoteUpload: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Starts a binary-safe remote upload session.
+    pub async fn begin_remote_upload(
+        &self,
+        upload_id: String,
+        repo_path: String,
+        target_dir: String,
+        entries: Vec<RemoteUploadManifestEntry>,
+        overwrite: bool,
+    ) -> Result<BeginRemoteUploadSuccess, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::BeginRemoteUpload(
+                BeginRemoteUpload {
+                    upload_id,
+                    repo_path,
+                    target_dir,
+                    entries,
+                    overwrite,
+                },
+            )),
+        };
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::RemoteUpload,
+            )
+            .await?;
+        match response.message {
+            Some(server_message::Message::BeginRemoteUploadResponse(resp)) => match resp.result {
+                Some(crate::proto::begin_remote_upload_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(crate::proto::begin_remote_upload_response::Result::Error(e)) => {
+                    Err(ClientError::FileOperationFailed(e.message))
+                }
+                None => Err(ClientError::UnexpectedResponse),
+            },
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for BeginRemoteUpload"),
+                    full: ("Remote server unexpected response for BeginRemoteUpload: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Appends one byte chunk to an active remote upload.
+    pub async fn upload_remote_file_chunk(
+        &self,
+        upload_id: String,
+        relative_path: String,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<UploadRemoteFileChunkSuccess, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UploadRemoteFileChunk(
+                UploadRemoteFileChunk {
+                    upload_id,
+                    relative_path,
+                    offset,
+                    data,
+                },
+            )),
+        };
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::RemoteUpload,
+            )
+            .await?;
+        match response.message {
+            Some(server_message::Message::UploadRemoteFileChunkResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::upload_remote_file_chunk_response::Result::Success(
+                        success,
+                    )) => Ok(success),
+                    Some(crate::proto::upload_remote_file_chunk_response::Result::Error(e)) => {
+                        Err(ClientError::FileOperationFailed(e.message))
+                    }
+                    None => Err(ClientError::UnexpectedResponse),
+                }
+            }
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for UploadRemoteFileChunk"),
+                    full: ("Remote server unexpected response for UploadRemoteFileChunk: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Commits an active remote upload into final destination paths.
+    pub async fn complete_remote_upload(
+        &self,
+        upload_id: String,
+    ) -> Result<CompleteRemoteUploadSuccess, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::CompleteRemoteUpload(
+                CompleteRemoteUpload { upload_id },
+            )),
+        };
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::RemoteUpload,
+            )
+            .await?;
+        match response.message {
+            Some(server_message::Message::CompleteRemoteUploadResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::complete_remote_upload_response::Result::Success(
+                        success,
+                    )) => Ok(success),
+                    Some(crate::proto::complete_remote_upload_response::Result::Error(e)) => {
+                        Err(ClientError::FileOperationFailed(e.message))
+                    }
+                    None => Err(ClientError::UnexpectedResponse),
+                }
+            }
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for CompleteRemoteUpload"),
+                    full: ("Remote server unexpected response for CompleteRemoteUpload: response={other:?}")
                 );
                 Err(ClientError::UnexpectedResponse)
             }
