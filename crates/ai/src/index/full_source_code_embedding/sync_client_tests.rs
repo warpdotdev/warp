@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use futures::executor::block_on;
+use virtual_fs::VirtualFS;
 
 use super::batch_leaves_by_size;
 use crate::index::full_source_code_embedding::merkle_tree::{construct_test_merkle_tree, NodeLens};
-
-use virtual_fs::VirtualFS;
 
 /// Collect all leaf nodes from a merkle tree by walking it recursively.
 fn collect_leaves<'a>(node: NodeLens<'a>) -> Vec<NodeLens<'a>> {

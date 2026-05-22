@@ -1,22 +1,16 @@
 use std::time::Duration;
 
-use warpui::{
-    AppContext, Element, SizeConstraint,
-    elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text},
-    geometry::vector::vec2f,
-};
-
-use crate::{
-    editor::RunnableCommandModel,
-    extract_block,
-    render::{
-        BLOCK_FOOTER_HEIGHT,
-        element::paint::{CursorData, CursorDisplayType},
-        model::{BlockItem, RenderState, bounds, viewport::ViewportItem},
-    },
-};
+use warpui::elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text};
+use warpui::geometry::vector::vec2f;
+use warpui::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
+use crate::editor::RunnableCommandModel;
+use crate::extract_block;
+use crate::render::BLOCK_FOOTER_HEIGHT;
+use crate::render::element::paint::{CursorData, CursorDisplayType};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState, bounds};
 const MERMAID_RENDER_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RenderableMermaidDiagram {

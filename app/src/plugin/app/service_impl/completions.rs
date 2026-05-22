@@ -1,6 +1,7 @@
 //! The implementation of `RegisterCommandSignatureService` to be served by the app process to the
 //! plugin host process.
-use std::{fmt, sync::Arc};
+use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use warp_completer::signatures::CommandRegistry;

@@ -1,39 +1,34 @@
-use std::{ops::Range, rc::Rc, sync::MutexGuard};
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::MutexGuard;
 
 use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
 use sum_tree::{Cursor, SeekBias};
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::ClippedScrollStateHandle,
-    units::{IntoLines, IntoPixels, Lines, Pixels},
-    AppContext, ModelHandle,
-};
+use warpui::elements::ClippedScrollStateHandle;
+use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
+use warpui::{AppContext, ModelHandle};
 
-use crate::{
-    ai::blocklist::agent_view::AgentViewDisplayMode,
-    terminal::{input::inline_menu::InlineMenuPositioner, model::index::Point as IndexPoint},
+use super::block_list_element::{
+    GridType, SnackbarHeader, SnackbarHeaderState, SnackbarPoint, VisibleItem,
 };
-use crate::{ai::blocklist::agent_view::AgentViewState, terminal::model::blocks::RichContentItem};
-
+use super::model::block::{Block, BlockSection};
+use super::model::blocks::{
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, SelectionRange,
+    TotalIndex,
+};
+use super::model::selection::SelectionPoint;
+use super::model::terminal_model::{BlockIndex, BlockSortDirection, WithinBlock};
+use super::view::BlockVisibilityMode;
 use super::{
-    block_list_element::{
-        GridType, SnackbarHeader, SnackbarHeaderState, SnackbarPoint, VisibleItem,
-    },
     height_in_range_approx, heights_approx_gt, heights_approx_gte, heights_approx_lt,
-    heights_approx_lte,
-    model::{
-        block::{Block, BlockSection},
-        blocks::{
-            BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint,
-            SelectionRange, TotalIndex,
-        },
-        selection::SelectionPoint,
-        terminal_model::{BlockIndex, BlockSortDirection, WithinBlock},
-    },
-    view::BlockVisibilityMode,
-    SizeInfo, HEIGHT_FUDGE_FACTOR_LINES,
+    heights_approx_lte, SizeInfo, HEIGHT_FUDGE_FACTOR_LINES,
 };
+use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
+use crate::terminal::input::inline_menu::InlineMenuPositioner;
+use crate::terminal::model::blocks::RichContentItem;
+use crate::terminal::model::index::Point as IndexPoint;
 
 /// Wraps a scroll position for the purposes of centralizing update logic.
 pub struct ScrollState {

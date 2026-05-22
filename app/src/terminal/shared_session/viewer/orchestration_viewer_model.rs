@@ -4,8 +4,8 @@
 //!
 //! 1. Calls `GET /agent/runs?ancestor_run_id={task_id}` to discover child agents.
 //! 2. Creates a local conversation for each child via [`BlocklistAIHistoryModel`]
-//!    marked as `is_viewing_shared_session = true` so [`crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel`]
-//!    does not report viewer-side status transitions back to the server.
+//!    marked as `is_viewing_shared_session = true` so server-side status
+//!    reporters do not echo viewer-side state back to the server.
 //! 3. Polls the children list periodically (~5s) until all reach a terminal
 //!    state, updating each child conversation's [`ConversationStatus`] when the
 //!    server-side state changes.
@@ -19,10 +19,6 @@
 //! 5. Pill clicks navigate via `SwapPaneToConversation` (the existing
 //!    local-orchestration mechanism), swapping the parent pane for the
 //!    hidden child pane.
-//!
-//! The model itself owns no `Network`s and does not subscribe to history
-//! events for navigation; it is purely a children poller + materialization
-//! trigger.
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -62,7 +58,8 @@ struct ChildAgentEntry {
 /// Owns child discovery + status polling for a shared session viewer of an
 /// orchestrated session.
 pub struct OrchestrationViewerModel {
-    /// Orchestrator run id; used as the `ancestor_run_id` fetch filter.
+    /// `ancestor_run_id` filter for REST fetches: the orchestrator's own
+    /// run id.
     parent_task_id: AmbientAgentTaskId,
     /// Owns the child conversations and anchors the orchestrator lookup.
     terminal_view_id: EntityId,
@@ -76,6 +73,10 @@ pub struct OrchestrationViewerModel {
     /// Bumped before each fetch; stale responses (older generation) are
     /// dropped so a slow timer-fired fetch can't clobber a fresher kick.
     fetch_generation: u64,
+    /// Set when the most recent fetch returned no children; we wait for
+    /// an `AppendedExchange` on the orchestrator before polling again.
+    /// Distinct from the in-flight state (`polling_handle = None`).
+    idle_due_to_no_children: bool,
 }
 
 impl Entity for OrchestrationViewerModel {
@@ -97,6 +98,7 @@ impl OrchestrationViewerModel {
         // 30s idle poll.
         ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
             me.maybe_kick_polling(event, ctx);
+            me.maybe_backfill_parent_agent_ids(event, ctx);
         });
 
         let mut model = Self {
@@ -106,6 +108,7 @@ impl OrchestrationViewerModel {
             children: HashMap::new(),
             polling_handle: None,
             fetch_generation: 0,
+            idle_due_to_no_children: false,
         };
 
         // Each fetch reschedules itself via its response callback.
@@ -114,12 +117,21 @@ impl OrchestrationViewerModel {
     }
 
     /// Schedules the next poll: fast cadence while any child is
-    /// non-terminal, slow cadence once all are terminal.
+    /// non-terminal, slow once all are terminal. Skipped while
+    /// [`Self::idle_due_to_no_children`] is set; [`Self::maybe_kick_polling`]
+    /// resumes on the next orchestrator `AppendedExchange`.
     fn schedule_next_poll(&mut self, ctx: &mut ModelContext<Self>) {
         // `SpawnedFutureHandle` doesn't abort on drop, so abort
         // explicitly to avoid stacking parallel timer chains.
         if let Some(prior) = self.polling_handle.take() {
             prior.abort();
+        }
+
+        // Stay idle until an `AppendedExchange` on the orchestrator wakes
+        // us up. `apply_children_fetch` is responsible for setting this
+        // flag when an empty descendant list comes back.
+        if self.idle_due_to_no_children {
+            return;
         }
 
         let all_terminal = !self.children.is_empty()
@@ -142,10 +154,11 @@ impl OrchestrationViewerModel {
         self.polling_handle = Some(handle);
     }
 
-    /// Tightens polling on `AppendedExchange` for a tracked conversation,
-    /// but only during the idle→active transition — while we're already
-    /// polling fast, every received exchange would otherwise add an
-    /// unnecessary REST request.
+    /// Tightens polling on `AppendedExchange` during the idle→active
+    /// transition, and resumes from `idle_due_to_no_children` on an
+    /// orchestrator-scoped exchange. The idle-resume check runs first
+    /// because it would otherwise be conflated with the
+    /// "fetch in flight" state by the `polling_handle.is_none()` guard.
     fn maybe_kick_polling(
         &mut self,
         event: &BlocklistAIHistoryEvent,
@@ -157,6 +170,24 @@ impl OrchestrationViewerModel {
         else {
             return;
         };
+        let conversation_id = *conversation_id;
+        let is_orchestrator = self.find_parent_conversation_id(ctx) == Some(conversation_id);
+
+        // Resume from idle-due-to-no-children. Only orchestrator-scoped
+        // exchanges count: child events are ignored because we have no
+        // tracked children to update yet, and an unrelated conversation's
+        // exchange does not imply this orchestrator just spawned a child.
+        if self.idle_due_to_no_children {
+            if is_orchestrator {
+                self.idle_due_to_no_children = false;
+                if let Some(prior) = self.polling_handle.take() {
+                    prior.abort();
+                }
+                self.fetch_children(ctx);
+            }
+            return;
+        }
+
         let all_terminal = !self.children.is_empty()
             && self
                 .children
@@ -165,13 +196,12 @@ impl OrchestrationViewerModel {
         if !all_terminal {
             return;
         }
-        // `polling_handle = None` means a kick fetch is already in flight;
-        // skipping here prevents pile-up when exchanges arrive in bursts.
+        // `polling_handle = None` here means a kick fetch is already in
+        // flight (the idle-due-to-no-children case is handled above);
+        // skipping prevents pile-up when exchanges arrive in bursts.
         if self.polling_handle.is_none() {
             return;
         }
-        let conversation_id = *conversation_id;
-        let is_orchestrator = self.find_parent_conversation_id(ctx) == Some(conversation_id);
         let is_tracked_child = self
             .children
             .values()
@@ -183,6 +213,52 @@ impl OrchestrationViewerModel {
             prior.abort();
         }
         self.fetch_children(ctx);
+    }
+
+    /// Backfills `parent_agent_id` on viewer-created children once the
+    /// orchestrator receives its server token / run id. First-poll
+    /// children are created with `parent_agent_id = None` because the
+    /// orchestrator hasn't been identified yet; this fixes them up so
+    /// `parent_conversation_id` resolution works.
+    fn maybe_backfill_parent_agent_ids(
+        &mut self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            conversation_id, ..
+        } = event
+        else {
+            return;
+        };
+        let conversation_id = *conversation_id;
+        if self.find_parent_conversation_id(ctx) != Some(conversation_id) {
+            return;
+        }
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        let parent_agent_id = history_handle
+            .as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|c| c.orchestration_agent_id());
+        let Some(parent_agent_id) = parent_agent_id else {
+            return;
+        };
+        let child_conversation_ids: Vec<AIConversationId> = self
+            .children
+            .values()
+            .map(|child| child.conversation_id)
+            .collect();
+        history_handle.update(ctx, |history, _ctx| {
+            for child_id in child_conversation_ids {
+                let Some(child) = history.conversation_mut(&child_id) else {
+                    continue;
+                };
+                if child.parent_agent_id().is_some() {
+                    continue;
+                }
+                child.set_parent_agent_id(parent_agent_id.clone());
+            }
+        });
     }
 
     /// Issues a `GET /agent/runs?ancestor_run_id={parent_task_id}` request
@@ -228,10 +304,10 @@ impl OrchestrationViewerModel {
         );
     }
 
-    /// Consumes a children list response, creating new local conversations
-    /// for previously-unseen children and updating statuses + session ids
-    /// on existing ones. Requests pane materialization for any child whose
-    /// `session_id` is freshly known.
+    /// Consumes a children-list response: creates conversations for new
+    /// children, updates status / session_id on existing ones, and
+    /// requests pane materialization for any child whose `session_id` is
+    /// freshly known.
     fn apply_children_fetch(&mut self, tasks: Vec<AmbientAgentTask>, ctx: &mut ModelContext<Self>) {
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
 
@@ -322,11 +398,23 @@ impl OrchestrationViewerModel {
                 // disambiguates viewer-spawned children downstream.
                 history.set_viewing_shared_session_for_conversation(conversation_id, true);
                 if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                    conversation.set_task_id(task_id);
                     if !fallback_title.is_empty() {
                         conversation.set_fallback_display_title(fallback_title);
                     }
                 }
+                // Stamp the child's `run_id` / `task_id` and populate the
+                // `agent_id_to_conversation_id` index so transcript references
+                // (received-message, send-message, lifecycle blocks) resolve
+                // to this child via `conversation_id_for_agent_id`. Replaces
+                // the earlier `set_task_id` call, which set the conversation
+                // field but never updated the reverse index.
+                history.assign_run_id_for_conversation(
+                    conversation_id,
+                    task_id.to_string(),
+                    Some(task_id),
+                    terminal_view_id,
+                    ctx,
+                );
                 history.update_conversation_status(
                     terminal_view_id,
                     conversation_id,
@@ -349,6 +437,20 @@ impl OrchestrationViewerModel {
                     pane_materialization_requested,
                 },
             );
+        }
+
+        // Polling-cost mitigation: if no children are tracked after this
+        // fetch, stop scheduling timers. The resume signal is an
+        // `AppendedExchange` on the orchestrator (see
+        // `maybe_kick_polling`). `schedule_next_poll` honours this flag
+        // and bails before spawning a new timer.
+        if self.children.is_empty() {
+            self.idle_due_to_no_children = true;
+            if let Some(prior) = self.polling_handle.take() {
+                prior.abort();
+            }
+        } else {
+            self.idle_due_to_no_children = false;
         }
 
         // Dispatch materialization events outside the children-borrow.

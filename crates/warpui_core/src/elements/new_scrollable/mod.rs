@@ -5,28 +5,24 @@ mod single_axis_config;
 pub(crate) mod util;
 
 pub use dual_axis_config::*;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 pub use single_axis_config::*;
 
-use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-
-use crate::{
-    elements::Vector2FExt,
-    event::{DispatchedEvent, ModifiersState},
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-    units::{IntoPixels, Pixels},
-    AfterLayoutContext, AppContext, ClipBounds, Element, Event, EventContext, LayoutContext,
-    PaintContext, SizeConstraint,
-};
-
 use self::util::adjust_scroll_delta_with_sensitivity_config;
-
 use super::{
     scrollbar_size, Axis, ClippedScrollStateHandle, CornerRadius, F32Ext, Fill, Point, Radius,
     ScrollData, ScrollbarWidth, SelectableElement, SelectionFragment, ZIndex,
+};
+use crate::elements::Vector2FExt;
+use crate::event::{DispatchedEvent, ModifiersState};
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
+use crate::units::{IntoPixels, Pixels};
+use crate::{
+    AfterLayoutContext, AppContext, ClipBounds, Element, Event, EventContext, LayoutContext,
+    PaintContext, SizeConstraint,
 };
 
 const LEFT_PADDING: f32 = 2.;

@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
-
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -940,9 +939,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
-    FeatureFlag::CustomInferenceEndpoints,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::RemoteCodeReview,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -1069,7 +1066,8 @@ mod overrides {
 /// should use overrides instead of globally modifying flags with [`super::FeatureFlag::set_enabled`].
 #[cfg(feature = "test-util")]
 mod overrides {
-    use std::{cell::RefCell, collections::HashMap};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     use super::FeatureFlag;
 

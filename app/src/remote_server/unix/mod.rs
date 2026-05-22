@@ -13,10 +13,12 @@
 
 pub(super) mod proxy;
 
-use super::server_model::{ConnectionId, ServerModel};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
+
 use warpui::r#async::executor;
+
+use super::server_model::{ConnectionId, ServerModel};
 
 /// Run the `remote-server-daemon` subcommand.
 ///

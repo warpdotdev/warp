@@ -1,4 +1,5 @@
 use std::io::Write;
+
 use tempfile::NamedTempFile;
 
 use crate::terminal::shell::ShellType;

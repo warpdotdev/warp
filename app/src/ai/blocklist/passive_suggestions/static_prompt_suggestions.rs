@@ -1,5 +1,6 @@
-use regex::Regex;
 use std::sync::LazyLock;
+
+use regex::Regex;
 use uuid::Uuid;
 
 use crate::terminal::view::PromptSuggestion;

@@ -1,6 +1,8 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, time::SystemTime};
+use std::fmt::Display;
+use std::ops::Range;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
 use itertools::Itertools as _;
@@ -9,10 +11,8 @@ use warp_core::command::ExitCode;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::FileLocations,
-    document::{AIDocumentId, AIDocumentVersion},
-};
+use crate::agent::FileLocations;
+use crate::document::{AIDocumentId, AIDocumentVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIAgentActionResultType {

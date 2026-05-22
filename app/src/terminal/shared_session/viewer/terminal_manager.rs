@@ -1,3 +1,6 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use async_broadcast::InactiveReceiver;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
@@ -10,16 +13,20 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
-use std::any::Any;
-
-use std::sync::Arc;
-
 use warpui::{
     AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use super::event_loop::SharedSessionInitialLoadMode;
+use super::network::{
+    agent_prompt_failure_reason_string, command_execution_failure_reason_string,
+    control_action_failure_reason_string, session_ended_reason_string,
+    viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
+};
+use super::orchestration_viewer_model::OrchestrationViewerModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
@@ -29,23 +36,19 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
 use crate::features::FeatureFlag;
-use crate::pane_group::pane::DetachType;
-
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-
+use crate::pane_group::pane::DetachType;
+use crate::pane_group::TerminalViewResources;
 use crate::settings::{DebugSettings, InputModeSettings, WarpPromptSeparator};
-use crate::terminal::event_listener::ChannelEventListener;
-
-use crate::terminal::input::CommandExecutionSource;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::terminal::PTY_READS_BROADCAST_CHANNEL_SIZE;
-
-use crate::terminal::session_settings::SessionSettings;
-
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::shared_handlers::{
@@ -55,20 +58,12 @@ use crate::terminal::shared_session::shared_handlers::{
 };
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list};
-
-use super::event_loop::SharedSessionInitialLoadMode;
-use super::network::{
-    agent_prompt_failure_reason_string, command_execution_failure_reason_string,
-    control_action_failure_reason_string, session_ended_reason_string,
-    viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
-};
-use super::orchestration_viewer_model::OrchestrationViewerModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
-use crate::terminal::{Event as TerminalViewEvent, TerminalModel, TerminalView};
+use crate::terminal::{
+    Event as TerminalViewEvent, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+};
 use crate::view_components::ToastFlavor;
-use crate::{pane_group::TerminalViewResources, terminal::model::session::Sessions};
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the
@@ -733,11 +728,9 @@ impl TerminalManager {
                 participant_list,
                 input_replica_id,
                 universal_developer_input_context,
-                source_type,
+                source,
             } => {
-                model
-                    .lock()
-                    .set_shared_session_source_type(source_type.clone());
+                model.lock().set_shared_session_source(source.clone());
 
                 Self::handle_active_prompt_update(
                     model.clone(),
@@ -775,15 +768,12 @@ impl TerminalManager {
                     return;
                 };
 
-                let ambient_task_id: Option<AmbientAgentTaskId> = match &source_type {
-                    SessionSourceType::AmbientAgent { task_id } => {
-                        task_id.as_deref().and_then(|s| s.parse().ok())
-                    }
-                    _ => None,
-                };
+                let ambient_task_id: Option<AmbientAgentTaskId> = source
+                    .orchestrator_task_id()
+                    .and_then(|s| s.parse().ok());
 
                 // Mark terminal view as a shared ambient agent session view.
-                if matches!(&source_type, SessionSourceType::AmbientAgent { .. }) {
+                if matches!(&source.source_type, SessionSourceType::AmbientAgent { .. }) {
                     let terminal_view_id = view.id();
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
                         history.mark_terminal_view_as_ambient_agent_session_view(terminal_view_id);
@@ -794,26 +784,27 @@ impl TerminalManager {
                         ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
                             model.register_ambient_session(terminal_view_id, task_id, ctx);
                         });
+                    }
+                }
 
-                        // Spin up the orchestration viewer model on first
-                        // join (`is_none()` guards against reconnect dupes).
-                        if enable_orchestration_polling
-                            && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
-                            && orchestration_viewer_model.lock().is_none()
-                        {
-                            let weak_view_handle_for_orch = weak_view_handle.clone();
-                            let orchestration_viewer_model_slot =
-                                orchestration_viewer_model.clone();
-                            let handle = ctx.add_model(|model_ctx| {
-                                OrchestrationViewerModel::new(
-                                    task_id,
-                                    terminal_view_id,
-                                    weak_view_handle_for_orch,
-                                    model_ctx,
-                                )
-                            });
-                            *orchestration_viewer_model_slot.lock() = Some(handle);
-                        }
+                if enable_orchestration_polling
+                    && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
+                    && orchestration_viewer_model.lock().is_none()
+                {
+                    if let Some(task_id) = ambient_task_id {
+                        let terminal_view_id = view.id();
+                        let weak_view_handle_for_orch = weak_view_handle.clone();
+                        let orchestration_viewer_model_slot =
+                            orchestration_viewer_model.clone();
+                        let model = ctx.add_model(|model_ctx| {
+                            OrchestrationViewerModel::new(
+                                task_id,
+                                terminal_view_id,
+                                weak_view_handle_for_orch,
+                                model_ctx,
+                            )
+                        });
+                        *orchestration_viewer_model_slot.lock() = Some(model);
                     }
                 }
 
@@ -839,7 +830,7 @@ impl TerminalManager {
                         input_replica_id.clone(),
                         participant_list.clone(),
                         session_id,
-                        source_type.clone(),
+                        source.source_type.clone(),
                         ctx,
                     );
                 });

@@ -1,8 +1,9 @@
 use warp_core::ui::theme::Fill;
 
-use crate::render::model::{BlockItem, Decoration, RenderState, viewport::ViewportItem};
-
-use super::{RenderableBlock, paint::RenderContext};
+use super::RenderableBlock;
+use super::paint::RenderContext;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, Decoration, RenderState};
 
 pub struct RenderableTemporaryBlock {
     viewport_item: ViewportItem,

@@ -1,5 +1,6 @@
-use super::*;
 use std::path::Path;
+
+use super::*;
 
 #[test]
 fn test_chunker() {

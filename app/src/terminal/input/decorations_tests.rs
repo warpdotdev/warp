@@ -1,20 +1,14 @@
-use warpui::{text_layout::TextStyle, App};
-
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        input::{
-            decorations::InputBackgroundJobOptions,
-            tests::{
-                add_window_with_bootstrapped_terminal, initialize_app,
-                simulate_directory_for_completion,
-            },
-        },
-        model::session::SessionInfo,
-    },
-    themes::theme::AnsiColorIdentifier,
-};
 use warp_completer::completer::SuggestionTypeName;
+use warpui::text_layout::TextStyle;
+use warpui::App;
+
+use crate::appearance::Appearance;
+use crate::terminal::input::decorations::InputBackgroundJobOptions;
+use crate::terminal::input::tests::{
+    add_window_with_bootstrapped_terminal, initialize_app, simulate_directory_for_completion,
+};
+use crate::terminal::model::session::SessionInfo;
+use crate::themes::theme::AnsiColorIdentifier;
 
 #[test]
 fn test_decorations_with_multibyte_chars() {

@@ -3,12 +3,10 @@ use std::ops::{Index, IndexMut, Range, RangeFrom, RangeFull, RangeTo};
 use warp_terminal::model::grid::cell::Cell;
 use warp_terminal::model::grid::row::Row;
 
-use crate::terminal::model::{
-    grid::Dimensions as _,
-    index::{Point, VisiblePoint, VisibleRow},
-};
-
-use super::{grid_handler::GridHandler, GridStorage};
+use super::grid_handler::GridHandler;
+use super::GridStorage;
+use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
 
 pub(in crate::terminal::model) trait ConvertToAbsolute {
     type Output;

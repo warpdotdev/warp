@@ -1,18 +1,17 @@
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
-    future::Future,
-    hash::{Hash, Hasher},
-    path::{Path, PathBuf},
-    pin::Pin,
-};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
 use futures::{future::OptionFuture, FutureExt as _};
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
-use warp_util::standardized_path::StandardizedPath;
-
-use crate::{repository::SubscriberId, RepoMetadataError, Repository};
+use crate::repository::SubscriberId;
+use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -323,15 +322,15 @@ impl DirectoryWatcher {
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
                 watcher.update(ctx, |watcher, _ctx| {
-                    use crate::entry::should_ignore_git_path;
-                    use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-                    use std::sync::Arc;
+                    use notify_debouncer_full::notify::RecursiveMode;
 
-                    let watch_filter = WatchFilter::with_filter(Arc::new(move |watch_path| {
-                        !should_ignore_git_path(watch_path)
-                    }));
+                    use crate::entry::repo_watch_filter;
 
-                    Some(watcher.register_path(&local_path, watch_filter, RecursiveMode::Recursive))
+                    Some(watcher.register_path(
+                        &local_path,
+                        repo_watch_filter(),
+                        RecursiveMode::Recursive,
+                    ))
                 })
             } else {
                 log::warn!("Cannot watch non-local path: {directory_path}");

@@ -1,19 +1,21 @@
-use crate::ui_components::blended_colors;
-use crate::{appearance::Appearance, themes::theme::Fill, ui_components::icons};
 use pathfinder_geometry::vector::vec2f;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Element, Flex, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    color::ColorU,
-    elements::{
-        Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Dismiss, Element, Flex, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::{FixedBinding, Keystroke},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::themes::theme::Fill;
+use crate::ui_components::{blended_colors, icons};
 
 pub const MODAL_CORNER_RADIUS: Radius = Radius::Pixels(8.);
 pub const MODAL_WIDTH: f32 = 440.;

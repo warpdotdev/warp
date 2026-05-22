@@ -1,8 +1,9 @@
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::{AppContext, SingletonEntity};
+
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 /// Returns the size for icons in the AI block, scaled to the user's current font size.
 pub fn icon_size(app: &AppContext) -> f32 {

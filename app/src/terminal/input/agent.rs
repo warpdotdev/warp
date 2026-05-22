@@ -1,44 +1,35 @@
-use super::{
-    common::{
-        add_command_xray_overlay, add_input_suggestions_overlays, add_voltron_overlay,
-        add_workflow_info_overlay, maybe_add_buy_credits_banner,
-        wrap_input_with_terminal_padding_and_focus_handler,
-    },
-    Input, InputAction, InputDropTargetData,
-};
-use crate::{
-    ai::{
-        blocklist::{
-            agent_view::{
-                agent_view_bg_fill,
-                shortcuts::{render_agent_shortcuts_view, AgentShortcutsViewContext},
-                AgentViewState,
-            },
-            InputType,
-        },
-        harness_availability::HarnessAvailabilityModel,
-    },
-    appearance::Appearance,
-    context_chips::spacing::{self},
-    editor::position_id_for_cursor,
-    features::FeatureFlag,
-    settings::InputModeSettings,
-    terminal::{settings::TerminalSettings, view::TerminalAction},
-    BlocklistAIHistoryModel,
-};
 use warp_cli::agent::Harness;
 use warp_core::settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::{
-    elements::{
-        Align, AnchorPair, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, DropTarget, Element, Empty, EventHandler, Expanded, Flex, Hoverable,
-        MainAxisSize, OffsetPositioning, OffsetType, ParentElement, PositionedElementOffsetBounds,
-        PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
-    },
-    presenter::ChildView,
-    AppContext, SingletonEntity as _,
+use warpui::elements::{
+    Align, AnchorPair, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DropTarget, Element, Empty, EventHandler, Expanded, Flex, Hoverable,
+    MainAxisSize, OffsetPositioning, OffsetType, ParentElement, PositionedElementOffsetBounds,
+    PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
 };
+use warpui::presenter::ChildView;
+use warpui::{AppContext, SingletonEntity as _};
+
+use super::common::{
+    add_command_xray_overlay, add_input_suggestions_overlays, add_voltron_overlay,
+    add_workflow_info_overlay, maybe_add_buy_credits_banner,
+    wrap_input_with_terminal_padding_and_focus_handler,
+};
+use super::{Input, InputAction, InputDropTargetData};
+use crate::ai::blocklist::agent_view::shortcuts::{
+    render_agent_shortcuts_view, AgentShortcutsViewContext,
+};
+use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
+use crate::ai::blocklist::InputType;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::appearance::Appearance;
+use crate::context_chips::spacing::{self};
+use crate::editor::position_id_for_cursor;
+use crate::features::FeatureFlag;
+use crate::settings::InputModeSettings;
+use crate::terminal::settings::TerminalSettings;
+use crate::terminal::view::TerminalAction;
+use crate::BlocklistAIHistoryModel;
 
 pub(super) const CLOUD_MODE_V2_MAX_WIDTH: f32 = 720.;
 

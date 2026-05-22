@@ -13,7 +13,6 @@ use crate::server::ids::{ClientId, SyncId};
 use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
-use session_sharing_protocol::sharer::SessionSourceType;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -66,7 +65,7 @@ use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     apply_cli_agent_state_update, RemoteUpdateGuard,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
@@ -365,6 +364,7 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -430,6 +430,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -901,6 +902,7 @@ fn cloud_mode_v1_agent_prefixed_query_spawns_cloud_agent() {
                         is_locked: false,
                     },
                     true,
+                    None,
                     ctx,
                 );
             });
@@ -1029,9 +1031,7 @@ fn shared_third_party_viewer_sync_enters_agent_view_and_retags_existing_block() 
         terminal.update(&mut app, |view, ctx| {
             let harness_block_id = {
                 let mut model = view.model.lock();
-                model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: None,
-                });
+                model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
                 model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                     role: Default::default(),
                 });
@@ -1104,9 +1104,7 @@ fn shared_third_party_viewer_syncs_from_viewer_harness_updated_when_harness_unch
         terminal.update(&mut app, |view, ctx| {
             let harness_block_id = {
                 let mut model = view.model.lock();
-                model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: None,
-                });
+                model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
                 model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                     role: Default::default(),
                 });
@@ -1175,7 +1173,7 @@ fn shared_third_party_viewer_syncs_from_cli_agent_state_without_ambient_model() 
         let harness_block_id = terminal.update(&mut app, |view, _| {
             assert!(view.ambient_agent_view_model().is_none());
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
             model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                 role: Default::default(),
             });
@@ -5080,6 +5078,7 @@ fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
                             is_locked: true,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });

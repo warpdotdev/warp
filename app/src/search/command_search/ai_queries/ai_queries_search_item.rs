@@ -1,31 +1,25 @@
-use crate::{
-    ai::blocklist::AIQueryHistoryOutputStatus,
-    terminal::rich_history::{render_row_with_icon_and_paragraph, DETAILS_PARAGRAPH_SPACING},
-    util::time_format::format_approx_duration_from_now,
-};
 use chrono::{DateTime, Local};
 use ordered_float::OrderedFloat;
 use warp_core::ui::builder::MIN_FONT_SIZE;
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon,
-        MainAxisAlignment, MainAxisSize, ParentElement, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, MainAxisAlignment,
+    MainAxisSize, ParentElement, Shrinkable, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
+use crate::ai::blocklist::AIQueryHistoryOutputStatus;
+use crate::appearance::Appearance;
+use crate::search::ai_queries::fuzzy_match::FuzzyMatchAIQueryResults;
+use crate::search::command_search::searcher::CommandSearchItemAction;
+use crate::search::item::SearchItem;
+use crate::search::result_renderer::ItemHighlightState;
+use crate::terminal::rich_history::{
+    render_row_with_icon_and_paragraph, DETAILS_PARAGRAPH_SPACING,
+};
 use crate::ui_components::icons::Icon as UiIcon;
-
-use crate::{
-    appearance::Appearance,
-    search::{
-        ai_queries::fuzzy_match::FuzzyMatchAIQueryResults,
-        command_search::searcher::CommandSearchItemAction, item::SearchItem,
-        result_renderer::ItemHighlightState,
-    },
-};
+use crate::util::time_format::format_approx_duration_from_now;
 
 /// Stores data needed to display an AI query search result item in Command Search.
 #[derive(Clone, Debug)]

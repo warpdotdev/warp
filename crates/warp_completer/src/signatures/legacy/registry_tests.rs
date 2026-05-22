@@ -1,6 +1,5 @@
 use crate::completer::testing::FakeCompletionContext;
-use crate::completer::CompletionContext;
-use crate::completer::TopLevelCommandCaseSensitivity;
+use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::signatures::registry::SignatureResult;
 use crate::signatures::testing::{create_test_command_registry, test_signature};
 

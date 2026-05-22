@@ -1,3 +1,26 @@
+use std::fmt::Debug;
+use std::path::PathBuf;
+
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use markdown_parser::weight::CustomWeight;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use warp_core::ui::appearance::{Appearance, AppearanceEvent};
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Expanded, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Shrinkable,
+};
+use warpui::platform::{Cursor, FilePickerConfiguration};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
+use super::{is_edit_allowed, is_syncing, style, AIFact, CloudAIFact, CloudAIFactModel};
+use crate::ai::facts::AIMemory;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
@@ -15,39 +38,10 @@ use crate::server::ids::{ClientId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::icons::Icon;
-use crate::view_components::{
-    action_button::{ActionButton, NakedTheme},
-    DismissibleToast,
-};
+use crate::view_components::action_button::{ActionButton, NakedTheme};
+use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
-use markdown_parser::{
-    weight::CustomWeight, FormattedText, FormattedTextFragment, FormattedTextLine,
-};
-use std::fmt::Debug;
-use std::path::PathBuf;
-use warp_core::ui::{
-    appearance::{Appearance, AppearanceEvent},
-    theme::color::internal_colors,
-};
-use warpui::elements::Shrinkable;
-use warpui::platform::FilePickerConfiguration;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Expanded, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
-use super::{is_edit_allowed, is_syncing, style, AIFact, CloudAIFact, CloudAIFactModel};
-use crate::ai::facts::AIMemory;
 
 pub const HEADER_TEXT: &str = "Rules";
 const DESCRIPTION_TEXT: &str = "Rules enhance the agent by providing structured guidelines that help maintain consistency, enforce best practices, and adapt to specific workflows, including codebases or broader tasks.";

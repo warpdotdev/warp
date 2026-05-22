@@ -1,8 +1,9 @@
+use chrono::{Duration, TimeZone, Utc};
+
 use crate::telemetry::event_store::{
     EventPayload, EventStore, SESSION_CONTINUATION_THRESHOLD_SECONDS,
 };
 use crate::time::{get_current_time, test_offset_time};
-use chrono::{Duration, TimeZone, Utc};
 
 #[test]
 fn test_initialize_session() {

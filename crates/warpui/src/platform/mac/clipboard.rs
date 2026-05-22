@@ -1,17 +1,15 @@
-use anyhow::{anyhow, Result};
-use cocoa::appkit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-use cocoa::foundation::{NSArray, NSData};
-use cocoa::{
-    base::{id, nil},
-    foundation::NSString,
-};
-use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CStr;
 use std::os::raw::{c_uchar, c_void};
 use std::slice;
 
-use super::make_nsstring;
+use anyhow::{anyhow, Result};
+use cocoa::appkit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSArray, NSData, NSString};
+use objc::{class, msg_send, sel, sel_impl};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
+
+use super::make_nsstring;
 
 extern "C" {
     fn getFilePathsFromPasteboard() -> id;

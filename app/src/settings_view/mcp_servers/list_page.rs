@@ -1,18 +1,32 @@
-use crate::ai::mcp::templatable::GalleryData;
-use crate::ai::mcp::MCPServerUpdate;
-use crate::modal::Modal;
-use crate::modal::ModalEvent;
-use crate::modal::ModalViewState;
-use crate::server::telemetry::{MCPTemplateInstallationSource, TelemetryEvent};
-use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::settings_view::mcp_servers_page::InstallOrigin;
-use crate::settings_view::settings_page::{
-    build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
-};
-use crate::util::truncation::truncate_from_end;
-use crate::view_components::DismissibleToast;
-use crate::ToastStack;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use settings::ToggleableSetting as _;
+use strum::IntoEnumIterator;
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::AppearanceEvent;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Text,
+};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
+use crate::ai::mcp::gallery::MCPGalleryManagerEvent;
+use crate::ai::mcp::templatable::{GalleryData, TemplatableMCPServer};
+use crate::ai::mcp::templatable_manager::{
+    TemplatableMCPServerManager, TemplatableMCPServerManagerEvent,
+};
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{
     // Import events for file-based manager and watcher conditionally
@@ -21,59 +35,39 @@ use crate::ai::mcp::{
     FileMCPWatcher,
     FileMCPWatcherEvent,
 };
-
-use crate::{
-    ai::mcp::{
-        gallery::MCPGalleryManagerEvent,
-        logs,
-        templatable::TemplatableMCPServer,
-        templatable_manager::{TemplatableMCPServerManager, TemplatableMCPServerManagerEvent},
-        FileBasedMCPManager, MCPGalleryManager, MCPProvider, TemplatableMCPServerInstallation,
-    },
-    appearance::Appearance,
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        GenericStringObjectFormat, JsonObjectType,
-    },
-    drive::CloudObjectTypeAndId,
-    editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},
-    pane_group::Direction,
-    search_bar::SearchBar,
-    settings_view::mcp_servers::{
-        server_card::{
-            ServerCardEvent, ServerCardOptions, ServerCardStatus, ServerCardView, TitleChip,
-        },
-        style,
-        update_modal::{UpdateModalBody, UpdateModalBodyEvent},
-        ServerCardItemId,
-    },
-    ui_components::blended_colors,
-    view_components::action_button::{ActionButton, NakedTheme},
-    workflows::local_workflows::tail_command_for_shell,
-    workspace::Workspace,
-    workspaces::user_workspaces::UserWorkspaces,
+use crate::ai::mcp::{
+    logs, FileBasedMCPManager, MCPGalleryManager, MCPProvider, MCPServerUpdate,
+    TemplatableMCPServerInstallation,
 };
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use settings::ToggleableSetting as _;
-use std::cmp::Ordering;
-use std::{collections::HashMap, path::PathBuf};
-use strum::IntoEnumIterator;
-use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::{appearance::AppearanceEvent, theme::color::internal_colors, Icon};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-        MainAxisSize, ParentElement, Radius, Text,
-    },
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::editor::{
+    EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pane_group::Direction;
+use crate::search_bar::SearchBar;
+use crate::server::telemetry::{MCPTemplateInstallationSource, TelemetryEvent};
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::mcp_servers::server_card::{
+    ServerCardEvent, ServerCardOptions, ServerCardStatus, ServerCardView, TitleChip,
+};
+use crate::settings_view::mcp_servers::update_modal::{UpdateModalBody, UpdateModalBodyEvent};
+use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers_page::InstallOrigin;
+use crate::settings_view::settings_page::{
+    build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
+};
+use crate::ui_components::blended_colors;
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::action_button::{ActionButton, NakedTheme};
+use crate::view_components::DismissibleToast;
+use crate::workflows::local_workflows::tail_command_for_shell;
+use crate::workspace::Workspace;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::ToastStack;
 
 const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 

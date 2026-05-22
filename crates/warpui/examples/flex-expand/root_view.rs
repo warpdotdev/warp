@@ -1,15 +1,12 @@
-use warpui::elements::{Expanded, Shrinkable};
-use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
-        Rect, Stack, Text,
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext,
-};
-
 use warpui::color::ColorU;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, Expanded, Flex, MainAxisAlignment, MainAxisSize,
+    ParentElement, Rect, Shrinkable, Stack, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+};
 
 pub struct RootView {
     font_family: FamilyId,
