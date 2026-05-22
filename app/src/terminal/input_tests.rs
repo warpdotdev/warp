@@ -5500,7 +5500,10 @@ fn test_input_type_button_explicit_lock() {
                 ai_input.last_ai_autodetection_source()
             })
         });
-        assert_eq!(final_source, Some(InputTypeAutoDetectionSource::ManualToggle));
+        assert_eq!(
+            final_source,
+            Some(InputTypeAutoDetectionSource::ManualToggle)
+        );
     });
 }
 

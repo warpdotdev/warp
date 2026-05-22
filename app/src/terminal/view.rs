@@ -3455,12 +3455,7 @@ impl TerminalView {
             if !model.is_autodetection_enabled_for_current_context(ctx) {
                 if let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
-                    model.set_input_config(
-                        input_config,
-                        is_input_buffer_empty,
-                        Some(InputTypeAutoDetectionSource::SettingDisabled),
-                        ctx,
-                    );
+                    model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
                 }
             }
             model

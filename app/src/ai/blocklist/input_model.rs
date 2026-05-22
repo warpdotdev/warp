@@ -283,8 +283,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_enabled,
                                 input_type: InputType::AI,
                             },
-                            (!is_nld_enabled)
-                                .then(None),
+                            None,
                             ctx,
                         );
                     }
@@ -300,8 +299,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_autodetection_enabled,
                             ..me.input_config()
                         },
-                        (!is_autodetection_enabled)
-                            .then(None),
+                        None,
                         ctx,
                     );
                 }
@@ -315,7 +313,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_nld_enabled,
                             input_type: InputType::Shell,
                         },
-                        (!is_nld_enabled).then(None),
+                        None,
                         ctx,
                     );
                 }
@@ -347,8 +345,7 @@ impl BlocklistAIInputModel {
                                 input_type: me.input_config().input_type,
                                 is_locked: !is_autodetection_enabled,
                             },
-                            (!is_autodetection_enabled)
-                                .then(None),
+                            None,
                             ctx,
                         );
                     } else if me.has_locking_attachment(ctx) {
@@ -380,8 +377,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: !is_autodetection_enabled,
                             },
-                            (!is_autodetection_enabled)
-                                .then_some(InputTypeAutoDetectionSource::SettingDisabled),
+                            None,
                             ctx,
                         );
                     }
@@ -400,8 +396,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::Shell,
                                 is_locked: !is_nld_in_terminal_enabled,
                             },
-                            (!is_nld_in_terminal_enabled)
-                                .then(None),
+                            None,
                             ctx,
                         );
                     }
@@ -415,8 +410,7 @@ impl BlocklistAIInputModel {
         } else {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         };
-        let initial_decision_source =
-            (!is_autodetection_enabled).then(None);
+        let initial_decision_source = None;
         Self {
             input_config: InputConfig {
                 input_type: InputType::Shell,
@@ -490,7 +484,7 @@ impl BlocklistAIInputModel {
     }
 
     /// Swaps between Agent/Shell input types while preserving lock state. Temporarily disables
-    /// autodetection. 
+    /// autodetection.
     pub fn set_input_type(
         &mut self,
         input_type: InputType,

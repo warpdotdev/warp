@@ -144,10 +144,10 @@ use crate::{
             prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             render_ai_agent_mode_icon, render_ai_follow_up_icon,
             telemetry_banner::should_collect_ai_ugc_telemetry,
-            BlocklistAIContextEvent, BlocklistAIContextModel,
-            BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-            BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
-            InputType, InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
+            BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+            BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+            BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
+            InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
             DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
         },
         llms::{LLMPreferences, LLMPreferencesEvent},
@@ -6010,10 +6010,7 @@ impl Input {
         from: &voice_input::VoiceInputToggledFrom,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.enter_ai_mode(
-            Some(InputTypeAutoDetectionSource::VoiceInputToggle),
-            ctx,
-        );
+        self.enter_ai_mode(Some(InputTypeAutoDetectionSource::VoiceInputToggle), ctx);
         let did_start_listening = self
             .editor
             .update(ctx, |editor, ctx| editor.toggle_voice_input(from, ctx));
@@ -6518,7 +6515,7 @@ impl Input {
                                     is_locked: true,
                                 },
                                 is_input_buffer_empty,
-                                Some(InputTypeAutoDetectionSource::SettingDisabled),
+                                None,
                                 ctx,
                             );
                         });
@@ -14163,14 +14160,7 @@ impl Input {
                 let new_config = ai_input_model
                     .input_config()
                     .unlocked_if_autodetection_enabled(is_in_fullscreen_agent_view, ctx);
-                ai_input_model.set_input_config(
-                    new_config,
-                    false,
-                    new_config
-                        .is_locked
-                        .then_some(InputTypeAutoDetectionSource::SettingDisabled),
-                    ctx,
-                );
+                ai_input_model.set_input_config(new_config, false, None, ctx);
             });
 
             let viewing_shared_session = self.model.lock().shared_session_status().is_viewer();
