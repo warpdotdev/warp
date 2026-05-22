@@ -244,6 +244,14 @@ fn pill_label_width(
 
 /// Width of the per-pill hover details card.
 const HOVER_CARD_WIDTH: f32 = 280.;
+const HOVER_CARD_HORIZONTAL_PADDING: f32 = 12.;
+const HOVER_CARD_VERTICAL_PADDING: f32 = 10.;
+const HOVER_CARD_CONTENT_WIDTH: f32 = HOVER_CARD_WIDTH - 2. * HOVER_CARD_HORIZONTAL_PADDING;
+const HOVER_CARD_HEADER_AVATAR_NAME_GAP: f32 = 8.;
+const HOVER_CARD_HEADER_NAME_BADGE_GAP: f32 = 8.;
+/// Slightly larger than the longest expected status label ("In progress") plus
+/// its icon and padding.
+const HOVER_CARD_STATUS_BADGE_MAX_WIDTH: f32 = 96.;
 
 /// Typed actions dispatched by the pill bar's widgets. Each action carries
 /// the targeted child pill's conversation id so a single shared `Menu`
@@ -606,12 +614,8 @@ impl OrchestrationPillBar {
 
         let mut specs = Vec::with_capacity(1 + children.len());
 
-        // Orchestrator pill first; never pinned (it's the home view).
-        // The pill's status badge reflects the orchestration tree as a whole
-        // (see `aggregated_orchestrator_status`) so the user sees `InProgress`
-        // while any descendant is still running, even though the orchestrator's
-        // own `ConversationStatus` flips to `Success` as soon as its own turn
-        // finishes.
+        // Orchestrator pill first; never pinned. Its badge aggregates the tree,
+        // while child pills show per-child status.
         specs.push(PillSpec {
             conversation_id: orchestrator_id,
             label: orchestrator_label(orchestrator),
@@ -621,10 +625,6 @@ impl OrchestrationPillBar {
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
-            // `is_remote_child` is a child-placeholder flag and never applies
-            // to the orchestrator itself. A cloud-to-cloud orchestrator can
-            // still be running remotely, but surfacing that via the cloud
-            // overlay would need separate plumbing.
             is_remote_child: false,
         });
 
@@ -1327,20 +1327,8 @@ fn render_hover_card(
     .with_clip(ClipConfig::ellipsis())
     .soft_wrap(false)
     .finish();
-    // The orchestrator's raw `ConversationStatus` only reflects its own
-    // last exchange and flips to `Success` as soon as the orchestrator's
-    // turn finishes — even when children are still running. For the
-    // orchestrator pill's hover card we instead show the aggregated
-    // status across the whole orchestration tree so the badge matches
-    // what the user expects to see (e.g. `InProgress` while any child is
-    // running). Child pills continue to show their own per-child status.
-    // Cap the badge at a fixed width so it can't shove the name out of
-    // the card. Slightly larger than the longest expected status label
-    // ("In progress") plus its icon and padding.
-    const STATUS_BADGE_MAX_WIDTH: f32 = 96.;
-    // Hold an aggregated status by value on the orchestrator path so the
-    // non-orchestrator path can keep passing the child's status by
-    // reference (no clone).
+    // Orchestrator hover cards use aggregated tree status; child cards use
+    // per-child status.
     let aggregated_status;
     let badge_status: &ConversationStatus = if is_orchestrator {
         aggregated_status = aggregated_orchestrator_status(history, conversation_id);
@@ -1349,18 +1337,15 @@ fn render_hover_card(
         conversation.status()
     };
     let status_badge = ConstrainedBox::new(render_status_badge(badge_status, theme, appearance))
-        .with_max_width(STATUS_BADGE_MAX_WIDTH)
+        .with_max_width(HOVER_CARD_STATUS_BADGE_MAX_WIDTH)
         .finish();
-    // Compute the name's max width by subtracting all of the surrounding
-    // chrome from the card width: card horizontal padding (12+12), the
-    // 16px avatar, the 8px avatar→name gap, an 8px name→badge gap, and
-    // the reserved badge slot. Without this fixed budget,
-    // `MainAxisAlignment::SpaceBetween` would happily push the badge off
-    // the right edge of the card whenever the name is long enough to fill
-    // the available space (this used to happen on the orchestrator pill,
-    // whose title falls back to the conversation's multi-word title rather
-    // than a short agent name).
-    let name_max_width = HOVER_CARD_WIDTH - 24. - 16. - 8. - 8. - STATUS_BADGE_MAX_WIDTH;
+    // Reserve fixed space for the badge so long names ellipsize instead of
+    // pushing it off the card.
+    let name_max_width = HOVER_CARD_CONTENT_WIDTH
+        - AVATAR_SIZE
+        - HOVER_CARD_HEADER_AVATAR_NAME_GAP
+        - HOVER_CARD_HEADER_NAME_BADGE_GAP
+        - HOVER_CARD_STATUS_BADGE_MAX_WIDTH;
     let header = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
@@ -1369,7 +1354,7 @@ fn render_hover_card(
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min)
-                .with_spacing(8.)
+                .with_spacing(HOVER_CARD_HEADER_AVATAR_NAME_GAP)
                 .with_child(avatar)
                 .with_child(
                     ConstrainedBox::new(name_text)
@@ -1503,14 +1488,14 @@ fn render_hover_card(
     if let Some(cwd_line) = cwd_line {
         column = column.with_child(
             ConstrainedBox::new(cwd_line)
-                .with_max_width(HOVER_CARD_WIDTH - 24.)
+                .with_max_width(HOVER_CARD_CONTENT_WIDTH)
                 .finish(),
         );
     }
     if let Some(description) = description {
         column = column.with_child(
             ConstrainedBox::new(description)
-                .with_max_width(HOVER_CARD_WIDTH - 24.)
+                .with_max_width(HOVER_CARD_CONTENT_WIDTH)
                 .finish(),
         );
     }
@@ -1526,10 +1511,10 @@ fn render_hover_card(
     }
 
     let card = Container::new(column.finish())
-        .with_padding_left(12.)
-        .with_padding_right(12.)
-        .with_padding_top(10.)
-        .with_padding_bottom(10.)
+        .with_padding_left(HOVER_CARD_HORIZONTAL_PADDING)
+        .with_padding_right(HOVER_CARD_HORIZONTAL_PADDING)
+        .with_padding_top(HOVER_CARD_VERTICAL_PADDING)
+        .with_padding_bottom(HOVER_CARD_VERTICAL_PADDING)
         .with_background(bg)
         .with_border(warpui::elements::Border::all(1.).with_border_fill(outline))
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
@@ -1814,10 +1799,6 @@ fn render_pill(
         let show_pin_glyph = supports_pinning && outer_pill_hovered;
         let leading: Box<dyn Element> = match kind {
             PillKind::Orchestrator => match status.as_ref() {
-                // Orchestrator pills always carry an aggregated status (see
-                // `aggregated_orchestrator_status` in `pill_specs`); the
-                // `None` arm is kept as a defensive fallback in case a
-                // future caller constructs a `PillSpec` without one.
                 Some(status) => render_avatar_with_status_overlay(
                     avatar_color,
                     avatar_glyph,
