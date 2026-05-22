@@ -59,8 +59,8 @@ impl QueuedQuery {
     }
 
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
-    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code removes
-    /// it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
+    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
+    /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
     pub fn is_locked(&self) -> bool {
         matches!(self.origin, QueuedQueryOrigin::InitialCloudMode)
     }
@@ -257,10 +257,11 @@ impl QueuedQueryModel {
         query_id
     }
 
-    /// Pops the first row in `conversation_id`'s queue and returns it. Used by the error/cancel
-    /// drain path where the caller restores the popped text to the input editor. No-ops when the
-    /// head is locked ([`QueuedQuery::is_locked`]) so a status transition arriving before the
-    /// lifecycle cleanup events cannot clobber the locked initial Cloud Mode row.
+    /// Pops the first row in `conversation_id`'s queue and returns it.
+    /// Used by the non-clean drain path (Error / Cancelled) to restore a single popped
+    /// prompt to the input editor. No-ops when the head is locked
+    /// ([`QueuedQuery::is_locked`]) so a status-transition arriving before the lifecycle
+    /// cleanup events cannot clobber the locked initial Cloud Mode row.
     pub fn pop_front(
         &mut self,
         conversation_id: AIConversationId,
@@ -281,10 +282,10 @@ impl QueuedQueryModel {
         Some(popped)
     }
 
-    /// Auto-fire drain entry point for `conversation_id`. Returns `None` for empty queues or
-    /// when the head is locked ([`QueuedQuery::is_locked`]); otherwise pops the first row and
-    /// tells the caller whether to submit it normally or treat it as a popped edit-mode row
-    /// (per the spec, the row's last-committed text is restored to the input box).
+    /// Auto-fire drain entry point for `conversation_id`.
+    /// Returns `None` for empty queues or when the head is locked
+    /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
+    /// the caller should submit it normally or treat it as a popped edit-mode row.
     pub fn pop_for_autofire(
         &mut self,
         conversation_id: AIConversationId,
@@ -312,9 +313,10 @@ impl QueuedQueryModel {
         })
     }
 
-    /// Removes a specific row by id within `conversation_id`'s queue, if present. No-ops when
-    /// the target row is locked ([`QueuedQuery::is_locked`]); the locked initial Cloud Mode row
-    /// is only removable via [`Self::remove_initial_cloud_mode_row`].
+    /// Removes a specific row by id within `conversation_id`'s queue, if present. Returns the
+    /// removed row. No-ops when the target row is locked ([`QueuedQuery::is_locked`]); the
+    /// locked initial Cloud Mode row is only removable via
+    /// [`Self::remove_initial_cloud_mode_row`].
     pub fn remove_by_id(
         &mut self,
         conversation_id: AIConversationId,
@@ -363,37 +365,11 @@ impl QueuedQueryModel {
         Some(removed)
     }
 
-    /// Replaces the text of a specific row by id in `conversation_id`'s queue, if present.
-    /// No-op when `query_id` does not exist. Emits `EditCommitted` because subscribers care
-    /// about the same thing (a row's text changed) regardless of whether the trigger was an
-    /// inline edit or a programmatic update.
-    pub fn replace_text_by_id(
-        &mut self,
-        conversation_id: AIConversationId,
-        query_id: QueuedQueryId,
-        new_text: String,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(state) = self.queues.get_mut(&conversation_id) else {
-            return;
-        };
-        let Some(row) = state.queue.iter_mut().find(|q| q.id == query_id) else {
-            return;
-        };
-        if row.text == new_text {
-            return;
-        }
-        row.text = new_text;
-        ctx.emit(QueuedQueryEvent::EditCommitted {
-            conversation_id,
-            query_id,
-        });
-    }
-
     /// Moves the row identified by `source_id` to position `target_index` within
     /// `conversation_id`'s queue. `target_index` is interpreted as the index in the post-removal
     /// list and is clamped to the queue length. No-ops when the source row is locked
-    /// ([`QueuedQuery::is_locked`]) or when the move would displace a locked row off the head.
+    /// ([`QueuedQuery::is_locked`]) or when the move would displace a locked row off the head of
+    /// the queue.
     pub fn reorder(
         &mut self,
         conversation_id: AIConversationId,

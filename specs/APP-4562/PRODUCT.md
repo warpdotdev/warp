@@ -40,7 +40,7 @@ Today in Cloud Mode setup, the user's submitted prompt appears as a separate "pe
 7. If the cloud run fails before the prompt is picked up (failure, cancellation, GitHub-auth required, snapshot upload failure), the locked row is removed from the panel at the same moment the legacy pending-user-query block would be removed today. Any follow-up rows queued behind it remain in the panel, available for review, edit, deletion, or reordering, exactly like regular queued rows.
 
 ### Submission during environment setup
-8. While the cloud pane is in any state between submitting the initial prompt and the agent actually running (i.e. `WaitingForSession`, `Failed`, `Cancelled`, `NeedsGithubAuth`), submitting the input editor queues the prompt instead of doing nothing. The queued prompt appears as a new row in the panel, after the locked initial row.
+8. Whenever the cloud pane is an ambient-agent pane that is not currently composing and not currently running, submitting the input editor queues the prompt instead of doing nothing. The queued prompt appears as a new row in the panel, after the locked initial row. In practice this covers every pre-run cloud state where the user can reach the editor — `WaitingForSession`, `Failed`, `Cancelled`, `NeedsGithubAuth`, and `Setup` (the last is normally unreachable because the first-time-setup modal owns the focus, but the predicate matches it for completeness).
 9. Follow-up rows queued during setup are *not* locked. They support the same interactions as regular Agent Mode queued rows: drag-to-reorder among themselves, hover-revealed edit and delete buttons, and so on.
 10. The locked initial row stays pinned at index 0 regardless of how follow-up rows are reordered. Dragging another row above the locked row is not possible — the panel keeps the locked row at the top.
 11. Submitting an empty prompt does not append a new row (existing trim-and-skip behavior).
@@ -56,8 +56,8 @@ Today in Cloud Mode setup, the user's submitted prompt appears as a separate "pe
 16. Auto-fire resumes naturally the next time the active cloud conversation completes an exchange cleanly — from that completion onward, the queue resumes draining from the top.
 
 ### Conversation lifecycle interactions
-17. The queued-prompts panel is per-conversation. Switching to a different conversation hides the current panel and shows that conversation's panel (which may be empty).
-18. Exiting the cloud pane, closing the tab, or removing the conversation discards that conversation's queue (including any locked initial row).
+17. The queued-prompts panel is owned by the terminal view and implicitly scoped to whichever conversation is currently active in that view. Switching to a different conversation goes through agent-view exit (which clears the queue) before re-entering for the new conversation, so the panel always reflects the active conversation and never carries follow-up rows across conversation switches.
+18. Exiting the cloud pane, closing the tab, or removing the conversation discards the queue (including any locked initial row).
 19. The collapsed/expanded state of the panel, the row-level edit state, and reorder behavior all match the regular Agent Mode queued-prompts panel for follow-up rows.
 
 ### Telemetry

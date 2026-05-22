@@ -109,7 +109,9 @@ impl TerminalView {
         // Tear down the Cloud Mode pending prompt on terminal / transition events that replace it.
         // Legacy `Failed`, `NeedsGithubAuth`, and `Cancelled` hand off to the existing error /
         // auth / cancelled UI; `HarnessCommandStarted` hands off to the live harness CLI block.
-        let should_remove_pending_user_query = match event {
+        // The V2 queue-row removal shares this gate so the locked initial row disappears on the
+        // same lifecycle events that retire the legacy block — no V2/non-V2 divergence.
+        let should_clean_up_pending_cloud_query = match event {
             AmbientAgentViewModelEvent::Failed { .. } => {
                 !FeatureFlag::CloudModeSetupV2.is_enabled()
             }
@@ -119,18 +121,8 @@ impl TerminalView {
             | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. } => true,
             _ => false,
         };
-        if should_remove_pending_user_query {
+        if should_clean_up_pending_cloud_query {
             self.remove_pending_user_query_block(ctx);
-        }
-        let should_remove_cloud_mode_queue_row = matches!(
-            event,
-            AmbientAgentViewModelEvent::Failed { .. }
-                | AmbientAgentViewModelEvent::NeedsGithubAuth
-                | AmbientAgentViewModelEvent::Cancelled
-                | AmbientAgentViewModelEvent::HarnessCommandStarted { .. }
-                | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
-        );
-        if should_remove_cloud_mode_queue_row {
             self.remove_cloud_mode_queue_row(ctx);
         }
 

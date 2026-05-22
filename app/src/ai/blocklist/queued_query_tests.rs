@@ -95,6 +95,30 @@ fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
 }
 
 #[test]
+fn pop_front_no_ops_when_head_is_locked() {
+    // The Error/Cancelled drain path calls `pop_front` to restore a row to the editor. A locked
+    // initial Cloud Mode head must not be popped even if a status-transition arrives before the
+    // ambient-agent cleanup events fire `remove_initial_cloud_mode_row`.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("locked initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, conv, "follow up");
+
+        let popped = model.update(&mut app, |model, ctx| model.pop_front(conv, ctx));
+        assert!(popped.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[1].id(), followup_id);
+        });
+    });
+}
+
+#[test]
 fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
     with_model(|mut app, model, events| {
         let conv = AIConversationId::new();

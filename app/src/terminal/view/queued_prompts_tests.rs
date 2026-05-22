@@ -192,6 +192,10 @@ fn dispatched_cloud_followup_uses_locked_queue_row_when_v2_is_enabled() {
 
 #[test]
 fn cloud_setup_cleanup_events_remove_the_locked_queue_row() {
+    // Events that always retire the locked initial Cloud Mode row, regardless of
+    // CloudModeSetupV2. The V2 row removal is aligned with the legacy pending-user-query
+    // block removal: these four events removed the legacy block under both V2-off and
+    // V2-on, and now do the same for the V2 queue row.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -206,9 +210,6 @@ fn cloud_setup_cleanup_events_remove_the_locked_queue_row() {
             let cleanup_events = [
                 AmbientAgentViewModelEvent::HarnessCommandStarted {
                     block_id: active_block_id,
-                },
-                AmbientAgentViewModelEvent::Failed {
-                    error_message: "failed setup".to_owned(),
                 },
                 AmbientAgentViewModelEvent::Cancelled,
                 AmbientAgentViewModelEvent::NeedsGithubAuth,
@@ -228,6 +229,66 @@ fn cloud_setup_cleanup_events_remove_the_locked_queue_row() {
                     "event should remove locked cloud row: {event:?}"
                 );
             }
+        });
+    });
+}
+
+#[test]
+fn failed_event_keeps_locked_queue_row_under_cloud_mode_setup_v2() {
+    // Under CloudModeSetupV2, `Failed` keeps the legacy pending-user-query block in place
+    // (alongside the failure tombstone). The V2 queue-row removal is gated on the same
+    // condition, so the locked initial row stays so the user can review or retry.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            enter_cloud_setup_with_conversation(view, ctx);
+            view.enqueue_initial_cloud_mode_prompt("initial".to_owned(), ctx)
+                .expect("active conversation should accept cloud queue rows");
+            view.handle_ambient_agent_event(
+                &AmbientAgentViewModelEvent::Failed {
+                    error_message: "failed setup".to_owned(),
+                },
+                ctx,
+            );
+            assert_eq!(
+                queue_texts(view, ctx),
+                vec![("initial".to_owned(), QueuedQueryOrigin::InitialCloudMode)]
+            );
+        });
+    });
+}
+
+#[test]
+fn failed_event_removes_locked_queue_row_without_cloud_mode_setup_v2() {
+    // Without CloudModeSetupV2, the legacy pending-user-query block is removed on `Failed`.
+    // The V2 queue-row removal follows the same gate.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(false);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            view.enqueue_initial_cloud_mode_prompt("initial".to_owned(), ctx)
+                .expect("active conversation should accept cloud queue rows");
+            view.handle_ambient_agent_event(
+                &AmbientAgentViewModelEvent::Failed {
+                    error_message: "failed setup".to_owned(),
+                },
+                ctx,
+            );
+            assert!(QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .is_empty());
         });
     });
 }
