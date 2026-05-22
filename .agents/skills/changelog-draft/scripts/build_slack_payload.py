@@ -10,6 +10,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote
 
 MAX_SECTION_TEXT_LENGTH = 3000
 MAX_MESSAGE_BLOCKS = 50
@@ -24,11 +25,22 @@ SECTION_ORDER = (
 )
 
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+SLACK_LINK_URL_SAFE_CHARS = "/:?&=#%+~@!$'()*;,[]"
 
 
 def escape_slack_text(text: str) -> str:
     """Escape Slack control characters in ordinary mrkdwn text."""
     return html.escape(text, quote=False)
+
+
+def escape_slack_link_url(url: str) -> str:
+    """Percent-encode Slack link delimiters before embedding a URL in mrkdwn."""
+    return quote(url, safe=SLACK_LINK_URL_SAFE_CHARS)
+
+
+def slack_link(url: str, label: str) -> str:
+    """Build a Slack mrkdwn link from an already-validated URL and label."""
+    return f"<{escape_slack_link_url(url)}|{escape_slack_text(label)}>"
 
 
 def markdown_links_to_slack(text: str) -> str:
@@ -38,7 +50,7 @@ def markdown_links_to_slack(text: str) -> str:
     for match in MARKDOWN_LINK_RE.finditer(text):
         parts.append(escape_slack_text(text[last_end : match.start()]))
         label, url = match.groups()
-        parts.append(f"<{url}|{escape_slack_text(label)}>")
+        parts.append(slack_link(url, label))
         last_end = match.end()
     parts.append(escape_slack_text(text[last_end:]))
     return "".join(parts)
@@ -94,7 +106,7 @@ def artifact_link_block(markdown_artifact_url: str) -> dict | None:
             "type": "mrkdwn",
             "text": (
                 "Raw Markdown changelog: "
-                f"<{markdown_artifact_url}|Download raw Markdown changelog artifact>"
+                f"{slack_link(markdown_artifact_url, 'Download raw Markdown changelog artifact')}"
             ),
         },
     }
