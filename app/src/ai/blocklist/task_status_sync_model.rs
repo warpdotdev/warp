@@ -78,7 +78,7 @@ impl TaskStatusSyncModel {
         // Report IN_PROGRESS immediately
         // by CLIAgentSessionsModel::register_listener is never emitted as a
         // StatusChanged event, so we must report it at registration time.
-        self.fire_update(task_id, AgentTaskState::InProgress, None, ctx);
+        self.fire_update(task_id, AgentTaskState::InProgress, None, None, ctx);
     }
 
     fn handle_history_event(
@@ -136,7 +136,7 @@ impl TaskStatusSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let (task_id, task_state, status_message) = {
+        let (task_id, task_state, conversation_id, status_message) = {
             let Some(conversation) =
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
             else {
@@ -156,14 +156,15 @@ impl TaskStatusSyncModel {
             if conversation.is_remote_child() {
                 return;
             }
-            let Some(task_id) = conversation.task_id() else {
+            let Some((task_id, task_state, conversation_id, status_message)) =
+                task_update_for_conversation(conversation)
+            else {
                 return;
             };
-            let (state, msg) = map_conversation_status(conversation);
-            (task_id, state, msg)
+            (task_id, task_state, conversation_id, status_message)
         };
 
-        self.fire_update(task_id, task_state, status_message, ctx);
+        self.fire_update(task_id, task_state, conversation_id, status_message, ctx);
     }
 
     fn on_cli_session_status_changed(
@@ -177,7 +178,7 @@ impl TaskStatusSyncModel {
         };
 
         let (task_state, status_message) = map_cli_session_status(status);
-        self.fire_update(task_id, task_state, status_message, ctx);
+        self.fire_update(task_id, task_state, None, status_message, ctx);
     }
 
     /// Sends an `update_agent_task` request to the server (fire-and-forget).
@@ -185,6 +186,7 @@ impl TaskStatusSyncModel {
         &self,
         task_id: AmbientAgentTaskId,
         task_state: AgentTaskState,
+        conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -192,7 +194,13 @@ impl TaskStatusSyncModel {
         ctx.spawn(
             async move {
                 if let Err(err) = ai_client
-                    .update_agent_task(task_id, Some(task_state), None, None, status_message)
+                    .update_agent_task(
+                        task_id,
+                        Some(task_state),
+                        None,
+                        conversation_id,
+                        status_message,
+                    )
                     .await
                 {
                     log::warn!(
@@ -210,6 +218,21 @@ impl Entity for TaskStatusSyncModel {
 }
 
 impl SingletonEntity for TaskStatusSyncModel {}
+fn task_update_for_conversation(
+    conversation: &AIConversation,
+) -> Option<(
+    AmbientAgentTaskId,
+    AgentTaskState,
+    Option<String>,
+    Option<TaskStatusUpdate>,
+)> {
+    let task_id = conversation.task_id()?;
+    let (task_state, status_message) = map_conversation_status(conversation);
+    let conversation_id = conversation
+        .server_conversation_token()
+        .map(|token| token.as_str().to_string());
+    Some((task_id, task_state, conversation_id, status_message))
+}
 
 /// Maps conversation state to an `AgentTaskState` and optional status message.
 /// For errors, extracts the specific error from the last exchange when available.

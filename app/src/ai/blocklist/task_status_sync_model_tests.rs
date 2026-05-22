@@ -1,9 +1,9 @@
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-
-use super::{classify_renderable_error, map_cli_session_status};
+use super::{classify_renderable_error, map_cli_session_status, task_update_for_conversation};
+use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::RenderableAIError;
 use crate::server::server_api::ai::TaskStatusUpdate;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionStatus;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(
@@ -144,4 +144,30 @@ fn cli_blocked_without_message() {
     let (state, update) = map_cli_session_status(&CLIAgentSessionStatus::Blocked { message: None });
     assert_eq!(state, AgentTaskState::Blocked);
     assert!(update.is_none());
+}
+
+#[test]
+fn task_update_for_conversation_includes_server_conversation_token() {
+    let task_id = "550e8400-e29b-41d4-a716-446655440000"
+        .parse()
+        .expect("valid task id");
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_task_id(task_id);
+    conversation.set_server_conversation_token("server-conversation-id".to_string());
+
+    let (observed_task_id, state, conversation_id, status_message) =
+        task_update_for_conversation(&conversation).expect("task update should exist");
+
+    assert_eq!(observed_task_id.to_string(), task_id.to_string());
+    assert_eq!(state, AgentTaskState::InProgress);
+    assert_eq!(conversation_id.as_deref(), Some("server-conversation-id"));
+    assert!(status_message.is_none());
+}
+
+#[test]
+fn task_update_for_conversation_requires_task_id() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_server_conversation_token("server-conversation-id".to_string());
+
+    assert!(task_update_for_conversation(&conversation).is_none());
 }
