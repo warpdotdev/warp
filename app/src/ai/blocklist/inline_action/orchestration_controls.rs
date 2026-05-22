@@ -68,6 +68,8 @@ pub const ORCHESTRATION_PICKER_RADIUS: f32 = 4.;
 pub const ORCHESTRATION_PICKER_MAX_WIDTH: f32 = 205.;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
+const ORCHESTRATION_SEGMENTED_CONTROL_PADDING: f32 = 4.;
+const ORCHESTRATION_SEGMENT_VERTICAL_PADDING: f32 = 4.;
 
 /// Label shown in the auth secret picker when no secret is selected
 /// (the child agent will inherit credentials from its environment).
@@ -1778,17 +1780,19 @@ pub fn render_mode_toggle<A: OrchestrationControlAction>(
         .with_child(Expanded::new(1.0, local_segment).finish())
         .finish();
     let segmented_control = Container::new(segments_row)
-        .with_padding_top(4.)
-        .with_padding_bottom(4.)
-        .with_padding_left(4.)
-        .with_padding_right(4.)
+        .with_padding_top(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_bottom(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_left(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_right(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
         .with_background(segment_outer_bg)
         .finish();
+    let segmented_control =
+        ConstrainedBox::new(segmented_control).with_height(ORCHESTRATION_PICKER_HEIGHT);
     let segmented_control = if full_width {
-        segmented_control
+        segmented_control.finish()
     } else {
-        ConstrainedBox::new(segmented_control)
+        segmented_control
             .with_width(ORCHESTRATION_PICKER_MAX_WIDTH)
             .finish()
     };
@@ -1816,7 +1820,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
     let theme = appearance.theme();
     let label_owned = label.to_string();
     let font_family = appearance.ui_font_family();
-    let font_size = appearance.monospace_font_size() + 1.;
+    let font_size = ORCHESTRATION_PICKER_FONT_SIZE;
     let active_text_color = blended_colors::text_main(theme, theme.surface_1());
     let inactive_text_color = blended_colors::text_disabled(theme, theme.surface_1());
     let segment_active_bg = active_bg_override
@@ -1831,7 +1835,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
             .finish();
         let centered = warpui::elements::Align::new(text).finish();
         let mut container = Container::new(centered)
-            .with_vertical_padding(6.)
+            .with_vertical_padding(ORCHESTRATION_SEGMENT_VERTICAL_PADDING)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
         if is_active {
             container = container.with_background(segment_active_bg);
