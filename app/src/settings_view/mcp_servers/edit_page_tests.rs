@@ -25,9 +25,59 @@ fn parsed_mcp_server_with_secret_in_args_is_detected() {
 
     assert_eq!(parsed_servers.len(), 1);
     assert!(
-        MCPServersEditPageView::templatable_mcp_server_contains_secrets(
-            &parsed_servers[0].templatable_mcp_server
-        )
+        MCPServersEditPageView::parsed_templatable_mcp_server_contains_secrets(&parsed_servers[0])
+    );
+}
+
+#[test]
+#[serial]
+fn parsed_mcp_server_with_secret_in_env_is_detected() {
+    secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new("sk-test-secret-11265").expect("regex should compile")],
+        std::iter::empty(),
+    );
+
+    let parsed_servers = ParsedTemplatableMCPServerResult::from_user_json(
+        r#"{
+            "demo-env-server": {
+                "command": "/usr/bin/true",
+                "env": {
+                    "API_KEY": "sk-test-secret-11265"
+                }
+            }
+        }"#,
+    )
+    .expect("valid MCP server JSON should parse");
+
+    assert_eq!(parsed_servers.len(), 1);
+    assert!(
+        MCPServersEditPageView::parsed_templatable_mcp_server_contains_secrets(&parsed_servers[0])
+    );
+}
+
+#[test]
+#[serial]
+fn parsed_mcp_server_with_secret_in_headers_is_detected() {
+    secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new("sk-test-secret-11265").expect("regex should compile")],
+        std::iter::empty(),
+    );
+
+    let parsed_servers = ParsedTemplatableMCPServerResult::from_user_json(
+        r#"{
+            "demo-http-server": {
+                "url": "https://example.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer sk-test-secret-11265"
+                }
+            }
+        }"#,
+    )
+    .expect("valid MCP server JSON should parse");
+
+    assert_eq!(parsed_servers.len(), 1);
+    assert!(
+        MCPServersEditPageView::parsed_templatable_mcp_server_contains_secrets(&parsed_servers[0])
     );
 }
 
@@ -51,8 +101,6 @@ fn parsed_mcp_server_without_secrets_is_allowed() {
 
     assert_eq!(parsed_servers.len(), 1);
     assert!(
-        !MCPServersEditPageView::templatable_mcp_server_contains_secrets(
-            &parsed_servers[0].templatable_mcp_server
-        )
+        !MCPServersEditPageView::parsed_templatable_mcp_server_contains_secrets(&parsed_servers[0])
     );
 }

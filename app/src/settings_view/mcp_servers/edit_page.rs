@@ -529,12 +529,12 @@ impl MCPServersEditPageView {
         footer.finish()
     }
 
-    fn detect_secrets_in_templatable_mcp_server(
+    fn detect_secrets_in_parsed_templatable_mcp_server(
         &self,
         ctx: &mut ViewContext<Self>,
-        templatable_mcp_server: &TemplatableMCPServer,
+        parsed_templatable_mcp_server: &ParsedTemplatableMCPServerResult,
     ) -> Result<(), String> {
-        if Self::templatable_mcp_server_contains_secrets(templatable_mcp_server) {
+        if Self::parsed_templatable_mcp_server_contains_secrets(parsed_templatable_mcp_server) {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
@@ -553,6 +553,22 @@ impl MCPServersEditPageView {
         templatable_mcp_server: &TemplatableMCPServer,
     ) -> bool {
         !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty()
+    }
+
+    fn parsed_templatable_mcp_server_contains_secrets(
+        parsed_templatable_mcp_server: &ParsedTemplatableMCPServerResult,
+    ) -> bool {
+        if Self::templatable_mcp_server_contains_secrets(
+            &parsed_templatable_mcp_server.templatable_mcp_server,
+        ) {
+            return true;
+        }
+
+        parsed_templatable_mcp_server
+            .templatable_mcp_server_installation
+            .as_ref()
+            .map(resolve_json)
+            .is_some_and(|resolved_json| !find_secrets_in_text(&resolved_json).is_empty())
     }
 
     fn parse_templatable_json(
@@ -578,9 +594,9 @@ impl MCPServersEditPageView {
             };
 
         for parsed_templatable_mcp_server_result in parsed_templatable_mcp_servers.iter() {
-            self.detect_secrets_in_templatable_mcp_server(
+            self.detect_secrets_in_parsed_templatable_mcp_server(
                 ctx,
-                &parsed_templatable_mcp_server_result.templatable_mcp_server,
+                parsed_templatable_mcp_server_result,
             )?;
         }
 
