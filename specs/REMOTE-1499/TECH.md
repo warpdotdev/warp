@@ -6,7 +6,7 @@ Cross-repo siblings:
 - `../../../session-sharing-protocol/specs/REMOTE-1499/` — `AmbientSetupPhaseEnded` variant on `OrderedTerminalEventType`.
 - `../../../session-sharing-server/specs/REMOTE-1499/` — testing-only protocol dep swap.
 Stack layout in this repo:
-- Stage 1 base: `harry/empty-prompt-handoff-wire-contract`. Wire-contract widening only — `SpawnAgentRequest.prompt` becomes `Option<String>`. No runtime behavior change in warp-4 except the CLI skill-only `None` emission. Documented in `STAGE-1.md`.
+- Stage 1 base: `harry/empty-prompt-handoff-wire-contract`. Wire-contract widening only — `SpawnAgentRequest.prompt` becomes `Option<String>`. No runtime behavior change in warp-4 except the CLI skill-only and conversation-only `None` emission. Documented in `STAGE-1.md`.
 - Stage 2 head: `harry/empty-prompt-handoff-local`, stacked on Stage 1. Adds the local→cloud client behavior (entry points + guardrail + client-side substitution), drops the indicator enum, and wires the `AmbientSetupPhaseEnded` setup-phase teardown marker. Documented in `STAGE-2.md`.
 ## Architecture overview
 The feature is composed of four orthogonal sub-systems on the warp-4 side, all gated behind `FeatureFlag::EmptyPromptHandoff` once Stage 2 lands:
@@ -15,14 +15,15 @@ The feature is composed of four orthogonal sub-systems on the warp-4 side, all g
 3. **Worker-derived skip-initial-turn** — the AgentDriver reads the `--skip-initial-turn` CLI flag (set by the worker on a per-execution basis) rather than destructuring a stored client-side bool (Stage 2).
 4. **`AmbientSetupPhaseEnded` setup-phase teardown** — the AgentDriver emits a shared-session-protocol marker after env setup completes; the viewer event loop tears down the Cloud Mode Setup V2 UI on receipt (Stage 2).
 ## 1. Wire-contract widening (Stage 1)
-`SpawnAgentRequest` in `app/src/server/server_api/ai.rs:205-207`:
-```rust path=/Users/harryalbert/warp-4/app/src/server/server_api/ai.rs start=205
+`SpawnAgentRequest` in `app/src/server/server_api/ai.rs:206-208`:
+```rust path=/Users/harryalbert/warp-4/app/src/server/server_api/ai.rs start=206
+/// None for skill-only or conversation-only invocations; omitted on the wire.
 #[serde(skip_serializing_if = "Option::is_none")]
 pub prompt: Option<String>,
 ```
 `Option<T>` serializes transparently under serde: `Some("hello")` emits `"prompt": "hello"`, and `skip_serializing_if = "Option::is_none"` causes `None` to omit the field entirely. The struct derives only `Serialize`, not `Deserialize`, so wire compatibility only needs to hold client→server.
-All twelve `SpawnAgentRequest { … }` literal construction sites wrap their prompt value in `Some(...)`. The two interactive submit paths in `app/src/terminal/view/ambient_agent/model.rs:666-717` and `:1187` wrap the result of `extract_user_query_mode(prompt)`. `app/src/pane_group/pane/terminal_pane.rs:2137` wraps the orchestration child's `request.prompt`. Fixtures in `spawn_tests.rs`, `model_tests.rs`, `view_tests.rs`, `mcp_config_tests.rs`, and `ai_tests.rs` follow the same shape.
-The CLI path at `app/src/ai/agent_sdk/ambient.rs:267-313` is the only non-test site that emits `prompt: None` at runtime: skill-only and saved-prompt-only invocations propagate `Option<String>` through the resolution branch. The extracted `(prompt, mode)` pair is computed by a `match` at `ambient.rs:474-480` that runs `extract_user_query_mode` only on the `Some` branch and defaults `mode` to `UserQueryMode::Normal` when the prompt is `None`.
+All twelve `SpawnAgentRequest { … }` literal construction sites wrap their prompt value in `Some(...)`. The two interactive submit paths in `app/src/terminal/view/ambient_agent/model.rs:622-649` (`build_handoff_spawn_request`) and `:1111-1139` (`spawn_agent`) wrap the result of `extract_user_query_mode(prompt)`. `app/src/pane_group/pane/terminal_pane.rs:2137` wraps the orchestration child's `request.prompt`. Fixtures in `spawn_tests.rs`, `model_tests.rs`, `view_tests.rs`, `mcp_config_tests.rs`, and `ai_tests.rs` follow the same shape.
+The CLI path at `app/src/ai/agent_sdk/ambient.rs:267-313` is the only non-test site that emits `prompt: None` at runtime: skill-only and conversation-only invocations propagate `Option<String>` through the resolution branch (saved-prompt invocations always resolve to `Some(text)` or fatal-error). The extracted `(prompt, mode)` pair is computed by a `match` at `ambient.rs:474-480` that runs `extract_user_query_mode` only on the `Some` branch and defaults `mode` to `UserQueryMode::Normal` when the prompt is `None`.
 Two reader sites use `.as_deref()` so the `Some` case dereferences to `&str` and the `None` case short-circuits cleanly:
 - `app/src/terminal/view/ambient_agent/block/entry.rs:160` — entry-block title fallback chain: `request.prompt.as_deref().and_then(Self::meaningful_title)`.
 - `app/src/terminal/view/ambient_agent/view_impl.rs:154-189` — Cloud Mode Setup V2 queued-prompt insertion: `request.prompt.as_deref().map(|prompt| display_user_query_with_mode(request.mode, prompt))`. The existing `if !prompt.is_empty()` guard suppresses the block on `None`.
@@ -38,7 +39,7 @@ When `EmptyPromptHandoff` is on and the guardrail passes, all three entry points
 - `app/src/terminal/input.rs:4060-4067`: the empty-prompt early-return in `maybe_launch_cloud_handoff_request` keys on `!(EmptyPromptHandoff.is_enabled() && source_conversation_has_content(...))`; when both conditions hold the early-return is bypassed and `PendingCloudLaunch { prompt: "".to_owned(), attachments }` is built. **Fallback:** swallows the Enter (no-op) so the compose draft is preserved.
 - `app/src/terminal/input/slash_commands/mod.rs:924-940` `/handoff` with no argument: when `EmptyPromptHandoff` is on AND the guardrail passes, dispatches the same `OpenLocalToCloudHandoffPane { launch: None, ... }` as the chip. **Fallback when `EmptyPromptHandoff` is on but the guardrail fails:** no-op (no compose-mode activation). **Fallback when `EmptyPromptHandoff` is off:** legacy compose-mode activation via `activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx)`.
 ### 2.4 Wire-level substitution (display = wire)
-`app/src/terminal/view/ambient_agent/model.rs:686-743` `build_handoff_spawn_request`:
+`app/src/terminal/view/ambient_agent/model.rs:622-649` `build_handoff_spawn_request` (Stage 2 extends this function in place):
 - When the submitted prompt is empty AND `pending_handoff.source_conversation_in_progress` is true: substitute `prompt: Some("Continue")` on the wire.
 - Else when the submitted prompt is empty AND `initial_snapshot_token` is `Some(non-empty)`: substitute `prompt: Some("Apply the workspace changes from my previous session.")` on the wire. The snapshot token still rides on the wire alongside.
 - Else when the submitted prompt is empty: send `prompt: None` on the wire. The worker derives `--skip-initial-turn` from the execution input.
@@ -57,7 +58,7 @@ On the warp-4 side, the relevant client-side architecture is:
 ### 3.1 `SpawnAgentRequest` does not carry the flag
 `app/src/server/server_api/ai.rs` — `SpawnAgentRequest` does not include a `skip_initial_turn` field. The client never derives or transmits this signal; the wire shape between client and server is silent on it.
 ### 3.2 `build_handoff_spawn_request` does not derive the flag
-`app/src/terminal/view/ambient_agent/model.rs:686-743` — the function decides only the wire-level prompt (per Section 2.4). It does not compute a `skip_initial_turn` value. `spawn_agent` at `model.rs:1187` likewise emits no `skip_initial_turn` value.
+`app/src/terminal/view/ambient_agent/model.rs:622-649` — the function decides only the wire-level prompt (per Section 2.4). It does not compute a `skip_initial_turn` value. `spawn_agent` at `model.rs:1111-1139` likewise emits no `skip_initial_turn` value.
 ### 3.3 `AgentRunPrompt::ServerSide` shape
 `app/src/ai/agent_sdk/driver.rs:405-410` — the `ServerSide` variant carries only `skill: Option<ParsedSkill>` and `attachments_dir: Option<String>`. The skip-initial-turn signal is intentionally not part of the prompt variant because the prompt variant must round-trip through `prepare_harness` (which is harness-agnostic) without ferrying a flag that's meaningful only on the Oz harness.
 ### 3.4 `AgentDriverOptions` and `AgentDriver` field
