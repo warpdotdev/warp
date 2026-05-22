@@ -81,6 +81,9 @@ pub enum InputTypeAutoDetectionSource {
     ManualToggle,
     ShellPrefix,
     AttachmentForcedAi,
+    Denylist,
+    HistoryMatch,
+    AgentFollowUp,
     HistorySelection,
     /// Inserting a workflow into the input set the input type based on workflow kind.
     WorkflowInsertion,

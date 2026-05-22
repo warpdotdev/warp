@@ -20,10 +20,7 @@ pub enum NldDecision {
     NldClassifier,
     NldClassifierFallbackHeuristic,
     NldClassifierFallbackCurrentInput,
-    Denylist,
-    HistoryMatch,
     OneOffWhitelist,
-    AgentFollowUp,
     ShellHeuristic,
 }
 
