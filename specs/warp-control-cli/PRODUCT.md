@@ -152,7 +152,7 @@ Non-goals:
    - Result data or structured error data.
 29. The protocol is versioned. Clients must be able to determine whether a running Warp process supports the protocol version and action they intend to call.
 30. Multiple running Warp processes are a supported normal case, not an error state. A local stable build and local dev build, or multiple supported local app instances, can coexist; the CLI provides deterministic discovery and addressing rather than assuming one global server.
-31. Requests should be scoped to local-user control of the running app. A command that fails authentication or local authorization reports that condition explicitly and does not degrade into a less-specific request.
+31. Requests should be scoped to local-user control of the running app, with separate enforcement for actions that require a true logged-in Warp user. A command that fails local authentication, local authorization, execution-context checks, or authenticated-user checks reports that condition explicitly and does not degrade into a less-specific request.
 32. If a selected action is valid in general but impossible in the current UI state, the CLI reports a state-specific failure. Examples include:
    - Splitting a pane that no longer exists.
    - Running a session-scoped command against a non-terminal pane.
@@ -167,47 +167,72 @@ Non-goals:
 34. Follow-up PRs should fill out the remaining catalog in parallelizable groups once the protocol, discovery model, target resolution, error model, `tab.create` action path, and standalone `warpctrl` packaging shape have been validated by the first slice.
 35. The protocol transport should be designed so that the default target is localhost but the CLI can be extended in the future to target remote URLs (e.g., a Warp instance on another machine or a hosted control endpoint). This is not in scope for the first implementation but should not be precluded by the architecture.
 ## Action classification and permission model
-Agents (Oz cloud agents, local agent mode, and third-party automation) are expected to be major consumers of the warpctrl CLI alongside human developers. The action catalog must support differentiated permission policies for human callers versus agent callers, and must clearly classify every action by its risk profile so that Warp can enforce appropriate guardrails at both the protocol and product level.
+Agents, scripts, and human developers are expected to be major consumers of `warpctrl`. The action catalog must therefore classify every action by both risk tier and authenticated-user requirement so Warp can enforce local-control permissions in the app bridge.
+Every action definition must include:
+- a stable action name and namespace;
+- a risk tier;
+- whether a true logged-in Warp user is required;
+- whether the action may run from external clients, verified Warp-terminal clients, or both;
+- the required local-control permission category;
+- any target-scope restrictions.
+By default, new actions require an authenticated Warp user. An action may be marked logged-out-safe only after deliberate review confirms it does not touch Warp Drive, AI conversation traces, synced settings, team/account data, cloud-backed user state, terminal content, or other user-sensitive data.
 ### Classification tiers
 Every action in the catalog belongs to exactly one of the following tiers, from least to most sensitive:
-1. **Read-only / metadata.** Actions that return app-level structural information without exposing terminal content. These are safe for any caller and should never require elevated permission.
+1. **Read-only / metadata.** Actions that return local app structure or configuration without exposing terminal content or user-authenticated data.
    - Instance discovery and health: `instance list`, `app active`, `app version`, `app ping`.
    - Layout enumeration: `window list`, `tab list`, `pane list`, `session list`.
-   - Appearance/settings reads that return configuration values but not user data: `theme list`, `setting list`, `setting get`.
-2. **Read-only / terminal data.** Actions that return content from a user's terminal sessions, command history, pane output buffers, or input editor state. These expose potentially sensitive user data and must be gated separately from structural metadata reads.
-   - Reading pane output or scrollback content (when implemented).
+   - Appearance reads that return local configuration values but not user data: `theme list`, selected `setting get` actions for logged-out-safe local settings.
+   These are the primary default actions for external clients.
+2. **Read-only / terminal data.** Actions that return content from terminal sessions, command history, pane output buffers, input editor state, session replay, or terminal-derived traces.
+   - Reading pane output or scrollback content.
    - Reading the current input buffer contents.
    - Reading command history or session replay data.
-   Even though these are read-only, they cross a privacy boundary that metadata reads do not. An agent that can enumerate tabs should not automatically be able to read terminal output.
-3. **Mutating / non-destructive.** Actions that change app state in ways that are visible but reversible or low-risk. They do not destroy user data or execute arbitrary commands.
+   Even though these are read-only, they cross a privacy boundary that metadata reads do not.
+3. **Mutating / non-destructive.** Actions that change app state in visible, reversible, or low-risk ways without executing terminal content or destroying user state.
    - Layout mutations: `tab create`, `tab activate`, `tab move`, `tab rename`, `window create`, `window focus`, `pane split`, `pane focus`, `pane navigate`, `pane maximize`, `pane resize`.
    - Appearance mutations: `theme set`, `font-size increase/decrease/reset`, `zoom increase/decrease/reset`.
-   - Settings writes for allowlisted non-destructive settings: `setting set`, `setting toggle`.
-   - Panel/surface toggles: settings open, command palette, Warp Drive toggle, AI assistant toggle, etc.
-4. **Mutating / destructive or high-risk.** Actions that destroy user state, close active work, or execute arbitrary content in a terminal session. These require the strongest permission gates and explicit review before agent use.
+   - Settings writes for allowlisted non-destructive local settings.
+   - Panel/surface toggles where they do not expose authenticated user data.
+4. **Mutating / destructive or high-risk.** Actions that destroy user state, close active work, inject terminal input, execute commands, or execute user-authored content.
    - Closing targets: `tab close`, `window close`, `pane close`.
    - Terminal input injection: `input insert`, `input replace`, `input clear`.
-   - Command execution in a session (when implemented).
+   - Command execution in a session.
    - Input mode switching between terminal and agent modes.
-   Any action that can cause data loss (closing an unsaved session) or execute arbitrary code (injecting and running a shell command) belongs here regardless of how simple the API looks.
-### Permission policies
-The protocol and product should support per-caller permission policies keyed to these tiers:
-- **Human interactive use** defaults to full access across all tiers, gated only by local authentication (the bearer token).
-- **Agent use** should default to read-only metadata access and require explicit opt-in for each higher tier. The product should support:
-  - A baseline "read-only metadata" grant that lets agents discover and enumerate without accessing terminal content or mutating state.
-  - A "read terminal data" grant that additionally permits reading pane output, input buffers, and session content.
-  - A "mutate non-destructive" grant that additionally permits layout and appearance changes.
-  - A "mutate destructive" grant that additionally permits closing targets, injecting input, and executing commands.
-- The permission model should be expressible in the protocol (e.g., a capability or scope field in the authentication material) so that the app bridge can enforce it server-side, not just client-side.
-- When an agent attempts an action above its granted tier, the bridge should return a structured `insufficient_permissions` error that identifies the required tier, rather than silently downgrading or returning a generic failure.
-### Scoped credentials and caller identity
-The local discovery bearer token is not sufficient for differentiated human vs. agent permissions. If the same full-access token is readable by both humans and agents, the server cannot enforce agent-specific read-only defaults. Before agent-facing read/write or destructive actions ship, the product must introduce scoped credentials.
-- The discovery record may expose a human CLI credential for same-user interactive use, but agent runtimes should not receive that full-access credential by default.
-- Agent callers should receive a separate scoped credential minted by Warp or by a trusted local broker. The credential must identify the caller class (`human`, `local_agent`, `cloud_agent`, `third_party_automation`) and granted permission tiers.
-- Scoped credentials should be bound to a specific Warp instance, protocol version, issued-at time, optional expiry time, and allowed action tiers. The bridge must validate those fields before action dispatch.
-- The bridge, not the CLI frontend, enforces permission tiers by mapping every `ActionKind` to a required tier and comparing that tier to the credential's grants.
-- If a process presents the human discovery credential, the bridge treats it as human interactive use. If a process presents an agent credential, the bridge applies the agent policy even if the process runs under the same local user account.
-- The first implementation slice may ship a same-user human credential only because it implements discovery and `tab create`; any slice that exposes terminal data, input mutation, command execution, or other agent-consumable automation must add scoped credential issuance first.
+   - Executing Warp Drive workflows or notebooks in a terminal session.
+   Any action that can cause data loss or execute arbitrary code belongs here regardless of how simple the API looks.
+### Authenticated-user requirement
+An authenticated user means a true logged-in Warp user in the selected Warp app, not merely the local OS user or a `warpctrl` process authenticated to localhost.
+The allowlist must clearly indicate `requires_authenticated_user` for every action:
+- `false` only for logged-out-safe actions that operate on local app structure, local appearance metadata, or local-only settings that do not expose user-sensitive data.
+- `true` for actions that read or mutate Warp Drive, AI conversation traces, synced settings, team/account data, user identity data, or any cloud-backed Warp state.
+- `true` for actions that execute user-authored Warp Drive content, even if the execution target is a local terminal session.
+If an authenticated-user action is invoked while the selected app has no logged-in user, the CLI reports a structured authenticated-user error. It must not silently return partial logged-out data as success.
+### Execution context policy
+`warpctrl` should distinguish verified invocations from inside Warp-managed terminal sessions from external invocations.
+- **External invocation:** a `warpctrl` process started outside Warp's terminal. By default, it can receive only the smaller logged-out-safe local action set that does not touch user-authenticated data. Higher tiers require explicit local-control settings or approvals.
+- **Verified Warp-terminal invocation:** a `warpctrl` process started inside a Warp-managed terminal session and able to present an app-issued execution-context proof. When the selected app has a logged-in Warp user, this context can receive authenticated-user grants if the user enabled that permission.
+- The app must not trust a caller-declared label. Environment variables may help discover the context, but the broker must verify a session-bound capability or equivalent proof before issuing in-Warp-only grants.
+### Granular local-control permissions
+The product settings surface should expose granular permissions under the default-off local-control setting. Recommended controls:
+- Allow local read-only metadata.
+- Allow terminal data reads.
+- Allow non-destructive local mutations.
+- Allow destructive or execution actions.
+- Allow authenticated-user actions from verified Warp terminals.
+- Allow authenticated-user actions from external clients, default off and separate from the in-Warp permission.
+These settings define the maximum grants the broker may issue. The app bridge still enforces the action's risk tier, authenticated-user requirement, execution-context requirement, and target scope for every request.
+### Scoped credentials
+The local discovery record must not expose a reusable full-access credential. `warpctrl` should request scoped credentials from an app-owned broker or equivalent trusted path.
+Scoped credentials should include:
+- the selected Warp instance;
+- granted risk tiers;
+- allowed action families;
+- verified execution context;
+- whether authenticated-user access is granted and for which logged-in user subject;
+- optional target scopes;
+- issuance and expiry metadata;
+- revocation/audit identity.
+The bridge, not the CLI frontend, enforces these grants. If a request exceeds its credential, the bridge returns `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, or `execution_context_not_allowed` as appropriate.
 ### Future entity extensibility: files and Warp Drive objects
 The selector and action model should be designed to accommodate entity types beyond the current window/tab/pane/session hierarchy. Two important future entity families are **local files** and **Warp Drive objects** (workflows, notebooks, environment variables, prompts). Neither is in scope for the first implementation, but the protocol should not preclude them.
 **Files.** Warp already supports file opening via deep links and the built-in editor. A future `file` namespace could support:
@@ -224,12 +249,12 @@ Drive object selectors should support both opaque IDs (for automation stability)
 **Design constraints for both:**
 - File and Drive selectors are orthogonal to the window/tab/pane hierarchy — a file open action targets an instance (which window to open in), not a specific pane. A Drive workflow execution targets a session (which pane to run in).
 - The `TargetSelector` type in the protocol should be extensible with optional fields for these new selector families without breaking existing requests that omit them.
-- The action classification tiers apply: listing Drive objects is tier 1 (metadata), reading Drive object content is tier 1 or 2 depending on whether it contains user data, executing a Drive workflow is tier 4 (destructive/high-risk).
+- The action classification tiers apply, and Drive actions require authenticated-user grants by default: listing Drive objects is tier 1 metadata plus authenticated user, reading Drive object content is tier 1 or 2 depending on whether it contains user data plus authenticated user, and executing a Drive workflow is tier 4 plus authenticated user.
 ### Settings: protocol-first
 Settings reads and writes should go through the local-control protocol like other actions, not bypass it via direct file manipulation.
 - `warpctrl setting get <key>`, `warpctrl setting set <key> <value>`, and `warpctrl setting toggle <key>` send requests to the running Warp instance through the standard authenticated control endpoint.
 - The app bridge validates the key against the allowlist and the value against the expected type before applying the change.
-- This keeps authorization enforcement consistent: the same permission tier checks and caller-type policies apply to settings mutations as to any other action, rather than creating a second unguarded path through the filesystem.
+- This keeps authorization enforcement consistent: the same permission tier, execution-context, and authenticated-user policies apply to settings mutations as to any other action, rather than creating a second unguarded path through the filesystem.
 - The app owns the write to the settings file and any side effects (e.g., theme reload, layout reflow) as a single atomic operation, avoiding races between a CLI file write and the app's file watcher.
 - If a future need arises for offline settings manipulation (no running Warp process), a separate file-based path can be added later with its own validation, but it should not be the default.
 - The action classification still applies: settings reads are tier 1 (metadata), settings writes are tier 3 (non-destructive mutation).

@@ -1,5 +1,6 @@
 # Context
 `PRODUCT.md` defines a standalone local Warp control CLI binary, provisionally named `warpctrl`, with an allowlisted action catalog, deterministic addressing across multiple running Warp app processes, and an incremental implementation plan.
+`SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for explicit in-app enablement, protected enablement storage, granular permissions, discovery metadata, credential storage, scoped safety grants, verified execution context, authenticated-user requirements, localhost/browser protections, action-tier enforcement, deterministic target resolution, and local app-side validation. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
 The existing app already has three relevant building blocks:
 - `crates/http_server/src/lib.rs (7-61)` runs a native-only loopback Axum server on fixed port `9277`.
 - `app/src/lib.rs (1993-2001)` registers that HTTP server in the native app and currently merges only installation-detection and profiling routers.
@@ -22,10 +23,31 @@ The current Oz CLI build/distribution model is also directly relevant because th
 - `script/windows/windows-installer.iss (235-263)` shows the current Windows helper-wrapper pattern for CLI access.
 The most important constraint surfaced by this code is that the current fixed-port local HTTP server cannot be the entire solution for a multi-process control API. If multiple local Warp processes attempt to expose mutating routes through the same fixed port, only one can own it. The control design therefore needs explicit per-process discovery and addressing.
 ## Proposed changes
+### 0. Security architecture dependency
+Before implementing any local-control listener, CLI command, credential path, or action handler, the implementation must be checked against `SECURITY.md`.
+Required security gates:
+- Local control scripting is disabled by default and can only be enabled by an in-app Warp settings flow.
+- The authoritative enablement state is local-only, not Settings Sync'd, and stored in protected local storage rather than ordinary user-editable settings.
+- `warpctrl`, direct protocol requests, shell scripts, config files, registry/plist edits, and server-backed preferences must not be able to enable local control scripting.
+- Discovery records do not publish actionable endpoints or credential references while local control scripting is disabled.
+- Credential issuance is unavailable while local control scripting is disabled.
+- Raw credential material is kept out of plaintext discovery records and stored in platform secure storage where available.
+- The broker distinguishes verified Warp-terminal invocations from external invocations using an app-issued execution-context proof, not a caller-declared label.
+- External invocations default to a smaller logged-out-safe action set that does not touch user-authenticated data.
+- Verified Warp-terminal invocations may receive authenticated-user grants only when the selected app has a true logged-in Warp user and local-control settings allow authenticated-user actions from Warp terminals.
+- The app rejects disabled, unauthenticated, expired, revoked, insufficient-scope, unsupported, malformed, ambiguous, missing-target, and stale-target requests with structured errors.
+- Every action has a documented risk tier and the app bridge enforces the required tier locally before selector resolution or handler dispatch.
+- Every action has a documented `requires_authenticated_user` value and allowed execution contexts. New actions default to requiring an authenticated user unless explicitly reviewed as logged-out-safe.
+- Granular local-control settings gate the maximum grants for metadata reads, terminal-data reads, non-destructive mutations, destructive/execution actions, authenticated-user actions from Warp terminals, and authenticated-user actions from external clients.
+- Safety tiers are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
+- Remote control remains out of scope for the local same-machine credential model.
+The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side tier enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
 ### 1. Protocol crate and stable envelope
 Create a small shared protocol crate or equivalent shared module used by both the app server and standalone CLI client. It should define:
 - Protocol version metadata.
 - Discovery/health response types.
+- Execution-context proof/request types for verified Warp-terminal invocations versus external invocations.
+- Action metadata describing risk tier, required grant, `requires_authenticated_user`, allowed execution contexts, and target families.
 - Selector types:
   - `InstanceSelector`
   - `WindowSelector`
@@ -62,7 +84,7 @@ Recommended response shape:
   "result": {}
 }
 ```
-Error payloads should include a stable code such as `no_instance`, `ambiguous_instance`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, or `unauthorized_local_client`.
+Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
 ### 2. Per-process discovery instead of fixed-port-only routing
 Keep the existing fixed-port HTTP behavior intact for installation detection/profiling compatibility. Add a separate local-control listener that follows the same native Axum/Tokio pattern but supports multiple local Warp app processes.
 Recommended design:
@@ -75,20 +97,27 @@ Recommended design:
   - control-listener endpoint
   - protocol version
   - start timestamp
-  - local-auth material reference or token metadata
+  - credential metadata or secure-storage references only when local control scripting is enabled
 - The CLI loads discovery records, removes or ignores stale records after health checks, and chooses an instance using the product selector rules.
 - `warpctrl instance list` is a CLI-first projection of this discovery registry plus health responses.
+When local control scripting is disabled, discovery must follow `SECURITY.md`: either publish no actionable local-control record or publish only a minimal disabled-status record with no endpoint authority or credential reference.
 This design preserves the current `9277` behavior while avoiding cross-process port contention for the new control API.
-### 3. Local authentication boundary
+### 3. Local authentication, enablement, and safety boundary
 Mutating localhost routes should not copy the permissive CORS posture of `/install_detection`.
 Recommended local trust model:
 - No browser-readable CORS allowance on control endpoints.
-- Per-instance random bearer token or equivalent local credential stored in the discovery record or adjacent secure local state with user-only permissions.
-- CLI automatically loads and presents the credential.
-- The app rejects missing/invalid local credentials before action resolution.
-- Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities or sensitive target state.
+- Local control scripting must be explicitly enabled in the Warp app before credentials are minted or sensitive control requests are accepted.
+- The authoritative enablement bit must live in protected local storage and must not be writable by `warpctrl` or ordinary same-user preference/config edits.
+- Per-instance raw credential material must be kept out of plaintext discovery records and stored in platform secure storage where practical.
+- The CLI may load or request scoped credentials through an app-owned broker/helper, but it must not mint authority itself.
+- The broker verifies whether the invocation originated from a Warp-managed terminal session before issuing in-Warp-only grants.
+- The broker issues authenticated-user grants only when the selected app has a true logged-in Warp user and the relevant local-control permission is enabled.
+- The app rejects disabled-state, missing, malformed, invalid, expired, or revoked credentials before selector resolution or mutation.
+- The app maps every action to a risk tier and rejects insufficient grants before selector resolution or mutation.
+- The app maps every action to a `requires_authenticated_user` value and allowed execution contexts, rejecting mismatches before selector resolution or mutation.
+- Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities, credentials, or sensitive target state.
 This keeps the protocol local and scriptable without creating an ambient browser-to-localhost control surface.
-For agent-facing permissions, local authentication must evolve from a single bearer token into scoped credentials before higher-risk surfaces ship. A scoped credential should encode caller class, instance binding, granted permission tiers, issue time, and optional expiry. The app bridge must authenticate the credential and enforce the required action tier server-side before selector resolution or mutation. The first slice can use the discovery bearer token for human same-user CLI use only because it is limited to discovery and `tab.create`.
+Do not ship the first slice as a plaintext discovery bearer token, even for same-user human CLI use. The first slice is the foundation for higher-risk terminal data, input injection, command execution, and destructive operations, so it must establish the protected enablement, credential storage, scoped grant, and app-side enforcement model from `SECURITY.md`.
 ### 4. App-side request bridge onto the UI/application context
 The HTTP handler runs on a Tokio runtime thread owned by the local-control server. It cannot directly access or mutate Warp's UI models, views, or app context because all WarpUI state is single-threaded and owned by the main app event loop. The bridge solves this by sending a closure from the Tokio handler thread to the main thread, executing it in the model's context, and returning the result to the waiting HTTP handler.
 #### Thread model
@@ -109,7 +138,8 @@ The bridge uses WarpUI's `ModelSpawner<T>` mechanism, which is the standard way 
 ```
 HTTP handler (Tokio thread)
   │
-  ├─ verify auth token
+  ├─ verify local control scripting is enabled
+  ├─ verify credential, execution context, safety grant, and authenticated-user grant
   ├─ deserialize RequestEnvelope
   ├─ call bridge_spawner.spawn(move |bridge, ctx| {
   │      bridge.handle_request(request, ctx)  // runs on main thread
@@ -119,6 +149,10 @@ HTTP handler (Tokio thread)
 
 LocalControlBridge::handle_request (main thread)
   │
+  ├─ verify protected enablement state is still enabled
+  ├─ map action to required risk tier
+  ├─ map action to authenticated-user and execution-context requirements
+  ├─ verify presented credential grants that tier, target family, execution context, and authenticated-user access
   ├─ match request.action.kind
   │   └─ ActionKind::TabCreate
   │       ├─ validate_tab_create_target(&request.target)
@@ -143,9 +177,11 @@ LocalControlBridge::handle_request (main thread)
 #### Adding new action handlers
 To add a new action to the bridge:
 1. Add a variant to `ActionKind` in `crates/local_control/src/protocol.rs`.
-2. Add a match arm in `LocalControlBridge::handle_request` in `app/src/local_control/mod.rs`.
-3. Inside the match arm, use `ctx` (which is a `&mut ModelContext<LocalControlBridge>` that derefs to `&mut AppContext`) to resolve selectors and dispatch the action onto existing app types.
-4. Return a `ResponseEnvelope::ok(...)` or `ResponseEnvelope::error(...)` with the result.
+2. Document its `SECURITY.md` risk tier, required grant, `requires_authenticated_user` value, and allowed execution contexts.
+3. Add a match arm in `LocalControlBridge::handle_request` in `app/src/local_control/mod.rs`.
+4. Before selector resolution or dispatch, verify local control is enabled and the presented credential grants the action tier, target family, execution context, and authenticated-user access if required.
+5. Inside the match arm, use `ctx` (which is a `&mut ModelContext<LocalControlBridge>` that derefs to `&mut AppContext`) to resolve selectors and dispatch the action onto existing app types.
+6. Return a `ResponseEnvelope::ok(...)` or `ResponseEnvelope::error(...)` with the result.
 The bridge closure has access to the full `AppContext` API surface, including `ctx.windows()`, `ctx.window_ids()`, `ctx.views_of_type::<T>(window_id)`, `handle.update(ctx, ...)`, and `handle.read(ctx, ...)`. This makes it straightforward to wire new actions to existing UI behavior without introducing new concurrency concerns.
 ### 5. Target resolution model
 Implement target resolution as a reusable component rather than scattering lookup logic across handlers.
@@ -160,6 +196,7 @@ Selector behavior:
 - Explicit opaque IDs must resolve exactly or return `stale_target`.
 - Index selectors are allowed only for user-visible indexed concepts such as tabs and should resolve to a concrete opaque ID before execution.
 - A session-scoped request against a non-terminal pane returns `target_state_conflict`.
+Target resolution must happen after protected enablement, authentication, and safety-grant checks. This prevents denied requests from learning more target state than necessary and keeps enforcement centralized.
 Implementation references:
 - Window-level active selection already exists inside the app through `WindowManager`.
 - Pane scoping can build on the conceptual model of `PaneViewLocator` in `app/src/workspace/util.rs (12-18)`.
@@ -183,15 +220,21 @@ Do not use a generic “dispatch action by string” endpoint. Every handler sho
 ### 7. First slice: prove discovery and `tab.create`
 The first `warpctrl` implementation slice should land the minimum cross-cutting architecture plus a single representative tab mutation:
 - Shared protocol types and error envelopes.
+- Protected in-app enablement setting and protected local-only enablement storage.
+- Granular local-control permission storage for at least metadata, non-destructive local mutations, and authenticated-user-action categories.
 - Discovery registry and CLI instance selection.
 - A standalone `warpctrl` binary or artifact path that runs control commands without starting the GUI app runtime.
-- Per-process authenticated local-control server.
+- Per-process authenticated local-control server that refuses sensitive work when local control scripting is disabled.
+- Scoped credential issuance/storage with no raw credentials in plaintext discovery records, including execution-context fields and authenticated-user grant fields.
 - App-side request bridge and selector resolver.
+- Action-tier mapping and app-side safety-grant enforcement.
+- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe non-destructive local mutation only when the user's granular local-control settings allow that category.
 - Read-only `ping/version` plus `warpctrl instance list` or equivalent minimal discovery command.
 - End-to-end `warpctrl tab create` for the selected instance, reusing the same app behavior as the user-visible new-terminal-tab action.
 Why `tab.create` first:
 - It proves a UI/layout action can be targeted and executed against live app state.
 - It exercises process discovery, local authentication, request bridging, selector defaults, app-context dispatch, and structured success/error output without introducing higher-risk terminal input execution.
+- It exercises the protected enablement and scoped-grant model before higher-risk action families depend on it.
 - It gives operators a concise end-to-end smoke test: discover a running instance, create a tab, and confirm the live app changed.
 The PR should also introduce the shell-facing CLI command grammar that the remainder of the protocol will reuse and establish a lightweight CLI startup path distinct from GUI startup.
 ### 8. Follow-up slices: fill out the remaining protocol in parallel
@@ -232,6 +275,7 @@ sequenceDiagram
     participant CLI as Warp control CLI
     participant REG as Local discovery registry
     participant PROC as Selected Warp process
+    participant BROKER as Credential broker
     participant HTTP as Local control listener
     participant BRIDGE as App request bridge
     participant RES as Target resolver
@@ -242,8 +286,12 @@ sequenceDiagram
     CLI->>PROC: Health/protocol check for candidates
     PROC-->>CLI: Instance metadata + compatibility
     CLI->>CLI: Resolve instance selector
+    CLI->>BROKER: Request scoped credential for action + execution context
+    BROKER-->>CLI: Grant or structured denial
     CLI->>HTTP: Authenticated POST tab.create request
+    HTTP->>HTTP: Verify enablement + credential + execution context
     HTTP->>BRIDGE: Typed request + response channel
+    BRIDGE->>BRIDGE: Recheck enablement + tier + auth-user policy
     BRIDGE->>RES: Resolve window/tab/pane/session selectors
     RES-->>BRIDGE: Concrete target handles or typed error
     BRIDGE->>ACT: Execute allowlisted ControlAction
@@ -256,10 +304,19 @@ sequenceDiagram
 ```
 ## Testing and validation
 Map tests directly to `PRODUCT.md` behavior.
+- Security architecture:
+  - Protected enablement tests proving disabled state rejects credential issuance, sensitive discovery, and mutating requests with `local_control_disabled`.
+  - Tests proving discovery in disabled state exposes no actionable endpoint authority or credential reference.
+  - Credential-storage tests proving raw credentials are not written into plaintext discovery records.
+  - Execution-context tests proving external clients cannot receive grants reserved for verified Warp-terminal invocations.
+  - Tier-enforcement tests proving insufficient grants fail with `insufficient_permissions` before selector resolution or handler dispatch.
+  - Authenticated-user tests proving user-authenticated actions fail without a logged-in app user or authenticated-user grant.
+  - Granular-permission tests proving disabled categories invalidate credentials and prevent new grants.
+  - Structured-error tests for disabled, unauthenticated, expired, revoked, insufficient-scope, execution-context-denied, authenticated-user-required, authenticated-user-unavailable, unsupported, malformed, ambiguous, missing-target, stale-target, and invalid-selector requests.
 - Behavior 1-6, 29-31:
   - Protocol version/unit tests.
   - Discovery-registry tests with zero, one, multiple, stale, and incompatible instance records.
-  - Local-auth tests for missing/invalid/valid credentials.
+  - Local-auth tests for missing, invalid, expired, revoked, and valid credentials.
 - Behavior 7-13:
   - Selector-resolution unit tests for active, explicit ID, index, stale target, ambiguous target, and non-terminal session target.
   - Tests that no lower-level selector silently retargets after an explicit stale selector fails.
@@ -305,7 +362,15 @@ flowchart LR
 - Fixed-port server assumptions:
   - Mitigation: leave current `9277` endpoints undisturbed and use a per-process control listener plus discovery registry.
 - Browser-to-localhost abuse:
-  - Mitigation: no permissive CORS, explicit local auth, and mutating routes gated before selector resolution.
+  - Mitigation: no permissive CORS, protected in-app enablement, explicit local auth, scoped grants, and mutating routes gated before selector resolution.
+- External apps silently enabling local control:
+  - Mitigation: authoritative enablement state lives in protected local storage, is local-only, is not Settings Sync'd, and is not writable through `warpctrl`, config files, registry/plist preference edits, or server-backed settings.
+- External apps obtaining in-Warp authenticated-user grants:
+  - Mitigation: require an app-issued execution-context proof for Warp-terminal-only grants, do not trust caller-declared labels or plain environment variables as sole authority, and keep external authenticated-user grants behind a separate default-off permission.
+- Logged-out requests touching user-authenticated data:
+  - Mitigation: every action declares `requires_authenticated_user`, new actions default to true, and the bridge returns authenticated-user errors before selector resolution or dispatch.
+- Implementation drift from `SECURITY.md`:
+  - Mitigation: treat `SECURITY.md` as normative for security behavior; update this technical plan before implementation when there is disagreement, and include tests for the security architecture in the first slice.
 - Action catalog drift from real UI behavior:
   - Mitigation: each control action reuses or factors existing UI action paths rather than duplicating behavior.
 - Leaking internal unstable identifiers:
