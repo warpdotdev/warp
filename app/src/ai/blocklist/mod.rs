@@ -12,7 +12,6 @@ pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
-pub(crate) mod queued_prompts_panel;
 pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
@@ -71,7 +70,6 @@ pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedR
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
-pub(crate) use queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 pub(crate) use queued_query::{
     AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
     QueuedQueryOrigin,

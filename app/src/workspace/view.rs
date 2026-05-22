@@ -22655,23 +22655,6 @@ impl TypedActionView for Workspace {
             } => {
                 self.summarize_active_ai_conversation(prompt.clone(), initial_prompt.clone(), ctx);
             }
-            QueuePromptForConversation { prompt } => {
-                let Some(terminal_view) = self
-                    .active_tab_pane_group()
-                    .as_ref(ctx)
-                    .active_session_view(ctx)
-                else {
-                    return;
-                };
-
-                terminal_view.update(ctx, |terminal, ctx| {
-                    terminal.enqueue_prompt(
-                        prompt.clone(),
-                        crate::ai::blocklist::QueuedQueryOrigin::AutoQueueToggle,
-                        ctx,
-                    );
-                });
-            }
             InsertForkSlashCommand => {
                 self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                     if let Some(terminal_view) = pane_group.active_session_view(ctx) {

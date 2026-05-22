@@ -9,6 +9,7 @@ mod context_menu;
 pub mod init;
 pub mod inline_banner;
 pub mod load_ai_conversation;
+pub(crate) mod queued_prompts_panel;
 #[cfg(test)]
 #[path = "view/queued_prompts_test.rs"]
 mod queued_prompts_test;
@@ -268,11 +269,10 @@ use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
     InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
     LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedPromptsPanelEvent,
-    QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind,
-    ShellCommandExecutor, ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor,
-    StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-    PRE_REWIND_PREFIX,
+    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQueryModel,
+    RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
+    SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+    ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -4321,19 +4321,6 @@ impl TerminalView {
         };
         terminal_view.register_subscriptions_for_use_agent_footer(ctx);
 
-        if FeatureFlag::QueueSlashCommand.is_enabled() {
-            let queued_query_model = terminal_view.queued_query_model.clone();
-            let queued_prompts_panel = ctx.add_typed_action_view(|ctx| {
-                crate::ai::blocklist::QueuedPromptsPanelView::new(queued_query_model, ctx)
-            });
-            ctx.subscribe_to_view(&queued_prompts_panel, |me, _, event, ctx| {
-                me.handle_queued_prompts_panel_event(event, ctx);
-            });
-            terminal_view.input.update(ctx, |input, _| {
-                input.set_queued_prompts_panel(queued_prompts_panel)
-            });
-        }
-
         // Forward RemoteServerManager setup events into the terminal event stream
         // so the ModelEventDispatcher can gate session initialization on them.
         if FeatureFlag::SshRemoteServer.is_enabled() {
@@ -4805,8 +4792,6 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let queued_prompt = self.queued_prompt_callback.take();
-        self.drain_queued_prompts(finish_reason, ctx);
-
         let callbacks = self
             .conversation_completed_callbacks
             .drain(..)
@@ -4817,6 +4802,7 @@ impl TerminalView {
         if let Some(callback) = queued_prompt {
             callback(self, finish_reason, ctx);
         }
+        self.drain_queued_prompts(finish_reason, ctx);
     }
 
     #[cfg(feature = "local_fs")]
@@ -5166,54 +5152,6 @@ impl TerminalView {
         }
     }
 
-    /// Append a prompt to the queued-query model for regular Agent Mode queueing surfaces such as
-    /// the queue-next toggle and `/queue`. Returns `None` if no conversation is selected (e.g. the
-    /// agent view is closed), in which case the prompt is silently dropped.
-    pub fn enqueue_prompt(
-        &mut self,
-        prompt: String,
-        origin: QueuedQueryOrigin,
-        ctx: &mut ViewContext<Self>,
-    ) -> Option<QueuedQueryId> {
-        // Guard against queueing when no conversation is active to avoid stranding prompts.
-        self.ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)?;
-        let id = self.queued_query_model.update(ctx, |model, ctx| {
-            model.append(QueuedQuery::new(prompt, origin), ctx)
-        });
-        Some(id)
-    }
-
-    /// Handles input-placement side effects from `QueuedPromptsPanelView`, which the panel itself
-    /// doesn't own because the input editor lives on `Input`.
-    fn handle_queued_prompts_panel_event(
-        &mut self,
-        event: &QueuedPromptsPanelEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            QueuedPromptsPanelEvent::RowDeletedForInputPlacement { text } => {
-                let text = text.clone();
-                self.input.update(ctx, |input, ctx| {
-                    if input.buffer_text(ctx).is_empty() {
-                        input.replace_buffer_content(&text, ctx);
-                        input.focus_input_box(ctx);
-                    }
-                });
-            }
-            QueuedPromptsPanelEvent::EditCancelled { .. }
-            | QueuedPromptsPanelEvent::RowEdited { .. }
-            | QueuedPromptsPanelEvent::RowRemoved { .. } => {
-                self.input
-                    .update(ctx, |input, ctx| input.focus_input_box(ctx));
-            }
-            QueuedPromptsPanelEvent::RowEditEntered { .. }
-            | QueuedPromptsPanelEvent::CollapseToggled { .. }
-            | QueuedPromptsPanelEvent::RowReordered { .. } => {}
-        }
-    }
-
     /// Drains one prompt from the queued-query model when the active conversation finishes.
     fn drain_queued_prompts(&mut self, finish_reason: FinishReason, ctx: &mut ViewContext<Self>) {
         match finish_reason {
@@ -5229,7 +5167,7 @@ impl TerminalView {
 
                 let action = self
                     .queued_query_model
-                    .update(ctx, |model, ctx| model.pop_for_autofire(None, ctx));
+                    .update(ctx, |model, ctx| model.pop_for_autofire(ctx));
                 match action {
                     Some(AutofireAction::Submit { text }) => {
                         self.input.update(ctx, |input, ctx| {
@@ -20110,7 +20048,7 @@ impl TerminalView {
             .rich_content_views
             .iter()
             .rev()
-            .find(|rc| !rc.is_usage_footer());
+            .find(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query());
 
         candidate.and_then(|rich_content| {
             let ai_metadata = rich_content.ai_block_metadata()?;
@@ -22162,7 +22100,7 @@ impl TerminalView {
         self.rich_content_views
             .iter()
             .rev()
-            .find(|rc| !rc.is_usage_footer())
+            .find(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query())
             .and_then(|rich_content| rich_content.ai_block_metadata())
             .map(|ai_metadata| ai_metadata.ai_block_handle.clone())
     }

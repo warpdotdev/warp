@@ -134,6 +134,7 @@ use super::view::inline_banner::{
     PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
     ZeroStatePromptSuggestionType,
 };
+use super::view::queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 use super::view::{
     ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
 };
@@ -1676,8 +1677,8 @@ pub struct Input {
     buy_credits_banner: ViewHandle<BuyCreditsBanner>,
     agent_status_view: ViewHandle<BlocklistAIStatusBar>,
     /// Optional queued-prompts panel rendered between `agent_status_view` and the input editor.
-    /// Set lazily by [`TerminalView`] after construction via [`Input::set_queued_prompts_panel`].
-    queued_prompts_panel: Option<ViewHandle<crate::ai::blocklist::QueuedPromptsPanelView>>,
+    /// Constructed in [`Input::new`] when [`FeatureFlag::QueueSlashCommand`] is enabled.
+    queued_prompts_panel: Option<ViewHandle<QueuedPromptsPanelView>>,
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_shortcut_view_model: ModelHandle<AgentShortcutViewModel>,
     ambient_agent_view_state: Option<AmbientAgentViewState>,
@@ -3496,6 +3497,16 @@ impl Input {
             )
         });
 
+        let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
+            let panel = ctx.add_typed_action_view(|ctx| {
+                QueuedPromptsPanelView::new(queued_query_model.clone(), ctx)
+            });
+            ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
+                me.handle_queued_prompts_panel_event(event, ctx);
+            });
+            panel
+        });
+
         let deferred_remote_operations =
             DeferredRemoteOperations::new(model.lock().block_list().active_block_id().clone());
 
@@ -3586,7 +3597,7 @@ impl Input {
             weak_view_handle: ctx.handle(),
             buy_credits_banner,
             agent_status_view,
-            queued_prompts_panel: None,
+            queued_prompts_panel,
             agent_view_controller,
             agent_input_footer,
             agent_shortcut_view_model,
@@ -3659,20 +3670,24 @@ impl Input {
         &self.agent_status_view
     }
 
-    /// Sets the queued-prompts panel handle so it can be rendered between the warping indicator
-    /// (`agent_status_view`) and the input editor.
-    pub fn set_queued_prompts_panel(
+    /// Handles events from the queued-prompts panel: places deleted-row text into an empty editor,
+    /// and refocuses the input editor when an inline edit finishes.
+    fn handle_queued_prompts_panel_event(
         &mut self,
-        panel: ViewHandle<crate::ai::blocklist::QueuedPromptsPanelView>,
+        event: &QueuedPromptsPanelEvent,
+        ctx: &mut ViewContext<Self>,
     ) {
-        self.queued_prompts_panel = Some(panel);
-    }
-
-    /// Returns the queued-prompts panel handle, if one was set.
-    pub fn queued_prompts_panel(
-        &self,
-    ) -> Option<&ViewHandle<crate::ai::blocklist::QueuedPromptsPanelView>> {
-        self.queued_prompts_panel.as_ref()
+        match event {
+            QueuedPromptsPanelEvent::RowDeleted { text } => {
+                if self.buffer_text(ctx).is_empty() {
+                    self.replace_buffer_content(text, ctx);
+                }
+                self.focus_input_box(ctx);
+            }
+            QueuedPromptsPanelEvent::EditEnded => {
+                self.focus_input_box(ctx);
+            }
+        }
     }
 
     pub fn agent_input_footer(&self) -> &ViewHandle<AgentInputFooter> {
@@ -13238,9 +13253,7 @@ impl Input {
             return false;
         };
 
-        let history = BlocklistAIHistoryModel::handle(ctx);
-        let should_queue = history
-            .as_ref(ctx)
+        let should_queue = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|c| {
                 !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
@@ -13284,8 +13297,6 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        // The auto-queue toggle origin powers telemetry; queue ordering is FIFO across origins.
-        let _ = conversation_id;
         self.queued_query_model.update(ctx, |model, ctx| {
             model.append(
                 QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),

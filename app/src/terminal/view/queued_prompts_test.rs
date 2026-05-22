@@ -21,7 +21,7 @@ fn complete_drain_pops_head_and_returns_submit_action() {
             m.append(user_query("second"), ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
             Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
             other => panic!("expected Submit, got {other:?}"),
@@ -36,7 +36,7 @@ fn complete_drain_pops_head_and_returns_submit_action() {
 #[test]
 fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
     // When the first row is being edited, drain produces a PopFromEditMode action carrying the
-    // live-edit override text.
+    // row's last-committed text (per spec, NOT any uncommitted live-editor buffer text).
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
         let id_a = model.update(&mut app, |m, ctx| m.append(user_query("first"), ctx));
@@ -45,15 +45,13 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             m.enter_edit_mode(id_a, ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| {
-            m.pop_for_autofire(Some("edited-first".to_owned()), ctx)
-        });
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "edited-first"),
+            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
+        // Edit mode is cleared after pop.
         model.read(&app, |m, _| {
-            // Edit mode is cleared so the next drain doesn't re-enter the edit-mode branch.
             assert_eq!(m.editing_row(), None);
             assert_eq!(m.queue().len(), 1);
             assert_eq!(m.queue()[0].text(), "second");
@@ -76,7 +74,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
         let simulated_input_is_non_empty = true;
         if !(simulated_input_is_non_empty && model.read(&app, |m, _| m.first_row_is_in_edit_mode()))
         {
-            model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+            model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         }
 
         model.read(&app, |m, _| {
@@ -92,7 +90,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
 fn complete_drain_with_empty_queue_returns_none() {
     App::test((), |mut app| async move {
         let model = app.add_model(|_| QueuedQueryModel::new());
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         assert!(action.is_none());
     });
 }
@@ -163,21 +161,21 @@ fn complete_drain_after_error_drain_continues_with_next_row() {
         );
 
         // Complete: pop "second".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
             Some(AutofireAction::Submit { text }) => assert_eq!(text, "second"),
             other => panic!("expected Submit(\"second\"), got {other:?}"),
         }
 
         // Complete again: pop "third".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
             Some(AutofireAction::Submit { text }) => assert_eq!(text, "third"),
             other => panic!("expected Submit(\"third\"), got {other:?}"),
         }
 
         // Queue is now empty; the next drain returns None.
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         assert!(action.is_none());
     });
 }

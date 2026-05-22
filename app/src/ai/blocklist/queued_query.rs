@@ -60,12 +60,12 @@ pub enum AutofireAction {
     /// Submit this prompt as a normal queued user query.
     Submit { text: String },
     /// The popped row was in edit mode at the time of pop.
-    /// The caller places `text` in the input box after deciding it is safe to pop the edited row.
+    /// The caller places `text` (the row's last committed text) in the input box.
     PopFromEditMode { text: String },
 }
 
-/// Queue of follow-up prompts for the active conversation in this terminal view, plus queue UI
-/// and submission state.
+/// Queue of follow-up prompts for the active conversation in this terminal view, plus the
+/// queue-next-prompt toggle state.
 ///
 /// The model is per-terminal-view and implicitly scoped to whichever conversation owns the agent
 /// view; entries are wiped on agent-view exit and on `ClearedConversationsInTerminalView`.
@@ -73,8 +73,6 @@ pub struct QueuedQueryModel {
     queue: Vec<QueuedQuery>,
     /// The row currently in edit mode, if any.
     editing: Option<QueuedQueryId>,
-    /// Whether the queue panel is currently collapsed (header visible, rows hidden).
-    collapsed: bool,
     /// When true, submitting a prompt while the selected conversation is responding will queue it
     /// instead of sending it immediately.
     queue_next_prompt_enabled: bool,
@@ -85,12 +83,10 @@ pub struct QueuedQueryModel {
 pub enum QueuedQueryEvent {
     Appended { query_id: QueuedQueryId },
     Removed { query_id: QueuedQueryId },
-    Replaced { query_id: QueuedQueryId },
     Reordered,
     EditEntered { query_id: QueuedQueryId },
     EditCommitted { query_id: QueuedQueryId },
     EditCancelled { query_id: QueuedQueryId },
-    CollapseToggled { collapsed: bool },
     Cleared,
     QueueNextPromptToggled,
 }
@@ -104,7 +100,6 @@ impl QueuedQueryModel {
         Self {
             queue: Vec::new(),
             editing: None,
-            collapsed: false,
             queue_next_prompt_enabled: false,
         }
     }
@@ -134,11 +129,6 @@ impl QueuedQueryModel {
             .is_some_and(|query| query.id == editing_row_id)
     }
 
-    /// Returns true if the queue panel is collapsed.
-    pub fn is_collapsed(&self) -> bool {
-        self.collapsed
-    }
-
     pub fn is_queue_next_prompt_enabled(&self) -> bool {
         self.queue_next_prompt_enabled
     }
@@ -157,7 +147,8 @@ impl QueuedQueryModel {
     }
 
     /// Pops the first row in the queue and returns it.
-    /// Used by the auto-fire drain when there is no edit-mode special case to handle.
+    /// Used by the error/cancel drain path where the caller restores the popped text to the
+    /// input editor.
     pub fn pop_front(&mut self, ctx: &mut ModelContext<Self>) -> Option<QueuedQuery> {
         if self.queue.is_empty() {
             return None;
@@ -166,44 +157,30 @@ impl QueuedQueryModel {
         if self.editing == Some(popped.id) {
             self.editing = None;
         }
-        self.clear_empty_queue_state();
         ctx.emit(QueuedQueryEvent::Removed {
             query_id: popped.id,
         });
         Some(popped)
     }
 
-    /// Auto-fire drain entry point.
-    /// Returns `None` for empty queues; otherwise pops the first row and returns whether the caller
-    /// should submit it normally or treat it as a popped edit-mode row.
-    ///
-    /// `edit_text_override` lets the caller pass the live editor buffer text when the first
-    /// row is in edit mode (the model only tracks committed row text).
-    pub fn pop_for_autofire(
-        &mut self,
-        edit_text_override: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<AutofireAction> {
+    /// Auto-fire drain entry point. Pops the first row and tells the caller whether to submit
+    /// it normally or treat it as a popped edit-mode row (per the spec, the last-committed text
+    /// is restored to the input box).
+    pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
         let first = self.queue.first()?;
         let first_in_edit_mode = self.editing == Some(first.id);
-        let mut popped = self.queue.remove(0);
+        let popped = self.queue.remove(0);
         if first_in_edit_mode {
-            if let Some(text) = edit_text_override {
-                popped.text = text;
-            }
             self.editing = None;
         }
-        let removed_id = popped.id;
-        let text = popped.text;
-        self.clear_empty_queue_state();
         ctx.emit(QueuedQueryEvent::Removed {
-            query_id: removed_id,
+            query_id: popped.id,
         });
 
         Some(if first_in_edit_mode {
-            AutofireAction::PopFromEditMode { text }
+            AutofireAction::PopFromEditMode { text: popped.text }
         } else {
-            AutofireAction::Submit { text }
+            AutofireAction::Submit { text: popped.text }
         })
     }
 
@@ -218,27 +195,8 @@ impl QueuedQueryModel {
         if self.editing == Some(query_id) {
             self.editing = None;
         }
-        self.clear_empty_queue_state();
         ctx.emit(QueuedQueryEvent::Removed { query_id });
         Some(removed)
-    }
-
-    /// Replaces the text of a specific row by id, if present.
-    /// No-op when `query_id` does not exist.
-    pub fn replace_text_by_id(
-        &mut self,
-        query_id: QueuedQueryId,
-        new_text: String,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(row) = self.queue.iter_mut().find(|q| q.id == query_id) else {
-            return;
-        };
-        if row.text == new_text {
-            return;
-        }
-        row.text = new_text;
-        ctx.emit(QueuedQueryEvent::Replaced { query_id });
     }
 
     /// Moves the row identified by `source_id` to position `target_index` within the queue.
@@ -258,8 +216,8 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::Reordered);
     }
 
-    /// Enters edit mode for `query_id`. If another row was being edited, that edit is implicitly
-    /// committed (its current row text remains as-is).
+    /// Enters edit mode for `query_id`. If another row was being edited, that edit is cancelled
+    /// (its text is unchanged, per the spec).
     pub fn enter_edit_mode(&mut self, query_id: QueuedQueryId, ctx: &mut ModelContext<Self>) {
         let row_exists = self.queue.iter().any(|r| r.id == query_id);
         if !row_exists {
@@ -268,7 +226,7 @@ impl QueuedQueryModel {
 
         if let Some(prev) = self.editing.take() {
             if prev != query_id {
-                ctx.emit(QueuedQueryEvent::EditCommitted { query_id: prev });
+                ctx.emit(QueuedQueryEvent::EditCancelled { query_id: prev });
             }
         }
 
@@ -288,8 +246,9 @@ impl QueuedQueryModel {
             return;
         }
 
-        // `replace_text_by_id` handles event emission and row lookup safety.
-        self.replace_text_by_id(query_id, new_text, ctx);
+        if let Some(row) = self.queue.iter_mut().find(|q| q.id == query_id) {
+            row.text = new_text;
+        }
         ctx.emit(QueuedQueryEvent::EditCommitted { query_id });
     }
 
@@ -301,29 +260,14 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::EditCancelled { query_id });
     }
 
-    /// Sets the collapsed state of the queue panel.
-    pub fn set_collapsed(&mut self, collapsed: bool, ctx: &mut ModelContext<Self>) {
-        if self.collapsed != collapsed {
-            self.collapsed = collapsed;
-            ctx.emit(QueuedQueryEvent::CollapseToggled { collapsed });
-        }
-    }
-
-    /// Removes all queue, edit, and collapse state.
+    /// Removes all queue and edit state.
     /// Used when the agent view is exited or all conversations in the terminal view are cleared.
     pub fn clear_all(&mut self, ctx: &mut ModelContext<Self>) {
-        let had_state = !self.queue.is_empty() || self.editing.is_some() || self.collapsed;
+        let had_state = !self.queue.is_empty() || self.editing.is_some();
         self.queue.clear();
         self.editing = None;
-        self.collapsed = false;
         if had_state {
             ctx.emit(QueuedQueryEvent::Cleared);
-        }
-    }
-
-    fn clear_empty_queue_state(&mut self) {
-        if self.queue.is_empty() {
-            self.collapsed = false;
         }
     }
 }

@@ -1,9 +1,10 @@
 //! Multi-prompt queue panel rendered between the warping indicator and the input editor in
 //! [`TerminalView`].
 //!
-//! Reads from [`QueuedQueryModel`] and emits high-level
-//! [`QueuedPromptsPanelEvent`]s for the host view to handle (for example, focusing the input
-//! editor after canceling an edit).
+//! Reads from [`QueuedQueryModel`] for queue data and tracks its own panel-only UI state
+//! (collapse, hover, drag). Emits two high-level events:
+//! [`QueuedPromptsPanelEvent::RowDeleted`] and [`QueuedPromptsPanelEvent::EditEnded`], which the
+//! host uses to update the input editor.
 use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
@@ -31,7 +32,7 @@ use crate::editor::{
 };
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
-use crate::ui_components::icons::Icon;
+use crate::ui_components::icons::Icon as TerminalIcon;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
@@ -49,7 +50,7 @@ fn build_row_state(
 ) -> QueuedPromptRowState {
     let edit_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
-            .with_icon(Icon::Pencil)
+            .with_icon(TerminalIcon::Pencil)
             .with_tooltip("Edit queued prompt")
             .with_size(ButtonSize::XSmall)
             .on_click(move |ctx| {
@@ -58,7 +59,7 @@ fn build_row_state(
     });
     let delete_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
-            .with_icon(Icon::Trash)
+            .with_icon(TerminalIcon::Trash)
             .with_tooltip("Delete queued prompt")
             .with_size(ButtonSize::XSmall)
             .on_click(move |ctx| {
@@ -84,69 +85,40 @@ struct QueuedPromptRowState {
 
 /// View for the multi-prompt queue panel.
 pub struct QueuedPromptsPanelView {
-    /// Cached view id; used to namespace per-row `SavePosition` ids so live-reorder lookups are
-    /// scoped to this panel even if multiple panels share a window.
     view_id: EntityId,
     queued_query_model: ModelHandle<QueuedQueryModel>,
     /// Reusable editor for whichever row is currently in edit mode.
-    /// Created once and reused across edit sessions to avoid view churn.
     edit_editor: ViewHandle<EditorView>,
     edit_editor_is_single_logical_line: bool,
     edit_editor_scroll_state: ClippedScrollStateHandle,
-    /// Mouse state for the header row, used to highlight on hover.
+    /// Panel-only UI state: whether the body is collapsed. Owned here (not on the model) because
+    /// no other view reads this. Reset on `QueuedQueryEvent::Cleared`.
+    collapsed: bool,
     header_mouse_state: MouseStateHandle,
-    /// Per-row hover/button/drag state keyed by `QueuedQueryId`.
     row_states: HashMap<QueuedQueryId, QueuedPromptRowState>,
-    /// The id of the row currently being dragged, if any.
     dragging_query_id: Option<QueuedQueryId>,
-    /// The index where the current drag started, used for telemetry after live swaps.
     drag_start_index: Option<usize>,
 }
 
-/// Actions dispatched by hover buttons inside the panel.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelAction {
     ToggleCollapsed,
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
-    /// Dispatched when the user begins dragging a row.
-    /// Cancels any in-progress edit on that row.
     StartDrag(QueuedQueryId),
-    /// Fired as the dragged row moves; carries the dragged row's bounding rect so the handler
-    /// can compare its midpoint against neighbor rows and live-swap rows in the queue.
-    DragMoved {
-        rect: RectF,
-    },
-    /// Fired when the user releases the dragged row; clears in-progress drag state.
+    DragMoved { rect: RectF },
     DropEnd,
 }
 
-/// Events emitted to the parent view ([`TerminalView`]).
+/// Events emitted to the parent view ([`TerminalView`]). Two variants cover everything the host
+/// needs: place text on delete, and refocus the input box after an edit-mode transition.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
-    /// A row was removed.
-    RowRemoved {
-        query_id: QueuedQueryId,
-        was_via_edit_commit: bool,
-    },
-    /// A row's text was committed via the inline editor.
-    RowEdited { query_id: QueuedQueryId },
-    /// The collapse chevron was toggled.
-    CollapseToggled { collapsed: bool },
-    /// The user pressed Escape inside the inline editor and the edit was cancelled.
-    EditCancelled { query_id: QueuedQueryId },
-    /// A row entered edit mode.
-    RowEditEntered { query_id: QueuedQueryId },
-    /// The user requested to delete a row whose text should be placed in the input
-    /// editor when the editor is empty.
-    /// The host owns the input editor so it performs the placement.
-    RowDeletedForInputPlacement { text: String },
-    /// A row was reordered via drag-and-drop.
-    RowReordered {
-        query_id: QueuedQueryId,
-        from_index: usize,
-        to_index: usize,
-    },
+    /// A row was deleted via the trash button. The host should place `text` into the input editor
+    /// when the editor is empty, and focus the input.
+    RowDeleted { text: String },
+    /// An inline edit was committed or cancelled. The host should refocus the input.
+    EditEnded,
 }
 
 impl Entity for QueuedPromptsPanelView {
@@ -172,6 +144,7 @@ impl QueuedPromptsPanelView {
             edit_editor,
             edit_editor_is_single_logical_line: true,
             edit_editor_scroll_state: Default::default(),
+            collapsed: false,
             header_mouse_state: MouseStateHandle::default(),
             row_states: HashMap::new(),
             dragging_query_id: None,
@@ -195,6 +168,9 @@ impl QueuedPromptsPanelView {
                 self.row_states.remove(query_id);
                 if self.dragging_query_id == Some(*query_id) {
                     self.clear_drag_state();
+                }
+                if !self.queued_query_model.as_ref(ctx).has_queue() {
+                    self.collapsed = false;
                 }
             }
             QueuedQueryEvent::EditEntered { query_id } => {
@@ -221,16 +197,14 @@ impl QueuedPromptsPanelView {
             QueuedQueryEvent::Cleared => {
                 self.row_states.clear();
                 self.clear_drag_state();
+                self.collapsed = false;
             }
             QueuedQueryEvent::Appended { query_id } => {
                 self.row_states
                     .entry(*query_id)
                     .or_insert_with(|| build_row_state(*query_id, ctx));
             }
-            QueuedQueryEvent::Replaced { .. }
-            | QueuedQueryEvent::Reordered
-            | QueuedQueryEvent::CollapseToggled { .. }
-            | QueuedQueryEvent::QueueNextPromptToggled => {}
+            QueuedQueryEvent::Reordered | QueuedQueryEvent::QueueNextPromptToggled => {}
         }
         ctx.notify();
     }
@@ -290,21 +264,17 @@ impl QueuedPromptsPanelView {
                 );
             }
         }
-        if was_empty {
-            ctx.emit(QueuedPromptsPanelEvent::EditCancelled { query_id });
-        } else {
-            ctx.emit(QueuedPromptsPanelEvent::RowEdited { query_id });
-        }
+        ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
 
     fn cancel_edit(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(query_id) = self.editing_row_id(ctx) else {
+        if self.editing_row_id(ctx).is_none() {
             return;
-        };
+        }
         self.queued_query_model.update(ctx, |model, ctx| {
             model.cancel_edit(ctx);
         });
-        ctx.emit(QueuedPromptsPanelEvent::EditCancelled { query_id });
+        ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
 
     /// Visibility predicate used by the host to decide whether to render the panel.
@@ -322,42 +292,34 @@ impl TypedActionView for QueuedPromptsPanelView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             QueuedPromptsPanelAction::ToggleCollapsed => {
-                let collapsed = !self.queued_query_model.as_ref(ctx).is_collapsed();
-                self.queued_query_model.update(ctx, |model, ctx| {
-                    model.set_collapsed(collapsed, ctx);
-                });
+                self.collapsed = !self.collapsed;
                 send_telemetry_from_ctx!(
-                    TelemetryEvent::QueuedPromptPanelCollapseToggled { collapsed },
+                    TelemetryEvent::QueuedPromptPanelCollapseToggled {
+                        collapsed: self.collapsed,
+                    },
                     ctx
                 );
-                ctx.emit(QueuedPromptsPanelEvent::CollapseToggled { collapsed });
+                ctx.notify();
             }
             QueuedPromptsPanelAction::StartEditingRow(query_id) => {
                 let query_id = *query_id;
                 self.queued_query_model.update(ctx, |model, ctx| {
                     model.enter_edit_mode(query_id, ctx);
                 });
-                ctx.emit(QueuedPromptsPanelEvent::RowEditEntered { query_id });
             }
             QueuedPromptsPanelAction::DeleteRow(query_id) => {
                 let query_id = *query_id;
                 let removed = self
                     .queued_query_model
                     .update(ctx, |model, ctx| model.remove_by_id(query_id, ctx));
-                if let Some(ref removed) = removed {
+                if let Some(removed) = removed {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::QueuedPromptDeleted {
                             origin: removed.origin().into(),
                         },
                         ctx
                     );
-                }
-                ctx.emit(QueuedPromptsPanelEvent::RowRemoved {
-                    query_id,
-                    was_via_edit_commit: false,
-                });
-                if let Some(removed) = removed {
-                    ctx.emit(QueuedPromptsPanelEvent::RowDeletedForInputPlacement {
+                    ctx.emit(QueuedPromptsPanelEvent::RowDeleted {
                         text: removed.text().to_owned(),
                     });
                 }
@@ -381,10 +343,6 @@ impl TypedActionView for QueuedPromptsPanelView {
                 self.drag_start_index = from_index;
                 ctx.notify();
             }
-            // On every `on_drag` tick, compare the dragged row's midpoint against neighbor row
-            // midpoints and swap with the neighbor when the threshold is crossed. This produces
-            // live, single-step reordering as the user drags so the queue visibly reflows under
-            // the cursor.
             QueuedPromptsPanelAction::DragMoved { rect } => {
                 let rect = *rect;
                 let Some(source_id) = self.dragging_query_id else {
@@ -419,7 +377,6 @@ impl TypedActionView for QueuedPromptsPanelView {
                 let queue = self.queued_query_model.as_ref(ctx).queue();
                 let to_index = queue.iter().position(|q| q.id() == source_id);
                 let origin = to_index.map(|idx| queue[idx].origin());
-                // Only emit reorder telemetry/event if the row's index actually changed during the drag.
                 if let (Some(from_index), Some(to_index), Some(origin)) =
                     (from_index, to_index, origin)
                 {
@@ -432,11 +389,6 @@ impl TypedActionView for QueuedPromptsPanelView {
                             },
                             ctx
                         );
-                        ctx.emit(QueuedPromptsPanelEvent::RowReordered {
-                            query_id: source_id,
-                            from_index,
-                            to_index,
-                        });
                     }
                 }
                 ctx.notify();
@@ -471,8 +423,8 @@ impl View for QueuedPromptsPanelView {
         let appearance = Appearance::as_ref(app);
         let queue_model = self.queued_query_model.as_ref(app);
         let queue: Vec<_> = queue_model.queue().to_vec();
-        let collapsed = queue_model.is_collapsed();
         let editing_row_id = queue_model.editing_row();
+        let collapsed = self.collapsed;
 
         let panel_view_id = self.view_id;
         let header = render_header(queue.len(), collapsed, &self.header_mouse_state, appearance);
@@ -520,7 +472,6 @@ impl View for QueuedPromptsPanelView {
 }
 
 fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandle<EditorView> {
-    // Register the editor as a child so focus events bubble through the panel.
     let appearance = Appearance::as_ref(ctx);
     let text_options = TextOptions::ui_text(Some(appearance.ui_font_size()), appearance);
     ctx.add_typed_action_view(|ctx| {
@@ -537,8 +488,6 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
     })
 }
 
-/// Computes the dragged row's new index based on its current rect and the rects of its immediate
-/// neighbors.
 fn calculate_updated_row_index(
     panel_view_id: EntityId,
     current_index: usize,
@@ -592,9 +541,9 @@ fn render_header(
     let banner_background: Fill = theme.surface_overlay_1().into();
     let border_color: Fill = theme.split_pane_border_color().into();
     let chevron_icon = if collapsed {
-        Icon::ChevronRight
+        TerminalIcon::ChevronRight
     } else {
-        Icon::ChevronDown
+        TerminalIcon::ChevronDown
     };
     let ui_font_family = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
@@ -722,7 +671,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
         };
 
         let drag_handle: Box<dyn Element> = ConstrainedBox::new(
-            Icon::DragIndicator
+            TerminalIcon::DragIndicator
                 .to_warpui_icon(dimmed_color.into())
                 .finish(),
         )

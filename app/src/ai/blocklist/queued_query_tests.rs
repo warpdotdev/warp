@@ -139,7 +139,7 @@ fn pop_for_autofire_returns_submit_for_user_managed_head() {
         append_user(&model, &mut app, "first");
         append_user(&model, &mut app, "second");
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(None, ctx));
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
             Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
             other => panic!("expected Submit, got {other:?}"),
@@ -152,21 +152,19 @@ fn pop_for_autofire_returns_submit_for_user_managed_head() {
 }
 
 #[test]
-fn pop_for_autofire_uses_edit_text_override_when_first_row_is_in_edit_mode() {
-    // Edit-mode autofire uses the live edit text.
+fn pop_for_autofire_returns_last_committed_text_when_first_row_is_in_edit_mode() {
+    // Per spec: even when the first row is in edit mode, auto-fire's PopFromEditMode action
+    // carries the row's last-committed text, not any uncommitted live-editor buffer text.
     with_model(|mut app, model, _events| {
         let id_a = append_user(&model, &mut app, "first");
         append_user(&model, &mut app, "second");
         model.update(&mut app, |m, ctx| m.enter_edit_mode(id_a, ctx));
 
-        let action = model.update(&mut app, |m, ctx| {
-            m.pop_for_autofire(Some("edited".to_owned()), ctx)
-        });
+        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(ctx));
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "edited"),
+            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
-        // Edit mode is cleared after pop.
         model.read(&app, |model, _| {
             assert_eq!(model.editing_row(), None);
         });
@@ -193,7 +191,7 @@ fn first_row_is_in_edit_mode_only_when_the_head_row_is_being_edited() {
 
 #[test]
 fn enter_edit_mode_locks_to_one_row_at_a_time() {
-    // Entering edit mode on one row replaces the prior edit state.
+    // Entering edit mode on one row cancels the prior edit state.
     with_model(|mut app, model, _events| {
         let id_a = append_user(&model, &mut app, "first");
         let id_b = append_user(&model, &mut app, "second");
@@ -342,29 +340,13 @@ fn reorder_clamps_target_index_to_queue_len() {
 }
 
 #[test]
-fn removing_last_row_resets_collapse_state() {
-    with_model(|mut app, model, _events| {
-        let id = append_user(&model, &mut app, "only");
-        model.update(&mut app, |m, ctx| m.set_collapsed(true, ctx));
-
-        model.update(&mut app, |m, ctx| m.remove_by_id(id, ctx));
-
-        model.read(&app, |m, _| {
-            assert!(!m.has_queue());
-            assert!(!m.is_collapsed());
-        });
-    });
-}
-
-#[test]
-fn clear_all_wipes_queue_edit_and_collapse_state() {
+fn clear_all_wipes_queue_and_edit_state() {
     // Agent-view exit clears all queue state.
     with_model(|mut app, model, _events| {
         let id_a = append_user(&model, &mut app, "a1");
         append_user(&model, &mut app, "a2");
         model.update(&mut app, |m, ctx| {
             m.enter_edit_mode(id_a, ctx);
-            m.set_collapsed(true, ctx);
         });
 
         model.update(&mut app, |m, ctx| m.clear_all(ctx));
@@ -372,27 +354,6 @@ fn clear_all_wipes_queue_edit_and_collapse_state() {
         model.read(&app, |m, _| {
             assert!(!m.has_queue());
             assert_eq!(m.editing_row(), None);
-            assert!(!m.is_collapsed());
         });
-    });
-}
-
-#[test]
-fn set_collapsed_toggles_and_emits_event() {
-    with_model(|mut app, model, events| {
-        model.read(&app, |m, _| assert!(!m.is_collapsed()));
-
-        model.update(&mut app, |m, ctx| m.set_collapsed(true, ctx));
-        model.read(&app, |m, _| assert!(m.is_collapsed()));
-
-        // Idempotent — re-setting the same value does not emit again.
-        model.update(&mut app, |m, ctx| m.set_collapsed(true, ctx));
-
-        let collapse_events = events
-            .borrow()
-            .iter()
-            .filter(|e| matches!(e, QueuedQueryEvent::CollapseToggled { .. }))
-            .count();
-        assert_eq!(collapse_events, 1);
     });
 }

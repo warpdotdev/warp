@@ -153,13 +153,6 @@ impl RichContent {
         matches!(self.metadata, Some(RichContentMetadata::UsageFooter))
     }
 
-    pub fn is_pending_user_query(&self) -> bool {
-        matches!(
-            self.metadata,
-            Some(RichContentMetadata::PendingUserQuery { .. })
-        )
-    }
-
     pub fn is_telemetry_banner(&self) -> bool {
         matches!(
             self.metadata,
@@ -180,6 +173,13 @@ impl RichContent {
 
     pub fn is_agent_view_zero_state(&self) -> bool {
         matches!(self.metadata, Some(RichContentMetadata::AgentViewZeroState))
+    }
+
+    pub fn is_pending_user_query(&self) -> bool {
+        matches!(
+            self.metadata,
+            Some(RichContentMetadata::PendingUserQuery { .. })
+        )
     }
 
     pub fn is_init_step(&self) -> bool {
@@ -264,9 +264,6 @@ pub enum RichContentMetadata {
     TelemetryBanner {
         telemetry_banner_handle: ViewHandle<TelemetryBanner>,
     },
-    PendingUserQuery {
-        pending_user_query_block_handle: ViewHandle<PendingUserQueryBlock>,
-    },
     AgentViewEntry(AgentViewEntryMetadata),
     AmbientAgentBlock {
         block_handle: ViewHandle<AmbientAgentEntryBlock>,
@@ -275,6 +272,9 @@ pub enum RichContentMetadata {
     AgentViewZeroState,
     TerminalViewZeroState,
     PluginInstructionsBlock,
+    PendingUserQuery {
+        pending_user_query_block_handle: ViewHandle<PendingUserQueryBlock>,
+    },
     HarnessSessionHeader,
 }
 
