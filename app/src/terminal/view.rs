@@ -11917,6 +11917,7 @@ impl TerminalView {
                     self.refresh_warp_prompt(ctx);
                 }
             }
+
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]
                 {

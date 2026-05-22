@@ -206,6 +206,21 @@ pub struct AsyncBlockGridMatch {
 ///
 /// Mirrors the data carried by `BlockListMatch::RichContent` in the sync path,
 /// so callers can synthesize a `BlockListMatch` from either path.
+///
+/// This is a snapshot of the controller's state at the time it was produced.
+/// `match_id` is the most volatile field: `AIBlock::run_find` regenerates all
+/// match ids from a process-global atomic counter on every rescan (see
+/// `app/src/ai/blocklist/block/find.rs`), so any cached id is invalidated the
+/// next time that AI block is scanned. `total_index` is more stable — it only
+/// shifts when the blocklist sumtree itself is mutated at a non-end position
+/// (banner/gap insertion, scrollback truncation), not when new output streams
+/// into an existing AI block. Callers should still consume the value inline
+/// and not hold it across `process_message` deliveries.
+///
+/// TODO(vkodithala): This mirrors `BlockListMatch::RichContent` in the sync path. Both
+/// derive `Clone` even though their contents are short-lived; explore removing
+/// `Clone` from both in a future PR to enforce the snapshot contract in the
+/// type system.
 #[derive(Debug, Clone)]
 pub struct AsyncFocusedAiMatch {
     /// The view id of the rich content block.
@@ -504,7 +519,7 @@ impl AsyncFindController {
         self.update_cached_focused_match();
     }
 
-    /// Returns the focused match as an `AsyncBlockGridMatch` if it's a terminal match.
+    /// Returns the focused match as an [`AsyncBlockGridMatch`] if it's a terminal match.
     ///
     /// Returns a cached value that is updated when focus or matches change,
     /// avoiding the cost of sorting and iterating on every call. Returns
