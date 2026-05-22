@@ -1505,7 +1505,7 @@ impl AgentDriver {
 
         let load_skills_result = foreground
             .spawn(move |_, ctx| {
-                let skills = SkillWatcher::read_skills_for_repos(&repo_paths, ctx);
+                let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
                 if !skills.is_empty() {
                     log::info!("Loaded {} environment skill(s)", skills.len());
                 } else {
@@ -2148,7 +2148,7 @@ impl AgentDriver {
                     .map(|parsed_skill| ResolvePromptAttachedSkill {
                         name: parsed_skill.name.clone(),
                         content: parsed_skill.content.clone(),
-                        path: Some(parsed_skill.path.to_string_lossy().to_string()),
+                        path: Some(parsed_skill.path.display_path()),
                     });
                 let request = ResolvePromptRequest {
                     skill,

@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillScope};
 use warp_cli::skill::SkillSpec;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::{filter_skills_by_spec, resolve_skill_repos};
 use crate::ai::cloud_environments::GithubRepo;
@@ -149,7 +150,7 @@ fn skill_path(repo_path: &Path, provider_dir: &str, skill_name: &str) -> PathBuf
 fn parsed_skill(path: PathBuf, name: &str) -> ParsedSkill {
     let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
     ParsedSkill {
-        path,
+        path: LocalOrRemotePath::Local(path),
         name: name.to_string(),
         description: String::new(),
         content: String::new(),
@@ -160,7 +161,10 @@ fn parsed_skill(path: PathBuf, name: &str) -> ParsedSkill {
 }
 
 fn skill_paths(skills: Vec<ParsedSkill>) -> Vec<PathBuf> {
-    skills.into_iter().map(|skill| skill.path).collect()
+    skills
+        .into_iter()
+        .map(|skill| skill.path.to_local_path().unwrap().to_path_buf())
+        .collect()
 }
 
 #[test]

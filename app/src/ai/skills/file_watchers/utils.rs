@@ -1,19 +1,18 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use ai::skills::{
     home_skills_path, parse_skill, read_skills, ParsedSkill, SkillProvider,
     SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
-use regex::Regex;
-use repo_metadata::local_model::GetContentsArgs;
-use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
+use repo_metadata::{
+    local_model::GetContentsArgs, RepoContent, RepoMetadataModel, RepositoryIdentifier,
+};
 use walkdir::{DirEntry, WalkDir};
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
+use warp_util::{
+    local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
+    standardized_path::StandardizedPath,
+};
 use warpui::AppContext;
 
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;
@@ -30,39 +29,38 @@ fn local_or_remote_path_for_repo_path(
     }
 }
 
-/// Finds all skill files in a repository by querying the RepoMetadataModel tree.
+/// Finds concrete `SKILL.md` files in a repository tree.
 ///
-/// Returns a list of paths to concrete `SKILL.md` files (e.g.,
-/// `/repo/.agents/skills/deploy/SKILL.md`, `/repo/sub/.claude/skills/build/SKILL.md`).
+/// Remote sessions cannot walk the filesystem from the client, so callers use
+/// repo metadata to locate files and then fetch contents through the daemon.
 pub fn find_skill_files_in_tree(
     repo_id: &RepositoryIdentifier,
     repo_metadata: &RepoMetadataModel,
     ctx: &AppContext,
 ) -> Vec<LocalOrRemotePath> {
-    // Filter during traversal: only collect concrete SKILL.md files that match a known provider
-    // path. This keeps project acquisition on repo metadata until local or remote file hydration.
+    let repo_id_for_filter = repo_id.clone();
     let args = GetContentsArgs {
         include_folders: false,
         ..GetContentsArgs::default()
     }
     .include_ignored()
-    .with_filter(|content| {
+    .with_filter(move |content| {
         let RepoContent::File(file) = content else {
             return false;
         };
-        is_skill_file(&file.path.to_local_path_lossy())
+        let path = local_or_remote_path_for_repo_path(&repo_id_for_filter, &file.path);
+        extract_skill_parent_directory(&path).is_ok()
     });
+
     repo_metadata
         .get_repo_contents(repo_id, args, ctx)
         .unwrap_or_default()
         .into_iter()
-        // Only files should reach this iterator due to the GetContentsArgs::filter.
-        // Keep the Directory arm for exhaustive matching in case RepoContent grows new variants.
-        .filter_map(|content| match content {
-            RepoContent::File(file) => {
-                Some(local_or_remote_path_for_repo_path(repo_id, &file.path))
-            }
-            RepoContent::Directory(_) => None,
+        .filter_map(|content| {
+            let RepoContent::File(file) = content else {
+                return None;
+            };
+            Some(local_or_remote_path_for_repo_path(repo_id, &file.path))
         })
         .collect()
 }
@@ -194,58 +192,58 @@ pub fn read_skills_from_files(skill_files: impl IntoIterator<Item = PathBuf>) ->
 }
 
 pub fn is_skill_file(path: &Path) -> bool {
-    extract_skill_parent_directory(path).is_ok()
+    extract_skill_parent_directory(&LocalOrRemotePath::Local(path.to_path_buf())).is_ok()
 }
 
-static SKILL_PROVIDER_PATHS: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    // Collect the skill provider paths from the definitions
-    SKILL_PROVIDER_DEFINITIONS
-        .iter()
-        .map(|p| p.skills_path.to_string_lossy().to_string())
-        .collect()
-});
-
-// Pattern: {prefix}/{provider_path}/{skill-name}/SKILL.md
-// where provider_path is 2 parts (e.g., ".agents/skills") and skill-name is 1 part
-#[cfg(not(target_os = "windows"))]
-static SKILL_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(.+)/([^/]+/[^/]+)/[^/]+/SKILL\.md$")
-        .expect("Failed to compile skill file pattern")
-});
-
-// On windows, the path separator is \
-#[cfg(target_os = "windows")]
-static SKILL_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(.+)\\([^\\]+\\[^\\]+)\\[^\\]+\\SKILL\.md$")
-        .expect("Failed to compile skill file pattern")
-});
-
-pub fn extract_skill_parent_directory(path: &Path) -> Result<PathBuf, Error> {
+pub fn extract_skill_parent_directory(
+    path: &LocalOrRemotePath,
+) -> Result<LocalOrRemotePath, Error> {
     let is_warp_home_skill = path
-        .file_name()
+        .to_local_path()
+        .and_then(Path::file_name)
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "SKILL.md")
         && path
-            .parent()
+            .to_local_path()
+            .and_then(Path::parent)
             .and_then(Path::parent)
             .is_some_and(|parent| warp_managed_skill_dirs().iter().any(|dir| parent == dir));
     if is_warp_home_skill {
         return dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Home directory not available for {}", path.display()));
+            .map(LocalOrRemotePath::Local)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Home directory not available for {}", path.display_path())
+            });
     }
-    let path_str = path.to_string_lossy();
+    if path.file_name() != Some("SKILL.md") {
+        return Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()));
+    }
 
-    if let Some(captures) = SKILL_FILE_PATTERN.captures(&path_str) {
-        if let Some(provider_path) = captures.get(2) {
-            if SKILL_PROVIDER_PATHS.contains(provider_path.as_str()) {
-                if let Some(parent_directory) = captures.get(1) {
-                    return Ok(PathBuf::from(parent_directory.as_str()));
-                }
-            }
+    let Some(skill_dir) = path.parent() else {
+        return Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()));
+    };
+    let Some(skills_root) = skill_dir.parent() else {
+        return Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()));
+    };
+
+    for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
+        if !skills_root
+            .path_component()
+            .ends_with(&definition.skills_path.to_string_lossy())
+        {
+            continue;
         }
+
+        let mut parent_directory = skills_root.clone();
+        for _ in definition.skills_path.components() {
+            parent_directory = parent_directory
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Not a skill path: {}", path.display_path()))?;
+        }
+        return Ok(parent_directory);
     }
 
-    Err(anyhow::anyhow!("Not a skill path: {}", path.display()))
+    Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()))
 }
 
 /// Check if this path is a skill directory under a home directory provider path

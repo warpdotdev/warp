@@ -3,6 +3,7 @@ use std::fmt::Display;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
+use ai::skills::SkillPathOrigin;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -26,8 +27,8 @@ use super::api::ServerConversationToken;
 use super::task::helper::*;
 use super::task::transaction::{SavedTask, Transaction};
 use super::task::{
-    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, UpdateTaskError,
-    UpgradeOptimisticTaskError,
+    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, TaskMessageContext,
+    UpdateTaskError, UpgradeOptimisticTaskError,
 };
 use super::task_store::TaskStore;
 use super::{
@@ -684,7 +685,7 @@ impl AIConversation {
             .remove(&root_task_id)
             .expect("root task should exist for upgrade-in-place test helper");
         let server_root = root_task
-            .into_server_created_task(server_task, None, None, None)
+            .into_server_created_task(server_task, None, None, None, &SkillPathOrigin::Unavailable)
             .expect("upgrading optimistic root to a server-backed task should succeed");
         self.task_store.set_root_task(server_root);
     }
@@ -2282,6 +2283,7 @@ impl AIConversation {
         response_stream_id: &ResponseStreamId,
         terminal_view_id: EntityId,
         action: warp_multi_agent_api::client_action::Action,
+        skill_path_origin: &SkillPathOrigin,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         use warp_multi_agent_api::client_action::*;
@@ -2330,6 +2332,7 @@ impl AIConversation {
                             parent_task.source(),
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                         )?;
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: optimistic_id.clone(),
@@ -2366,6 +2369,7 @@ impl AIConversation {
                             existing_exchange,
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                             // In shared-session viewers, we have to reconstruct what the original user input
                             // was using subsequent conversation messages (as the original input was not
                             // sent on this client). Once we reconstruct these inputs, we will insert them
@@ -2453,6 +2457,7 @@ impl AIConversation {
                             None,
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                         )?;
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: old_id,
@@ -2680,8 +2685,11 @@ impl AIConversation {
                 task.add_messages(
                     messages,
                     exchange_id,
-                    current_todo_list.as_ref(),
-                    current_comment_state.as_ref(),
+                    TaskMessageContext {
+                        current_todo_list: current_todo_list.as_ref(),
+                        active_code_review: current_comment_state.as_ref(),
+                        skill_path_origin,
+                    },
                     // In shared-session viewers, we have to reconstruct what the original user input
                     // was using subsequent conversation messages (as the original input was not
                     // sent on this client). Once we reconstruct these inputs, we will insert them
@@ -2786,8 +2794,11 @@ impl AIConversation {
                         task.upsert_message(
                             message,
                             exchange_id,
-                            current_todo_list.as_ref(),
-                            current_comment_state.as_ref(),
+                            TaskMessageContext {
+                                current_todo_list: current_todo_list.as_ref(),
+                                active_code_review: current_comment_state.as_ref(),
+                                skill_path_origin,
+                            },
                             mask,
                             is_viewing_shared_session,
                         )
@@ -2831,8 +2842,11 @@ impl AIConversation {
                         task.append_to_message_content(
                             message,
                             exchange_id,
-                            current_todo_list.as_ref(),
-                            current_comment_state.as_ref(),
+                            TaskMessageContext {
+                                current_todo_list: current_todo_list.as_ref(),
+                                active_code_review: current_comment_state.as_ref(),
+                                skill_path_origin,
+                            },
                             mask,
                         )
                         .map(|msg| msg.todos_op().cloned())

@@ -1,6 +1,8 @@
 use ai::agent::action::AskUserQuestionType;
-use ai::skills::SkillReference;
+use ai::skills::{SkillPathOrigin, SkillReference};
+use std::path::PathBuf;
 use warp_multi_agent_api as api;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::{
     convert_api_question, ConversionParams, ConvertAPIMessageToClientOutputMessage,
@@ -299,6 +301,7 @@ fn converts_start_agent_tool_call_to_action_with_prompt() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -328,6 +331,7 @@ fn converts_local_start_agent_v2_without_harness_type_to_defaults() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -355,6 +359,7 @@ fn converts_upload_artifact_tool_call_to_action() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -378,6 +383,7 @@ fn converts_file_artifact_created_message_with_filename() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -408,6 +414,7 @@ fn converts_start_agent_tool_calls_with_different_prompt_lengths() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("partial conversion should succeed");
     let updated_output = updated_message
@@ -415,6 +422,7 @@ fn converts_start_agent_tool_calls_with_different_prompt_lengths() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("updated conversion should succeed");
 
@@ -443,6 +451,7 @@ fn converts_start_agent_with_explicit_empty_lifecycle_subscription() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -472,6 +481,7 @@ fn converts_start_agent_with_cancelled_and_blocked_lifecycle_subscription() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -504,6 +514,7 @@ fn converts_remote_start_agent_with_environment_id() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -542,6 +553,7 @@ fn converts_remote_start_agent_v2_with_skill_references() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -554,7 +566,7 @@ fn converts_remote_start_agent_v2_with_skill_references() {
         StartAgentExecutionMode::Remote {
             environment_id: "env-123".to_string(),
             skill_references: vec![
-                SkillReference::Path("/tmp/SKILL.md".into()),
+                SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from("/tmp/SKILL.md",))),
                 SkillReference::BundledSkillId("review-comments".to_string()),
             ],
             model_id: "gpt-test".to_string(),
@@ -583,6 +595,7 @@ fn converts_local_start_agent_v2_with_harness_type() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("conversion should succeed");
 
@@ -625,6 +638,7 @@ fn transfer_control_tool_call_converts_to_action_message() {
             task_id: &task_id,
             current_todo_list: None,
             active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
         })
         .expect("transfer-control conversion should succeed");
 

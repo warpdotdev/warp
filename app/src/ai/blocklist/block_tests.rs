@@ -16,6 +16,7 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::settings::AISettings;
 use crate::test_util::settings::initialize_settings_for_tests;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
@@ -207,7 +208,9 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
 fn remote_arm_propagates_skills_into_skill_references() {
     let skills = vec![
         SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-        SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+        SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+            "/tmp/skill/SKILL.md",
+        ))),
     ];
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Remote {

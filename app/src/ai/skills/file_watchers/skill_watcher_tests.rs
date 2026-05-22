@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::PathBuf;
 
 use super::super::subscribers::SkillRepositoryMessage;
 use super::SkillWatcher;
@@ -12,7 +13,7 @@ use repo_metadata::{
     DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate, TargetFile,
 };
 use tempfile::TempDir;
-use warp_util::standardized_path::StandardizedPath;
+use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 use warpui::App;
 
 /// Helper function for creating a single skill file
@@ -44,7 +45,7 @@ description: {}
     let line_range_start = skill_content.clone().lines().count() - content.lines().count() + 1;
     let line_range_end = skill_content.clone().lines().count() + 1;
     ParsedSkill {
-        path: skill_file_path,
+        path: LocalOrRemotePath::Local(skill_file_path),
         name: name.to_string(),
         description: description.to_string(),
         content: skill_content.clone(),
@@ -52,6 +53,10 @@ description: {}
         provider: SkillProvider::Agents,
         scope: SkillScope::Project,
     }
+}
+
+fn skill_local_path(skill: &ParsedSkill) -> PathBuf {
+    skill.path.to_local_path().unwrap().to_path_buf()
 }
 
 // ============================================================================
@@ -72,7 +77,7 @@ fn test_handle_repository_update_single_skill_added() {
         let skill = create_skill_file(&temp_dir, "test", "Test skill", "Test content");
 
         let update = RepositoryUpdate {
-            added: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            added: HashSet::from([TargetFile::new(skill_local_path(&skill), false)]),
             modified: HashSet::new(),
             deleted: HashSet::new(),
             moved: HashMap::new(),
@@ -177,11 +182,14 @@ fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory(
         let symlink_parent = repo.join(".agents/skills");
         fs::create_dir_all(&symlink_parent).unwrap();
         let symlink_skill_dir = symlink_parent.join("linked-skill");
-        std::os::unix::fs::symlink(target_skill.path.parent().unwrap(), &symlink_skill_dir)
-            .unwrap();
+        std::os::unix::fs::symlink(
+            target_skill.path.to_local_path().unwrap().parent().unwrap(),
+            &symlink_skill_dir,
+        )
+        .unwrap();
 
         let mut expected_skill = target_skill;
-        expected_skill.path = symlink_skill_dir.join("SKILL.md");
+        expected_skill.path = LocalOrRemotePath::Local(symlink_skill_dir.join("SKILL.md"));
 
         let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
         let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
@@ -262,9 +270,9 @@ fn test_local_project_fallback_scans_filesystem_when_repo_metadata_fails() {
         let SkillWatcherEvent::SkillsAdded { mut skills } = rx.recv().await.unwrap() else {
             panic!("Expected SkillsAdded event");
         };
-        skills.sort_by(|a, b| a.path.cmp(&b.path));
+        skills.sort_by_key(|skill| skill.path.display_path());
         let mut expected = vec![root_skill, subdir_skill];
-        expected.sort_by(|a, b| a.path.cmp(&b.path));
+        expected.sort_by_key(|skill| skill.path.display_path());
         assert_eq!(skills, expected);
     });
 }
@@ -292,11 +300,14 @@ fn test_local_project_fallback_initial_scan_loads_symlinked_skill_directory() {
         let symlink_parent = repo.join(".agents/skills");
         fs::create_dir_all(&symlink_parent).unwrap();
         let symlink_skill_dir = symlink_parent.join("fallback-linked-skill");
-        std::os::unix::fs::symlink(target_skill.path.parent().unwrap(), &symlink_skill_dir)
-            .unwrap();
+        std::os::unix::fs::symlink(
+            skill_local_path(&target_skill).parent().unwrap(),
+            &symlink_skill_dir,
+        )
+        .unwrap();
 
         let mut expected_skill = target_skill;
-        expected_skill.path = symlink_skill_dir.join("SKILL.md");
+        expected_skill.path = LocalOrRemotePath::Local(symlink_skill_dir.join("SKILL.md"));
 
         let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -325,7 +336,7 @@ fn test_local_project_fallback_update_reuses_repository_update_handler() {
         let skill = create_skill_file(&temp_dir, "fallback-update", "Fallback update", "Content");
         let update = RepositoryUpdate {
             added: HashSet::new(),
-            modified: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            modified: HashSet::from([TargetFile::new(skill_local_path(&skill), false)]),
             deleted: HashSet::new(),
             moved: HashMap::new(),
             commit_updated: false,
@@ -403,7 +414,7 @@ fn test_handle_repository_update_skill_modified() {
 
         let update = RepositoryUpdate {
             added: HashSet::new(),
-            modified: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            modified: HashSet::from([TargetFile::new(skill_local_path(&skill), false)]),
             deleted: HashSet::new(),
             moved: HashMap::new(),
             commit_updated: false,
@@ -441,7 +452,7 @@ fn test_handle_repository_update_skill_deleted() {
         let update = RepositoryUpdate {
             added: HashSet::new(),
             modified: HashSet::new(),
-            deleted: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            deleted: HashSet::from([TargetFile::new(skill_local_path(&skill), false)]),
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
@@ -480,8 +491,8 @@ fn test_handle_repository_update_multiple_skills_deleted() {
             added: HashSet::new(),
             modified: HashSet::new(),
             deleted: HashSet::from([
-                TargetFile::new(skill_a.path.clone(), false),
-                TargetFile::new(skill_b.path.clone(), false),
+                TargetFile::new(skill_local_path(&skill_a), false),
+                TargetFile::new(skill_local_path(&skill_b), false),
             ]),
             moved: HashMap::new(),
             commit_updated: false,
@@ -497,9 +508,9 @@ fn test_handle_repository_update_multiple_skills_deleted() {
         let SkillWatcherEvent::SkillsDeleted { mut paths } = event else {
             panic!("Expected SkillsDeleted event");
         };
-        paths.sort();
+        paths.sort_by_key(LocalOrRemotePath::display_path);
         let mut expected = vec![skill_a.path, skill_b.path];
-        expected.sort();
+        expected.sort_by_key(LocalOrRemotePath::display_path);
         assert_eq!(paths, expected);
     });
 }
@@ -524,8 +535,8 @@ fn test_handle_repository_update_skill_moved() {
             modified: HashSet::new(),
             deleted: HashSet::new(),
             moved: HashMap::from([(
-                TargetFile::new(new_skill.path.clone(), false),
-                TargetFile::new(old_skill.path.clone(), false),
+                TargetFile::new(skill_local_path(&new_skill), false),
+                TargetFile::new(skill_local_path(&old_skill), false),
             )]),
             commit_updated: false,
             index_lock_detected: false,
@@ -592,9 +603,10 @@ fn test_handle_repository_update_non_skill_directory_added_does_not_emit_project
 
 fn project_state(repo: &std::path::Path, skill: Option<&ParsedSkill>) -> FileTreeState {
     let children = if let Some(skill) = skill {
-        let skill_file = Entry::File(FileMetadata::new(skill.path.clone(), false));
+        let skill_path = skill_local_path(skill);
+        let skill_file = Entry::File(FileMetadata::new(skill_path.clone(), false));
         let skill_dir = Entry::Directory(DirectoryEntry {
-            path: StandardizedPath::try_from_local(skill.path.parent().unwrap()).unwrap(),
+            path: StandardizedPath::try_from_local(skill_path.parent().unwrap()).unwrap(),
             children: vec![skill_file],
             ignored: false,
             loaded: true,

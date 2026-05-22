@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
@@ -121,6 +122,18 @@ impl SessionContext {
     /// the remote server client is connected).
     pub fn is_remote(&self) -> bool {
         matches!(self.session_type, Some(SessionType::WarpifiedRemote { .. }))
+    }
+
+    pub fn skill_path_origin(&self) -> SkillPathOrigin {
+        match &self.session_type {
+            Some(SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            }) => SkillPathOrigin::Remote {
+                host_id: host_id.clone(),
+            },
+            Some(SessionType::WarpifiedRemote { host_id: None }) => SkillPathOrigin::Unavailable,
+            Some(SessionType::Local) | None => SkillPathOrigin::Local,
+        }
     }
 
     #[cfg(test)]
@@ -2613,6 +2626,11 @@ impl BlocklistAIController {
                             }
                             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                                 let client_actions = actions.actions;
+                                let skill_path_origin = SessionContext::from_session(
+                                    self.active_session.as_ref(ctx),
+                                    ctx,
+                                )
+                                .skill_path_origin();
                                 let apply_result =
                                     history_model.update(ctx, |history_model, ctx| {
                                         history_model.apply_client_actions(
@@ -2620,6 +2638,7 @@ impl BlocklistAIController {
                                             client_actions,
                                             conversation_id,
                                             self.terminal_view_id,
+                                            &skill_path_origin,
                                             ctx,
                                         )
                                     });

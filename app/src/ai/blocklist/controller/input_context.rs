@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
@@ -76,7 +74,9 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::ListSkills.is_enabled() {
         let skills = list_skills_if_changed(
-            active_session.current_working_directory().map(Path::new),
+            active_session
+                .current_working_directory_location(app)
+                .as_ref(),
             conversation_id,
             app,
         );

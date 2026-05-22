@@ -3074,7 +3074,7 @@ impl AIBlock {
                         ctx.emit(AIBlockEvent::OpenCodeInWarp {
                             source: CodeSource::Skill {
                                 reference: reference.clone(),
-                                path: path.clone(),
+                                location: LocalOrRemotePath::Local(path.clone()),
                                 origin: SkillOpenOrigin::EditFiles,
                             },
                             layout: *crate::util::file::external_editor::EditorSettings::as_ref(
