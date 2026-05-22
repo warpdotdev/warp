@@ -94,8 +94,8 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
-    MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings, TerminalSettingsChangedEvent,
-    UseAudibleBell,
+    AsyncFindEnabled, MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings,
+    TerminalSettingsChangedEvent, UseAudibleBell,
 };
 use crate::terminal::{BlockListSettings, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
@@ -559,6 +559,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 #[derive(Clone, Debug)]
 pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
+    ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
     ToggleAutocompleteSymbols,
@@ -1149,6 +1150,10 @@ impl FeaturesPageAction {
             Self::ToggleAgentInAppNotifications => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleAgentInAppNotifications".to_string(),
                 value: to_string(*AISettings::as_ref(ctx).show_agent_notifications),
+            },
+            Self::ToggleAsyncFind => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleAsyncFind".to_string(),
+                value: to_string(*TerminalSettings::as_ref(ctx).async_find_enabled),
             },
         }
     }
@@ -1905,6 +1910,13 @@ impl TypedActionView for FeaturesPageView {
                     default_terminal.make_warp_default(ctx);
                 });
             }
+            ToggleAsyncFind => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(terminal_settings
+                        .async_find_enabled
+                        .toggle_and_save_value(ctx));
+                });
+            }
         }
 
         send_telemetry_from_ctx!(action.telemetry_event(ctx), ctx);
@@ -2507,6 +2519,13 @@ impl FeaturesPageView {
 
         if DefaultTerminal::can_warp_become_default() {
             general_widgets.push(Box::new(DefaultTerminalWidget::default()));
+        }
+
+        // Gated behind the `AsyncFind` feature flag. The widget itself reads from
+        // `TerminalSettings::async_find_enabled`; both the flag and the setting must
+        // be on for async find to actually run (see `TerminalSettings::is_async_find_enabled`).
+        if FeatureFlag::AsyncFind.is_enabled() {
+            general_widgets.push(Box::new(AsyncFindWidget::default()));
         }
 
         let app_editor_settings = AppEditorSettings::as_ref(ctx);
@@ -7254,5 +7273,58 @@ impl SettingsWidget for GraphicsBackendWidget {
             );
         }
         col.finish()
+    }
+}
+
+#[derive(Default)]
+struct AsyncFindWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AsyncFindWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "async asynchronous find search terminal ai background"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AsyncFind.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Asynchronous find".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                AsyncFindEnabled::storage_key(),
+                AsyncFindEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*TerminalSettings::as_ref(app).async_find_enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleAsyncFind);
+                })
+                .finish(),
+            Some(
+                "Run find on a background thread to keep the UI responsive on large outputs."
+                    .into(),
+            ),
+        )
     }
 }

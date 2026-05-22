@@ -3487,7 +3487,7 @@ impl TerminalView {
             legacy: legacy_passive_suggestions_model,
         };
 
-        let find_model = ctx.add_model(|_| TerminalFindModel::new(model.clone()));
+        let find_model = ctx.add_model(|ctx| TerminalFindModel::new(model.clone(), ctx));
 
         ctx.subscribe_to_model(
             &TerminalSettings::handle(ctx),

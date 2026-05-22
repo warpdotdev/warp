@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use warp_core::features::FeatureFlag;
 use warpui::units::Pixels;
 use warpui::{AppContext, SingletonEntity};
 
@@ -133,6 +134,18 @@ define_settings_group!(TerminalSettings, settings: [
         toml_path: "terminal.show_terminal_zero_state_block",
         description: "Whether to show the AI zero-state block in new terminal sessions.",
     },
+    // Opt-in toggle for running terminal find on a background thread. Gated behind
+    // `FeatureFlag::AsyncFind`; use `is_async_find_enabled()` rather than reading this
+    // field directly so the feature flag is always considered.
+    async_find_enabled: AsyncFindEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "terminal.async_find_enabled",
+        description: "Whether terminal find runs asynchronously on a background thread.",
+    },
 ]);
 
 impl TerminalSettings {
@@ -148,6 +161,13 @@ impl TerminalSettings {
     /// Checks both the user setting and the global AI enablement.
     pub fn should_show_zero_state_block(&self, ctx: &AppContext) -> bool {
         *self.show_terminal_zero_state_block && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+    }
+
+    /// Whether asynchronous terminal find should be used. Combines the `AsyncFind`
+    /// feature flag (compile/runtime gate) with the user-facing toggle, so callers
+    /// don't need to remember both checks.
+    pub fn is_async_find_enabled(&self) -> bool {
+        FeatureFlag::AsyncFind.is_enabled() && *self.async_find_enabled
     }
 
     /// Spacing for the input box.
