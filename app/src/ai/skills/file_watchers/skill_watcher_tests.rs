@@ -87,6 +87,54 @@ fn test_handle_repository_update_single_skill_added() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let repo_metadata_handle = app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let repo_dir = TempDir::new().unwrap();
+        let target_dir = TempDir::new().unwrap();
+        let target_skill = create_skill_file(
+            &target_dir,
+            "linked-skill",
+            "Linked skill",
+            "Linked content",
+        );
+        let repo = repo_dir.path().to_path_buf();
+        let symlink_parent = repo.join(".agents/skills");
+        fs::create_dir_all(&symlink_parent).unwrap();
+        let symlink_skill_dir = symlink_parent.join("linked-skill");
+        std::os::unix::fs::symlink(target_skill.path.parent().unwrap(), &symlink_skill_dir)
+            .unwrap();
+
+        let mut expected_skill = target_skill;
+        expected_skill.path = symlink_skill_dir.join("SKILL.md");
+
+        let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+        let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
+        repo_metadata_handle.update(&mut app, |model, ctx| {
+            model.insert_test_state(repo_key, project_provider_state(&repo), ctx);
+        });
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsAdded {
+                skills: vec![expected_skill]
+            }
+        );
+    });
+}
+
+#[test]
 fn test_handle_repository_update_skill_modified() {
     let (tx, rx) = async_channel::unbounded();
 
@@ -317,6 +365,28 @@ fn project_state(repo: &std::path::Path, skill: Option<&ParsedSkill>) -> FileTre
     let root = Entry::Directory(DirectoryEntry {
         path: StandardizedPath::try_from_local(repo).unwrap(),
         children,
+        ignored: false,
+        loaded: true,
+    });
+    FileTreeState::new(root, Vec::new(), None)
+}
+
+fn project_provider_state(repo: &std::path::Path) -> FileTreeState {
+    let skills_dir = Entry::Directory(DirectoryEntry {
+        path: StandardizedPath::try_from_local(&repo.join(".agents/skills")).unwrap(),
+        children: Vec::new(),
+        ignored: false,
+        loaded: true,
+    });
+    let agents_dir = Entry::Directory(DirectoryEntry {
+        path: StandardizedPath::try_from_local(&repo.join(".agents")).unwrap(),
+        children: vec![skills_dir],
+        ignored: false,
+        loaded: true,
+    });
+    let root = Entry::Directory(DirectoryEntry {
+        path: StandardizedPath::try_from_local(repo).unwrap(),
+        children: vec![agents_dir],
         ignored: false,
         loaded: true,
     });

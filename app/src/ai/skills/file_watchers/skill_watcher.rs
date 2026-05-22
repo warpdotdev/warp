@@ -13,8 +13,8 @@ use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWat
 
 use super::subscribers::{HomeSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber};
 use super::utils::{
-    find_skill_files_in_tree, is_home_provider_path, is_home_skill_directory, is_skill_file,
-    read_skills_from_directories, read_skills_from_files,
+    find_skill_files_in_tree, find_symlinked_skill_files_in_tree, is_home_provider_path,
+    is_home_skill_directory, is_skill_file, read_skills_from_directories, read_skills_from_files,
 };
 use crate::warp_managed_paths_watcher::{
     filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
@@ -58,7 +58,15 @@ impl SkillWatcher {
         let skill_files: Vec<PathBuf> = repo_paths
             .iter()
             .filter_map(|repo_path| RepositoryIdentifier::try_local(repo_path))
-            .flat_map(|repo_id| find_skill_files_in_tree(&repo_id, repo_metadata, ctx))
+            .flat_map(|repo_id| {
+                let mut skill_files = find_skill_files_in_tree(&repo_id, repo_metadata, ctx);
+                skill_files.extend(
+                    find_symlinked_skill_files_in_tree(&repo_id, repo_metadata, ctx)
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local),
+                );
+                skill_files
+            })
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
             .collect();
         read_skills_from_files(skill_files)
@@ -185,10 +193,15 @@ impl SkillWatcher {
     ) {
         let current_skill_files: HashSet<LocalOrRemotePath> = {
             let repo_metadata = RepoMetadataModel::as_ref(ctx);
-            find_skill_files_in_tree(repo_id, repo_metadata, ctx)
-                .into_iter()
-                .collect()
+            let mut skill_files = find_skill_files_in_tree(repo_id, repo_metadata, ctx);
+            skill_files.extend(
+                find_symlinked_skill_files_in_tree(repo_id, repo_metadata, ctx)
+                    .into_iter()
+                    .map(LocalOrRemotePath::Local),
+            );
+            skill_files.into_iter().collect()
         };
+
         let previous_skill_files = self
             .project_skill_files_by_repo
             .get(repo_id)
@@ -208,6 +221,10 @@ impl SkillWatcher {
                 });
         }
 
+        // Local hydration intentionally only parses local paths. Remote project
+        // skill discovery now comes from RepoMetadataModel, but hydrating/parsing
+        // remote content is coming in a subsequent PR with a remote-aware skill
+        // identity pipeline.
         let skill_files = current_skill_files
             .iter()
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
