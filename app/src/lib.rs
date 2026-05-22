@@ -1726,9 +1726,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
-    ctx.add_singleton_model(ai::blocklist::task_status_sync_model::TaskStatusSyncModel::new);
     ctx.add_singleton_model(
-        ai::blocklist::local_shared_session_link_model::LocalSharedSessionLinkModel::new,
+        ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
     if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
         ctx.add_singleton_model(

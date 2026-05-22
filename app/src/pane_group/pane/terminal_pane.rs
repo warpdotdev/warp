@@ -2042,7 +2042,7 @@ fn launch_remote_child(
             Some(orchestration_harness),
             ctx,
         );
-        // Mark as remote so the parent's TaskStatusSyncModel skips status
+        // Mark as remote so the parent's LocalAgentTaskSyncModel skips status
         // reporting — the remote worker handles it.
         history_model.mark_conversation_as_remote_child(id, ctx);
         id

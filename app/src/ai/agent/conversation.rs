@@ -237,7 +237,7 @@ pub struct AIConversation {
     /// True when this conversation is a placeholder for a child agent executing
     /// on a remote worker. The parent's client does not drive execution for
     /// these conversations — the remote worker's own client handles status
-    /// reporting. TaskStatusSyncModel skips status updates for these.
+    /// reporting.
     is_remote_child: bool,
 
     /// The last event sequence number observed from the v2 orchestration
