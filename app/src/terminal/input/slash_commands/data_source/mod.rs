@@ -13,7 +13,6 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon as WarpIcon;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::fonts::FamilyId;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 pub use zero_state::*;
@@ -505,14 +504,13 @@ impl SyncDataSource for SlashCommandDataSource {
         // Skills are invoked by the agent, so they're hidden entirely when AI is globally off.
         if FeatureFlag::ListSkills.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
             let cli_agent_providers = self.active_cli_agent_providers(app);
-            let cwd = self
+            let cwd_path = self
                 .active_session
                 .as_ref(app)
-                .current_working_directory()
-                .map(|cwd| LocalOrRemotePath::Local(cwd.into()));
+                .current_working_directory_location(app);
             let skills = SkillManager::handle(app)
                 .as_ref(app)
-                .get_skills_for_working_directory(cwd.as_ref(), app);
+                .get_skills_for_working_directory(cwd_path.as_ref(), app);
 
             let skill_manager = SkillManager::as_ref(app);
             for mut skill in skills {

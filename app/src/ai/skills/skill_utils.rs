@@ -164,6 +164,23 @@ pub fn icon_override_for_skill_name(name: &str) -> Option<Icon> {
     }
 }
 
+pub fn skill_path_from_location(location: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
+    let mut current = Some(location.clone());
+    while let Some(candidate_skill_dir) = current {
+        if let Some(provider_dir) = candidate_skill_dir.parent() {
+            if SKILL_PROVIDER_DEFINITIONS.iter().any(|definition| {
+                provider_dir
+                    .path_component()
+                    .ends_with(&definition.skills_path.to_string_lossy())
+            }) {
+                return Some(candidate_skill_dir.join("SKILL.md"));
+            }
+        }
+        current = candidate_skill_dir.parent();
+    }
+    None
+}
+
 pub fn skill_path_from_file_path(file_path: &Path) -> Option<PathBuf> {
     for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
         let home_skill_dirs = if definition.provider == SkillProvider::Warp {

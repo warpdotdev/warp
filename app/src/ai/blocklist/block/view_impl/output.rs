@@ -22,6 +22,7 @@ use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[allow(unused_imports)]
 use warp_util::path::{common_path, CleanPathResult};
 use warpui::elements::new_scrollable::SingleAxisConfig;
@@ -487,12 +488,14 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                         .collect_vec(),
                                 };
 
-                                let file_paths: Vec<_> = files.iter().map(|f| &f.name).collect();
-                                let skill = common_path(&file_paths)
-                                    .and_then(|common| skill_path_from_file_path(&common))
-                                    .and_then(|skill_path| {
-                                        SkillManager::as_ref(app).skill_by_path(&skill_path)
-                                    });
+                                let file_paths = files.iter().map(|file| {
+                                    PathBuf::from(shell_native_absolute_path(
+                                        &file.name,
+                                        props.shell_launch_data,
+                                        props.current_working_directory,
+                                    ))
+                                });
+                                let skill = parsed_skill_for_common_local_paths(file_paths, app);
                                 output_items.add_child(render_read_files(
                                     props,
                                     id,
@@ -1491,13 +1494,9 @@ fn render_search_codebase(
                                 .render(app)
                                 .finish()
                             } else {
-                                let file_paths: Vec<_> =
-                                    files.iter().map(|f| &f.file_name).collect();
-                                let skill = common_path(&file_paths)
-                                    .and_then(|common| skill_path_from_file_path(&common))
-                                    .and_then(|skill_path| {
-                                        SkillManager::as_ref(app).skill_by_path(&skill_path)
-                                    });
+                                let file_paths =
+                                    files.iter().map(|file| PathBuf::from(&file.file_name));
+                                let skill = parsed_skill_for_common_local_paths(file_paths, app);
                                 let grouped = group_file_contexts_for_display(files, None, None);
                                 return Some(render_read_files(
                                     props,
@@ -1864,6 +1863,18 @@ fn render_read_files(
     }
 
     renderable_action.render(app).finish()
+}
+
+fn parsed_skill_for_common_local_paths(
+    file_paths: impl IntoIterator<Item = PathBuf>,
+    app: &AppContext,
+) -> Option<&ai::skills::ParsedSkill> {
+    let file_paths = file_paths.into_iter().collect_vec();
+    common_path(&file_paths)
+        .and_then(|common| skill_path_from_file_path(&common))
+        .and_then(|skill_path| {
+            SkillManager::as_ref(app).skill_by_path(&LocalOrRemotePath::Local(skill_path))
+        })
 }
 
 fn maybe_render_edit_document(

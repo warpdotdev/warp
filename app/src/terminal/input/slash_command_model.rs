@@ -1,9 +1,7 @@
 use ai::skills::SkillReference;
 use input_classifier::InputType;
 use settings::Setting as _;
-use std::path::PathBuf;
 use warp_core::features::FeatureFlag;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::blocklist::{
@@ -250,14 +248,13 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd = self
+        let cwd_path = self
             .active_session
             .as_ref(ctx)
-            .current_working_directory()
-            .map(|cwd| LocalOrRemotePath::Local(PathBuf::from(cwd)));
+            .current_working_directory_location(ctx);
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
-            .get_skills_for_working_directory(cwd.as_ref(), ctx);
+            .get_skills_for_working_directory(cwd_path.as_ref(), ctx);
 
         let matched_skill = skills.into_iter().find(|skill| skill.name == skill_name)?;
 

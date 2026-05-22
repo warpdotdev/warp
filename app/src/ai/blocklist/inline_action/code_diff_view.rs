@@ -25,7 +25,8 @@ use warp_core::HostId;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::file::FileSaveError;
-use warp_util::path::common_path;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
@@ -65,10 +66,9 @@ use crate::ai::mcp::{mcp_provider_from_file_path, MCPProvider};
 use crate::ai::paths::host_native_absolute_path;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
 use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path, SkillManager,
+    icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
     SkillOpenOrigin, SkillReference, SkillTelemetryEvent,
 };
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::diff_viewer::{DiffViewer, DisplayMode};
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor::{add_color, remove_color};
@@ -248,7 +248,7 @@ pub enum CodeDiffViewEvent {
     /// Emitted when the user opens a skill file from a code diff
     OpenSkill {
         reference: SkillReference,
-        path: PathBuf,
+        path: LocalOrRemotePath,
     },
     /// Emitted when the user opens an MCP config file from a code diff
     OpenMCPConfig {
@@ -423,7 +423,7 @@ pub enum CodeDiffViewAction {
     RevertChanges,
     OpenSkill {
         reference: SkillReference,
-        path: PathBuf,
+        path: LocalOrRemotePath,
         mouse_state: MouseStateHandle,
     },
     OpenMCPConfig {
@@ -1572,30 +1572,35 @@ impl CodeDiffView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min);
 
-        let file_paths: Vec<PathBuf> = self
+        let file_locations: Vec<LocalOrRemotePath> = self
             .pending_diffs
             .iter()
             .filter_map(|diff| {
-                diff.diff_view
-                    .as_ref(app)
-                    .file_path()
-                    .and_then(|p| p.to_local_path())
+                self.location_for_standardized_path(diff.diff_view.as_ref(app).file_path()?)
             })
+            .collect();
+        let file_paths: Vec<PathBuf> = file_locations
+            .iter()
+            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
             .collect();
 
         // Renders the 'open skill' button if all edited files live in the same skill directory
-        let skill = common_path(&file_paths)
-            .and_then(|common| skill_path_from_file_path(&common))
-            .and_then(|skill_path| SkillManager::as_ref(app).skill_by_path(&skill_path));
-        if let Some((skill, skill_path)) = skill.and_then(|skill| {
-            skill
-                .path
-                .to_local_path()
-                .map(|path| (skill, path.to_path_buf()))
-        }) {
+        let skill_paths = file_locations
+            .iter()
+            .filter_map(skill_path_from_location)
+            .collect::<Vec<_>>();
+        let skill = skill_paths.first().and_then(|first_path| {
+            skill_paths
+                .iter()
+                .all(|path| path == first_path)
+                .then(|| SkillManager::as_ref(app).skill_by_path(first_path))
+                .flatten()
+        });
+        if let Some(skill) = skill {
+            let skill_path = skill.path.clone();
             let skill_reference = SkillManager::handle(app)
                 .as_ref(app)
-                .reference_for_skill_path(&skill.path);
+                .reference_for_skill_path(&skill_path);
             let skill_button_handle = self.button_mouse_states.skill_button_handle.clone();
 
             let skill_icon_override = icon_override_for_skill_name(&skill.name);
@@ -2594,17 +2599,21 @@ impl CodeDiffView {
     /// Returns the primary file location as a `LocalOrRemotePath`,
     /// using `diff_session_type` to correctly identify remote files.
     pub fn primary_file_location(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
-        let path_str = self.primary_file_path(app)?;
+        self.pending_diffs
+            .first()?
+            .diff_view
+            .as_ref(app)
+            .file_path()
+            .and_then(|path| self.location_for_standardized_path(path))
+    }
+
+    fn location_for_standardized_path(&self, path: &StandardizedPath) -> Option<LocalOrRemotePath> {
         match &self.diff_session_type {
-            DiffSessionType::Local => Some(LocalOrRemotePath::Local(PathBuf::from(path_str))),
-            DiffSessionType::Remote(host_id) => {
-                StandardizedPath::try_new(&path_str).ok().map(|path| {
-                    LocalOrRemotePath::Remote(warp_util::remote_path::RemotePath {
-                        host_id: host_id.clone(),
-                        path,
-                    })
-                })
-            }
+            DiffSessionType::Local => path.to_local_path().map(LocalOrRemotePath::Local),
+            DiffSessionType::Remote(host_id) => Some(LocalOrRemotePath::Remote(RemotePath {
+                host_id: host_id.clone(),
+                path: path.clone(),
+            })),
         }
     }
 }
