@@ -75,6 +75,32 @@ fn test_parse_history_zsh_continuation_line_looks_like_prefix() {
 }
 
 #[test]
+fn test_parse_history_nushell_text() {
+    let history_lines = "\nls\npwd\n\nopen Cargo.toml\n";
+    assert_eq!(
+        ShellType::Nushell.parse_history(history_lines.as_bytes()),
+        vec![
+            "ls".to_string(),
+            "pwd".to_string(),
+            "open Cargo.toml".to_string()
+        ]
+    );
+}
+
+#[test]
+fn test_parse_history_nushell_sqlite() {
+    let sqlite_header = b"SQLite format 3\0more bytes";
+    assert_eq!(
+        ShellType::Nushell.parse_history(sqlite_header),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn test_nushell_kill_buffer_uses_clear_line_binding() {
+    assert_eq!(ShellType::Nushell.kill_buffer_bytes(), &[0x15]);
+}
+#[test]
 fn test_zsh_unmetafy() {
     let test_zsh_history = [
         227, 129, 131, 179, 227, 130, 131, 172, 227, 129, 175, 230, 131, 183, 165, 230, 131, 188,
@@ -107,6 +133,13 @@ fn test_from_name() {
         Some(ShellType::Fish),
         ShellType::from_name("/usr/local/bin/fish")
     );
+    assert_eq!(Some(ShellType::Nushell), ShellType::from_name("nu"));
+    assert_eq!(Some(ShellType::Nushell), ShellType::from_name("-nu"));
+    assert_eq!(
+        Some(ShellType::Nushell),
+        ShellType::from_name("/opt/homebrew/bin/nu")
+    );
+    assert_eq!(Some(ShellType::Nushell), ShellType::from_name("nu.exe"));
     assert_eq!(
         Some(ShellType::PowerShell),
         ShellType::from_name("pwsh.exe")
@@ -145,6 +178,14 @@ fn test_from_markdown_language_spec() {
     assert_eq!(
         Some(ShellType::Fish),
         ShellType::from_markdown_language_spec("fish")
+    );
+    assert_eq!(
+        Some(ShellType::Nushell),
+        ShellType::from_markdown_language_spec("nu")
+    );
+    assert_eq!(
+        Some(ShellType::Nushell),
+        ShellType::from_markdown_language_spec("nushell")
     );
     assert_eq!(
         Some(ShellType::PowerShell),
@@ -190,6 +231,26 @@ alias ehw 'echo \"Hello, world\"'";
     assert_eq!(aliases.get("g").unwrap(), "git");
     assert_eq!(aliases.get("rmi").unwrap(), "rm -i");
     assert_eq!(aliases.get("ehw").unwrap(), r#"echo "Hello, world""#);
+}
+
+#[test]
+fn test_nushell_parse_aliases() {
+    let raw_aliases = "ll\tls -l\ngco\tgit checkout";
+    let aliases = ShellType::Nushell.aliases(raw_aliases);
+
+    assert_eq!(aliases.len(), 2);
+    assert_eq!(aliases.get("ll").unwrap(), "ls -l");
+    assert_eq!(aliases.get("gco").unwrap(), "git checkout");
+}
+
+#[test]
+fn test_nushell_executable_command_uses_path_scan() {
+    let command = ShellType::Nushell.shell_command_to_get_executables();
+
+    assert!(command.contains("$env.PATH"));
+    assert!(command.contains("ls $dir"));
+    assert!(command.contains("path basename"));
+    assert!(!command.contains("type == external"));
 }
 
 #[test]
